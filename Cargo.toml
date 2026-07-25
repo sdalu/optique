@@ -1,0 +1,18 @@
+[package]
+name = "optique"
+version = "0.1.0"
+edition = "2021"
+description = "Fast FreeBSD ports options/dependency configurator for poudriere"
+license = "BSD-2-Clause"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+
+[profile.release]
+lto = true
