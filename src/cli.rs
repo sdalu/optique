@@ -37,6 +37,20 @@ pub struct Cli {
 pub enum Command {
     /// Scan the dependency closure and print each port's option status
     Scan(RootsArgs),
+    /// Refresh options files non-interactively: keep saved choices, adopt
+    /// defaults for new options, drop removed ones (like `poudriere options -C`
+    /// but headless and fast)
+    Sync(SyncArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    #[command(flatten)]
+    pub roots: RootsArgs,
+
+    /// Show what would be written without touching anything
+    #[arg(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]
