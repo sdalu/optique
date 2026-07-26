@@ -1,0 +1,8 @@
+optique inspects and edits the per-port OPTIONS files that poudriere and the
+ports tree consume, without going through the interactive dialog4 screens.
+
+It resolves a port's effective option set the way the framework does, walking
+the poudriere options directories, make.conf and the port's own OPTIONS_*
+defaults. A TUI is provided for browsing and toggling options, while the
+non-interactive subcommands (notably "scan --json") suit scripting and bulk
+audits of a whole options tree.

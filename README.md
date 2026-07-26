@@ -283,6 +283,11 @@ package works as usual:
 make install PREFIX=/opt DESTDIR=/tmp/stage
 ```
 
+A FreeBSD port skeleton is also kept in-tree at
+[`ports/sysutils/optique`](ports/sysutils/optique) — see
+[`ports/README.md`](ports/README.md) for how to drop it into a ports tree or
+poudriere overlay.
+
 `make deinstall` removes both files again, `make test` runs the test suite and
 `make lint` runs `mandoc -T lint` on the man page. The same thing by hand:
 
