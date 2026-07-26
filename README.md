@@ -136,7 +136,8 @@ the global `OPTIONS_SET/UNSET` policy (marker `≠`, badge `≠mc` on the option
 row) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
 keeps neighbors put while you work down the list; `n`/`p` still jump between
 problems in either order) · `/` filter · `a` apply ·
-`r` why-is-this-here (dependency chain) · `?`/`h`/F1 color-coded
+`r` why-is-this-here (dependency chain) · `B` bulk-set an option across
+visible ports · `?`/`h`/F1 color-coded
 in-TUI help (markers, badges, keys) · `q` quit.
 
 ## Poudriere layout

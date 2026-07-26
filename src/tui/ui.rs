@@ -27,6 +27,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_quit_confirm(f);
     } else if app.modal.is_some() {
         draw_apply_modal(f, app);
+    } else if app.bulk.is_some() {
+        draw_bulk(f, app);
     } else if app.show_help {
         draw_help(f);
     } else if app.why.is_some() {
@@ -517,6 +519,7 @@ fn draw_help(f: &mut Frame) {
         ("Enter/l", "edit selected port · h/Esc back to the list"),
         ("Space", "toggle option (group rules enforced)"),
         ("d / u", "reset port to defaults / revert to saved state"),
+        ("B", "bulk: set an option on/off across all visible ports"),
         ("n / p", "next / previous port needing attention"),
         ("t", "show only ports needing attention"),
         ("s", "toggle problems-first / stable alphabetical sort"),
@@ -724,6 +727,26 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" {opt} — {key} "))
+            .border_style(Style::default().fg(Color::LightBlue)),
+    );
+    f.render_widget(p, area);
+}
+
+/// One-line input prompt for the bulk decision, centered on the screen.
+fn draw_bulk(f: &mut Frame, app: &App) {
+    let Some(input) = &app.bulk else { return };
+    let full = f.area();
+    let height = 3.min(full.height);
+    let area = Rect {
+        y: full.y + full.height.saturating_sub(height) / 2,
+        height,
+        ..centered_rect(70, 20, full)
+    };
+    f.render_widget(Clear, area);
+    let p = Paragraph::new(Line::from(format!(" {input}▏"))).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" bulk: OPTION=on|off — Enter apply, Esc cancel ")
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);

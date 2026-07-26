@@ -68,6 +68,8 @@ pub struct App {
     pub message: Option<(String, bool)>,
     pub modal: Option<ApplyModal>,
     pub quit_confirm: bool,
+    /// Bulk-decision prompt: the text typed so far while it is open.
+    pub bulk: Option<String>,
     /// Ports hidden because they have no options (status-bar info).
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
@@ -127,6 +129,7 @@ pub fn run(
         message: None,
         modal: None,
         quit_confirm: false,
+        bulk: None,
         hidden,
         hide_ok: false,
         sort_problems_first: true,
@@ -204,6 +207,30 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             }
             return Ok(());
         }
+        // The bulk prompt takes text input, so it grabs the keys before the
+        // filter branch and the plain command keys.
+        if app.bulk.is_some() {
+            match key.code {
+                KeyCode::Esc => app.bulk = None,
+                KeyCode::Enter => {
+                    if let Some(input) = app.bulk.take() {
+                        app.run_bulk(&input);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(input) = app.bulk.as_mut() {
+                        input.pop();
+                    }
+                }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(input) = app.bulk.as_mut() {
+                        input.push(c);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
         if app.focus == Focus::Filter {
             match key.code {
                 KeyCode::Esc => {
@@ -237,6 +264,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             KeyCode::Char('/') => app.focus = Focus::Filter,
             KeyCode::Char('?') | KeyCode::F(1) => app.show_help = true,
             KeyCode::Char('a') => app.open_apply_modal(),
+            KeyCode::Char('B') => app.open_bulk(),
             KeyCode::Char('t') => {
                 app.hide_ok = !app.hide_ok;
                 let keep = app.selected_key();
@@ -656,6 +684,45 @@ impl App {
         self.opt_info = Some((key, opt.clone()));
     }
 
+    /// Open the bulk-decision prompt, pre-filled with the option under the
+    /// editor cursor when the editor has one selected.
+    fn open_bulk(&mut self) {
+        let prefill = match (&self.focus, self.editor_rows.get(self.editor_idx)) {
+            (Focus::Editor, Some(EditorRow::Option(opt))) => format!("{opt}="),
+            _ => String::new(),
+        };
+        self.bulk = Some(prefill);
+    }
+
+    /// Apply a typed bulk decision to every visible port carrying the option.
+    fn run_bulk(&mut self, input: &str) {
+        let (opt, on) = match parse_bulk(input) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                self.flash(&e, true);
+                return;
+            }
+        };
+        let keys = self.visible.clone();
+        let (changed, skipped) = self.session.bulk_set(&keys, &opt, on);
+        for key in &changed {
+            self.mark_pending(key);
+        }
+        let mut msg = format!(
+            "{opt}={}: {} port(s) changed, {} skipped",
+            if on { "on" } else { "off" },
+            changed.len(),
+            skipped.len()
+        );
+        if let Some((key, reason)) = skipped.first() {
+            msg.push_str(&format!(" (first: {key}: {reason})"));
+        }
+        self.flash(&msg, changed.is_empty());
+        let keep = self.selected_key();
+        self.rebuild_visible(keep);
+        self.rebuild_editor();
+    }
+
     /// Schedule the port for a debounced background re-query.
     fn mark_pending(&mut self, key: &PortKey) {
         self.pending.insert(key.clone(), Instant::now());
@@ -770,4 +837,29 @@ impl App {
     fn flash(&mut self, msg: &str, error: bool) {
         self.message = Some((msg.to_string(), error));
     }
+}
+
+/// Parse a bulk decision: `NAME=on`/`NAME=off` (value case-insensitive), or the
+/// shorthands `NAME+` (on) and `NAME-` (off). The option name is uppercased.
+fn parse_bulk(input: &str) -> Result<(String, bool), String> {
+    const SYNTAX: &str = "expected OPTION=on|off (or OPTION+ / OPTION-)";
+    let input = input.trim();
+    let (name, on) = if let Some((name, value)) = input.split_once('=') {
+        match value.trim().to_lowercase().as_str() {
+            "on" => (name, true),
+            "off" => (name, false),
+            other => return Err(format!("{other:?} is not on or off — {SYNTAX}")),
+        }
+    } else if let Some(name) = input.strip_suffix('+') {
+        (name, true)
+    } else if let Some(name) = input.strip_suffix('-') {
+        (name, false)
+    } else {
+        return Err(SYNTAX.to_string());
+    };
+    let name = name.trim().to_uppercase();
+    if name.is_empty() {
+        return Err(format!("no option name — {SYNTAX}"));
+    }
+    Ok((name, on))
 }

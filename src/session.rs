@@ -272,6 +272,42 @@ impl Session {
         Ok(())
     }
 
+    /// Set `opt` to `on` on every given port that carries it, using the same
+    /// rules as toggle (group semantics, FORCED and implied locks).
+    /// Returns (changed_ports, skipped) where skipped pairs a port with the
+    /// refusal reason. Ports not carrying the option are ignored silently.
+    pub fn bulk_set(
+        &mut self,
+        keys: &[PortKey],
+        opt: &str,
+        on: bool,
+    ) -> (Vec<PortKey>, Vec<(PortKey, String)>) {
+        let mut changed = Vec::new();
+        let mut skipped = Vec::new();
+        // States are shared per OPTIONS_NAME: decide each of them once, so the
+        // other flavors of an origin never report a second change.
+        let mut visited: BTreeSet<String> = BTreeSet::new();
+        for key in keys {
+            let Some(info) = self.ports.get(key) else { continue };
+            if !info.options.complete.iter().any(|o| o == opt) {
+                continue;
+            }
+            let options_name = info.options_name.clone();
+            if !visited.insert(options_name.clone()) {
+                continue;
+            }
+            let Some(state) = self.states.get(&options_name) else { continue };
+            if state.staged.contains(opt) == on {
+                continue; // already the wanted value; not an error
+            }
+            match self.toggle(key, opt) {
+                Ok(()) => changed.push(key.clone()),
+                Err(reason) => skipped.push((key.clone(), reason)),
+            }
+        }
+        (changed, skipped)
+    }
+
     pub fn reset_to_defaults(&mut self, key: &PortKey) {
         if let Some(info) = self.ports.get(key).cloned() {
             if let Some(state) = self.states.get_mut(&info.options_name) {
@@ -1056,6 +1092,92 @@ mod tests {
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.baseline.contains("A"));
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+    }
+
+    #[test]
+    fn bulk_set_applies_rules_and_dedups_shared_state() {
+        let mk = |origin: &str, options_name: &str, complete: &[&str]| {
+            let key = PortKey::parse(origin).unwrap();
+            PortInfo {
+                key: key.clone(),
+                canonical: key,
+                pkgname: format!("{}-1.0", origin.replace('/', "-")),
+                flavors: vec!["f1".into(), "f2".into()],
+                options_name: options_name.into(),
+                options: PortOptions {
+                    complete: complete.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+                deps: vec![],
+                broken: None,
+                ignore: None,
+                deprecated: None,
+                default_versions: vec![],
+                warnings: vec![],
+            }
+        };
+        let mut ports = BTreeMap::new();
+        for info in [
+            mk("cat/a", "cat_a", &["DOCS", "X11"]),
+            mk("cat/b", "cat_b", &["DOCS"]),
+            mk("cat/c", "cat_c", &["ZZZ"]),
+            // Two flavors of one origin share cat_d's options file/state.
+            mk("cat/d@f1", "cat_d", &["DOCS"]),
+            mk("cat/d@f2", "cat_d", &["DOCS"]),
+        ] {
+            ports.insert(info.key.clone(), info);
+        }
+        let a = PortKey::parse("cat/a").unwrap();
+        let b = PortKey::parse("cat/b").unwrap();
+        let c = PortKey::parse("cat/c").unwrap();
+        let d1 = PortKey::parse("cat/d@f1").unwrap();
+        let d2 = PortKey::parse("cat/d@f2").unwrap();
+        // cat/b's DOCS is nailed down by a make.conf *_FORCE knob.
+        ports.get_mut(&b).unwrap().options.force_set.insert("DOCS".into());
+        let keys: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = session_for(ports);
+
+        let (changed, skipped) = s.bulk_set(&keys, "DOCS", true);
+        assert!(changed.contains(&a), "cat/a takes the decision");
+        assert_eq!(
+            changed.iter().filter(|k| **k == d1 || **k == d2).count(),
+            1,
+            "one shared state change counts as one changed port"
+        );
+        assert_eq!(changed.len(), 2, "only cat/a and one cat/d flavor changed");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].0, b);
+        assert!(skipped[0].1.contains("forced"), "reason: {}", skipped[0].1);
+        assert!(!changed.contains(&c) && !skipped.iter().any(|(k, _)| *k == c));
+
+        for key in [&a, &d1, &d2] {
+            let st = s.state(&s.ports[key]).unwrap();
+            assert!(st.staged.contains("DOCS"), "{key} staged DOCS");
+        }
+        assert!(!s.state(&s.ports[&c]).unwrap().staged.contains("DOCS"));
+
+        // Idempotent: already-equal ports are skipped silently.
+        let (changed, skipped) = s.bulk_set(&keys, "DOCS", true);
+        assert!(changed.is_empty(), "nothing left to change");
+        assert!(!skipped.iter().any(|(k, _)| *k == a), "cat/a not an error");
+    }
+
+    #[test]
+    fn bulk_set_respects_groups() {
+        let g = OptionGroup {
+            kind: GroupKind::Single,
+            name: "IMPL".into(),
+            desc: String::new(),
+            members: vec!["A".into(), "B".into()],
+        };
+        let (ports, key) = mk_port(&["A", "B"], &["A"], vec![g], vec![]);
+        let mut s = session_for(ports);
+        let (changed, skipped) = s.bulk_set(&[key.clone()], "A", false);
+        assert!(changed.is_empty());
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].0, key);
+        assert!(skipped[0].1.contains("single-choice group"), "reason: {}", skipped[0].1);
+        assert!(s.state(&s.ports[&key]).unwrap().staged.contains("A"), "A stays on");
     }
 
     #[test]
