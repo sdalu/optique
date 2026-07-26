@@ -18,7 +18,6 @@ use anyhow::Result;
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
-use crate::model::port::PortStatus;
 use crate::moved::Moved;
 use crate::optionsfile::SavedOptionsFile;
 use crate::query::makerunner::QueryCtx;
@@ -108,7 +107,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         let mut done = 0usize;
         let verbose = cli.verbose;
         let mut kept: Vec<(String, String)> = Vec::new();
-        let mut handle = |info: model::port::PortInfo,
+        let handle = |info: model::port::PortInfo,
                           removals: &mut Vec<clean::Removal>,
                           kept: &mut Vec<(String, String)>,
                           by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
@@ -347,27 +346,58 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
 }
 
 fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
+    use crate::session::UiStatus;
+
     let scanned = run_scan(cli, roots)?;
-    let (settings, result) = (&scanned.settings, &scanned.result);
+    let (queried, from_cache, elapsed) =
+        (scanned.result.queried, scanned.result.from_cache, scanned.elapsed);
+    let settings = scanned.settings;
+    // Session gives owner-aware statuses (flavors sharing an options file
+    // are judged against the default flavor's view).
+    let sess = session::Session::new(
+        scanned.result.ports,
+        scanned.result.aliases,
+        roots,
+        &settings.options_dir,
+    );
 
     struct Row {
         key: String,
         pkgname: String,
-        status: PortStatus,
+        status: UiStatus,
+        detail: String,
         undecided: Vec<String>,
         state: String,
         warnings: Vec<String>,
     }
     let mut rows: Vec<Row> = Vec::new();
     let mut hidden = 0usize;
-    for (key, info) in &result.ports {
+    for (key, info) in &sess.ports {
         if !info.options.has_options() {
             hidden += 1;
             continue;
         }
-        let saved =
-            SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
-        let undecided = session::undecided_options(info, saved.as_ref());
+        let saved = sess.state(info).and_then(|s| s.saved.as_ref());
+        let status = sess.status(info);
+        let detail = if status == UiStatus::Stale {
+            let owner = sess.owner_info(info);
+            let cur: std::collections::BTreeSet<&str> =
+                owner.options.complete.iter().map(String::as_str).collect();
+            let was: std::collections::BTreeSet<&str> = saved
+                .map(|s| s.complete.iter().map(String::as_str).collect())
+                .unwrap_or_default();
+            let mut d = String::new();
+            for o in cur.difference(&was) {
+                d.push_str(&format!(" +{o}"));
+            }
+            for o in was.difference(&cur) {
+                d.push_str(&format!(" -{o}"));
+            }
+            d
+        } else {
+            String::new()
+        };
+        let undecided = session::undecided_options(info, saved);
         let state = if cli.verbose {
             info.options
                 .complete
@@ -383,13 +413,14 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         rows.push(Row {
             key: key.to_string(),
             pkgname: info.pkgname.clone(),
-            status: info.status(saved.as_ref()),
+            status,
+            detail,
             undecided,
             state,
             warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
         });
     }
-    rows.sort_by_key(|r| (matches!(r.status, PortStatus::Ok), r.key.clone()));
+    rows.sort_by_key(|r| (r.status == UiStatus::Ok, r.key.clone()));
 
     let mut unconfigured = 0;
     let mut stale = 0;
@@ -401,22 +432,18 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
             format!(" undecided: {}", row.undecided.join(" "))
         };
         match &row.status {
-            PortStatus::Unconfigured => {
+            UiStatus::Unconfigured => {
                 unconfigured += 1;
                 println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
             }
-            PortStatus::Stale { added, removed } => {
+            UiStatus::Stale => {
                 stale += 1;
-                let mut detail = String::new();
-                if !added.is_empty() {
-                    detail.push_str(&format!(" +{}", added.join(" +")));
-                }
-                if !removed.is_empty() {
-                    detail.push_str(&format!(" -{}", removed.join(" -")));
-                }
-                println!("!  {key:<40} {pkgname:<32} STALE{detail}{decision}");
+                println!("!  {key:<40} {pkgname:<32} STALE{}{decision}", row.detail);
             }
-            PortStatus::Ok => println!("   {key:<40} {pkgname:<32} ok"),
+            UiStatus::Conflict => {
+                println!("✗  {key:<40} {pkgname:<32} CONFLICT (saved options violate constraints)");
+            }
+            _ => println!("   {key:<40} {pkgname:<32} ok"),
         }
         if cli.verbose {
             if !row.state.is_empty() {
@@ -435,9 +462,9 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         unconfigured,
         stale,
         hidden,
-        result.queried,
-        result.from_cache,
-        scanned.elapsed
+        queried,
+        from_cache,
+        elapsed
     );
     Ok(())
 }

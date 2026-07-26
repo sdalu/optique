@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use super::options::PortOptions;
 use super::origin::PortKey;
-use crate::optionsfile::SavedOptionsFile;
 
 /// One dependency edge as extracted from _UNIFIED_DEPENDS.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,37 +32,6 @@ pub struct PortInfo {
     pub warnings: Vec<String>,
 }
 
-/// Configuration state of a port relative to the target options dir.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PortStatus {
-    /// No options at all, or saved file matches the current option list.
-    Ok,
-    /// Port has options but no saved options file.
-    Unconfigured,
-    /// Saved file's option list differs from the current one.
-    Stale { added: Vec<String>, removed: Vec<String> },
-}
-
-impl PortInfo {
-    /// Derive the status from the saved options file (if any).
-    pub fn status(&self, saved: Option<&SavedOptionsFile>) -> PortStatus {
-        if !self.options.has_options() {
-            return PortStatus::Ok;
-        }
-        let Some(saved) = saved else {
-            return PortStatus::Unconfigured;
-        };
-        let current: std::collections::BTreeSet<&str> =
-            self.options.complete.iter().map(String::as_str).collect();
-        let recorded: std::collections::BTreeSet<&str> =
-            saved.complete.iter().map(String::as_str).collect();
-        if current == recorded {
-            PortStatus::Ok
-        } else {
-            PortStatus::Stale {
-                added: current.difference(&recorded).map(|s| s.to_string()).collect(),
-                removed: recorded.difference(&current).map(|s| s.to_string()).collect(),
-            }
-        }
-    }
-}
+// NOTE: per-port staleness deliberately has no direct API here — flavors
+// share options files owned by the default flavor, so status must be asked
+// of session::Session, which knows the owner.

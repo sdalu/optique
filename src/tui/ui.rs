@@ -126,6 +126,19 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
             EditorRow::Option(opt) => {
                 lines.push(option_line(app, info, opt, selected));
             }
+            EditorRow::ExcludedHeader => {
+                lines.push(Line::from(Span::styled(
+                    "── not in this flavor (managed via the default flavor)",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                )));
+            }
+            EditorRow::Excluded(opt) => {
+                let on = state.map(|s| s.staged.contains(opt)).unwrap_or(false);
+                lines.push(Line::from(Span::styled(
+                    format!("  [{}] {}", if on { "x" } else { " " }, opt),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
             EditorRow::ObsoleteHeader => {
                 lines.push(Line::from(Span::styled(
                     "── obsolete (no longer exist; dropped on apply)",

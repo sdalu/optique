@@ -42,6 +42,18 @@ pub struct Session {
     pub aliases: HashMap<PortKey, PortKey>,
     /// Canonical roots the closure is anchored on (for reachability GC).
     pub roots: Vec<PortKey>,
+    /// OPTIONS_NAME -> the port whose view owns the shared file (the
+    /// default flavor). Staleness and obsolete options are judged against
+    /// the owner, since apply writes the file from its point of view.
+    pub owners: HashMap<String, PortKey>,
+}
+
+/// Is this port the default flavor of its origin (or unflavored)?
+fn is_preferred(info: &PortInfo) -> bool {
+    match &info.canonical.flavor {
+        None => true,
+        Some(f) => info.flavors.first() == Some(f),
+    }
 }
 
 impl Session {
@@ -51,8 +63,13 @@ impl Session {
         requested_roots: &[PortKey],
         options_dir: &Path,
     ) -> Self {
-        let mut session =
-            Session { ports, states: HashMap::new(), aliases, roots: Vec::new() };
+        let mut session = Session {
+            ports,
+            states: HashMap::new(),
+            aliases,
+            roots: Vec::new(),
+            owners: HashMap::new(),
+        };
         session.roots = requested_roots
             .iter()
             .filter_map(|r| session.resolve(r))
@@ -62,11 +79,44 @@ impl Session {
             // than risk collecting live ports.
             session.roots = session.ports.keys().cloned().collect();
         }
+        session.rebuild_owners();
         let keys: Vec<PortKey> = session.ports.keys().cloned().collect();
         for key in keys {
             session.ensure_state(&key, options_dir);
         }
         session
+    }
+
+    /// Recompute the owner (default flavor) of every shared options file.
+    fn rebuild_owners(&mut self) {
+        let mut owners: HashMap<String, PortKey> = HashMap::new();
+        for (key, info) in &self.ports {
+            if !info.options.has_options() {
+                continue;
+            }
+            match owners.get(&info.options_name) {
+                Some(existing) => {
+                    let existing_preferred =
+                        self.ports.get(existing).map(is_preferred).unwrap_or(false);
+                    if !existing_preferred && is_preferred(info) {
+                        owners.insert(info.options_name.clone(), key.clone());
+                    }
+                }
+                None => {
+                    owners.insert(info.options_name.clone(), key.clone());
+                }
+            }
+        }
+        self.owners = owners;
+    }
+
+    /// The port whose view owns this port's options file (itself when it is
+    /// the owner or no other flavor is known).
+    pub fn owner_info<'a>(&'a self, info: &'a PortInfo) -> &'a PortInfo {
+        self.owners
+            .get(&info.options_name)
+            .and_then(|k| self.ports.get(k))
+            .unwrap_or(info)
     }
 
     /// Resolve a (possibly non-canonical) key to the canonical ports-map key.
@@ -83,9 +133,12 @@ impl Session {
             return;
         }
         if !self.states.contains_key(&info.options_name) {
+            // The baseline follows the file OWNER's view (default flavor):
+            // that's what apply will write.
+            let owner = self.owner_info(info);
             let saved =
-                SavedOptionsFile::load(&options_dir.join(&info.options_name).join("options"));
-            let baseline = close_implies(info, apply::sync_enabled_set(info, saved.as_ref()));
+                SavedOptionsFile::load(&options_dir.join(&owner.options_name).join("options"));
+            let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
             self.states.insert(
                 info.options_name.clone(),
                 OptState { saved, staged: baseline.clone(), baseline },
@@ -104,6 +157,14 @@ impl Session {
             if self.ports.insert(key.clone(), info).is_none() {
                 added_keys.push(key.clone());
             }
+        }
+        self.rebuild_owners();
+        for key in &added_keys {
+            self.ensure_state(key, options_dir);
+        }
+        // Existing ports may have gained state-worthy options in a refresh.
+        let keys: Vec<PortKey> = self.ports.keys().cloned().collect();
+        for key in keys {
             self.ensure_state(&key, options_dir);
         }
         // Reachability GC from the roots.
@@ -136,12 +197,23 @@ impl Session {
 
     /// Reload saved files after an apply so statuses reflect reality.
     pub fn reload_saved(&mut self, options_dir: &Path) {
+        let mut updates: Vec<(String, Option<SavedOptionsFile>, BTreeSet<String>)> = Vec::new();
         for info in self.ports.values() {
-            if let Some(state) = self.states.get_mut(&info.options_name) {
-                state.saved =
-                    SavedOptionsFile::load(&options_dir.join(&info.options_name).join("options"));
-                state.baseline =
-                    close_implies(info, apply::sync_enabled_set(info, state.saved.as_ref()));
+            if !self.states.contains_key(&info.options_name)
+                || updates.iter().any(|(n, _, _)| *n == info.options_name)
+            {
+                continue;
+            }
+            let owner = self.owner_info(info);
+            let saved =
+                SavedOptionsFile::load(&options_dir.join(&owner.options_name).join("options"));
+            let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
+            updates.push((info.options_name.clone(), saved, baseline));
+        }
+        for (name, saved, baseline) in updates {
+            if let Some(state) = self.states.get_mut(&name) {
+                state.saved = saved;
+                state.baseline = baseline;
             }
         }
     }
@@ -276,7 +348,12 @@ impl Session {
         match &state.saved {
             None => UiStatus::Unconfigured,
             Some(saved) => {
-                let cur: BTreeSet<&str> = info.options.complete.iter().map(String::as_str).collect();
+                // Judge staleness against the file OWNER's option list: a
+                // non-default flavor excludes options on purpose and must not
+                // read the owner-written file as stale.
+                let owner = self.owner_info(info);
+                let cur: BTreeSet<&str> =
+                    owner.options.complete.iter().map(String::as_str).collect();
                 let was: BTreeSet<&str> = saved.complete.iter().map(String::as_str).collect();
                 if cur == was { UiStatus::Ok } else { UiStatus::Stale }
             }
@@ -657,6 +734,61 @@ mod tests {
             default_versions: vec![],
             warnings: vec![],
         }
+    }
+
+    #[test]
+    fn shared_file_judged_against_owner_flavor() {
+        // @full (default) owns editors_emacs with options A + X11;
+        // @nox excludes X11. The file records the owner's view.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("editors_emacs")).unwrap();
+        std::fs::write(
+            tmp.path().join("editors_emacs/options"),
+            "_OPTIONS_READ=emacs-30\n_FILE_COMPLETE_OPTIONS_LIST=A X11\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=X11\n",
+        )
+        .unwrap();
+
+        let mk = |flavor: &str, complete: &[&str]| {
+            let key = PortKey::parse(&format!("editors/emacs@{flavor}")).unwrap();
+            PortInfo {
+                key: key.clone(),
+                canonical: key,
+                pkgname: format!("emacs-{flavor}-30"),
+                flavors: vec!["full".into(), "nox".into()],
+                options_name: "editors_emacs".into(),
+                options: PortOptions {
+                    complete: complete.iter().map(|s| s.to_string()).collect(),
+                    effective: complete.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+                deps: vec![],
+                broken: None,
+                ignore: None,
+                deprecated: None,
+                default_versions: vec![],
+                warnings: vec![],
+            }
+        };
+        let full = mk("full", &["A", "X11"]);
+        let nox = mk("nox", &["A"]);
+        let full_key = full.key.clone();
+        let nox_key = nox.key.clone();
+        let mut ports = BTreeMap::new();
+        // Insert the non-default flavor first: owner selection must still
+        // pick @full.
+        ports.insert(nox_key.clone(), nox);
+        ports.insert(full_key.clone(), full);
+        let roots = vec![full_key.clone(), nox_key.clone()];
+        let s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+
+        assert_eq!(s.owners["editors_emacs"], full_key);
+        assert_eq!(s.status(&s.ports[&full_key]), UiStatus::Ok);
+        assert_eq!(
+            s.status(&s.ports[&nox_key]),
+            UiStatus::Ok,
+            "nox flavor must not read the owner-written file as stale"
+        );
     }
 
     #[test]

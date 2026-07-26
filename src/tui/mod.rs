@@ -33,6 +33,10 @@ pub enum EditorRow {
     ObsoleteHeader,
     /// Option known only to the saved file; not selectable.
     Obsolete(String),
+    ExcludedHeader,
+    /// Option this flavor excludes but the file's owning (default) flavor
+    /// still manages; informational, not selectable.
+    Excluded(String),
 }
 
 pub struct ApplyModal {
@@ -457,18 +461,28 @@ impl App {
                 self.editor_rows.push(EditorRow::Option(m.clone()));
             }
         }
+        let owner_complete: Vec<String> =
+            self.session.owner_info(info).options.complete.clone();
         if let Some(state) = self.session.state(info) {
             if let Some(saved) = &state.saved {
-                let obsolete: Vec<String> = saved
+                let file_known: BTreeSet<String> = saved
                     .complete
                     .iter()
                     .chain(saved.set.iter())
                     .chain(saved.unset.iter())
                     .filter(|o| !opts.complete.contains(*o))
                     .cloned()
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
                     .collect();
+                // Known to the owning (default) flavor: excluded here, not obsolete.
+                let (excluded, obsolete): (Vec<String>, Vec<String>) = file_known
+                    .into_iter()
+                    .partition(|o| owner_complete.contains(o));
+                if !excluded.is_empty() {
+                    self.editor_rows.push(EditorRow::ExcludedHeader);
+                    for o in excluded {
+                        self.editor_rows.push(EditorRow::Excluded(o));
+                    }
+                }
                 if !obsolete.is_empty() {
                     self.editor_rows.push(EditorRow::ObsoleteHeader);
                     for o in obsolete {
