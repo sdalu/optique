@@ -106,8 +106,11 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             live.iter().map(|e| (e.key.clone(), e)).collect();
         let mut in_flight = 0usize;
         let mut done = 0usize;
+        let verbose = cli.verbose;
+        let mut kept: Vec<(String, String)> = Vec::new();
         let mut handle = |info: model::port::PortInfo,
                           removals: &mut Vec<clean::Removal>,
+                          kept: &mut Vec<(String, String)>,
                           by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
             if let Some(entry) = by_key.get(&info.key) {
                 // The verdict below is only valid for the file this port
@@ -120,19 +123,25 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
                     );
                     return;
                 }
-                if clean::file_is_redundant(&info) {
+                let diff = clean::redundancy_diff(&info);
+                if diff.is_empty() {
                     removals.push(clean::Removal {
                         options_name: entry.options_name.clone(),
                         dir: entry.dir.clone(),
                         reason: "redundant: repeats defaults + make.conf".to_string(),
                     });
+                } else if verbose {
+                    kept.push((
+                        entry.options_name.clone(),
+                        format!("deviates from defaults + make.conf: {}", diff.join(" ")),
+                    ));
                 }
             }
         };
         for entry in &live {
             if let Some(info) = cache.lookup(&entry.key, &settings.options_dir) {
                 done += 1;
-                handle(info, &mut removals, &by_key);
+                handle(info, &mut removals, &mut kept, &by_key);
             } else {
                 runner.submit(entry.key.clone());
                 in_flight += 1;
@@ -144,7 +153,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
                     in_flight -= 1;
                     done += 1;
                     cache.insert(&info, &settings.options_dir);
-                    handle(*info, &mut removals, &by_key);
+                    handle(*info, &mut removals, &mut kept, &by_key);
                 }
                 Ok(ScanEvent::PortError { key, msg }) => {
                     in_flight -= 1;
@@ -161,6 +170,12 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         }
         runner.shutdown();
         removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
+        if cli.verbose {
+            kept.sort();
+            for (name, why) in &kept {
+                println!("keep  {name:<38} {why}");
+            }
+        }
     }
 
     if removals.is_empty() {
@@ -333,7 +348,15 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
     let scanned = run_scan(cli, roots)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
 
-    let mut rows: Vec<(String, String, PortStatus, Vec<String>)> = Vec::new();
+    struct Row {
+        key: String,
+        pkgname: String,
+        status: PortStatus,
+        undecided: Vec<String>,
+        state: String,
+        warnings: Vec<String>,
+    }
+    let mut rows: Vec<Row> = Vec::new();
     let mut hidden = 0usize;
     for (key, info) in &result.ports {
         if !info.options.has_options() {
@@ -343,19 +366,39 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         let saved =
             SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
         let undecided = session::undecided_options(info, saved.as_ref());
-        rows.push((key.to_string(), info.pkgname.clone(), info.status(saved.as_ref()), undecided));
+        let state = if cli.verbose {
+            info.options
+                .complete
+                .iter()
+                .map(|o| {
+                    if info.options.effective.contains(o) { format!("+{o}") } else { format!("-{o}") }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            String::new()
+        };
+        rows.push(Row {
+            key: key.to_string(),
+            pkgname: info.pkgname.clone(),
+            status: info.status(saved.as_ref()),
+            undecided,
+            state,
+            warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
+        });
     }
-    rows.sort_by_key(|(key, _, status, _)| (matches!(status, PortStatus::Ok), key.clone()));
+    rows.sort_by_key(|r| (matches!(r.status, PortStatus::Ok), r.key.clone()));
 
     let mut unconfigured = 0;
     let mut stale = 0;
-    for (key, pkgname, status, undecided) in &rows {
-        let decision = if undecided.is_empty() {
+    for row in &rows {
+        let (key, pkgname) = (&row.key, &row.pkgname);
+        let decision = if row.undecided.is_empty() {
             " [mc-covered ≈]".to_string()
         } else {
-            format!(" undecided: {}", undecided.join(" "))
+            format!(" undecided: {}", row.undecided.join(" "))
         };
-        match status {
+        match &row.status {
             PortStatus::Unconfigured => {
                 unconfigured += 1;
                 println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
@@ -372,6 +415,14 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
                 println!("!  {key:<40} {pkgname:<32} STALE{detail}{decision}");
             }
             PortStatus::Ok => println!("   {key:<40} {pkgname:<32} ok"),
+        }
+        if cli.verbose {
+            if !row.state.is_empty() {
+                println!("     options: {}", row.state);
+            }
+            for w in &row.warnings {
+                println!("     warning: {w}");
+            }
         }
     }
 
@@ -410,6 +461,15 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
     }
     for w in &writes {
         println!("{}  {}", w.key, w.describe());
+        if cli.verbose {
+            let state = w
+                .complete
+                .iter()
+                .map(|o| if w.enabled.contains(o) { format!("+{o}") } else { format!("-{o}") })
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("     final: {state}");
+        }
     }
     if dry_run {
         eprintln!("dry run: {} file(s) would be written to {}", writes.len(), settings.options_dir.display());

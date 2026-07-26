@@ -41,7 +41,10 @@ optique -z workstation clean --redundant
 Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`
 (poudriere ports tree, default `default`), `-o dir` (explicit options dir,
 bypasses poudriere resolution; default `/var/db/ports`), `-f pkglist`
-(repeatable), `-J jobs`, `--no-cache`.
+(repeatable), `-J jobs`, `--no-cache`, `-v` (verbose: scan adds each port's
+full `+ON`/`-OFF` option state and query warnings, sync adds the final state
+per written file, clean explains kept entries — e.g. which options deviate
+from defaults + make.conf).
 
 ## Workflow
 

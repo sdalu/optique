@@ -37,6 +37,12 @@ pub struct Cli {
     #[arg(long = "no-cache", global = true)]
     pub no_cache: bool,
 
+    /// More detail: scan shows each port's effective options and query
+    /// warnings, sync shows the full final state per written file, clean
+    /// explains why kept entries are kept
+    #[arg(short = 'v', long = "verbose", global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
