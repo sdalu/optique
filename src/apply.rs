@@ -218,6 +218,40 @@ pub fn plan_writes<'a>(
     PlannedWrites { writes, warnings }
 }
 
+/// Leftover options files owned by ports that no longer have ANY options.
+/// A file is only removable when NO port in the closure sharing that
+/// OPTIONS_NAME still has options — a flavor with an empty option list
+/// (e.g. glib20@bootstrap) must not delete the default flavor's file.
+pub fn plan_stale_removals(
+    ports: &std::collections::BTreeMap<PortKey, PortInfo>,
+    options_dir: &Path,
+) -> Vec<crate::clean::Removal> {
+    let with_options: BTreeSet<&str> = ports
+        .values()
+        .filter(|i| i.options.has_options())
+        .map(|i| i.options_name.as_str())
+        .collect();
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut out = Vec::new();
+    for info in ports.values() {
+        if info.options.has_options()
+            || with_options.contains(info.options_name.as_str())
+            || !seen.insert(info.options_name.as_str())
+        {
+            continue;
+        }
+        let dir = options_dir.join(&info.options_name);
+        if dir.join("options").is_file() {
+            out.push(crate::clean::Removal {
+                options_name: info.options_name.clone(),
+                dir,
+                reason: "port has no options anymore".to_string(),
+            });
+        }
+    }
+    out
+}
+
 pub struct ApplySummary {
     pub written: usize,
     pub failed: Vec<(PortKey, String)>,
@@ -394,6 +428,38 @@ mod tests {
         // A brand-new file describes itself by option count.
         let w2 = PendingWrite { old: None, ..w };
         assert!(w2.describe().contains("new file"));
+    }
+
+    #[test]
+    fn stale_removal_spares_files_shared_with_optioned_flavors() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("devel_glib20")).unwrap();
+        std::fs::write(tmp.path().join("devel_glib20/options"), "x\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("print_indexinfo")).unwrap();
+        std::fs::write(tmp.path().join("print_indexinfo/options"), "x\n").unwrap();
+
+        // glib20@default has options; glib20@bootstrap shares the file and
+        // has none. indexinfo has none at all.
+        let mut default = mk_info(&["DOCS"], &[]);
+        default.key = PortKey::parse("devel/glib20@default").unwrap();
+        default.canonical = default.key.clone();
+        default.options_name = "devel_glib20".into();
+        let mut bootstrap = mk_info(&[], &[]);
+        bootstrap.key = PortKey::parse("devel/glib20@bootstrap").unwrap();
+        bootstrap.canonical = bootstrap.key.clone();
+        bootstrap.options_name = "devel_glib20".into();
+        let mut indexinfo = mk_info(&[], &[]);
+        indexinfo.key = PortKey::parse("print/indexinfo").unwrap();
+        indexinfo.canonical = indexinfo.key.clone();
+        indexinfo.options_name = "print_indexinfo".into();
+
+        let mut ports = std::collections::BTreeMap::new();
+        for i in [default, bootstrap, indexinfo] {
+            ports.insert(i.key.clone(), i);
+        }
+        let removals = plan_stale_removals(&ports, tmp.path());
+        let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
+        assert_eq!(names, vec!["print_indexinfo"], "glib20's shared file must survive");
     }
 
     #[test]

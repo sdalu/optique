@@ -485,22 +485,9 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
     let writes = planned.writes;
 
     // A port that lost ALL its options never reaches plan_writes; its
-    // leftover file is dead configuration and must go too.
-    let mut stale_files: Vec<clean::Removal> = Vec::new();
-    let mut seen_names: std::collections::HashSet<&str> = Default::default();
-    for info in result.ports.values() {
-        if info.options.has_options() || !seen_names.insert(&info.options_name) {
-            continue;
-        }
-        let dir = settings.options_dir.join(&info.options_name);
-        if dir.join("options").is_file() {
-            stale_files.push(clean::Removal {
-                options_name: info.options_name.clone(),
-                dir,
-                reason: "port has no options anymore".to_string(),
-            });
-        }
-    }
+    // leftover file is dead configuration and must go too (unless another
+    // flavor sharing the file still has options).
+    let stale_files = apply::plan_stale_removals(&result.ports, &settings.options_dir);
 
     if writes.is_empty() && stale_files.is_empty() {
         eprintln!("everything up to date, nothing to write");
