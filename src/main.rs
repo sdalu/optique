@@ -37,15 +37,15 @@ fn main() -> Result<()> {
     }
     match &cli.command {
         Some(Command::Tui(args)) => {
-            let roots = roots_or_installed(&cli, &args.roots.origins)?;
-            cmd_tui(&cli, &roots, args.drive)
+            let rs = roots_or_installed(&cli, &args.roots.origins)?;
+            cmd_tui(&cli, &rs, args.drive)
         }
         Some(Command::Scan(args)) => {
-            let roots = roots_or_installed(&cli, &args.roots.origins)?;
+            let rs = roots_or_installed(&cli, &args.roots.origins)?;
             // Exit code is the cron/CI gate: 1 = decisions pending, 0 = clean.
             // Real errors keep travelling up the anyhow path (nonzero, 1 from
             // clap's runner) — only the *clean* run may return 0.
-            let attention = cmd_scan(&cli, &roots, args.json)?;
+            let attention = cmd_scan(&cli, &rs, args.json)?;
             if attention > 0 {
                 let _ = std::io::stdout().flush();
                 let _ = std::io::stderr().flush();
@@ -54,8 +54,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Sync(args)) => {
-            let roots = roots_or_installed(&cli, &args.origins)?;
-            cmd_sync(&cli, &roots, cli.dry_run)
+            let rs = roots_or_installed(&cli, &args.origins)?;
+            cmd_sync(&cli, &rs, cli.dry_run)
         }
         Some(Command::Clean(args)) => cmd_clean(&cli, args),
         Some(Command::Origins(raw)) => {
@@ -64,8 +64,8 @@ fn main() -> Result<()> {
             let (origins, files) = split_raw_origins(raw)?;
             let mut all_files = cli.files.clone();
             all_files.extend(files);
-            let roots = cli::collect_roots(&origins, &all_files)?;
-            cmd_tui(&cli, &roots, false)
+            let rs = RootSet { roots: cli::collect_roots(&origins, &all_files)?, notes: Vec::new() };
+            cmd_tui(&cli, &rs, false)
         }
         None => {
             if cli.files.is_empty() && cli.synth.is_none() {
@@ -73,8 +73,8 @@ fn main() -> Result<()> {
                     "no ports given; try `optique -z <set> category/port…` or `optique -f pkglist`"
                 );
             }
-            let roots = roots_or_installed(&cli, &[])?;
-            cmd_tui(&cli, &roots, false)
+            let rs = roots_or_installed(&cli, &[])?;
+            cmd_tui(&cli, &rs, false)
         }
     }
 }
@@ -141,8 +141,8 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     // --unused: only the closure of the given list justifies keeping an entry,
     // so the closure has to be resolved first — settings, cache, MOVED and the
     // job count are then reused for the cleaning pass itself.
-    let roots = roots_or_installed(cli, &args.origins)?;
-    let scanned = run_scan(cli, &roots)?;
+    let rs = roots_or_installed(cli, &args.origins)?;
+    let scanned = run_scan(cli, &rs)?;
     if !scanned.result.errors.is_empty() {
         // A port that failed to query is absent from the closure and would be
         // pruned as unused — refuse rather than delete on partial knowledge.
@@ -358,15 +358,22 @@ fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
     Ok(roots)
 }
 
+/// The resolved root list plus notes destined for the startup banner's
+/// aligned `note:` block (nothing is printed here).
+struct RootSet {
+    roots: Vec<model::origin::PortKey>,
+    notes: Vec<String>,
+}
+
 /// Roots for a subcommand: the given list, or — in synth mode only — the
 /// installed packages when nothing was given.
-fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<Vec<model::origin::PortKey>> {
+fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
         let roots = installed_roots()?;
-        eprintln!("{} no ports given; using {} installed package(s) as the list", tint(stderr_color(cli), ansi::YELLOW, "note:"), roots.len());
-        return Ok(roots);
+        let note = format!("no ports given; using {} installed package(s) as the list", roots.len());
+        return Ok(RootSet { roots, notes: vec![note] });
     }
-    cli::collect_roots(origins, &cli.files)
+    Ok(RootSet { roots: cli::collect_roots(origins, &cli.files)?, notes: Vec::new() })
 }
 
 /// Split an external-subcommand argument vector into origins and -f/--file
@@ -394,7 +401,7 @@ pub(crate) fn split_raw_origins(
     Ok((origins, files))
 }
 
-fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<()> {
+fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     if cli.dry_run {
         eprintln!("{} --dry-run has no effect in the TUI; the apply dialog previews changes", tint(stderr_color(cli), ansi::YELLOW, "note:"));
     }
@@ -403,12 +410,12 @@ fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<(
     if !drive {
         tui::ensure_terminal()?;
     }
-    let scanned = run_scan(cli, roots)?;
+    let scanned = run_scan(cli, rs)?;
     let options_dir = scanned.settings.options_dir.clone();
     let session = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        roots,
+        &rs.roots,
         &options_dir,
         cli.minimal,
     );
@@ -465,7 +472,7 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
     }
 }
 
-fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
+fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let staging = tempfile::tempdir()?;
     let settings = config::resolve(
         cli.tree.as_deref(),
@@ -494,7 +501,7 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
             settings.portsdir.display(),
             jobs
         );
-        for note in &settings.notes {
+        for note in rs.notes.iter().chain(settings.notes.iter()) {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
         eprintln!(
@@ -524,7 +531,7 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     }
 
     let t0 = Instant::now();
-    let result = scanner::scan(roots, &ctx, jobs, &mut cache, &moved, move |p| {
+    let result = scanner::scan(&rs.roots, &ctx, jobs, &mut cache, &moved, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();
@@ -603,10 +610,10 @@ fn stdout_color(cli: &Cli) -> bool {
 
 /// Scan and report. Returns the number of ports needing a *human* decision,
 /// which main turns into exit code 1 (see `Row::needs_attention`).
-fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<usize> {
+fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
     use crate::session::UiStatus;
 
-    let scanned = run_scan(cli, roots)?;
+    let scanned = run_scan(cli, rs)?;
     let (queried, from_cache, elapsed) =
         (scanned.result.queried, scanned.result.from_cache, scanned.elapsed);
     let settings = scanned.settings;
@@ -615,7 +622,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
     let sess = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        roots,
+        &rs.roots,
         &settings.options_dir,
         cli.minimal,
     );
@@ -851,8 +858,8 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
     Ok(attention)
 }
 
-fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Result<()> {
-    let scanned = run_scan(cli, roots)?;
+fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
+    let scanned = run_scan(cli, rs)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
     let paint = stderr_color(cli);
 
