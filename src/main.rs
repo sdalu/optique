@@ -314,10 +314,11 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 
 /// Origins of everything installed, from pkg(8) — synth's natural root set
 /// when no list is given (synth builds what is installed). Flavors come from
-/// the pkg "flavor" annotation.
-fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
+/// the pkg "flavor" annotation; `repo` restricts to packages installed from
+/// that pkg repository (%R).
+fn installed_roots(repo: Option<&str>) -> Result<Vec<model::origin::PortKey>> {
     let origins = std::process::Command::new("pkg")
-        .args(["query", "-a", "%o"])
+        .args(["query", "-a", "%o\t%R"])
         .output()
         .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
     if !origins.status.success() {
@@ -328,19 +329,51 @@ fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
         .args(["query", "-a", "%o\t%At\t%Av"])
         .output()
         .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
-    let mut flavor: std::collections::HashMap<String, String> = Default::default();
-    for line in String::from_utf8_lossy(&annots.stdout).lines() {
+    let roots = parse_installed(
+        &String::from_utf8_lossy(&origins.stdout),
+        &String::from_utf8_lossy(&annots.stdout),
+        repo,
+    );
+    if roots.is_empty() {
+        match repo {
+            Some(r) => anyhow::bail!(
+                "no installed packages from repository '{r}' \
+                 (check the names with: pkg query -a %R | sort -u)"
+            ),
+            None => anyhow::bail!("no installed packages with port origins found (pkg query -a %o)"),
+        }
+    }
+    Ok(roots)
+}
+
+/// Pure part of installed_roots: `origins` lines are `origin\trepository`,
+/// `annots` lines are `origin\tannotation\tvalue`. Unparsable origins are
+/// skipped, duplicates collapse, the result is sorted.
+fn parse_installed(
+    origins: &str,
+    annots: &str,
+    repo: Option<&str>,
+) -> Vec<model::origin::PortKey> {
+    let mut flavor: std::collections::HashMap<&str, &str> = Default::default();
+    for line in annots.lines() {
         let mut f = line.split('\t');
         if let (Some(origin), Some("flavor"), Some(value)) = (f.next(), f.next(), f.next()) {
-            flavor.insert(origin.to_string(), value.to_string());
+            flavor.insert(origin, value);
         }
     }
     let mut seen = std::collections::HashSet::new();
     let mut roots = Vec::new();
-    for line in String::from_utf8_lossy(&origins.stdout).lines() {
-        let origin = line.trim();
+    for line in origins.lines() {
+        let mut f = line.split('\t');
+        let (Some(origin), pkg_repo) = (f.next(), f.next()) else { continue };
+        let origin = origin.trim();
         if origin.is_empty() || !seen.insert(origin.to_string()) {
             continue;
+        }
+        if let Some(wanted) = repo {
+            if pkg_repo.map(str::trim) != Some(wanted) {
+                continue;
+            }
         }
         let spec = match flavor.get(origin) {
             Some(fl) => format!("{origin}@{fl}"),
@@ -351,11 +384,8 @@ fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
             roots.push(key);
         }
     }
-    if roots.is_empty() {
-        anyhow::bail!("no installed packages with port origins found (pkg query -a %o)");
-    }
     roots.sort();
-    Ok(roots)
+    roots
 }
 
 /// The resolved root list plus notes destined for the startup banner's
@@ -369,9 +399,23 @@ struct RootSet {
 /// installed packages when nothing was given.
 fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
-        let roots = installed_roots()?;
-        let note = format!("no ports given; using {} installed package(s) as the list", roots.len());
+        let roots = installed_roots(cli.repo.as_deref())?;
+        let note = match &cli.repo {
+            Some(repo) => format!(
+                "no ports given; using {} installed package(s) from repository '{repo}'",
+                roots.len()
+            ),
+            None => {
+                format!("no ports given; using {} installed package(s) as the list", roots.len())
+            }
+        };
         return Ok(RootSet { roots, notes: vec![note] });
+    }
+    if cli.repo.is_some() {
+        anyhow::bail!(
+            "--repo filters the installed-package list, which is only used when \
+             no ports are given"
+        );
     }
     Ok(RootSet { roots: cli::collect_roots(origins, &cli.files)?, notes: Vec::new() })
 }
@@ -941,6 +985,32 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::split_raw_origins;
+    use super::parse_installed;
+
+    #[test]
+    fn installed_list_flavors_and_repo_filter() {
+        let origins = "www/nginx\tpoudriere\n\
+                       graphics/ImageMagick7\tSynth\n\
+                       devel/binutils\tSynth\n\
+                       www/nginx\tpoudriere\n\
+                       not-an-origin\tSynth\n";
+        let annots = "graphics/ImageMagick7\tflavor\tnox11\n\
+                      devel/binutils\tflavor\tnative\n\
+                      www/nginx\tcpe\tsomething\n";
+        // Unfiltered: three ports, flavors applied, dup and junk dropped.
+        let all = parse_installed(origins, annots, None);
+        let names: Vec<String> = all.iter().map(|k| k.to_string()).collect();
+        assert_eq!(
+            names,
+            vec!["devel/binutils@native", "graphics/ImageMagick7@nox11", "www/nginx"]
+        );
+        // Repo filter keeps only Synth-built packages.
+        let synth = parse_installed(origins, annots, Some("Synth"));
+        let names: Vec<String> = synth.iter().map(|k| k.to_string()).collect();
+        assert_eq!(names, vec!["devel/binutils@native", "graphics/ImageMagick7@nox11"]);
+        // Unknown repo: empty (caller turns this into an error).
+        assert!(parse_installed(origins, annots, Some("nope")).is_empty());
+    }
 
     #[test]
     fn split_raw_origins_forms() {

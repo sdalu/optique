@@ -836,6 +836,12 @@ This applies to the TUI,
 .Cm sync
 and
 .Cm clean Fl -unused .
+.Fl -repo Ar name
+restricts that implicit list to packages installed from the named pkg
+repository, e.g.
+.Ql --repo Synth
+to consider only synth-built packages; the names are listed by
+.Ql pkg query -a %R .
 .Pp
 Note that when
 .Va Directory_options

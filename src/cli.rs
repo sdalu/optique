@@ -75,6 +75,12 @@ pub struct Cli {
     )]
     pub synth: Option<String>,
 
+    /// With -s and no ports given, only consider installed packages coming
+    /// from this pkg(8) repository (e.g. Synth) when building the implicit
+    /// list; see `pkg query %R` for the names
+    #[arg(long = "repo", global = true, value_name = "NAME", requires = "synth")]
+    pub repo: Option<String>,
+
     /// Explicit options dir, overriding the poudriere or synth resolution
     /// (e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
