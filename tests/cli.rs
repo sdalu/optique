@@ -80,10 +80,29 @@ fn color_is_rejected_unless_it_names_a_mode() {
 fn quiet_is_a_global_flag() {
     // -Q must be accepted before the subcommand and must not swallow errors:
     // the malformed origin is still reported on stderr.
-    let out = optique().args(["-Q", "scan", "not-an-origin"]).output().unwrap();
+    let out = optique().args(["-q", "scan", "not-an-origin"]).output().unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("not-an-origin"), "{err}");
+}
+
+#[test]
+fn clear_cache_alone_clears_and_exits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path().join("optique");
+    std::fs::create_dir_all(cache.join("drafts")).unwrap();
+    std::fs::write(cache.join("v2-x-y.jsonl"), "{}\n").unwrap();
+    std::fs::write(cache.join("drafts/keep.json"), "{}\n").unwrap();
+    let out = optique()
+        .env("XDG_CACHE_HOME", tmp.path())
+        .arg("--clear-cache")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!cache.join("v2-x-y.jsonl").exists(), "generation file must be removed");
+    assert!(cache.join("drafts/keep.json").exists(), "drafts must survive");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("cache cleared"), "{err}");
 }
 
 #[test]

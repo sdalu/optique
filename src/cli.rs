@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crate::model::origin::PortKey;
 
 #[derive(Parser, Debug)]
-#[command(name = "optique", version, about = "Fast FreeBSD ports options/dependency configurator")]
+#[command(name = "optique", version, about = "Fast FreeBSD ports options/dependency configurator", max_term_width = 80)]
 pub struct Cli {
     /// Poudriere set (options land in poudriere.d/<SET>-options)
     #[arg(short = 'z', long = "set", global = true)]
@@ -37,6 +37,11 @@ pub struct Cli {
     #[arg(long = "no-cache", global = true)]
     pub no_cache: bool,
 
+    /// Delete the persistent query cache before running
+    /// (given alone: clear it and exit)
+    #[arg(long = "clear-cache", global = true)]
+    pub clear_cache: bool,
+
     /// Show what sync/clean would change without touching anything
     /// (the only commands that write)
     #[arg(short = 'n', long = "dry-run", global = true)]
@@ -51,7 +56,7 @@ pub struct Cli {
     /// Quiet: drop the startup banner and the per-port/per-file listings on
     /// stdout (scan rows, sync writes, clean entries); the summary line and
     /// all warnings/errors on stderr stay. Ignored by `scan --json`.
-    #[arg(short = 'Q', long = "quiet", global = true)]
+    #[arg(short = 'q', long = "quiet", global = true)]
     pub quiet: bool,
 
     /// Colorize output: auto (a terminal with NO_COLOR unset), always, never.

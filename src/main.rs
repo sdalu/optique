@@ -26,6 +26,15 @@ use crate::query::scanner::{self, ScanResult};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.clear_cache {
+        let dir = cache::default_cache_dir();
+        let (files, bytes) = cache::clear(&dir);
+        eprintln!("cache cleared: {files} file(s), {} KiB in {}", bytes / 1024, dir.display());
+        // Given alone, clearing IS the action.
+        if cli.command.is_none() && cli.files.is_empty() {
+            return Ok(());
+        }
+    }
     match &cli.command {
         Some(Command::Tui(args)) => {
             let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;

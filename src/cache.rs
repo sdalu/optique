@@ -35,9 +35,6 @@ impl Cache {
     }
 
     pub fn open(cache_dir: &Path, tree_key: &str, conf_hash: &str) -> Self {
-        // SCHEMA bumps whenever the wrapper emits new data, so entries
-        // queried by an older binary don't linger with missing fields.
-        const SCHEMA: u32 = 2;
         let generation = format!("v{SCHEMA}-{}-{}.jsonl", &short(tree_key), &short(conf_hash));
         let path = cache_dir.join(&generation);
         let _ = fs::create_dir_all(cache_dir);
@@ -199,6 +196,24 @@ fn object_id(s: &str) -> Option<String> {
     ok.then(|| s.to_string())
 }
 
+/// Delete every cache generation file (drafts are left alone).
+/// Returns (files removed, bytes freed).
+pub fn clear(cache_dir: &Path) -> (usize, u64) {
+    let mut files = 0;
+    let mut bytes = 0;
+    if let Ok(entries) = fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(".jsonl") {
+                bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                if fs::remove_file(entry.path()).is_ok() {
+                    files += 1;
+                }
+            }
+        }
+    }
+    (files, bytes)
+}
+
 pub fn default_cache_dir() -> PathBuf {
     if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
         return PathBuf::from(x).join("optique");
@@ -212,16 +227,32 @@ fn short(s: &str) -> String {
 }
 
 /// Keep the current generation plus the most recent other one.
+/// Cache format version: bumped whenever the wrapper emits new data or the
+/// entry layout changes, so a newer binary never reuses entries a previous
+/// one wrote with missing fields. Part of every generation file name
+/// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
+/// by the prune pass since nothing can read them again.
+const SCHEMA: u32 = 2;
+
 fn prune_old_generations(dir: &Path, keep: &str) {
     let Ok(entries) = fs::read_dir(dir) else { return };
-    let mut others: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .filter(|e| {
-            e.file_name().to_string_lossy().ends_with(".jsonl")
-                && e.file_name().to_string_lossy() != keep
-        })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-        .collect();
+    let prefix = format!("v{SCHEMA}-");
+    let mut others: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".jsonl") || name == keep {
+            continue;
+        }
+        if !name.starts_with(&prefix) {
+            let _ = fs::remove_file(e.path()); // other schema: unreadable now
+            continue;
+        }
+        if let (Ok(meta), path) = (e.metadata(), e.path()) {
+            if let Ok(t) = meta.modified() {
+                others.push((t, path));
+            }
+        }
+    }
     others.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
     for (_, path) in others.into_iter().skip(1) {
         let _ = fs::remove_file(path);
@@ -306,12 +337,34 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache_dir = tmp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        for n in ["old1-a.jsonl", "old2-b.jsonl", "old3-c.jsonl"] {
+        for n in [
+            format!("v{SCHEMA}-old1-a.jsonl"),
+            format!("v{SCHEMA}-old2-b.jsonl"),
+            format!("v{SCHEMA}-old3-c.jsonl"),
+        ] {
             std::fs::write(cache_dir.join(n), "\n").unwrap();
         }
         let _c = Cache::open(&cache_dir, "current", "gen");
         let count = std::fs::read_dir(&cache_dir).unwrap().count();
         assert!(count <= 2, "expected current + 1 old generation, got {count}");
+    }
+
+    #[test]
+    fn prune_reaps_other_schema_generations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        // Pre-versioning and other-schema files are unreadable: always removed.
+        std::fs::write(cache_dir.join("aaaa-bbbb.jsonl"), "\n").unwrap();
+        std::fs::write(cache_dir.join("v1-cccc-dddd.jsonl"), "\n").unwrap();
+        std::fs::write(cache_dir.join("v999-eeee-ffff.jsonl"), "\n").unwrap();
+        let _c = Cache::open(&cache_dir, "current", "gen");
+        let names: Vec<String> = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![format!("v{SCHEMA}-current-gen.jsonl")], "{names:?}");
     }
 
     /// A ports tree whose .git is a plain directory, with the given files

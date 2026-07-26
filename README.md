@@ -27,11 +27,11 @@ optique -z server -f base-list -f extra-list www/nginx
 # Exit code is the gate: 0 = nothing pending, 1 = a human decision is pending
 # (unconfigured/stale with undecided options, or a conflict), anything else =
 # error. Ports that are fully mc-covered do NOT trip the gate. With --json one
-# JSON object goes to stdout instead of the table; -Q drops the per-port rows
+# JSON object goes to stdout instead of the table; -q drops the per-port rows
 # and the banner, keeping the summary and warnings on stderr
 optique -z workstation scan -f pkglist
 optique -z workstation scan --json -f pkglist
-optique -z ws -Q scan -f list || mail-me   # cron: only speak up when it matters
+optique -z ws -q scan -f list || mail-me   # cron: only speak up when it matters
 
 # Headless refresh (the fast `poudriere options -C` replacement):
 # keep saved choices, adopt defaults for newly-added options, drop removed
@@ -59,7 +59,7 @@ bypasses poudriere resolution; default `/var/db/ports`), `-f pkglist`
 (repeatable), `-J jobs`, `--no-cache`, `-v` (verbose: scan adds each port's
 full `+ON`/`-OFF` option state and query warnings, sync adds the final state
 per written file, clean explains kept entries — e.g. which options deviate
-from defaults + make.conf), `-Q` (quiet: no banner and no per-port/per-file
+from defaults + make.conf), `-q` (quiet: no banner and no per-port/per-file
 stdout listing; summary and warnings still go to stderr).
 
 ## Workflow

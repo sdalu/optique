@@ -11,7 +11,7 @@
 .Nd fast FreeBSD ports options and dependency configurator for poudriere
 .Sh SYNOPSIS
 .Nm
-.Op Fl v | Fl Q
+.Op Fl v | Fl q
 .Op Fl z Ar set
 .Op Fl j Ar jail
 .Op Fl p Ar tree
@@ -178,7 +178,7 @@ prints the final state of every written file, and
 explains why each kept entry is kept, for example which options deviate from
 defaults plus
 .Pa make.conf .
-.It Fl Q , Fl -quiet
+.It Fl q , Fl -quiet
 Drop the startup banner and the per-port and per-file listings on standard
 output.
 The summary line and all warnings and errors on standard error remain.
@@ -510,7 +510,7 @@ Ports without any options are counted separately and not listed.
 .It Fl -json
 Print one machine-readable JSON object on standard output instead of the table;
 progress and the summary stay on standard error and
-.Fl Q
+.Fl q
 is ignored.
 The object has the keys
 .Va options_dir ,
@@ -550,10 +550,10 @@ the last of which drives the exit status.
 .El
 .Pp
 With
-.Fl Q
+.Fl q
 the per-port rows and the banner are dropped, leaving only the summary and any
 warnings on standard error, which makes
-.Nm Fl Q Cm scan
+.Nm Fl q Cm scan
 usable directly as a
 .Xr cron 8
 gate that speaks up only when something is pending.
