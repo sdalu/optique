@@ -37,6 +37,11 @@ pub struct Cli {
     #[arg(long = "no-cache", global = true)]
     pub no_cache: bool,
 
+    /// Show what sync/clean would change without touching anything
+    /// (the only commands that write)
+    #[arg(short = 'n', long = "dry-run", global = true)]
+    pub dry_run: bool,
+
     /// More detail: scan shows each port's effective options and query
     /// warnings, sync shows the full final state per written file, clean
     /// explains why kept entries are kept
@@ -56,7 +61,7 @@ pub enum Command {
     /// Refresh options files non-interactively: keep saved choices, adopt
     /// defaults for new options, drop removed ones (like `poudriere options -C`
     /// but headless and fast)
-    Sync(SyncArgs),
+    Sync(RootsArgs),
 
     /// Remove obsolete options files from the resolved options dir: ports
     /// that vanished from the tree, and optionally files that only repeat
@@ -74,10 +79,6 @@ pub struct CleanArgs {
     /// defaults + make.conf overlay outcome (removing them changes nothing)
     #[arg(short = 'r', long = "redundant")]
     pub redundant: bool,
-
-    /// Show what would be removed without touching anything
-    #[arg(short = 'n', long = "dry-run")]
-    pub dry_run: bool,
 }
 
 #[derive(Args, Debug, Default)]
@@ -86,15 +87,6 @@ pub struct RootsArgs {
     pub origins: Vec<String>,
 }
 
-#[derive(Args, Debug)]
-pub struct SyncArgs {
-    #[command(flatten)]
-    pub roots: RootsArgs,
-
-    /// Show what would be written without touching anything
-    #[arg(short = 'n', long = "dry-run")]
-    pub dry_run: bool,
-}
 
 /// Merge positional origins and pkglist files into parsed root keys,
 /// dropping duplicates while preserving first-seen order.

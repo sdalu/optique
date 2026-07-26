@@ -36,8 +36,8 @@ fn main() -> Result<()> {
             cmd_scan(&cli, &roots)
         }
         Some(Command::Sync(args)) => {
-            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
-            cmd_sync(&cli, &roots, args.dry_run)
+            let roots = cli::collect_roots(&args.origins, &cli.files)?;
+            cmd_sync(&cli, &roots, cli.dry_run)
         }
         Some(Command::Clean(args)) => cmd_clean(&cli, args),
         Some(Command::Origins(raw)) => {
@@ -185,7 +185,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     for r in &removals {
         println!("{:<44} {}", r.options_name, r.reason);
     }
-    if args.dry_run {
+    if cli.dry_run {
         eprintln!(
             "dry run: {} of {total_entries} entries would be removed from {}",
             removals.len(),
