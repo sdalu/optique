@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::model::origin::PortKey;
 
@@ -54,8 +54,34 @@ pub struct Cli {
     #[arg(short = 'Q', long = "quiet", global = true)]
     pub quiet: bool,
 
+    /// Colorize output: auto (a terminal with NO_COLOR unset), always, never.
+    /// Today this only tints the scan status marker column; it is honoured by
+    /// any colored CLI output added later. The TUI is unaffected.
+    #[arg(long = "color", global = true, value_name = "WHEN", default_value = "auto")]
+    pub color: ColorChoice,
+
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(ValueEnum, Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+/// Should ANSI colors be emitted on stdout? `always` is an explicit request
+/// and wins over NO_COLOR; under `auto` any NO_COLOR value (including an
+/// empty one) and any non-terminal stdout mean plain text, so piped output
+/// and the tests never see escapes.
+pub fn use_color(choice: ColorChoice, is_tty: bool, no_color_env: Option<&str>) -> bool {
+    match choice {
+        ColorChoice::Never => false,
+        ColorChoice::Always => true,
+        ColorChoice::Auto => is_tty && no_color_env.is_none(),
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -198,5 +224,21 @@ mod tests {
     #[test]
     fn empty_is_an_error() {
         assert!(collect_roots(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn color_decision_table() {
+        use ColorChoice::*;
+        // auto: only a terminal without NO_COLOR gets escapes.
+        assert!(use_color(Auto, true, None));
+        assert!(!use_color(Auto, false, None));
+        assert!(!use_color(Auto, true, Some("1")));
+        assert!(!use_color(Auto, true, Some("")), "NO_COLOR= still means no color");
+        assert!(!use_color(Auto, false, Some("1")));
+        // never always loses, always always wins (explicit beats the env).
+        assert!(!use_color(Never, true, None));
+        assert!(!use_color(Never, false, Some("1")));
+        assert!(use_color(Always, false, None));
+        assert!(use_color(Always, false, Some("1")));
     }
 }

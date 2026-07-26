@@ -587,6 +587,7 @@ fn draw_help(f: &mut Frame) {
         ("Enter/l", "edit selected port · h/Esc back to the list"),
         ("Space", "toggle option (group rules enforced)"),
         ("d / u", "reset port to defaults / revert to saved state"),
+        ("U", "undo the last option change (u = revert port to saved)"),
         ("B", "bulk: set an option on/off across all visible ports"),
         ("n / p", "next / previous port needing attention"),
         ("f", "jump to the next flavor of the same origin"),

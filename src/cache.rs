@@ -99,22 +99,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// Identity of the ports tree: git HEAD + dirty marker, falling back to the
+/// Identity of the ports tree: the git HEAD commit, falling back to the
 /// mtime of Mk/bsd.port.mk for non-git trees.
 pub fn tree_key(portsdir: &Path) -> String {
-    let git = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(portsdir)
-            .args(args)
-            .output()
-            .ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
     // HEAD only: a `git status` dirty-check would stat the whole tree
     // (~10s cold on /usr/ports). Uncommitted local edits to the tree are
     // invisible to the cache — use --no-cache when hacking on ports.
-    if let Some(head) = git(&["rev-parse", "HEAD"]) {
+    if let Some(head) = git_head(portsdir) {
         return head;
     }
     let mtime = fs::metadata(portsdir.join("Mk/bsd.port.mk"))
@@ -124,6 +115,88 @@ pub fn tree_key(portsdir: &Path) -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("mtime-{mtime}")
+}
+
+/// The commit HEAD points at, read straight from the .git directory — no
+/// `git` subprocess (a fork+exec per invocation, and git may not even be
+/// installed on a host that only ever fetched a portsnap/distfile tree).
+/// None whenever anything is missing or unrecognized; the caller then falls
+/// back to the mtime key.
+fn git_head(portsdir: &Path) -> Option<String> {
+    let gitdir = resolve_gitdir(portsdir)?;
+    let head = fs::read_to_string(gitdir.join("HEAD")).ok()?;
+    let head = head.trim();
+    let Some(refname) = head.strip_prefix("ref:") else {
+        // Detached HEAD: the file holds the commit itself.
+        return object_id(head);
+    };
+    let refname = refname.trim();
+    // Only real refs, so a malformed HEAD cannot point outside the gitdir.
+    if !refname.starts_with("refs/") {
+        return None;
+    }
+    // Linked worktrees keep their own HEAD but share refs/ and packed-refs
+    // with the main repository, named by the `commondir` file.
+    let common = fs::read_to_string(gitdir.join("commondir"))
+        .ok()
+        .map(|c| resolve_relative(&gitdir, c.trim()));
+    for dir in [Some(&gitdir), common.as_ref()].into_iter().flatten() {
+        if let Some(id) = fs::read_to_string(dir.join(refname)).ok().and_then(|t| object_id(t.trim()))
+        {
+            return Some(id);
+        }
+        if let Some(id) = packed_ref(dir, refname) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// The repository directory backing `portsdir`: `.git` itself when it is a
+/// directory, or the `gitdir: <path>` it names when it is a file (linked
+/// worktree or submodule checkout).
+fn resolve_gitdir(portsdir: &Path) -> Option<PathBuf> {
+    let dot = portsdir.join(".git");
+    if fs::metadata(&dot).ok()?.is_dir() {
+        return Some(dot);
+    }
+    let text = fs::read_to_string(&dot).ok()?;
+    let path = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))?.trim();
+    (!path.is_empty()).then(|| resolve_relative(portsdir, path))
+}
+
+/// Resolve a path a git file pointed at: absolute as given, relative to `base`.
+fn resolve_relative(base: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+/// Look `refname` up in `gitdir/packed-refs` (`<id> <ref>` lines; '#' headers
+/// and '^' peeled-tag lines are not refs).
+fn packed_ref(gitdir: &Path, refname: &str) -> Option<String> {
+    let text = fs::read_to_string(gitdir.join("packed-refs")).ok()?;
+    for line in text.lines() {
+        if line.starts_with('#') || line.starts_with('^') {
+            continue;
+        }
+        let Some((id, name)) = line.split_once(' ') else { continue };
+        if name.trim() == refname {
+            return object_id(id);
+        }
+    }
+    None
+}
+
+/// Accept a bare object id (sha1 or sha256 hex), rejecting anything else so a
+/// stray file cannot become a cache generation name.
+fn object_id(s: &str) -> Option<String> {
+    let s = s.trim();
+    let ok = matches!(s.len(), 40 | 64) && s.bytes().all(|b| b.is_ascii_hexdigit());
+    ok.then(|| s.to_string())
 }
 
 pub fn default_cache_dir() -> PathBuf {
@@ -239,6 +312,115 @@ mod tests {
         let _c = Cache::open(&cache_dir, "current", "gen");
         let count = std::fs::read_dir(&cache_dir).unwrap().count();
         assert!(count <= 2, "expected current + 1 old generation, got {count}");
+    }
+
+    /// A ports tree whose .git is a plain directory, with the given files
+    /// written inside it. Returns (tempdir, portsdir).
+    fn fake_tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        std::fs::create_dir_all(ports.join("Mk")).unwrap();
+        std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        for (rel, content) in files {
+            let path = ports.join(".git").join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, content).unwrap();
+        }
+        (tmp, ports)
+    }
+
+    const ID: &str = "f377481e728bedfe7005118ec50f9f145ebfffac";
+    const OTHER: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn tree_key_reads_a_loose_ref() {
+        let (_tmp, ports) = fake_tree(&[
+            ("HEAD", "ref: refs/heads/main\n"),
+            ("refs/heads/main", &format!("{ID}\n")),
+        ]);
+        assert_eq!(tree_key(&ports), ID);
+    }
+
+    #[test]
+    fn tree_key_reads_packed_refs_when_the_loose_ref_is_missing() {
+        // Comment headers and the '^' peel line of a packed tag must not be
+        // mistaken for refs.
+        let packed = format!(
+            "# pack-refs with: peeled fully-peeled sorted \n\
+             {OTHER} refs/heads/other\n\
+             {ID} refs/heads/main\n\
+             {OTHER} refs/tags/v1\n\
+             ^{ID}\n"
+        );
+        let (_tmp, ports) =
+            fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("packed-refs", &packed)]);
+        assert_eq!(tree_key(&ports), ID);
+    }
+
+    #[test]
+    fn tree_key_reads_a_detached_head() {
+        let (_tmp, ports) = fake_tree(&[("HEAD", &format!("{ID}\n"))]);
+        assert_eq!(tree_key(&ports), ID);
+    }
+
+    #[test]
+    fn tree_key_follows_a_gitdir_file() {
+        // Worktree/submodule layout: .git is a file naming the real gitdir,
+        // here relative to the ports tree.
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        std::fs::create_dir_all(ports.join("Mk")).unwrap();
+        std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        let real = ports.join("../real-gitdir");
+        std::fs::create_dir_all(real.join("refs/heads")).unwrap();
+        std::fs::write(real.join("HEAD"), "ref: refs/heads/mine\n").unwrap();
+        std::fs::write(real.join("refs/heads/mine"), format!("{ID}\n")).unwrap();
+        std::fs::write(ports.join(".git"), "gitdir: ../real-gitdir\n").unwrap();
+        assert_eq!(tree_key(&ports), ID);
+
+        // Absolute form too.
+        std::fs::write(
+            ports.join(".git"),
+            format!("gitdir: {}\n", real.canonicalize().unwrap().display()),
+        )
+        .unwrap();
+        assert_eq!(tree_key(&ports), ID);
+    }
+
+    #[test]
+    fn tree_key_falls_back_to_mtime_on_garbage() {
+        // Unparsable HEAD, ref pointing nowhere, non-hex content, and a
+        // gitdir file naming a missing directory: all must degrade quietly.
+        for files in [
+            vec![("HEAD", "not a ref at all\n")],
+            vec![("HEAD", "ref: refs/heads/main\n")], // no such ref anywhere
+            vec![("HEAD", "ref: ../../etc/passwd\n")],
+            vec![("HEAD", "ref: refs/heads/main\n"), ("refs/heads/main", "zzz\n")],
+        ] {
+            let (_tmp, ports) = fake_tree(&files);
+            let key = tree_key(&ports);
+            assert!(key.starts_with("mtime-"), "{files:?} gave {key}");
+        }
+
+        let (_tmp, ports) = fake_tree(&[]);
+        std::fs::write(ports.join(".git"), "gitdir: /nonexistent/gitdir\n").unwrap();
+        assert!(tree_key(&ports).starts_with("mtime-"));
+    }
+
+    /// The reader must agree with git itself on the host's real ports tree.
+    #[test]
+    #[ignore]
+    fn tree_key_matches_git_cli() {
+        let ports = Path::new("/usr/ports");
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(ports)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git must be installed to run this test");
+        assert!(out.status.success(), "/usr/ports is not a git checkout");
+        let expected = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        assert_eq!(tree_key(ports), expected);
     }
 
     #[test]

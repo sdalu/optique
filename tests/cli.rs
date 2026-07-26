@@ -13,7 +13,7 @@ fn help_mentions_every_command_and_global_flag() {
     let text = String::from_utf8_lossy(&out.stdout);
     for needle in [
         "tui", "scan", "sync", "clean", "--dry-run", "--verbose", "--file", "--no-cache",
-        "--quiet",
+        "--quiet", "--color",
     ] {
         assert!(text.contains(needle), "--help must mention {needle}\n{text}");
     }
@@ -54,6 +54,16 @@ fn scan_help_advertises_json() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("--json"), "scan --help must mention --json\n{text}");
+    // The marker column is the one thing --color affects today.
+    assert!(text.contains("--color"), "scan --help must mention --color\n{text}");
+}
+
+#[test]
+fn color_is_rejected_unless_it_names_a_mode() {
+    let out = optique().args(["--color", "sometimes", "scan", "www/nginx"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("sometimes"), "{err}");
 }
 
 #[test]
@@ -117,7 +127,8 @@ fn man_page_documents_every_subcommand_and_flag() {
     let text = std::fs::read_to_string(&man).unwrap();
     for needle in [
         "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
-        "-dry-run", "-options-dir", "EXIT STATUS", "POUDRIERE INTEGRATION",
+        "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
+        "POUDRIERE INTEGRATION",
     ] {
         assert!(text.contains(needle), "optique.8 must document {needle}");
     }

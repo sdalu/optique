@@ -19,6 +19,10 @@ use crate::staging::StagingDb;
 /// How long after the last toggle before the port is re-queried.
 const REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// How many option-set snapshots the undo stack keeps (a session's worth of
+/// mistakes; the oldest entries are dropped past this).
+const UNDO_MAX: usize = 100;
+
 #[derive(PartialEq)]
 pub enum Focus {
     List,
@@ -98,6 +102,10 @@ pub struct App {
     /// Option-detail overlay: (port, option name). The data is looked up at
     /// draw time so a background refresh keeps the popup current.
     pub opt_info: Option<(PortKey, String)>,
+    /// Undo stack of (OPTIONS_NAME, staged set before the change), oldest
+    /// first, capped at UNDO_MAX. Every TUI-driven mutation of a staged set
+    /// pushes one entry; 'U' pops and restores the top one.
+    pub undo: Vec<(String, BTreeSet<String>)>,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
     /// options_name -> staged set at the time of the last submitted refresh,
@@ -153,6 +161,7 @@ pub fn run(
         show_help: false,
         why: None,
         opt_info: None,
+        undo: Vec::new(),
         pending: HashMap::new(),
         refresh_snapshots: HashMap::new(),
         blame: HashMap::new(),
@@ -295,6 +304,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             KeyCode::Char('?') | KeyCode::F(1) => app.show_help = true,
             KeyCode::Char('a') => app.open_apply_modal(),
             KeyCode::Char('B') => app.open_bulk(),
+            // Shift-U undoes the last option change anywhere; lowercase 'u'
+            // stays the per-port revert-to-saved in the editor.
+            KeyCode::Char('U') => app.undo_last(),
             KeyCode::Char('t') => {
                 app.hide_ok = !app.hide_ok;
                 let keep = app.selected_key();
@@ -398,6 +410,7 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('i') => app.open_opt_info(),
         KeyCode::Char('d') => {
             if let Some(key) = app.selected_key() {
+                app.push_undo(&key);
                 app.session.reset_to_defaults(&key);
                 app.mark_pending(&key);
                 app.flash("reset to port defaults", false);
@@ -405,6 +418,7 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('u') => {
             if let Some(key) = app.selected_key() {
+                app.push_undo(&key);
                 app.session.revert(&key);
                 app.mark_pending(&key);
                 app.flash("reverted to saved state", false);
@@ -696,6 +710,7 @@ impl App {
                 None
             }
         };
+        self.push_undo(&key);
         match self.session.toggle(&key, &opt) {
             Ok(()) => {
                 self.mark_pending(&key);
@@ -704,7 +719,12 @@ impl App {
                     None => self.message = None,
                 }
             }
-            Err(e) => self.flash(&e, true),
+            Err(e) => {
+                // A refused toggle changed nothing: drop the snapshot instead
+                // of leaving a no-op entry on the stack.
+                self.undo.pop();
+                self.flash(&e, true);
+            }
         }
     }
 
@@ -775,8 +795,24 @@ impl App {
             }
         };
         let keys = self.visible.clone();
+        // Snapshot every state the bulk could touch before it runs; only the
+        // ports it really changed then get an undo entry, in the order they
+        // were changed.
+        let before: HashMap<String, BTreeSet<String>> = keys
+            .iter()
+            .filter_map(|k| self.session.ports.get(k))
+            .filter_map(|info| {
+                let state = self.session.states.get(&info.options_name)?;
+                Some((info.options_name.clone(), state.staged.clone()))
+            })
+            .collect();
         let (changed, skipped) = self.session.bulk_set(&keys, &opt, on);
         for key in &changed {
+            if let Some(name) = self.session.ports.get(key).map(|i| i.options_name.clone()) {
+                if let Some(staged) = before.get(&name).cloned() {
+                    self.push_undo_entry(name, staged);
+                }
+            }
             self.mark_pending(key);
         }
         let mut msg = format!(
@@ -799,7 +835,23 @@ impl App {
     /// picks up the dependencies their staged options pull in.
     fn restore_draft_if_any(&mut self) {
         let Some(draft) = draft::load(&self.options_dir) else { return };
+        // Pre-images of every state the draft names, so 'U' can walk back the
+        // restore one port at a time.
+        let before: Vec<(String, BTreeSet<String>)> = draft
+            .staged
+            .keys()
+            .filter_map(|name| {
+                let state = self.session.states.get(name)?;
+                Some((name.clone(), state.staged.clone()))
+            })
+            .collect();
         let restored = self.session.restore_draft(&draft);
+        for (name, staged) in before {
+            // Only the states the restore actually moved.
+            if self.session.states.get(&name).map(|s| s.staged != staged).unwrap_or(false) {
+                self.push_undo_entry(name, staged);
+            }
+        }
         if restored == 0 {
             // Nothing in it still applies (ports gone, or the edits already
             // landed) — a stale draft would only nag on every launch.
@@ -818,6 +870,56 @@ impl App {
             ),
             false,
         );
+    }
+
+    /// Record `staged` as the state of `options_name` before a change, for 'U'.
+    fn push_undo_entry(&mut self, options_name: String, staged: BTreeSet<String>) {
+        push_capped(&mut self.undo, (options_name, staged));
+    }
+
+    /// Snapshot the current staged set of the state a port edits (its
+    /// OPTIONS_NAME, shared by the flavors using the same file). Call this
+    /// *before* mutating it.
+    fn push_undo(&mut self, key: &PortKey) {
+        let Some(name) = self.session.ports.get(key).map(|i| i.options_name.clone()) else {
+            return;
+        };
+        let Some(staged) = self.session.states.get(&name).map(|s| s.staged.clone()) else {
+            return;
+        };
+        self.push_undo_entry(name, staged);
+    }
+
+    /// Restore the staged set recorded by the most recent change, whatever
+    /// produced it (toggle, d, u, bulk, draft restore).
+    fn undo_last(&mut self) {
+        let Some((options_name, staged)) = self.undo.pop() else {
+            self.flash("nothing to undo", false);
+            return;
+        };
+        let Some(state) = self.session.states.get_mut(&options_name) else {
+            // The state left the session (its port dropped out of the closure
+            // on a refresh); the entry is meaningless now.
+            self.flash(&format!("{options_name} is no longer in the closure"), true);
+            return;
+        };
+        state.staged = staged;
+        // The options changed back, so the dependencies they pull in did too:
+        // re-query through the port owning the file, like the restore flow.
+        let owner = self.session.owners.get(&options_name).cloned().or_else(|| {
+            self.session
+                .ports
+                .iter()
+                .find(|(_, info)| info.options_name == options_name)
+                .map(|(key, _)| key.clone())
+        });
+        if let Some(key) = owner {
+            self.mark_pending(&key);
+        }
+        self.flash(&format!("undid change to {options_name}"), false);
+        let keep = self.selected_key();
+        self.rebuild_visible(keep);
+        self.rebuild_editor();
     }
 
     /// Schedule the port for a debounced background re-query.
@@ -1023,6 +1125,15 @@ fn trim_reason(msg: &str) -> String {
     }
 }
 
+/// Push onto the undo stack, dropping the oldest entry once it is full (a
+/// Vec shift at 100 entries costs nothing and keeps the newest undo on top).
+fn push_capped(stack: &mut Vec<(String, BTreeSet<String>)>, entry: (String, BTreeSet<String>)) {
+    if stack.len() >= UNDO_MAX {
+        stack.remove(0);
+    }
+    stack.push(entry);
+}
+
 /// Parse a bulk decision: `NAME=on`/`NAME=off` (value case-insensitive), or the
 /// shorthands `NAME+` (on) and `NAME-` (off). The option name is uppercased.
 fn parse_bulk(input: &str) -> Result<(String, bool), String> {
@@ -1046,4 +1157,32 @@ fn parse_bulk(input: &str) -> Result<(String, bool), String> {
         return Err(format!("no option name — {SYNTAX}"));
     }
     Ok((name, on))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn undo_stack_drops_the_oldest_past_the_cap() {
+        let mut stack: Vec<(String, BTreeSet<String>)> = Vec::new();
+        for n in 0..UNDO_MAX + 50 {
+            push_capped(&mut stack, (format!("port_{n}"), BTreeSet::new()));
+        }
+        assert_eq!(stack.len(), UNDO_MAX);
+        // The newest change is on top, the 50 oldest are gone.
+        assert_eq!(stack.last().unwrap().0, format!("port_{}", UNDO_MAX + 49));
+        assert_eq!(stack.first().unwrap().0, "port_50");
+    }
+
+    #[test]
+    fn bulk_parse_forms_and_errors() {
+        assert_eq!(parse_bulk("docs=on").unwrap(), ("DOCS".to_string(), true));
+        assert_eq!(parse_bulk(" X11 = OFF ").unwrap(), ("X11".to_string(), false));
+        assert_eq!(parse_bulk("nls+").unwrap(), ("NLS".to_string(), true));
+        assert_eq!(parse_bulk("nls-").unwrap(), ("NLS".to_string(), false));
+        assert!(parse_bulk("docs=maybe").is_err());
+        assert!(parse_bulk("docs").is_err());
+        assert!(parse_bulk("=on").is_err());
+    }
 }

@@ -18,6 +18,7 @@
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
 .Op Fl -no-cache
+.Op Fl -color Ar when
 .Op Cm tui
 .Op Fl f Ar pkglist
 .Op Ar origin ...
@@ -137,6 +138,24 @@ Defaults to
 .Ic min Ns Pq 16 , Va ncpu .
 .It Fl -no-cache
 Neither read nor write the persistent query cache.
+.It Fl -color Ar when
+When to colorize output:
+.Cm auto
+.Pq the default ,
+.Cm always
+or
+.Cm never .
+Under
+.Cm auto
+color is emitted only when standard output is a terminal and
+.Ev NO_COLOR
+is unset;
+.Cm always
+is an explicit request and overrides
+.Ev NO_COLOR .
+Currently only the
+.Cm scan
+status marker column is colorized; the interactive TUI is unaffected.
 .It Fl n , Fl -dry-run
 Report what would change without touching anything.
 Only
@@ -298,6 +317,10 @@ Toggle the selected option, enforcing group rules.
 Reset the port to its defaults.
 .It Ic u
 Revert the port to its saved state.
+.It Ic U
+Undo the last option change, whichever port it was on and whatever made it
+.Pq a toggle, Ic d , Ic u , a bulk decision or a restored draft .
+Up to 100 changes back; the affected port is re-queried like any other edit.
 .It Ic B
 Bulk-set one option across all currently visible ports.
 The prompt accepts

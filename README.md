@@ -154,7 +154,8 @@ cleared as soon as you apply (the edits are on disk then) or discard-quit; `u`
 reverts an individual port as usual.
 
 Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
-`u` revert · `n/p` next/prev problem · `t` show only ports needing attention
+`u` revert · `U` undo the last option change (any port, up to 100 back) ·
+`n/p` next/prev problem · `t` show only ports needing attention
 (hide `✓` ok) · `m` treat stale/unconfigured ports as ok when every added option (stale) or
 every option at all (unconfigured) is already decided by make.conf
 (marker `≈`) · `w` flag ports whose options contradict

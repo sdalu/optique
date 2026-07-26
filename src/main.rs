@@ -452,6 +452,35 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     })
 }
 
+/// SGR escapes for the scan marker column, matching the TUI's marker colors.
+/// A handful of constants beats a dependency for four markers.
+mod ansi {
+    pub const RESET: &str = "\x1b[0m";
+    pub const RED: &str = "\x1b[31m";
+    pub const LIGHT_RED: &str = "\x1b[91m";
+    pub const YELLOW: &str = "\x1b[33m";
+    pub const GRAY: &str = "\x1b[90m";
+}
+
+/// Color for a scan status marker; None for the unmarked ok rows.
+fn marker_color(marker: &str) -> Option<&'static str> {
+    match marker {
+        "?" => Some(ansi::YELLOW),      // unconfigured
+        "!" => Some(ansi::LIGHT_RED),   // stale
+        "✗" => Some(ansi::RED),         // conflict
+        "⛔" => Some(ansi::GRAY),       // blacklisted
+        _ => None,
+    }
+}
+
+/// Is stdout allowed ANSI color? Padding is applied inside the escapes by the
+/// caller, so column alignment is unaffected either way.
+fn stdout_color(cli: &Cli) -> bool {
+    use std::io::IsTerminal as _;
+    let no_color = std::env::var("NO_COLOR").ok();
+    cli::use_color(cli.color, std::io::stdout().is_terminal(), no_color.as_deref())
+}
+
 /// Scan and report. Returns the number of ports needing a *human* decision,
 /// which main turns into exit code 1 (see `Row::needs_attention`).
 fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<usize> {
@@ -642,6 +671,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if !cli.quiet {
+        let color = stdout_color(cli);
         for row in &rows {
             let (key, pkgname) = (&row.key, &row.pkgname);
             let decision = if row.mc_covered() {
@@ -666,7 +696,12 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
             } else {
                 (marker, "")
             };
-            println!("{marker:<2} {key:<40} {pkgname:<32} {text}{tail}");
+            // Pad first, tint after: the escapes must not count as width.
+            let cell = match marker_color(marker).filter(|_| color) {
+                Some(c) => format!("{c}{marker:<2}{}", ansi::RESET),
+                None => format!("{marker:<2}"),
+            };
+            println!("{cell} {key:<40} {pkgname:<32} {text}{tail}");
             if cli.verbose {
                 if !row.state.is_empty() {
                     println!("     options: {}", row.state);
