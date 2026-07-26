@@ -1,5 +1,6 @@
 mod apply;
 mod cache;
+mod clean;
 mod cli;
 mod config;
 mod model;
@@ -38,6 +39,7 @@ fn main() -> Result<()> {
             let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
             cmd_sync(&cli, &roots, args.dry_run)
         }
+        Some(Command::Clean(args)) => cmd_clean(&cli, args),
         Some(Command::Origins(raw)) => {
             // Bare origins (default TUI). Tolerate -f/--file mixed in after
             // the first origin, where clap no longer parses flags.
@@ -57,6 +59,129 @@ fn main() -> Result<()> {
             cmd_tui(&cli, &roots)
         }
     }
+}
+
+/// Remove obsolete (and optionally redundant) options files from the
+/// resolved options dir. Unlike scan/sync this walks the directory itself,
+/// not a package list.
+fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
+    use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
+
+    let staging = tempfile::tempdir()?;
+    let settings = config::resolve(
+        cli.tree.as_deref(),
+        cli.jail.as_deref(),
+        cli.set.as_deref(),
+        cli.options_dir.as_deref(),
+        staging.path(),
+    )?;
+    let moved = Moved::load(&settings.portsdir);
+    eprintln!("optique clean: options dir {}", settings.options_dir.display());
+
+    let (mut removals, live, warnings) =
+        clean::classify_entries(&settings.options_dir, &settings.portsdir, &moved);
+    let total_entries = removals.len() + live.len();
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
+
+    // Optionally find files that only repeat defaults + make.conf.
+    if args.redundant {
+        let jobs = cli.jobs.unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
+        });
+        let mut cache = if cli.no_cache {
+            cache::Cache::disabled()
+        } else {
+            let tree_key = cache::tree_key(&settings.portsdir);
+            cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
+        };
+        let ctx = QueryCtx {
+            portsdir: settings.portsdir.clone(),
+            make_conf: settings.make_conf.clone(),
+            port_dbdir: settings.options_dir.clone(),
+        };
+        let runner = MakeRunner::new(ctx.clone(), jobs);
+        let mut by_key: std::collections::HashMap<_, _> =
+            live.iter().map(|e| (e.key.clone(), e)).collect();
+        let mut in_flight = 0usize;
+        let mut done = 0usize;
+        let mut handle = |info: model::port::PortInfo,
+                          removals: &mut Vec<clean::Removal>,
+                          by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
+            if let Some(entry) = by_key.get(&info.key) {
+                if clean::file_is_redundant(&info) {
+                    removals.push(clean::Removal {
+                        options_name: entry.options_name.clone(),
+                        dir: entry.dir.clone(),
+                        reason: "redundant: repeats defaults + make.conf".to_string(),
+                    });
+                }
+            }
+        };
+        for entry in &live {
+            if let Some(info) = cache.lookup(&entry.key, &settings.options_dir) {
+                done += 1;
+                handle(info, &mut removals, &by_key);
+            } else {
+                runner.submit(entry.key.clone());
+                in_flight += 1;
+            }
+        }
+        while in_flight > 0 {
+            match runner.events.recv() {
+                Ok(ScanEvent::PortDone(info)) => {
+                    in_flight -= 1;
+                    done += 1;
+                    cache.insert(&info, &settings.options_dir);
+                    handle(*info, &mut removals, &by_key);
+                }
+                Ok(ScanEvent::PortError { key, msg }) => {
+                    in_flight -= 1;
+                    eprintln!("warning: {key}: query failed, left alone ({msg})");
+                    by_key.remove(&key);
+                }
+                Err(_) => break,
+            }
+            eprint!("\rchecking… {done}/{} ports", live.len());
+            let _ = std::io::stderr().flush();
+        }
+        if done > 0 {
+            eprintln!();
+        }
+        runner.shutdown();
+        removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
+    }
+
+    if removals.is_empty() {
+        eprintln!("nothing to clean ({total_entries} entries kept)");
+        return Ok(());
+    }
+    for r in &removals {
+        println!("{:<44} {}", r.options_name, r.reason);
+    }
+    if args.dry_run {
+        eprintln!(
+            "dry run: {} of {total_entries} entries would be removed from {}",
+            removals.len(),
+            settings.options_dir.display()
+        );
+        return Ok(());
+    }
+    let mut removed = 0;
+    for r in &removals {
+        match clean::remove_entry(r) {
+            Ok(note) => {
+                removed += 1;
+                if let Some(note) = note {
+                    eprintln!("note: {note}");
+                }
+            }
+            Err(e) => eprintln!("error: {}: {e}", r.options_name),
+        }
+    }
+    eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
+    Ok(())
 }
 
 /// Split an external-subcommand argument vector into origins and -f/--file

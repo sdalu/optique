@@ -52,9 +52,26 @@ pub enum Command {
     /// but headless and fast)
     Sync(SyncArgs),
 
+    /// Remove obsolete options files from the resolved options dir: ports
+    /// that vanished from the tree, and optionally files that only repeat
+    /// what defaults + make.conf already dictate
+    Clean(CleanArgs),
+
     /// Bare origins with no subcommand open the TUI: `optique -z set www/nginx`
     #[command(external_subcommand)]
     Origins(Vec<String>),
+}
+
+#[derive(Args, Debug)]
+pub struct CleanArgs {
+    /// Also remove files whose recorded configuration equals the
+    /// defaults + make.conf overlay outcome (removing them changes nothing)
+    #[arg(short = 'r', long = "redundant")]
+    pub redundant: bool,
+
+    /// Show what would be removed without touching anything
+    #[arg(short = 'n', long = "dry-run")]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug, Default)]

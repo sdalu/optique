@@ -30,6 +30,12 @@ optique -z workstation scan -f pkglist
 # keep saved choices, adopt defaults for newly-added options, drop removed
 optique -z workstation sync --dry-run -f pkglist
 optique -z workstation sync -f pkglist
+
+# Garbage-collect the options dir: drop entries whose port vanished from the
+# tree (MOVED-aware: renames and removals are explained); with --redundant,
+# also drop files that only repeat what defaults + make.conf dictate anyway
+optique -z workstation clean --dry-run
+optique -z workstation clean --redundant
 ```
 
 Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`

@@ -374,7 +374,7 @@ pub fn undecided_options(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> V
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
 /// known options (mirrors bsd.options.mk, which force-adds implied options).
-fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> {
+pub(crate) fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> {
     loop {
         let mut added = false;
         for opt in set.clone() {
