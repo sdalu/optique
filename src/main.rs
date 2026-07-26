@@ -26,9 +26,16 @@ use crate::query::scanner::{self, ScanResult};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
-        Command::Tui(roots) => cmd_tui(&cli, roots),
-        Command::Scan(roots) => cmd_scan(&cli, roots),
-        Command::Sync(args) => cmd_sync(&cli, args),
+        Some(Command::Tui(roots)) => cmd_tui(&cli, roots),
+        Some(Command::Scan(roots)) => cmd_scan(&cli, roots),
+        Some(Command::Sync(args)) => cmd_sync(&cli, args),
+        Some(Command::Origins(origins)) => {
+            let roots = cli::RootsArgs { origins: origins.clone(), files: vec![] };
+            cmd_tui(&cli, &roots)
+        }
+        None => {
+            anyhow::bail!("no ports given; try `optique -z <set> category/port…` or `optique help`")
+        }
     }
 }
 

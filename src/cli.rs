@@ -30,12 +30,12 @@ pub struct Cli {
     pub no_cache: bool,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Interactive TUI to review and edit options across the closure
+    /// Interactive TUI to review and edit options across the closure (default)
     Tui(RootsArgs),
     /// Scan the dependency closure and print each port's option status
     Scan(RootsArgs),
@@ -43,6 +43,10 @@ pub enum Command {
     /// defaults for new options, drop removed ones (like `poudriere options -C`
     /// but headless and fast)
     Sync(SyncArgs),
+
+    /// Bare origins with no subcommand open the TUI: `optique -z set www/nginx`
+    #[command(external_subcommand)]
+    Origins(Vec<String>),
 }
 
 #[derive(Args, Debug)]

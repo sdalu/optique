@@ -108,11 +108,11 @@ pub fn tree_key(portsdir: &Path) -> String {
             .ok()?;
         out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
+    // HEAD only: a `git status` dirty-check would stat the whole tree
+    // (~10s cold on /usr/ports). Uncommitted local edits to the tree are
+    // invisible to the cache — use --no-cache when hacking on ports.
     if let Some(head) = git(&["rev-parse", "HEAD"]) {
-        let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
-        return if dirty { format!("{head}-dirty") } else { head };
+        return head;
     }
     let mtime = fs::metadata(portsdir.join("Mk/bsd.port.mk"))
         .and_then(|m| m.modified())

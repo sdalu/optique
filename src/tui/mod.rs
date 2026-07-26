@@ -498,11 +498,19 @@ impl App {
                 }
                 RefreshEvent::Done(result) => {
                     self.refreshing = self.refreshing.saturating_sub(1);
+                    let errors = result.errors.len();
+                    let first_error = result.errors.first().cloned();
                     let (added, removed) =
                         self.session.merge(*result, &self.options_dir.clone());
                     let (a, r) = merged.get_or_insert((0usize, 0usize));
                     *a += added;
                     *r += removed;
+                    if let Some((key, msg)) = first_error {
+                        self.flash(
+                            &format!("refresh: {errors} dep error(s), e.g. {key}: {msg}"),
+                            true,
+                        );
+                    }
                 }
             }
         }
