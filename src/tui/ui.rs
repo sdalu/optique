@@ -514,6 +514,7 @@ fn draw_help(f: &mut Frame) {
         ("d / u", "reset port to defaults / revert to saved state"),
         ("n / p", "next / previous port needing attention"),
         ("t", "show only ports needing attention"),
+        ("s", "toggle problems-first / stable alphabetical sort"),
         ("m", "make.conf-decided ports count as ok (≈)"),
         ("w", "flag make.conf contradictions (≠)"),
         ("/", "filter the port list"),

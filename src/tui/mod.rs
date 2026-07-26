@@ -64,6 +64,9 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
+    /// Problems-first ordering (true, default) or stable alphabetical order
+    /// (false) — the latter keeps neighbors put while working down the list.
+    pub sort_problems_first: bool,
     /// When set, stale ports whose added options are all decided by
     /// make.conf count as needing no attention.
     pub mc_relax: bool,
@@ -113,6 +116,7 @@ pub fn run(
         quit_confirm: false,
         hidden,
         hide_ok: false,
+        sort_problems_first: true,
         mc_relax: false,
         warn_mc: false,
         listable: 0,
@@ -227,6 +231,20 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                         "make.conf-decided staleness counts as ok (≈, m to undo)"
                     } else {
                         "make.conf-decided staleness counts as stale again"
+                    },
+                    false,
+                );
+            }
+            KeyCode::Char('s') => {
+                app.sort_problems_first = !app.sort_problems_first;
+                let keep = app.selected_key();
+                app.rebuild_visible(keep);
+                app.rebuild_editor();
+                app.flash(
+                    if app.sort_problems_first {
+                        "sorting problems first"
+                    } else {
+                        "alphabetical order (stable while editing)"
                     },
                     false,
                 );
@@ -421,7 +439,11 @@ impl App {
             })
             .map(|(key, info)| (self.effective_status(info), key.clone()))
             .collect();
-        items.sort();
+        if self.sort_problems_first {
+            items.sort();
+        } else {
+            items.sort_by(|a, b| a.1.cmp(&b.1));
+        }
         self.listable = items.len();
         if self.hide_ok {
             items.retain(|(status, _)| *status != UiStatus::Ok);
