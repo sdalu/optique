@@ -956,9 +956,17 @@ fn draw_bulk(f: &mut Frame, app: &App) {
 fn draw_quit_confirm(f: &mut Frame) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
-    let p = Paragraph::new(
+    let mut lines = vec![Line::from(
         "Unsaved staged changes — [s]ave draft & quit · [d]iscard & quit · [Esc] stay",
-    )
+    )];
+    let active = crate::query::makerunner::active_make_count();
+    if active > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("{active} background make process(es) running — stopped on quit"),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let p = Paragraph::new(lines)
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).title(" quit ").border_style(Style::default().fg(Color::Red)));
     f.render_widget(p, area);

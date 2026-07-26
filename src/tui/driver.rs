@@ -70,6 +70,11 @@ pub fn run_driver(
             break;
         }
     }
+    // Same courtesy as the real TUI: no orphaned makes after the session.
+    let stopped = crate::query::makerunner::kill_active_makes();
+    if stopped > 0 {
+        eprintln!("optique: stopped {stopped} in-flight make process(es)");
+    }
     Ok(())
 }
 

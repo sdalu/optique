@@ -160,6 +160,11 @@ pub fn run(
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
+    // Don't leave background queries churning after the UI is gone.
+    let stopped = crate::query::makerunner::kill_active_makes();
+    if stopped > 0 {
+        eprintln!("optique: stopped {stopped} in-flight make process(es)");
+    }
     result
 }
 

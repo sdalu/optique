@@ -99,6 +99,10 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     }
 
     let mut child = cmd.spawn()?;
+    // Registered so a TUI quit can terminate whatever is still running
+    // instead of leaving orphaned makes churning; the guard unregisters on
+    // every exit path, including early ?-returns.
+    let _active = ActiveMake::register(child.id());
     // The wrapper is far smaller than the pipe buffer, so a plain write
     // before reading the output cannot deadlock.
     child
@@ -120,6 +124,46 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
 fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(n)..].join(" | ")
+}
+
+/// PIDs of the make processes currently running, across every runner in the
+/// process (foreground scans and background refreshes alike).
+static ACTIVE_MAKES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<u32>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Registration guard: the pid leaves the registry when the query is done,
+/// whichever way it ends.
+struct ActiveMake(u32);
+
+impl ActiveMake {
+    fn register(pid: u32) -> Self {
+        ACTIVE_MAKES.lock().unwrap().insert(pid);
+        ActiveMake(pid)
+    }
+}
+
+impl Drop for ActiveMake {
+    fn drop(&mut self) {
+        ACTIVE_MAKES.lock().unwrap().remove(&self.0);
+    }
+}
+
+/// How many make processes are running right now.
+pub fn active_make_count() -> usize {
+    ACTIVE_MAKES.lock().unwrap().len()
+}
+
+/// Terminate every registered make process (the quit path). Returns how many
+/// were signalled; their workers see the death as a failed query and drain.
+pub fn kill_active_makes() -> usize {
+    let pids: Vec<u32> = ACTIVE_MAKES.lock().unwrap().iter().copied().collect();
+    if pids.is_empty() {
+        return 0;
+    }
+    let _ = std::process::Command::new("kill")
+        .args(pids.iter().map(u32::to_string))
+        .status();
+    pids.len()
 }
 
 #[cfg(test)]
