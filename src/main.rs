@@ -316,7 +316,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 /// when no list is given (synth builds what is installed). Flavors come from
 /// the pkg "flavor" annotation; `repo` restricts to packages installed from
 /// that pkg repository (%R).
-fn installed_roots(repo: Option<&str>) -> Result<Vec<model::origin::PortKey>> {
+fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
     let origins = std::process::Command::new("pkg")
         .args(["query", "-a", "%o\t%R"])
         .output()
@@ -332,16 +332,18 @@ fn installed_roots(repo: Option<&str>) -> Result<Vec<model::origin::PortKey>> {
     let roots = parse_installed(
         &String::from_utf8_lossy(&origins.stdout),
         &String::from_utf8_lossy(&annots.stdout),
-        repo,
+        repos,
     );
     if roots.is_empty() {
-        match repo {
-            Some(r) => anyhow::bail!(
-                "no installed packages from repository '{r}' \
-                 (check the names with: pkg query -a %R | sort -u)"
-            ),
-            None => anyhow::bail!("no installed packages with port origins found (pkg query -a %o)"),
+        if repos.is_empty() {
+            anyhow::bail!("no installed packages with port origins found (pkg query -a %o)");
         }
+        anyhow::bail!(
+            "no installed packages from {} '{}' \
+             (check the names with: pkg query -a %R | sort -u)",
+            if repos.len() == 1 { "repository" } else { "repositories" },
+            repos.join("', '")
+        );
     }
     Ok(roots)
 }
@@ -352,7 +354,7 @@ fn installed_roots(repo: Option<&str>) -> Result<Vec<model::origin::PortKey>> {
 fn parse_installed(
     origins: &str,
     annots: &str,
-    repo: Option<&str>,
+    repos: &[String],
 ) -> Vec<model::origin::PortKey> {
     let mut flavor: std::collections::HashMap<&str, &str> = Default::default();
     for line in annots.lines() {
@@ -370,8 +372,9 @@ fn parse_installed(
         if origin.is_empty() || !seen.insert(origin.to_string()) {
             continue;
         }
-        if let Some(wanted) = repo {
-            if pkg_repo.map(str::trim) != Some(wanted) {
+        if !repos.is_empty() {
+            let from = pkg_repo.map(str::trim).unwrap_or("");
+            if !repos.iter().any(|r| r == from) {
                 continue;
             }
         }
@@ -399,19 +402,20 @@ struct RootSet {
 /// installed packages when nothing was given.
 fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
-        let roots = installed_roots(cli.repo.as_deref())?;
-        let note = match &cli.repo {
-            Some(repo) => format!(
-                "no ports given; using {} installed package(s) from repository '{repo}'",
-                roots.len()
-            ),
-            None => {
-                format!("no ports given; using {} installed package(s) as the list", roots.len())
-            }
+        let roots = installed_roots(&cli.repo)?;
+        let note = if cli.repo.is_empty() {
+            format!("no ports given; using {} installed package(s) as the list", roots.len())
+        } else {
+            format!(
+                "no ports given; using {} installed package(s) from {} '{}'",
+                roots.len(),
+                if cli.repo.len() == 1 { "repository" } else { "repositories" },
+                cli.repo.join("', '")
+            )
         };
         return Ok(RootSet { roots, notes: vec![note] });
     }
-    if cli.repo.is_some() {
+    if !cli.repo.is_empty() {
         anyhow::bail!(
             "--repo filters the installed-package list, which is only used when \
              no ports are given"
@@ -998,18 +1002,22 @@ mod tests {
                       devel/binutils\tflavor\tnative\n\
                       www/nginx\tcpe\tsomething\n";
         // Unfiltered: three ports, flavors applied, dup and junk dropped.
-        let all = parse_installed(origins, annots, None);
+        let all = parse_installed(origins, annots, &[]);
         let names: Vec<String> = all.iter().map(|k| k.to_string()).collect();
         assert_eq!(
             names,
             vec!["devel/binutils@native", "graphics/ImageMagick7@nox11", "www/nginx"]
         );
         // Repo filter keeps only Synth-built packages.
-        let synth = parse_installed(origins, annots, Some("Synth"));
+        let synth = parse_installed(origins, annots, &["Synth".to_string()]);
         let names: Vec<String> = synth.iter().map(|k| k.to_string()).collect();
         assert_eq!(names, vec!["devel/binutils@native", "graphics/ImageMagick7@nox11"]);
+        // Several repositories: a package from any of them is kept.
+        let both =
+            parse_installed(origins, annots, &["Synth".to_string(), "poudriere".to_string()]);
+        assert_eq!(both.len(), 3);
         // Unknown repo: empty (caller turns this into an error).
-        assert!(parse_installed(origins, annots, Some("nope")).is_empty());
+        assert!(parse_installed(origins, annots, &["nope".to_string()]).is_empty());
     }
 
     #[test]

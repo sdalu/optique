@@ -257,9 +257,10 @@ When no ports are given at all (no origins, no `-f`), synth mode uses the
 **installed packages** as the list — synth builds what is installed, so
 `optique -s`, `optique -s scan` or `optique -s clean --unused` operate on the
 `pkg query` origin set (flavors taken from the pkg `flavor` annotation).
-`--repo NAME` restricts that implicit list to packages installed from one
-pkg repository — e.g. `optique -s --repo Synth` to consider only
-synth-built packages (`pkg query -a %R | sort -u` lists the names).
+`--repo NAME` (repeatable) restricts that implicit list to packages
+installed from the given pkg repositories — e.g. `optique -s --repo Synth`
+to consider only synth-built packages (`pkg query -a %R | sort -u` lists
+the names).
 
 One caveat the banner also points out: when `Directory_options` is the live
 `/var/db/ports`, minimal/redundant cleanups affect plain `make config`
