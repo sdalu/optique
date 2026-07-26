@@ -28,6 +28,16 @@ fn subcommand_help_shows_specific_flags() {
     assert!(text.contains("--dry-run"));
 }
 
+/// `tui --drive` is the headless debugging driver. Its help text is all that
+/// can be checked hermetically: driving it needs a ports tree to scan first.
+#[test]
+fn tui_help_documents_the_drive_flag() {
+    let out = optique().args(["tui", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("--drive"), "tui --help must mention --drive\n{text}");
+}
+
 #[test]
 fn clean_unused_requires_a_list() {
     // No origins, no -f: there is nothing to compute a closure from, and the

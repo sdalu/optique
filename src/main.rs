@@ -28,8 +28,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::Tui(args)) => {
-            let roots = cli::collect_roots(&args.origins, &cli.files)?;
-            cmd_tui(&cli, &roots)
+            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
+            cmd_tui(&cli, &roots, args.drive)
         }
         Some(Command::Scan(args)) => {
             let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
             let mut all_files = cli.files.clone();
             all_files.extend(files);
             let roots = cli::collect_roots(&origins, &all_files)?;
-            cmd_tui(&cli, &roots)
+            cmd_tui(&cli, &roots, false)
         }
         None => {
             if cli.files.is_empty() {
@@ -65,7 +65,7 @@ fn main() -> Result<()> {
                 );
             }
             let roots = cli::collect_roots(&[], &cli.files)?;
-            cmd_tui(&cli, &roots)
+            cmd_tui(&cli, &roots, false)
         }
     }
 }
@@ -319,9 +319,12 @@ pub(crate) fn split_raw_origins(
     Ok((origins, files))
 }
 
-fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
-    // Fail before the (possibly minute-long) scan, not after.
-    tui::ensure_terminal()?;
+fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<()> {
+    // Fail before the (possibly minute-long) scan, not after. The headless
+    // driver renders into memory, so it has no use for a terminal.
+    if !drive {
+        tui::ensure_terminal()?;
+    }
     let scanned = run_scan(cli, roots)?;
     let options_dir = scanned.settings.options_dir.clone();
     let session = session::Session::new(
@@ -344,7 +347,12 @@ fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         port_dbdir: db.path().to_path_buf(),
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
-    tui::run(session, options_dir, db, refresher, scanned.settings.blacklist)
+    let blacklist = scanned.settings.blacklist;
+    if drive {
+        tui::run_driver(session, options_dir, db, refresher, blacklist)
+    } else {
+        tui::run(session, options_dir, db, refresher, blacklist)
+    }
     // scanned.staging (make.conf + staging db) lives until here
 }
 

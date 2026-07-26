@@ -204,6 +204,86 @@ fn clean_unused_prunes_outside_closure() {
     assert!(optdir.join("ports-mgmt_pkg/options").exists(), "closure entry must survive");
 }
 
+/// Drive the real TUI headlessly: the keymap, the App and the drawing code
+/// are the production ones, only the backend is in memory.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn tui_drive_end_to_end() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+
+    let script = "\
+state
+dump
+key ?
+dump
+key 2
+dump
+key esc
+key /
+keys pkg
+state
+key esc
+quit
+";
+
+    let mut child = optique(tmp.path())
+        .args(["tui", "--drive", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The scan runs before the driver reads a byte, so the whole script can
+    // go in upfront; closing stdin also guarantees an exit.
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success(),
+        "driver exited with {:?}: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // One `screen WxH` ... `end` block per dump, in script order.
+    let dumps: Vec<String> = stdout
+        .split("screen ")
+        .skip(1)
+        .map(|chunk| chunk.split("\nend\n").next().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(dumps.len(), 3, "expected 3 dumps:\n{stdout}");
+
+    let states: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter(|l| l.starts_with('{'))
+        .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("bad state line ({e}): {l}")))
+        .collect();
+    assert_eq!(states.len(), 2, "expected 2 state lines:\n{stdout}");
+    assert_eq!(states[0]["focus"], "list");
+    assert_eq!(states[0]["overlay"], "none");
+
+    // Initial screen: the port list with its title and the root port.
+    assert!(dumps[0].contains("ports-mgmt/pkg"), "{}", dumps[0]);
+    assert!(dumps[0].contains("Ports ("), "{}", dumps[0]);
+    // '?' opens the help overlay on its first tab...
+    assert!(dumps[1].contains("1:Markers"), "help tab bar missing:\n{}", dumps[1]);
+    // ...and '2' switches to the option-row legend.
+    assert!(dumps[2].contains("def:on|off"), "option row tab missing:\n{}", dumps[2]);
+
+    // Typing into the filter prompt lands in the filter, not in the keymap.
+    assert_eq!(states[1]["filter"], "pkg");
+    assert_eq!(states[1]["focus"], "filter");
+    assert!(stdout.contains("\"filter\":\"pkg\""), "{stdout}");
+    assert!(stdout.trim_end().ends_with("ok quit"), "{stdout}");
+}
+
 #[test]
 #[ignore = "needs /usr/ports on a FreeBSD host"]
 fn wrapper_metadata_matches_known_nginx_facts() {

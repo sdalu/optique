@@ -1,3 +1,4 @@
+mod driver;
 mod ui;
 
 use std::collections::{BTreeSet, HashMap};
@@ -5,8 +6,10 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::widgets::ListState;
+
+pub use driver::run_driver;
 
 use crate::apply::{self, PendingWrite};
 use crate::draft;
@@ -136,6 +139,23 @@ pub fn run(
     blacklist: crate::config::Blacklist,
 ) -> Result<()> {
     ensure_terminal()?;
+    let mut app = build_app(session, options_dir, staging_db, refresher, blacklist);
+    let mut terminal = ratatui::init();
+    let result = event_loop(&mut terminal, &mut app);
+    ratatui::restore();
+    result
+}
+
+/// Assemble the ready-to-draw App: initial state, adopted draft, first list
+/// and editor build. Shared by the real TUI and the headless driver so both
+/// start from exactly the same place.
+pub(crate) fn build_app(
+    session: Session,
+    options_dir: PathBuf,
+    staging_db: StagingDb,
+    refresher: Refresher,
+    blacklist: crate::config::Blacklist,
+) -> App {
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
     let mut app = App {
         session,
@@ -172,11 +192,7 @@ pub fn run(
     app.restore_draft_if_any();
     app.rebuild_visible(None);
     app.rebuild_editor();
-
-    let mut terminal = ratatui::init();
-    let result = event_loop(&mut terminal, &mut app);
-    ratatui::restore();
-    result
+    app
 }
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
@@ -191,201 +207,221 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         if key.kind != KeyEventKind::Press {
             continue;
         }
-
-        // Ctrl-L: full repaint to clear terminal artifacts — works in every
-        // mode (modal, filter, help) without consuming any state.
-        if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            terminal.clear()?;
-            continue;
-        }
-
-        // Modal and quit-confirm grab all keys.
-        if app.quit_confirm {
-            match key.code {
-                KeyCode::Char('s') | KeyCode::Char('S') => match draft::save(&app.session, &app.options_dir) {
-                    // No flash on success: the terminal is about to be
-                    // restored. The next launch announces the draft instead.
-                    Ok(_) => return Ok(()),
-                    Err(e) => {
-                        app.quit_confirm = false;
-                        app.flash(&format!("draft save failed: {e:#}"), true);
-                    }
-                },
-                // 'y' kept as an alias for the old confirm-and-quit muscle
-                // memory. Drop any older draft too: quitting on purpose
-                // without saving must not resurrect stale intentions.
-                KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') | KeyCode::Char('Y') => {
-                    draft::discard(&app.options_dir);
-                    return Ok(());
-                }
-                _ => app.quit_confirm = false,
-            }
-            continue;
-        }
-        if app.modal.is_some() {
-            handle_modal_key(app, key.code);
-            continue;
-        }
-        if let Some(tab) = app.help_tab {
-            let n = ui::HELP_TABS.len();
-            match key.code {
-                KeyCode::Char(c @ '1'..='9') => {
-                    let idx = c as usize - '1' as usize;
-                    if idx < n {
-                        app.help_tab = Some(idx);
-                    }
-                }
-                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                    app.help_tab = Some((tab + 1) % n)
-                }
-                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                    app.help_tab = Some((tab + n - 1) % n)
-                }
-                _ => app.help_tab = None,
-            }
-            continue;
-        }
-        if app.why.is_some() {
-            app.why = None;
-            continue;
-        }
-        if app.opt_info.is_some() {
-            app.opt_info = None;
-            continue;
-        }
-        // Ctrl-C always quits (with confirm if dirty) — checked before the
-        // filter branch so it can't be swallowed as a literal 'c'.
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if app.session.dirty() {
-                app.quit_confirm = true;
-                continue;
-            }
-            return Ok(());
-        }
-        // The bulk prompt takes text input, so it grabs the keys before the
-        // filter branch and the plain command keys.
-        if app.bulk.is_some() {
-            match key.code {
-                KeyCode::Esc => app.bulk = None,
-                KeyCode::Enter => {
-                    if let Some(input) = app.bulk.take() {
-                        app.run_bulk(&input);
-                    }
-                }
-                KeyCode::Backspace => {
-                    if let Some(input) = app.bulk.as_mut() {
-                        input.pop();
-                    }
-                }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let Some(input) = app.bulk.as_mut() {
-                        input.push(c);
-                    }
-                }
-                _ => {}
-            }
-            continue;
-        }
-        if app.focus == Focus::Filter {
-            match key.code {
-                KeyCode::Esc => {
-                    app.filter.clear();
-                    app.focus = Focus::List;
-                    app.rebuild_visible(app.selected_key());
-                }
-                KeyCode::Enter => app.focus = Focus::List,
-                KeyCode::Backspace => {
-                    app.filter.pop();
-                    app.rebuild_visible(None);
-                }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    app.filter.push(c);
-                    app.rebuild_visible(None);
-                }
-                _ => {}
-            }
-            app.rebuild_editor();
-            continue;
-        }
-
-        match key.code {
-            KeyCode::Char('q') => {
-                if app.session.dirty() {
-                    app.quit_confirm = true;
-                } else {
-                    return Ok(());
-                }
-            }
-            KeyCode::Char('/') => app.focus = Focus::Filter,
-            KeyCode::Char('?') | KeyCode::F(1) => app.help_tab = Some(0),
-            KeyCode::Char('a') => app.open_apply_modal(),
-            KeyCode::Char('B') => app.open_bulk(),
-            // Shift-U undoes the last option change anywhere; lowercase 'u'
-            // stays the per-port revert-to-saved in the editor.
-            KeyCode::Char('U') => app.undo_last(),
-            KeyCode::Char('t') => {
-                app.hide_ok = !app.hide_ok;
-                let keep = app.selected_key();
-                app.rebuild_visible(keep);
-                app.rebuild_editor();
-                app.flash(
-                    if app.hide_ok {
-                        "showing only ports needing attention (t to show all)"
-                    } else {
-                        "showing all ports"
-                    },
-                    false,
-                );
-            }
-            KeyCode::Char('m') => {
-                app.mc_relax = !app.mc_relax;
-                let keep = app.selected_key();
-                app.rebuild_visible(keep);
-                app.rebuild_editor();
-                app.flash(
-                    if app.mc_relax {
-                        "make.conf-decided staleness counts as ok (≈, m to undo)"
-                    } else {
-                        "make.conf-decided staleness counts as stale again"
-                    },
-                    false,
-                );
-            }
-            KeyCode::Char('s') => {
-                app.sort_problems_first = !app.sort_problems_first;
-                let keep = app.selected_key();
-                app.rebuild_visible(keep);
-                app.rebuild_editor();
-                app.flash(
-                    if app.sort_problems_first {
-                        "sorting problems first"
-                    } else {
-                        "alphabetical order (stable while editing)"
-                    },
-                    false,
-                );
-            }
-            KeyCode::Char('w') => {
-                app.warn_mc = !app.warn_mc;
-                let keep = app.selected_key();
-                app.rebuild_visible(keep);
-                app.rebuild_editor();
-                app.flash(
-                    if app.warn_mc {
-                        "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)"
-                    } else {
-                        "make.conf contradictions no longer flagged"
-                    },
-                    false,
-                );
-            }
-            _ => match app.focus {
-                Focus::List => handle_list_key(app, key.code),
-                Focus::Editor => handle_editor_key(app, key.code),
-                Focus::Filter => {}
-            },
+        match dispatch_key(app, key) {
+            KeyOutcome::Continue => {}
+            KeyOutcome::Repaint => terminal.clear()?,
+            KeyOutcome::Quit => return Ok(()),
         }
     }
+}
+
+/// What the caller of `dispatch_key` still has to do about a key.
+pub(crate) enum KeyOutcome {
+    /// The key was handled entirely by the state update.
+    Continue,
+    /// The screen needs a hard repaint (Ctrl-L); no state changed.
+    Repaint,
+    /// The session is over.
+    Quit,
+}
+
+/// Apply one key press to the app. Everything terminal-related is left to the
+/// caller through `KeyOutcome`, so the real event loop and the headless driver
+/// share exactly one keymap.
+fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    // Ctrl-L: full repaint to clear terminal artifacts — works in every
+    // mode (modal, filter, help) without consuming any state.
+    if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        return KeyOutcome::Repaint;
+    }
+
+    // Modal and quit-confirm grab all keys.
+    if app.quit_confirm {
+        match key.code {
+            KeyCode::Char('s') | KeyCode::Char('S') => match draft::save(&app.session, &app.options_dir) {
+                // No flash on success: the terminal is about to be
+                // restored. The next launch announces the draft instead.
+                Ok(_) => return KeyOutcome::Quit,
+                Err(e) => {
+                    app.quit_confirm = false;
+                    app.flash(&format!("draft save failed: {e:#}"), true);
+                }
+            },
+            // 'y' kept as an alias for the old confirm-and-quit muscle
+            // memory. Drop any older draft too: quitting on purpose
+            // without saving must not resurrect stale intentions.
+            KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                draft::discard(&app.options_dir);
+                return KeyOutcome::Quit;
+            }
+            _ => app.quit_confirm = false,
+        }
+        return KeyOutcome::Continue;
+    }
+    if app.modal.is_some() {
+        handle_modal_key(app, key.code);
+        return KeyOutcome::Continue;
+    }
+    if let Some(tab) = app.help_tab {
+        let n = ui::HELP_TABS.len();
+        match key.code {
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = c as usize - '1' as usize;
+                if idx < n {
+                    app.help_tab = Some(idx);
+                }
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                app.help_tab = Some((tab + 1) % n)
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                app.help_tab = Some((tab + n - 1) % n)
+            }
+            _ => app.help_tab = None,
+        }
+        return KeyOutcome::Continue;
+    }
+    if app.why.is_some() {
+        app.why = None;
+        return KeyOutcome::Continue;
+    }
+    if app.opt_info.is_some() {
+        app.opt_info = None;
+        return KeyOutcome::Continue;
+    }
+    // Ctrl-C always quits (with confirm if dirty) — checked before the
+    // filter branch so it can't be swallowed as a literal 'c'.
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if app.session.dirty() {
+            app.quit_confirm = true;
+            return KeyOutcome::Continue;
+        }
+        return KeyOutcome::Quit;
+    }
+    // The bulk prompt takes text input, so it grabs the keys before the
+    // filter branch and the plain command keys.
+    if app.bulk.is_some() {
+        match key.code {
+            KeyCode::Esc => app.bulk = None,
+            KeyCode::Enter => {
+                if let Some(input) = app.bulk.take() {
+                    app.run_bulk(&input);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(input) = app.bulk.as_mut() {
+                    input.pop();
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(input) = app.bulk.as_mut() {
+                    input.push(c);
+                }
+            }
+            _ => {}
+        }
+        return KeyOutcome::Continue;
+    }
+    if app.focus == Focus::Filter {
+        match key.code {
+            KeyCode::Esc => {
+                app.filter.clear();
+                app.focus = Focus::List;
+                app.rebuild_visible(app.selected_key());
+            }
+            KeyCode::Enter => app.focus = Focus::List,
+            KeyCode::Backspace => {
+                app.filter.pop();
+                app.rebuild_visible(None);
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                app.filter.push(c);
+                app.rebuild_visible(None);
+            }
+            _ => {}
+        }
+        app.rebuild_editor();
+        return KeyOutcome::Continue;
+    }
+
+    match key.code {
+        KeyCode::Char('q') => {
+            if app.session.dirty() {
+                app.quit_confirm = true;
+            } else {
+                return KeyOutcome::Quit;
+            }
+        }
+        KeyCode::Char('/') => app.focus = Focus::Filter,
+        KeyCode::Char('?') | KeyCode::F(1) => app.help_tab = Some(0),
+        KeyCode::Char('a') => app.open_apply_modal(),
+        KeyCode::Char('B') => app.open_bulk(),
+        // Shift-U undoes the last option change anywhere; lowercase 'u'
+        // stays the per-port revert-to-saved in the editor.
+        KeyCode::Char('U') => app.undo_last(),
+        KeyCode::Char('t') => {
+            app.hide_ok = !app.hide_ok;
+            let keep = app.selected_key();
+            app.rebuild_visible(keep);
+            app.rebuild_editor();
+            app.flash(
+                if app.hide_ok {
+                    "showing only ports needing attention (t to show all)"
+                } else {
+                    "showing all ports"
+                },
+                false,
+            );
+        }
+        KeyCode::Char('m') => {
+            app.mc_relax = !app.mc_relax;
+            let keep = app.selected_key();
+            app.rebuild_visible(keep);
+            app.rebuild_editor();
+            app.flash(
+                if app.mc_relax {
+                    "make.conf-decided staleness counts as ok (≈, m to undo)"
+                } else {
+                    "make.conf-decided staleness counts as stale again"
+                },
+                false,
+            );
+        }
+        KeyCode::Char('s') => {
+            app.sort_problems_first = !app.sort_problems_first;
+            let keep = app.selected_key();
+            app.rebuild_visible(keep);
+            app.rebuild_editor();
+            app.flash(
+                if app.sort_problems_first {
+                    "sorting problems first"
+                } else {
+                    "alphabetical order (stable while editing)"
+                },
+                false,
+            );
+        }
+        KeyCode::Char('w') => {
+            app.warn_mc = !app.warn_mc;
+            let keep = app.selected_key();
+            app.rebuild_visible(keep);
+            app.rebuild_editor();
+            app.flash(
+                if app.warn_mc {
+                    "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)"
+                } else {
+                    "make.conf contradictions no longer flagged"
+                },
+                false,
+            );
+        }
+        _ => match app.focus {
+            Focus::List => handle_list_key(app, key.code),
+            Focus::Editor => handle_editor_key(app, key.code),
+            Focus::Filter => {}
+        },
+    }
+    KeyOutcome::Continue
 }
 
 fn handle_list_key(app: &mut App, code: KeyCode) {

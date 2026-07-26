@@ -87,7 +87,7 @@ pub fn use_color(choice: ColorChoice, is_tty: bool, no_color_env: Option<&str>) 
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Interactive TUI to review and edit options across the closure (default)
-    Tui(RootsArgs),
+    Tui(TuiArgs),
     /// Scan the dependency closure and print each port's option status;
     /// exits 1 when a human decision is pending, 0 when nothing is
     Scan(ScanArgs),
@@ -121,6 +121,17 @@ pub struct CleanArgs {
 
     /// Port origins for --unused closure computation
     pub origins: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct TuiArgs {
+    #[command(flatten)]
+    pub roots: RootsArgs,
+
+    /// Headless driver for debugging/testing: read commands from stdin,
+    /// render into an in-memory terminal (see DRIVE PROTOCOL in optique(8))
+    #[arg(long)]
+    pub drive: bool,
 }
 
 #[derive(Args, Debug)]

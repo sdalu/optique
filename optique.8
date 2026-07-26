@@ -20,6 +20,7 @@
 .Op Fl -no-cache
 .Op Fl -color Ar when
 .Op Cm tui
+.Op Fl -drive
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
@@ -189,13 +190,16 @@ Print usage and exit.
 Print the version and exit.
 .El
 .Ss tui
-.Nm Cm tui Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Nm Cm tui Oo Fl -drive Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
 .Pp
 The default subcommand: running
 .Nm
 with port origins and no subcommand starts the interface.
 It requires a real terminal and refuses to start when standard input or output
-is not a tty.
+is not a tty, unless
+.Fl -drive
+is given
+.Pq see Sx DRIVE PROTOCOL .
 .Pp
 The left pane lists every port in the dependency closure that has options
 .Pq optionless ports remain in the graph but are never shown ,
@@ -392,6 +396,87 @@ restored ports so their dependencies reappear.
 The draft is cleared as soon as the changes are applied or discarded;
 .Ic u
 still reverts an individual port.
+.Ss DRIVE PROTOCOL
+.Nm Cm tui Fl -drive Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+With
+.Fl -drive
+the interface runs headless, for debugging and end-to-end testing: the closure
+is scanned as usual, but instead of taking over a terminal it renders into an
+in-memory screen
+.Pq 100 by 35 cells by default
+and reads one command per line from standard input.
+The keymap, the application state and the drawing code are the interactive
+ones, so what a dump shows is what a terminal would show.
+.Pp
+Blank lines and lines starting with
+.Ql #
+are ignored.
+Every other line is acknowledged on standard output with a line starting with
+.Ql ok
+or
+.Ql err ,
+except
+.Cm dump
+and
+.Cm state ,
+which print their payload instead.
+Output is flushed after each command, so the driver can be held open on a pipe.
+A malformed command is reported and never ends the session.
+Pending background re-queries are merged before each command, exactly as the
+interactive event loop does on every tick.
+.Bl -tag -width 16n
+.It Cm key Ar spec
+Press one key.
+.Ar spec
+is an optional
+.Ql ctrl-
+and/or
+.Ql alt-
+prefix followed by either a single character or one of
+.Cm enter esc tab backtab space backspace up down left right pgup pgdn home end
+.Cm f1 Ns \(en Ns Cm f12 question slash .
+Case matters for characters:
+.Ql B
+is the bulk key,
+.Ql b
+is not.
+.It Cm keys Ar text
+Press each character of
+.Ar text
+in turn, spaces included, for typing into the filter or bulk prompts.
+.It Cm dump
+Draw a frame and print the screen as
+.Ql screen Ar W Ns x Ns Ar H ,
+then one line per row with trailing blanks stripped, then
+.Ql end .
+.It Cm state
+Print a one-line JSON object with the fields
+.Va focus , selected , visible , listable , refreshing , pending , message ,
+.Va overlay , filter
+and
+.Va dirty .
+.Va overlay
+names the popup on screen, if any.
+.It Cm settle Op Ar timeout_ms
+Wait until no background re-query is outstanding
+.Pq default 5000 ms ,
+answering
+.Ql ok settled
+or
+.Ql err settle timeout .
+This is also what lets the 300 ms debounce on option edits expire.
+.It Cm resize Ar W Ns x Ns Ar H
+Recreate the in-memory screen at that size, clamped to 20\(en500 cells.
+.It Cm quit
+End the session; so does end of file on standard input, or any key the
+interface itself treats as quitting.
+.El
+.Pp
+Nothing is written to the options directory unless the script drives the apply
+flow, so pointing
+.Fl o
+at a scratch directory keeps a session harmless.
 .Ss scan
 .Nm Cm scan Oo Fl -json Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
 .Pp

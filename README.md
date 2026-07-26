@@ -167,6 +167,37 @@ problems in either order) · `/` filter · `a` apply ·
 visible ports · `f` next flavor of the same origin · `?`/`h`/F1 color-coded
 in-TUI help (markers, badges, keys) · `q` quit.
 
+### Debugging the TUI
+
+`optique tui --drive` runs the interface headless: same keymap, same app, same
+drawing code, but it renders into an in-memory screen and reads one command per
+line from stdin. Useful to reproduce a rendering bug or to test the TUI in CI,
+where there is no terminal.
+
+```sh
+printf 'dump\nkey /\nkeys nginx\nkey enter\nstate\nquit\n' |
+    optique tui --drive -o /tmp/opt www/nginx
+```
+
+Every command is acknowledged with an `ok …`/`err …` line except `dump` and
+`state`, which print their payload; output is flushed per command so the driver
+can be held open on a pipe, and a bad command is reported without ending the
+session:
+
+- `key <spec>` — one key press: an optional `ctrl-`/`alt-` prefix, then a
+  single character (case matters: `B` is the bulk key) or a name
+  (`enter esc tab backtab space backspace up down left right pgup pgdn home
+  end f1`…`f12 question slash`)
+- `keys <text>` — press each character of `<text>`, for typing into the filter
+  or bulk prompts
+- `dump` — draw a frame and print it: `screen <W>x<H>`, one line per row, `end`
+- `state` — one-line JSON: `focus`, `selected`, `visible`, `listable`,
+  `refreshing`, `pending`, `message`, `overlay`, `filter`, `dirty`
+- `settle [timeout_ms]` — wait for background re-queries to land (default 5000);
+  this is also what lets the 300 ms edit debounce expire before a `dump`
+- `resize <W>x<H>` — new in-memory screen size (default 100x35, clamped 20–500)
+- `quit` — end the session; so do EOF and any key the TUI treats as quitting
+
 ## Poudriere layout
 
 Given `-j jail`, `-p tree` (default `default`), `-z set`, optique resolves
