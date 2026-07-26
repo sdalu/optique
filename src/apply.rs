@@ -161,13 +161,36 @@ pub fn plan_writes<'a>(
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        let chosen_complete: BTreeSet<&str> =
+            chosen.info.options.complete.iter().map(String::as_str).collect();
         for other in cands.iter().filter(|c| !std::ptr::eq(*c, chosen)) {
-            if other.enabled != chosen.enabled {
-                warnings.push(format!(
-                    "{}: flavors disagree on shared options file {} — using {} (default flavor)",
-                    other.key, options_name, chosen.key
-                ));
+            if other.enabled == chosen.enabled {
+                continue;
             }
+            // Differences confined to options one flavor doesn't even have
+            // (OPTIONS_EXCLUDE etc.) are structural and harmless: the file
+            // records the default flavor's view, the other flavor ignores
+            // options it excludes. Only disagreement on options BOTH
+            // flavors carry is a real decision worth surfacing.
+            let other_complete: BTreeSet<&str> =
+                other.info.options.complete.iter().map(String::as_str).collect();
+            let shared_diff: Vec<&str> = other
+                .enabled
+                .symmetric_difference(&chosen.enabled)
+                .map(String::as_str)
+                .filter(|o| chosen_complete.contains(o) && other_complete.contains(o))
+                .collect();
+            if shared_diff.is_empty() {
+                continue;
+            }
+            warnings.push(format!(
+                "{}: flavors disagree on shared options file {} — using {} (default flavor); \
+                 differing shared options: {}",
+                other.key,
+                options_name,
+                chosen.key,
+                shared_diff.join(" ")
+            ));
         }
         let info = chosen.info;
         let enabled = &chosen.enabled;
@@ -315,8 +338,35 @@ mod tests {
         assert_eq!(planned.writes.len(), 1);
         assert_eq!(planned.writes[0].key.to_string(), "devel/git@default");
         assert!(planned.writes[0].enabled.contains("A"));
+        // A exists in BOTH flavors and they disagree -> real warning.
         assert_eq!(planned.warnings.len(), 1);
         assert!(planned.warnings[0].contains("devel/git@lite"));
+        assert!(planned.warnings[0].contains("A"));
+    }
+
+    #[test]
+    fn flavor_excluded_options_do_not_warn() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Default flavor has X11 (on); nox flavor excludes X11 entirely.
+        // Both agree on the shared option A.
+        let mut full = mk_info(&["A", "X11"], &["A", "X11"]);
+        full.key = PortKey::parse("editors/emacs@full").unwrap();
+        full.canonical = full.key.clone();
+        full.flavors = vec!["full".into(), "nox".into()];
+        let mut nox = mk_info(&["A"], &["A"]);
+        nox.key = PortKey::parse("editors/emacs@nox").unwrap();
+        nox.canonical = nox.key.clone();
+        nox.flavors = vec!["full".into(), "nox".into()];
+
+        let ports: Vec<(PortKey, &PortInfo, BTreeSet<String>)> = vec![
+            (nox.key.clone(), &nox, ["A".to_string()].into()),
+            (full.key.clone(), &full, ["A".to_string(), "X11".to_string()].into()),
+        ];
+        let planned =
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path());
+        assert_eq!(planned.writes.len(), 1);
+        assert_eq!(planned.writes[0].key.to_string(), "editors/emacs@full");
+        assert!(planned.warnings.is_empty(), "structural exclusion must not warn: {:?}", planned.warnings);
     }
 
     #[test]
