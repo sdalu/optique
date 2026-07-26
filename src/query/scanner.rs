@@ -119,3 +119,42 @@ fn register(info: PortInfo, result: &mut ScanResult) -> Vec<PortKey> {
     result.ports.entry(info.canonical.clone()).or_insert(info);
     targets
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::query::makerunner::QueryCtx;
+
+    /// Hermetic: the ports tree is an empty tempdir, so no `make` ever runs
+    /// (missing Makefiles bail before spawning) — this exercises the BFS
+    /// bookkeeping, MOVED handling and error dedup only.
+    #[test]
+    fn moved_and_missing_ports_reported_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = QueryCtx {
+            portsdir: tmp.path().to_path_buf(),
+            make_conf: None,
+            port_dbdir: tmp.path().to_path_buf(),
+        };
+        let moved = Moved::parse("cat/gone||2026-01-01|expired\ncat/old|cat/new|2026-01-01|renamed\n");
+        let mut cache = Cache::disabled();
+        let roots = vec![
+            PortKey::parse("cat/gone").unwrap(),
+            PortKey::parse("cat/gone").unwrap(), // duplicate root
+            PortKey::parse("cat/old").unwrap(),  // renamed, target also missing
+            PortKey::parse("cat/absent").unwrap(),
+        ];
+        let result = scan(&roots, &ctx, 2, &mut cache, &moved, |_| {});
+        assert!(result.ports.is_empty());
+        // cat/gone reported exactly once despite two references.
+        let gone: Vec<_> =
+            result.errors.iter().filter(|(k, _)| k.origin == "cat/gone").collect();
+        assert_eq!(gone.len(), 1);
+        assert!(gone[0].1.contains("expired"));
+        // The rename was noted and its (missing) target reported.
+        assert_eq!(result.moved_notes.len(), 1);
+        assert!(result.moved_notes[0].contains("cat/new"));
+        assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/new"));
+        assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/absent"));
+    }
+}

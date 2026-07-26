@@ -370,6 +370,50 @@ mod tests {
     }
 
     #[test]
+    fn describe_covers_all_change_kinds() {
+        // Old file: knows A(on) B(off) GONE(off); current: A B NEWOPT.
+        let old = SavedOptionsFile::parse(
+            "_OPTIONS_READ=p-1\n_FILE_COMPLETE_OPTIONS_LIST=A B GONE\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\nOPTIONS_FILE_UNSET+=GONE\n",
+        );
+        let w = PendingWrite {
+            key: PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
+            path: std::path::PathBuf::from("/nonexistent"),
+            old: Some(old),
+            // A turned off, B turned on, NEWOPT adopted on, GONE dropped.
+            enabled: ["B".to_string(), "NEWOPT".to_string()].into(),
+            complete: vec!["A".into(), "B".into(), "NEWOPT".into()],
+            content: String::new(),
+        };
+        let d = w.describe();
+        assert!(d.contains("+B"), "{d}");
+        assert!(d.contains("-A"), "{d}");
+        assert!(d.contains("NEWOPT(on)"), "{d}");
+        assert!(d.contains("dropped: GONE"), "{d}");
+        // A brand-new file describes itself by option count.
+        let w2 = PendingWrite { old: None, ..w };
+        assert!(w2.describe().contains("new file"));
+    }
+
+    #[test]
+    fn apply_reports_failures() {
+        let w = PendingWrite {
+            key: PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
+            // Parent is a file, not a dir -> create_dir_all fails.
+            path: std::path::PathBuf::from("/dev/null/cat_port/options"),
+            old: None,
+            enabled: BTreeSet::new(),
+            complete: vec![],
+            content: "x\n".into(),
+        };
+        let summary = apply(&[w]);
+        assert_eq!(summary.written, 0);
+        assert_eq!(summary.failed.len(), 1);
+    }
+
+    #[test]
     fn apply_writes_atomically() {
         let tmp = tempfile::tempdir().unwrap();
         let info = mk_info(&["A"], &["A"]);

@@ -260,6 +260,21 @@ mod tests {
     }
 
     #[test]
+    fn portsdir_resolution_via_poudriere_mnt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        let tree = tmp.path().join("tree");
+        fs::create_dir_all(tree.join("Mk")).unwrap();
+        fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        fs::create_dir_all(pd.join("ports/mytree")).unwrap();
+        fs::write(pd.join("ports/mytree/mnt"), format!("{}\n", tree.display())).unwrap();
+        assert_eq!(resolve_portsdir(&pd, "mytree").unwrap(), tree);
+        // A tree pointing at a non-ports dir is an error, not a fallback.
+        fs::write(pd.join("ports/mytree/mnt"), "/nonexistent\n").unwrap();
+        assert!(resolve_portsdir(&pd, "mytree").is_err());
+    }
+
+    #[test]
     fn make_conf_layering_order_matches_manpage() {
         let tmp = tempfile::tempdir().unwrap();
         let pd = tmp.path().join("poudriere.d");

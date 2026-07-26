@@ -174,6 +174,97 @@ mod tests {
     }
 
     #[test]
+    fn depends_edge_cases() {
+        // Empty input, duplicate targets collapse, flavored target kept.
+        let (edges, warns) = parse_depends("");
+        assert!(edges.is_empty() && warns.is_empty());
+        let (edges, _) = parse_depends("a.so:x/y b>0:x/y c:x/y@f");
+        assert_eq!(edges.len(), 2, "same origin deduped, flavored is distinct");
+        // Path specs with slashes must not be mistaken for origins.
+        let (edges, _) = parse_depends("/usr/local/bin/gmake:devel/gmake");
+        assert_eq!(edges[0].target.to_string(), "devel/gmake");
+        assert_eq!(edges[0].spec, "/usr/local/bin/gmake");
+    }
+
+    #[test]
+    fn desc_with_pipe_survives() {
+        let text = "\
+make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0
+make: /dev/stdin:3: OPTIQUE|COMPLETE|A
+make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
+";
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, text).unwrap();
+        assert_eq!(info.options.defs["A"].desc, "use X | Y syntax");
+    }
+
+    #[test]
+    fn failures_are_errors_not_panics() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        // No sentinel at all (make crashed early).
+        assert!(parse_dump(&key, "make: error: something exploded").is_err());
+        // Sentinel but no PKGNAME.
+        assert!(parse_dump(&key, "x OPTIQUE|COMPLETE|A B").is_err());
+    }
+
+    #[test]
+    fn canonical_flavor_resolution() {
+        let key = PortKey::parse("devel/py-foo").unwrap();
+        let text = "\
+OPTIQUE|PKGNAME|py312-foo-1.0
+OPTIQUE|FLAVORS|py312 py311
+OPTIQUE|FLAVOR|py312
+";
+        let info = parse_dump(&key, text).unwrap();
+        assert_eq!(info.canonical.to_string(), "devel/py-foo@py312");
+        // Unflavored port: canonical == plain origin.
+        let text2 = "OPTIQUE|PKGNAME|bar-1.0\nOPTIQUE|FLAVORS|\nOPTIQUE|FLAVOR|\n";
+        let key2 = PortKey::parse("cat/bar").unwrap();
+        assert_eq!(parse_dump(&key2, text2).unwrap().canonical, key2);
+    }
+
+    #[test]
+    fn port_level_flags_and_layers() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "\
+OPTIQUE|PKGNAME|foo-1.0
+OPTIQUE|COMPLETE|A B C
+OPTIQUE|MC_SET|A GLOBAL_OTHER
+OPTIQUE|MC_UNSET|B
+OPTIQUE|PORT_SET|C
+OPTIQUE|FORCE_SET|A
+OPTIQUE|BROKEN|does not build on 15.0
+OPTIQUE|IGNORE|requires X
+OPTIQUE|DEPRECATED|use cat/bar
+OPTIQUE|IMPLIES|A|B
+OPTIQUE|PREVENTS|A|C
+OPTIQUE|PREVENTS_MSG|A|A and C clash
+OPTIQUE|OPT_BROKEN|B|B is busted
+";
+        let info = parse_dump(&key, text).unwrap();
+        let o = &info.options;
+        assert!(o.mc_set.contains("A") && o.mc_set.contains("GLOBAL_OTHER"));
+        assert!(o.mc_unset.contains("B"));
+        assert!(o.port_set.contains("C"));
+        assert!(o.force_set.contains("A"));
+        assert_eq!(info.broken.as_deref(), Some("does not build on 15.0"));
+        assert_eq!(info.ignore.as_deref(), Some("requires X"));
+        assert_eq!(info.deprecated.as_deref(), Some("use cat/bar"));
+        assert_eq!(o.defs["A"].implies, vec!["B"]);
+        assert_eq!(o.defs["A"].prevents, vec!["C"]);
+        assert_eq!(o.defs["A"].prevents_msg.as_deref(), Some("A and C clash"));
+        assert_eq!(o.defs["B"].broken.as_deref(), Some("B is busted"));
+    }
+
+    #[test]
+    fn complete_list_dedups_preserving_order() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "OPTIQUE|PKGNAME|foo-1\nOPTIQUE|COMPLETE|B A B C A\n";
+        let info = parse_dump(&key, text).unwrap();
+        assert_eq!(info.options.complete, vec!["B", "A", "C"]);
+    }
+
+    #[test]
     fn dump_smoke() {
         let text = "\
 make: /dev/stdin:2: OPTIQUE|PKGNAME|nginx-1.30.4,3

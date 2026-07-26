@@ -632,6 +632,118 @@ mod tests {
         assert!(s4.covered_by_makeconf(&s4.ports[&key4]));
     }
 
+    fn linked_info(origin: &str, deps: &[&str], complete: &[&str]) -> PortInfo {
+        let key = PortKey::parse(origin).unwrap();
+        PortInfo {
+            key: key.clone(),
+            canonical: key,
+            pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
+            flavors: vec![],
+            options_name: origin.replace('/', "_"),
+            options: PortOptions {
+                complete: complete.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            deps: deps
+                .iter()
+                .map(|d| crate::model::port::DepEdge {
+                    target: PortKey::parse(d).unwrap(),
+                    spec: format!("dep:{d}"),
+                })
+                .collect(),
+            broken: None,
+            ignore: None,
+            deprecated: None,
+            default_versions: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn merge_gc_drops_unreachable_and_keeps_edits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = linked_info("cat/root", &["cat/dep"], &["ROOTOPT"]);
+        let dep = linked_info("cat/dep", &[], &["DEPOPT"]);
+        let root_key = root.key.clone();
+        let dep_key = dep.key.clone();
+        let mut ports = BTreeMap::new();
+        ports.insert(root_key.clone(), root);
+        ports.insert(dep_key.clone(), dep.clone());
+        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], tmp.path());
+
+        // User edits the dependency's options.
+        s.toggle(&dep_key, "DEPOPT").unwrap();
+        assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+
+        // Refresh: the root no longer depends on cat/dep -> GC'd.
+        let updated_root = linked_info("cat/root", &[], &["ROOTOPT"]);
+        let mut result = crate::query::scanner::ScanResult::default();
+        result.ports.insert(root_key.clone(), updated_root);
+        let (added, removed) = s.merge(result, tmp.path());
+        assert_eq!((added, removed), (0, 1));
+        assert!(!s.ports.contains_key(&dep_key));
+
+        // Flip back: dep reappears and the staged edit survived.
+        let mut result = crate::query::scanner::ScanResult::default();
+        result.ports.insert(root_key.clone(), linked_info("cat/root", &["cat/dep"], &["ROOTOPT"]));
+        result.ports.insert(dep_key.clone(), dep);
+        let (added, removed) = s.merge(result, tmp.path());
+        assert_eq!((added, removed), (1, 0));
+        let st = s.state(&s.ports[&dep_key]).unwrap();
+        assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
+        assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+    }
+
+    #[test]
+    fn status_precedence_conflict_beats_edited() {
+        let defs = vec![(
+            "X",
+            OptionDef { prevents: vec!["Y".into()], ..Default::default() },
+        )];
+        let (ports, key) = mk_port(&["X", "Y"], &["Y"], vec![], defs);
+        let mut s = session_for(ports);
+        s.toggle(&key, "X").unwrap(); // staged != baseline AND a conflict
+        let info = s.ports.get(&key).unwrap();
+        assert_eq!(s.status(info), UiStatus::Conflict, "conflict outranks edited");
+    }
+
+    #[test]
+    fn revert_and_reset_lifecycle() {
+        let (ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        let mut s = session_for(ports);
+        assert!(!s.dirty());
+        s.toggle(&key, "B").unwrap();
+        assert!(s.dirty());
+        s.revert(&key);
+        assert!(!s.dirty(), "revert restores baseline");
+        s.toggle(&key, "A").unwrap(); // A off (deviates from defaults)
+        s.reset_to_defaults(&key);
+        let st = s.state(&s.ports[&key]).unwrap();
+        assert!(st.staged.contains("A") && !st.staged.contains("B"));
+    }
+
+    #[test]
+    fn reload_saved_refreshes_baseline() {
+        let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Unconfigured);
+
+        // Simulate an apply: a file appears on disk recording A=on.
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp.path().join("cat_port/options"),
+            "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+        )
+        .unwrap();
+        s.reload_saved(tmp.path());
+        // Baseline now follows the file; staged still empty -> Edited.
+        let st = s.state(&s.ports[&key]).unwrap();
+        assert!(st.baseline.contains("A"));
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+    }
+
     #[test]
     fn forced_options_refuse_toggle() {
         let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);

@@ -211,7 +211,9 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
 
 /// Split an external-subcommand argument vector into origins and -f/--file
 /// values (clap stops parsing flags once the first bare origin appears).
-fn split_raw_origins(raw: &[String]) -> Result<(Vec<String>, Vec<std::path::PathBuf>)> {
+pub(crate) fn split_raw_origins(
+    raw: &[String],
+) -> Result<(Vec<String>, Vec<std::path::PathBuf>)> {
     let mut origins = Vec::new();
     let mut files = Vec::new();
     let mut it = raw.iter();
@@ -525,4 +527,29 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
         if summary.failed.is_empty() { String::new() } else { format!(", {} failed", summary.failed.len()) }
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_raw_origins;
+
+    #[test]
+    fn split_raw_origins_forms() {
+        let raw: Vec<String> = ["www/nginx", "-f", "list1", "mail/dovecot", "--file=list2"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (origins, files) = split_raw_origins(&raw).unwrap();
+        assert_eq!(origins, vec!["www/nginx", "mail/dovecot"]);
+        assert_eq!(files.len(), 2);
+        assert!(files[0].ends_with("list1") && files[1].ends_with("list2"));
+    }
+
+    #[test]
+    fn split_raw_origins_rejects_stray_flags_and_dangling_f() {
+        let raw = vec!["www/nginx".to_string(), "-J".to_string(), "8".to_string()];
+        assert!(split_raw_origins(&raw).is_err());
+        let raw = vec!["www/nginx".to_string(), "-f".to_string()];
+        assert!(split_raw_origins(&raw).is_err());
+    }
 }

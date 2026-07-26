@@ -155,3 +155,106 @@ fn prune_old_generations(dir: &Path, keep: &str) {
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::options::PortOptions;
+
+    fn info(origin: &str) -> PortInfo {
+        let key = PortKey::parse(origin).unwrap();
+        PortInfo {
+            key: key.clone(),
+            canonical: key,
+            pkgname: "x-1.0".into(),
+            flavors: vec![],
+            options_name: origin.replace('/', "_"),
+            options: PortOptions::default(),
+            deps: vec![],
+            broken: None,
+            ignore: None,
+            deprecated: None,
+            default_versions: vec![],
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn roundtrip_and_options_file_invalidation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbdir = tmp.path().join("db");
+        std::fs::create_dir_all(dbdir.join("cat_port")).unwrap();
+        std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+
+        let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
+        let i = info("cat/port");
+        assert!(c.lookup(&i.key, &dbdir).is_none());
+        c.insert(&i, &dbdir);
+        assert!(c.lookup(&i.key, &dbdir).is_some());
+
+        // Changing the options file invalidates the entry.
+        std::fs::write(dbdir.join("cat_port/options"), "v2\n").unwrap();
+        assert!(c.lookup(&i.key, &dbdir).is_none());
+        // Restoring the exact content revalidates it.
+        std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+        assert!(c.lookup(&i.key, &dbdir).is_some());
+    }
+
+    #[test]
+    fn persists_across_reopen_same_generation_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbdir = tmp.path().join("db");
+        std::fs::create_dir_all(&dbdir).unwrap();
+        let cache_dir = tmp.path().join("cache");
+
+        let mut c = Cache::open(&cache_dir, "treeA", "confA");
+        c.insert(&info("cat/port"), &dbdir);
+        drop(c);
+
+        let c2 = Cache::open(&cache_dir, "treeA", "confA");
+        assert!(c2.lookup(&PortKey::parse("cat/port").unwrap(), &dbdir).is_some());
+        let c3 = Cache::open(&cache_dir, "treeB", "confA");
+        assert!(c3.lookup(&PortKey::parse("cat/port").unwrap(), &dbdir).is_none());
+    }
+
+    #[test]
+    fn disabled_never_stores() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Cache::disabled();
+        c.insert(&info("cat/port"), tmp.path());
+        assert!(c.lookup(&PortKey::parse("cat/port").unwrap(), tmp.path()).is_none());
+    }
+
+    #[test]
+    fn prune_keeps_at_most_two_generations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        for n in ["old1-a.jsonl", "old2-b.jsonl", "old3-c.jsonl"] {
+            std::fs::write(cache_dir.join(n), "\n").unwrap();
+        }
+        let _c = Cache::open(&cache_dir, "current", "gen");
+        let count = std::fs::read_dir(&cache_dir).unwrap().count();
+        assert!(count <= 2, "expected current + 1 old generation, got {count}");
+    }
+
+    #[test]
+    fn tree_key_falls_back_to_mtime_without_git() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("Mk")).unwrap();
+        std::fs::write(tmp.path().join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        let key = tree_key(tmp.path());
+        assert!(key.starts_with("mtime-"), "got {key}");
+    }
+
+    #[test]
+    fn options_hash_absent_vs_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(options_hash(tmp.path(), "cat_port"), "ABSENT");
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
+        let h = options_hash(tmp.path(), "cat_port");
+        assert_ne!(h, "ABSENT");
+        assert_eq!(h.len(), 64);
+    }
+}

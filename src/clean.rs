@@ -181,6 +181,47 @@ mod tests {
     }
 
     #[test]
+    fn classify_against_fake_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let portsdir = tmp.path().join("ports");
+        let optdir = tmp.path().join("options");
+        // Live port: cat/alive.
+        std::fs::create_dir_all(portsdir.join("cat/alive")).unwrap();
+        std::fs::write(portsdir.join("cat/alive/Makefile"), "# port\n").unwrap();
+        for name in ["cat_alive", "cat_gone", "cat_renamed", "weird"] {
+            std::fs::create_dir_all(optdir.join(name)).unwrap();
+            std::fs::write(optdir.join(name).join("options"), "x\n").unwrap();
+        }
+        // A dir without an options file must be ignored entirely.
+        std::fs::create_dir_all(optdir.join("cat_emptydir")).unwrap();
+
+        let moved =
+            Moved::parse("cat/gone||2026-01-01|expired\ncat/renamed|cat/alive|2026-01-01|renamed\n");
+        let (removals, live, warnings) = classify_entries(&optdir, &portsdir, &moved);
+
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].key.to_string(), "cat/alive");
+        let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
+        assert_eq!(names, vec!["cat_gone", "cat_renamed"]);
+        assert!(removals[0].reason.contains("expired"));
+        assert!(removals[1].reason.contains("cat/alive"), "rename target named");
+        // "weird" has no '_' -> unmappable, warned about, untouched.
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("weird"));
+    }
+
+    #[test]
+    fn redundancy_diff_directions() {
+        // defaults {A}; file result: B on, A off -> +B -A.
+        let mut o = PortOptions::default();
+        o.complete = vec!["A".into(), "B".into()];
+        o.defaults = ["A".to_string()].into();
+        o.effective = ["B".to_string()].into();
+        let d = redundancy_diff(&info_with(o));
+        assert_eq!(d, vec!["+B".to_string(), "-A".to_string()]);
+    }
+
+    #[test]
     fn redundancy_check() {
         // defaults {A}, mc unsets B; file recorded exactly that -> effective {A}.
         let mut o = PortOptions::default();

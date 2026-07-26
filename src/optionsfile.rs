@@ -80,6 +80,24 @@ OPTIONS_FILE_UNSET+=FLITE
     }
 
     #[test]
+    fn parse_tolerates_junk_and_empty() {
+        let f = SavedOptionsFile::parse("");
+        assert!(f.complete.is_empty() && f.set.is_empty() && f.unset.is_empty());
+        let f = SavedOptionsFile::parse(
+            "# only comments\n\n   \nGARBAGE LINE\nOPTIONS_FILE_SET+= SPACED \n",
+        );
+        assert!(f.set.contains("SPACED"), "values are trimmed");
+    }
+
+    #[test]
+    fn render_empty_options_list() {
+        let text = render("foo-1.0", &[], &BTreeSet::new());
+        let f = SavedOptionsFile::parse(&text);
+        assert_eq!(f.options_read, "foo-1.0");
+        assert!(f.complete.is_empty() && f.set.is_empty() && f.unset.is_empty());
+    }
+
+    #[test]
     fn render_round_trip() {
         let complete = vec!["SPEECHD".to_string(), "FLITE".to_string()];
         let enabled: BTreeSet<String> = ["SPEECHD".to_string()].into();
