@@ -16,6 +16,9 @@ pub struct Settings {
     pub options_dir_is_new: bool,
     /// Layered make.conf (written into `staging_dir`), if any applies.
     pub make_conf: Option<PathBuf>,
+    /// The poudriere.d make.conf files that were concatenated, in inclusion
+    /// order (empty when none exists).
+    pub make_conf_sources: Vec<PathBuf>,
     /// Hash identifying the make.conf layering (empty layering hashes too).
     pub conf_hash: String,
 }
@@ -49,10 +52,17 @@ pub fn resolve(
         }
     };
 
-    let (make_conf, conf_hash) =
+    let (make_conf, conf_hash, make_conf_sources) =
         layer_make_conf(poudriere_d, jail, tree_name, set, staging_dir)?;
 
-    Ok(Settings { portsdir, options_dir, options_dir_is_new, make_conf, conf_hash })
+    Ok(Settings {
+        portsdir,
+        options_dir,
+        options_dir_is_new,
+        make_conf,
+        make_conf_sources,
+        conf_hash,
+    })
 }
 
 fn resolve_portsdir(poudriere_d: &Path, tree: &str) -> Result<PathBuf> {
@@ -167,29 +177,29 @@ fn layer_make_conf(
     tree: &str,
     set: Option<&str>,
     staging_dir: &Path,
-) -> Result<(Option<PathBuf>, String)> {
+) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut combined = String::new();
-    let mut found = false;
+    let mut sources = Vec::new();
     for name in make_conf_layers(jail, tree, set) {
         let path = poudriere_d.join(&name);
         if let Ok(text) = fs::read_to_string(&path) {
-            found = true;
             combined.push_str(&format!("# --- {} ---\n", path.display()));
             combined.push_str(&text);
             if !text.ends_with('\n') {
                 combined.push('\n');
             }
+            sources.push(path);
         }
     }
 
     let conf_hash = crate::cache::sha256_hex(combined.as_bytes());
-    if !found {
-        return Ok((None, conf_hash));
+    if sources.is_empty() {
+        return Ok((None, conf_hash, sources));
     }
     let path = staging_dir.join("make.conf");
     fs::write(&path, &combined)
         .with_context(|| format!("writing layered make.conf to {}", path.display()))?;
-    Ok((Some(path), conf_hash))
+    Ok((Some(path), conf_hash, sources))
 }
 
 #[cfg(test)]
@@ -269,7 +279,9 @@ mod tests {
         }
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _) = layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), &stage).unwrap();
+        let (path, _, sources) =
+            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), &stage).unwrap();
+        assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
         let order: Vec<usize> = layers.iter().map(|(_, c)| idx(c)).collect();

@@ -151,13 +151,23 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
         port_dbdir: settings.options_dir.clone(),
     };
 
+    eprintln!("optique: ports tree {} · {} jobs", settings.portsdir.display(), jobs);
     eprintln!(
-        "optique: tree {} · options dir {}{} · {} jobs",
-        settings.portsdir.display(),
+        "  options dir: {}{}",
         settings.options_dir.display(),
-        if settings.options_dir_is_new { " (new, created on apply)" } else { "" },
-        jobs
+        if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
     );
+    if settings.make_conf_sources.is_empty() {
+        eprintln!("  make.conf:   (none)");
+    } else {
+        for (i, src) in settings.make_conf_sources.iter().enumerate() {
+            eprintln!(
+                "  {}   {}",
+                if i == 0 { "make.conf:" } else { "          " },
+                src.display()
+            );
+        }
+    }
 
     let t0 = Instant::now();
     let result = scanner::scan(roots, &ctx, jobs, &mut cache, &moved, |p| {
