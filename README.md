@@ -214,3 +214,37 @@ cargo build --release        # needs lang/rust
 cargo test                   # unit tests, host-independent
 cargo test -- --ignored      # live tests against /usr/ports
 ```
+
+## Installing
+
+The `Makefile` is a thin BSD make (bmake) wrapper around cargo:
+
+```sh
+make build                   # cargo build --release
+make install                 # as root
+```
+
+It installs `optique` into `${PREFIX}/bin` and the man page into
+`${PREFIX}/share/man/man8/optique.8.gz`, with `PREFIX` defaulting to
+`/usr/local`. Both `PREFIX` and `DESTDIR` are honoured, so staging into a
+package works as usual:
+
+```sh
+make install PREFIX=/opt DESTDIR=/tmp/stage
+```
+
+`make deinstall` removes both files again, `make test` runs the test suite and
+`make lint` runs `mandoc -T lint` on the man page. The same thing by hand:
+
+```sh
+install -s -m 555 target/release/optique /usr/local/bin/optique
+gzip -cn optique.8 > /usr/local/share/man/man8/optique.8.gz
+```
+
+Full documentation lives in the man page — every flag, the poudriere options-dir
+and make.conf resolution chains, the TUI key bindings, the `scan --json` schema
+and `scan`'s exit-code contract:
+
+```sh
+man optique                  # or: mandoc optique.8
+```

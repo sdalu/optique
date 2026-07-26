@@ -91,6 +91,39 @@ fn missing_list_file_is_reported_with_its_path() {
 }
 
 #[test]
+fn man_page_is_valid_mdoc() {
+    // mandoc exits nonzero for mere STYLE/WARNING output too (e.g. "referenced
+    // manual not found" for poudriere(8) on hosts without it installed), so the
+    // assertion is on the absence of ERROR/UNSUPP diagnostics, not on the exit
+    // status. Skipped where mandoc is not available.
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    assert!(man.is_file(), "{} must exist", man.display());
+
+    let out = match Command::new("mandoc").args(["-T", "lint"]).arg(&man).output() {
+        Ok(out) => out,
+        Err(_) => return, // no mandoc on this host
+    };
+    let text =
+        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    for bad in ["ERROR:", "UNSUPP:", "SYSERR:"] {
+        assert!(!text.contains(bad), "mandoc reported {bad} on optique.8:\n{text}");
+    }
+}
+
+#[test]
+fn man_page_documents_every_subcommand_and_flag() {
+    // Cheap guard against the man page drifting from the CLI surface.
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    let text = std::fs::read_to_string(&man).unwrap();
+    for needle in [
+        "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
+        "-dry-run", "-options-dir", "EXIT STATUS", "POUDRIERE INTEGRATION",
+    ] {
+        assert!(text.contains(needle), "optique.8 must document {needle}");
+    }
+}
+
+#[test]
 fn tui_refuses_without_terminal_before_scanning() {
     // Origins are given, stdin/stdout are pipes -> must fail fast with the
     // terminal message, not attempt a scan.

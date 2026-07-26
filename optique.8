@@ -1,0 +1,782 @@
+.\"-
+.\" Copyright (c) 2026 Stephane D'Alu
+.\"
+.\" SPDX-License-Identifier: BSD-2-Clause
+.\"
+.Dd July 26, 2026
+.Dt OPTIQUE 8
+.Os
+.Sh NAME
+.Nm optique
+.Nd fast FreeBSD ports options and dependency configurator for poudriere
+.Sh SYNOPSIS
+.Nm
+.Op Fl v | Fl Q
+.Op Fl z Ar set
+.Op Fl j Ar jail
+.Op Fl p Ar tree
+.Op Fl o Ar dir
+.Op Fl J Ar jobs
+.Op Fl -no-cache
+.Op Cm tui
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Nm
+.Op Ar global options
+.Cm scan
+.Op Fl -json
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Nm
+.Op Ar global options
+.Cm sync
+.Op Fl n
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Nm
+.Op Ar global options
+.Cm clean
+.Op Fl n
+.Op Fl r
+.Op Fl u
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Sh DESCRIPTION
+.Nm
+reviews and maintains the ports options files that
+.Xr poudriere 8
+mounts over a build jail's
+.Pa /var/db/ports .
+It resolves the complete dependency closure of a package list, determines for
+every port in it whether its options file is missing, stale, redundant or
+inconsistent, and writes all options files in a single atomic pass.
+.Pp
+It is a replacement for
+.Nm poudriere Cm options Fl C Ar list ,
+which walks the dependency tree serially and pops one interactive
+.Xr dialog4ports 8
+window per port, in dependency order, with no overview and no way back.
+.Nm
+instead presents one full-screen interface over every port in the closure at
+once, with the ports that actually need a decision sorted to the top, and
+touches nothing on disk until the changes are explicitly applied.
+.Pp
+Ports are queried by piping a generated wrapper makefile to
+.Nm make Fl f Pa /dev/stdin Cm optique-config .
+The wrapper includes the port's own
+.Pa Makefile
+and dumps its options, option groups, descriptions,
+.Va IMPLIES
+and
+.Va PREVENTS
+relations,
+.Va BROKEN
+and
+.Va IGNORE
+conditions and the unified dependency list as parse-time
+.Ic .info
+lines, evaluated under the same layered
+.Va __MAKE_CONF
+that
+.Xr poudriere 8
+would use.
+Queries run in parallel
+.Pq up to 16 by default, see Fl J
+so a cold closure of about a thousand ports completes in roughly a minute.
+Every result is cached
+.Pq see Sx FILES
+keyed on the ports tree revision, the hash of the merged
+.Pa make.conf
+layers and the content of the port's own options file, so subsequent runs
+re-invoke
+.Nm make
+only for ports whose inputs actually changed and typically finish in well
+under a second.
+Renamed ports are resolved through the tree's
+.Pa MOVED
+file; ports that vanished surface as per-edge errors.
+.Ss Global options
+These options are accepted before and after the subcommand name.
+.Bl -tag -width Ds
+.It Fl z Ar set , Fl -set Ar set
+Poudriere set name, used both to resolve the options directory and to layer
+.Pa make.conf .
+.It Fl j Ar jail , Fl -jail Ar jail
+Poudriere jail name.
+Used for
+.Pa make.conf ,
+.Pa blacklist
+and options directory resolution.
+.It Fl p Ar tree , Fl -ports-tree Ar tree
+Poudriere ports tree name.
+Defaults to
+.Ql default .
+The tree's location is read from
+.Pa /usr/local/etc/poudriere.d/ports/ Ns Ar tree Ns Pa /mnt ,
+falling back to
+.Pa /usr/ports .
+.It Fl o Ar dir , Fl -options-dir Ar dir
+Use
+.Ar dir
+as the options directory verbatim, bypassing poudriere resolution entirely.
+.It Fl f Ar pkglist , Fl -file Ar pkglist
+Read port origins from
+.Ar pkglist ,
+one
+.Ar origin Ns Op @ Ns Ar flavor
+per line,
+.Ql #
+starting a comment
+.Pq the Xr poudriere 8 pkglist format .
+Repeatable; duplicates across files and command line arguments are dropped.
+.It Fl J Ar jobs , Fl -jobs Ar jobs
+Number of parallel
+.Nm make
+queries.
+Defaults to
+.Ic min Ns Pq 16 , Va ncpu .
+.It Fl -no-cache
+Neither read nor write the persistent query cache.
+.It Fl n , Fl -dry-run
+Report what would change without touching anything.
+Only
+.Cm sync
+and
+.Cm clean
+ever write outside the interactive apply step.
+.It Fl v , Fl -verbose
+More detail per subcommand:
+.Cm scan
+prints each port's full
+.Ql +ON
+and
+.Ql -OFF
+option state plus query warnings,
+.Cm sync
+prints the final state of every written file, and
+.Cm clean
+explains why each kept entry is kept, for example which options deviate from
+defaults plus
+.Pa make.conf .
+.It Fl Q , Fl -quiet
+Drop the startup banner and the per-port and per-file listings on standard
+output.
+The summary line and all warnings and errors on standard error remain.
+Ignored by
+.Cm scan Fl -json .
+.It Fl h , Fl -help
+Print usage and exit.
+.It Fl V , Fl -version
+Print the version and exit.
+.El
+.Ss tui
+.Nm Cm tui Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+The default subcommand: running
+.Nm
+with port origins and no subcommand starts the interface.
+It requires a real terminal and refuses to start when standard input or output
+is not a tty.
+.Pp
+The left pane lists every port in the dependency closure that has options
+.Pq optionless ports remain in the graph but are never shown ,
+problems first, each with a status marker:
+.Bl -tag -width 6n -compact
+.It \[u2717]
+conflict: the staged options violate
+.Va PREVENTS
+or a group rule.
+.It *
+edited: staged changes not yet applied.
+.It \&?
+unconfigured: no saved options file.
+.It \&!
+stale: the option list changed since the file was written.
+.It \[u2260]
+contradicts the
+.Pa make.conf
+.Va OPTIONS_SET
+or
+.Va OPTIONS_UNSET
+policy; shown only in the
+.Ic w
+view.
+.It \[u2248]
+needs no attention because
+.Pa make.conf
+already decides it; shown only in the
+.Ic m
+view.
+.It \[u2713]
+ok.
+.El
+.Pp
+Two further markers may trail the status one:
+.Sq \[u26D4]
+for a port blacklisted for this jail, tree and set, which therefore never needs
+attention, and
+.Sq \[u26A0]
+for a port that is
+.Va BROKEN
+or
+.Va IGNORE Ns d
+with its current options.
+.Pp
+The right pane shows the port's options in framework order under their group
+headers, whose kind is enforced on every toggle:
+.Dv SINGLE
+requires exactly one enabled member,
+.Dv RADIO
+at most one and
+.Dv MULTI
+at least one.
+.Pp
+Each option row carries the staged value, the port default
+.Pq Ql def:on No or Ql def:off ,
+a
+.Ql NEW
+badge for options added since the file was written, and a provenance badge:
+.Ql mc
+for a global
+.Va OPTIONS_SET
+or
+.Va OPTIONS_UNSET ,
+.Ql mc:port
+for a per-port knob, and
+.Ql FORCED
+for a
+.Va *_FORCE
+knob that the options file cannot override, which also locks the toggle.
+Options auto-enabled through an
+.Va IMPLIES
+chain are locked and marked
+.Ql implied by X ,
+and options carrying
+.Va <OPT>_BROKEN
+or
+.Va <OPT>_IGNORE
+get a warning badge.
+A yellow option name deviates from the port default; a magenta one
+.Pq badge Ql \[u2260]mc
+contradicts
+.Pa make.conf
+policy.
+Options that no longer exist are struck through and dropped on apply; options
+excluded by the current flavor but managed through the default flavor are
+listed in their own section.
+.Pp
+Toggling an option re-queries the port in the background against a staging
+.Va PORT_DBDIR ,
+so dependencies that the option adds or removes appear or disappear within a
+second or two.
+Nothing touches the real options directory until
+.Ic a
+is pressed, which previews every file as a diff and then writes atomically
+.Pq temporary file, Xr fsync 2 , Xr rename 2 .
+.Pp
+Key bindings:
+.Bl -tag -width "Enter, l" -compact
+.It Ic j , k , \(ua , \(da
+Move the selection;
+.Ic g
+and
+.Ic G
+jump to the first and last entry,
+.Ic PgUp
+and
+.Ic PgDn
+page.
+.It Ic Enter , l
+Edit the selected port;
+.Ic h
+or
+.Ic Esc
+returns to the list.
+.It Ic Space
+Toggle the selected option, enforcing group rules.
+.It Ic d
+Reset the port to its defaults.
+.It Ic u
+Revert the port to its saved state.
+.It Ic B
+Bulk-set one option across all currently visible ports.
+The prompt accepts
+.Ar OPTION Ns Cm = Ns Cm on Ns | Ns Cm off ,
+or the shorthands
+.Ar OPTION Ns Cm +
+and
+.Ar OPTION Ns Cm - .
+.It Ic n , p
+Jump to the next or previous port needing attention.
+.It Ic f
+Jump to the next flavor of the same origin.
+.It Ic t
+Show only ports needing attention, hiding the ok ones.
+.It Ic s
+Toggle problems-first versus stable alphabetical sort.
+Alphabetical order keeps neighbours in place while working down the list;
+.Ic n
+and
+.Ic p
+still jump between problems in either order.
+.It Ic m
+Count stale and unconfigured ports as ok when
+.Pa make.conf
+already decides every added option
+.Pq stale
+or every option at all
+.Pq unconfigured ;
+such ports are marked
+.Ql \[u2248] .
+.It Ic w
+Flag ports whose options contradict the global
+.Va OPTIONS_SET
+and
+.Va OPTIONS_UNSET
+policy, marked
+.Ql \[u2260] .
+.It Ic /
+Filter the port list.
+.It Ic a
+Apply: preview every file diff, then write all files atomically.
+.It Ic i
+Show details for the selected option: description, group,
+.Va IMPLIES
+and
+.Va PREVENTS ,
+and the dependencies enabling it would add.
+.It Ic r
+Explain why the port is in the closure: its dependency chain and its
+dependents.
+.It Ic \&? , h , F1
+Colour-coded in-interface help listing markers, badges and keys.
+.It Ic Ctrl-L
+Force a full screen repaint.
+.It Ic q , Ctrl-C
+Quit.
+.El
+.Pp
+Quitting with staged changes opens a prompt offering to keep them:
+.Ic s
+saves them as a draft
+.Pq see Sx FILES ,
+keyed by the options directory,
+.Ic d
+discards them, and any other key stays in the interface.
+The next session on the same options directory restores the draft's staged
+edits, dropping options that meanwhile vanished from a port and re-querying the
+restored ports so their dependencies reappear.
+The draft is cleared as soon as the changes are applied or discarded;
+.Ic u
+still reverts an individual port.
+.Ss scan
+.Nm Cm scan Oo Fl -json Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+Non-interactive status report over the closure, intended as a build gate.
+Each port is classified as
+.Cm ok ,
+.Cm unconfigured
+.Pq no saved options file ,
+.Cm stale
+.Pq the option list changed since the file was written, with the added and removed options named ,
+or
+.Cm conflict
+.Pq the recorded options violate Va PREVENTS No or a group constraint .
+Every flagged port also lists the options that
+.Pa make.conf
+does
+.Em not
+decide, as
+.Ql undecided: ... ,
+or is annotated
+.Ql [mc-covered \[u2248]]
+when
+.Pa make.conf
+decides all of them.
+Ports that are fully
+.Cm mc-covered
+never demand attention, and neither do blacklisted ports: poudriere will not
+build them in this jail, tree and set, so their options cannot hold a build up.
+Ports without any options are counted separately and not listed.
+.Bl -tag -width Ds
+.It Fl -json
+Print one machine-readable JSON object on standard output instead of the table;
+progress and the summary stay on standard error and
+.Fl Q
+is ignored.
+The object has the keys
+.Va options_dir ,
+.Va ports_tree ,
+.Va ports
+and
+.Va summary .
+Each element of
+.Va ports
+has
+.Va port
+.Pq Ar origin Ns Oo @ Ns Ar flavor Oc ,
+.Va pkgname ,
+.Va status
+.Pq Ql conflict , Ql unconfigured , Ql stale No or Ql ok ,
+.Va undecided ,
+.Va added
+and
+.Va removed
+.Pq both for stale ports ,
+.Va mc_covered
+and
+.Va blacklisted .
+Non-ok ports come first, then alphabetical order.
+.Va summary
+holds the counts
+.Va total ,
+.Va unconfigured ,
+.Va stale ,
+.Va conflict ,
+.Va ok ,
+.Va optionless ,
+.Va blacklisted
+and
+.Va attention ,
+the last of which drives the exit status.
+.El
+.Pp
+With
+.Fl Q
+the per-port rows and the banner are dropped, leaving only the summary and any
+warnings on standard error, which makes
+.Nm Fl Q Cm scan
+usable directly as a
+.Xr cron 8
+gate that speaks up only when something is pending.
+See
+.Sx EXIT STATUS .
+.Ss sync
+.Nm Cm sync Oo Fl n Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+Headless refresh of the options files over the closure: the fast equivalent of
+.Nm poudriere Cm options Fl C .
+For every port it keeps the saved file's choices for options that still exist,
+adopts the effective value
+.Pq defaults plus Pa make.conf
+for options the file does not know about, and drops options that no longer
+exist.
+It then reports every file it changed.
+A port whose options file already records the same complete option list and the
+same enabled set is left untouched; a changed package name alone does not force
+a rewrite, matching
+.Nm make Cm config-conditional .
+.Pp
+Options files belonging to ports that lost
+.Em all
+of their options are removed as dead configuration, but only when no port in
+the closure sharing that options file still has options, so a flavor with an
+empty option list never deletes the default flavor's file.
+Removal deletes the
+.Pa options
+file and the containing directory, but keeps a user-managed
+.Pa options.local
+if one is present.
+.Pp
+All flavors of one origin share a single options file.
+It is written from the default flavor's point of view, exactly as
+.Nm make config
+on the plain origin would; a non-default flavor that disagrees on an option
+both flavors carry is reported as a warning rather than silently overwritten.
+Disagreements confined to options one flavor does not even have, such as those
+removed by
+.Va OPTIONS_EXCLUDE ,
+are structural and not reported.
+.Pp
+With
+.Fl n
+nothing is written and the count of files that would be written and removed is
+reported instead.
+A later interactive session can revisit anything
+.Cm sync
+decided.
+.Ss clean
+.Nm Cm clean Oo Fl n Oc Oo Fl r Oc Oo Fl u Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+Garbage-collect the resolved options directory.
+By default it walks every entry in the directory and removes those whose port
+has vanished from the ports tree, resolving the tree's
+.Pa MOVED
+file first so that renames and removals are named and explained rather than
+guessed.
+Plain
+.Cm clean
+needs no package list, and giving origins or
+.Fl f
+without
+.Fl u
+is an error, since it would ignore them.
+.Bl -tag -width Ds
+.It Fl r , Fl -redundant
+Also remove files whose recorded configuration is exactly what defaults plus
+the
+.Pa make.conf
+overlay produce anyway, so that removing them changes nothing.
+.It Fl u , Fl -unused
+Also remove entries for ports outside the dependency closure of the given
+package list
+.Pq positional origins and/or Fl f Ar pkglist ,
+which is then required.
+If any port in that closure fails to query, the closure is incomplete and
+.Nm
+refuses to prune anything rather than risk deleting live configuration.
+.El
+.Sh POUDRIERE INTEGRATION
+All poudriere state is read from
+.Pa /usr/local/etc/poudriere.d .
+If that directory does not exist and neither
+.Fl j
+nor
+.Fl z
+was given,
+.Nm
+falls back to a plain
+.Pa /var/db/ports ;
+with
+.Fl j
+or
+.Fl z
+it is an error.
+.Fl o
+bypasses this resolution completely.
+.Pp
+Given
+.Fl j Ar jail ,
+.Fl p Ar tree
+and
+.Fl z Ar set ,
+the options directory is resolved exactly as
+.Xr poudriere 8
+resolves it before null-mounting one over the jail's
+.Pa /var/db/ports .
+The candidates are tried in this order and the
+.Em first existing
+one wins:
+.Bd -literal -offset indent
+<jail>-<tree>-<set>-options
+<jail>-<set>-options
+<jail>-<tree>-options
+<tree>-<set>-options
+<set>-options
+<tree>-options
+<jail>-options
+options
+.Ed
+.Pp
+If none of them exists, applying creates the one
+.Nm poudriere Cm options
+would have used for the same flags,
+.Pa [<jail>-][<tree>-][<set>-]options ,
+the tree component only when
+.Fl p
+was given explicitly.
+.Pp
+.Pa make.conf
+is layered in
+.Xr poudriere 8 Ns 's
+inclusion order, from least to most specific, with
+.Em every
+existing file merged, not just the first match:
+.Bd -literal -offset indent
+make.conf
+<set>-make.conf
+<tree>-make.conf
+<jail>-make.conf
+<tree>-<set>-make.conf
+<jail>-<tree>-make.conf
+<jail>-<set>-make.conf
+<jail>-<tree>-<set>-make.conf
+.Ed
+.Pp
+Port queries therefore see exactly what a poudriere build would see, including
+.Va DEFAULT_VERSIONS ,
+whose entries can change a port's default options, its option list and its
+dependencies; a set that overrides for instance
+.Ql DEFAULT_VERSIONS+=python=3.12
+is honoured throughout the scan, the interface and every written file.
+The same holds for the
+.Va OPTIONS_SET ,
+.Va OPTIONS_UNSET ,
+per-port
+.Va <PORT>_SET
+and
+.Va <PORT>_UNSET
+and the
+.Va *_FORCE
+knobs, which is what the
+.Ql mc ,
+.Ql mc:port
+and
+.Ql FORCED
+badges report.
+.Pp
+The
+.Pa blacklist
+chain is read with the same jail, tree and set expansion and, again like
+.Xr poudriere 8 ,
+every existing file contributes entries:
+.Bd -literal -offset indent
+blacklist
+<set>-blacklist
+<tree>-blacklist
+<jail>-blacklist
+<tree>-<set>-blacklist
+<jail>-<tree>-blacklist
+<jail>-<set>-blacklist
+<jail>-<tree>-<set>-blacklist
+.Ed
+.Pp
+Each line holds one port origin,
+.Ql #
+starts a comment, and
+.Ql *
+globs are allowed, as in
+.Ql www/nginx* .
+Blacklisted ports are marked in
+.Cm scan
+and in the interface, never demand attention and never trip
+.Cm scan Ns 's
+exit status gate, whatever their status.
+.Sh FILES
+.Bl -tag -width "/usr/local/etc/poudriere.d/<jail>-<tree>-<set>-make.conf" -compact
+.It Pa ~/.cache/optique/
+Persistent query cache, one JSON Lines file per generation, named
+.Pa v<schema>-<tree revision>-<make.conf hash>.jsonl .
+Overridden by
+.Ev XDG_CACHE_HOME ,
+in which case
+.Pa $XDG_CACHE_HOME/optique/
+is used.
+Stale generations are pruned automatically.
+Disabled entirely by
+.Fl -no-cache .
+.It Pa ~/.cache/optique/drafts/
+Saved staged edits from an interrupted session, one JSON file per options
+directory, named after a hash of its path.
+.It Pa /tmp/.tmpXXXXXXXX/
+Per-run staging directory, honouring
+.Ev TMPDIR ,
+holding the merged
+.Pa make.conf
+handed to
+.Nm make
+and, under
+.Pa db/ ,
+the staging
+.Va PORT_DBDIR
+that background re-queries evaluate uncommitted toggles against.
+Removed when
+.Nm
+exits.
+.It Pa /usr/local/etc/poudriere.d/
+Poudriere configuration root.
+.It Pa /usr/local/etc/poudriere.d/ports/<tree>/mnt
+File holding the path of the named ports tree.
+.It Pa /usr/local/etc/poudriere.d/*options/
+Candidate options directories; see
+.Sx POUDRIERE INTEGRATION .
+.It Pa /usr/local/etc/poudriere.d/*make.conf
+The merged
+.Pa make.conf
+layers.
+.It Pa /usr/local/etc/poudriere.d/*blacklist
+The merged blacklist chain.
+.It Pa /var/db/ports/
+Fallback options directory when no poudriere configuration is present.
+.El
+.Sh EXIT STATUS
+.Cm scan
+uses its exit status as a machine-readable gate:
+.Bl -tag -width Ds -compact
+.It 0
+Nothing is pending: every port in the closure is configured and consistent, or
+is fully decided by
+.Pa make.conf ,
+or is blacklisted.
+.It 1
+A human decision is pending: at least one port is unconfigured or stale with
+undecided options, or has a conflict.
+.It other
+An error occurred, for example an unreadable package list or an unresolvable
+ports tree.
+.El
+.Pp
+.Cm tui ,
+.Cm sync
+and
+.Cm clean
+exit 0 on success and non-zero on error, with a diagnostic on standard error.
+Per-file failures during
+.Cm sync
+or
+.Cm clean
+are reported individually and counted in the summary without failing the run.
+Invalid command line usage exits 2.
+.Sh EXAMPLES
+Review the closure of two ports interactively for the poudriere set
+.Ql workstation :
+.Bd -literal -offset indent
+optique -z workstation www/nginx mail/dovecot
+.Ed
+.Pp
+Do the same from poudriere package lists;
+.Fl f
+is repeatable and combines with origins on the command line:
+.Bd -literal -offset indent
+optique -z server -f /usr/local/etc/poudriere.d/pkglist
+optique -z server -f base-list -f extra-list www/nginx
+.Ed
+.Pp
+Report which ports are unconfigured or stale, as a table or as JSON:
+.Bd -literal -offset indent
+optique -z workstation scan -f pkglist
+optique -z workstation scan --json -f pkglist
+.Ed
+.Pp
+Use the exit status as a
+.Xr cron 8
+gate that only speaks up when a decision is actually pending:
+.Bd -literal -offset indent
+optique -z ws -Q scan -f list || mail-me
+.Ed
+.Pp
+Refresh every options file without interaction, first reporting, then writing:
+.Bd -literal -offset indent
+optique -z workstation sync --dry-run -f pkglist
+optique -z workstation sync -f pkglist
+.Ed
+.Pp
+Garbage-collect the options directory, progressively more aggressively:
+.Bd -literal -offset indent
+optique -z workstation clean --dry-run
+optique -z workstation clean --redundant
+optique -z workstation clean --unused -f pkglist
+.Ed
+.Pp
+A full hygiene pass for one package list, refreshing and then
+garbage-collecting, suitable for running before a bulk build:
+.Bd -literal -offset indent
+optique -z ws sync -f list && \e
+    optique -z ws clean --unused --redundant -f list
+.Ed
+.Sh SEE ALSO
+.Xr make 1 ,
+.Xr ports 7 ,
+.Xr poudriere 8
+.Sh HISTORY
+.Nm
+first appeared in 2026 as a replacement for the serial, one-dialog-per-port
+workflow of
+.Nm poudriere Cm options Fl C .
+.Sh AUTHORS
+.An -nosplit
+Project and design by
+.An Stephane D'Alu ,
+implementation with
+.An Claude ,
+Anthropic's coding assistant.
