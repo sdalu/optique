@@ -520,6 +520,7 @@ fn draw_help(f: &mut Frame) {
         ("/", "filter the port list"),
         ("a", "apply: preview every file diff, then write atomically"),
         ("? h F1", "this help"),
+        ("Ctrl-L", "force a full screen repaint"),
         ("q Ctrl-C", "quit (confirms when staged changes exist)"),
     ] {
         lines.push(Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())]));

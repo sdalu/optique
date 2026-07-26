@@ -149,6 +149,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             continue;
         }
 
+        // Ctrl-L: full repaint to clear terminal artifacts — works in every
+        // mode (modal, filter, help) without consuming any state.
+        if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            terminal.clear()?;
+            continue;
+        }
+
         // Modal and quit-confirm grab all keys.
         if app.quit_confirm {
             match key.code {
