@@ -57,6 +57,10 @@ pub struct App {
     pub quit_confirm: bool,
     /// Ports hidden because they have no options (status-bar info).
     pub hidden: usize,
+    /// When set, ports needing no attention (status ok) are not listed.
+    pub hide_ok: bool,
+    /// Ports with options matching the filter, before hide_ok is applied.
+    pub listable: usize,
     pub staging_db: StagingDb,
     pub refresher: Refresher,
     /// Ports awaiting a debounced background re-query.
@@ -95,6 +99,8 @@ pub fn run(
         modal: None,
         quit_confirm: false,
         hidden,
+        hide_ok: false,
+        listable: 0,
         staging_db,
         refresher,
         pending: HashMap::new(),
@@ -176,6 +182,20 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             }
             KeyCode::Char('/') => app.focus = Focus::Filter,
             KeyCode::Char('a') => app.open_apply_modal(),
+            KeyCode::Char('t') => {
+                app.hide_ok = !app.hide_ok;
+                let keep = app.selected_key();
+                app.rebuild_visible(keep);
+                app.rebuild_editor();
+                app.flash(
+                    if app.hide_ok {
+                        "showing only ports needing attention (t to show all)"
+                    } else {
+                        "showing all ports"
+                    },
+                    false,
+                );
+            }
             _ => match app.focus {
                 Focus::List => handle_list_key(app, key.code),
                 Focus::Editor => handle_editor_key(app, key.code),
@@ -237,6 +257,10 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
     let Some(modal) = app.modal.as_mut() else { return };
     if modal.done.is_some() {
         app.modal = None;
+        // Applied files changed statuses; refresh the list (matters with hide_ok).
+        let keep = app.selected_key();
+        app.rebuild_visible(keep);
+        app.rebuild_editor();
         return;
     }
     match code {
@@ -312,6 +336,10 @@ impl App {
             .map(|(key, info)| (self.session.status(info), key.clone()))
             .collect();
         items.sort();
+        self.listable = items.len();
+        if self.hide_ok {
+            items.retain(|(status, _)| *status != UiStatus::Ok);
+        }
         self.visible = items.into_iter().map(|(_, k)| k).collect();
         let idx = keep
             .and_then(|k| self.visible.iter().position(|v| *v == k))

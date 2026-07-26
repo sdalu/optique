@@ -111,7 +111,8 @@ real options dir until you hit `a` (apply), which previews every file diff
 and then writes atomically (tmp + fsync + rename).
 
 Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
-`u` revert · `n/p` next/prev problem · `/` filter · `a` apply · `q` quit.
+`u` revert · `n/p` next/prev problem · `t` show only ports needing attention
+(hide `✓` ok) · `/` filter · `a` apply · `q` quit.
 
 ## Poudriere layout
 

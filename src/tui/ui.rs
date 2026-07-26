@@ -59,11 +59,19 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let title = if app.filter.is_empty() && app.focus != Focus::Filter {
-        format!(" Ports ({}) ", app.visible.len())
+    let count = if app.hide_ok {
+        format!("{}/{}", app.visible.len(), app.listable)
     } else {
-        format!(" Ports ({}) — filter: {}▏", app.visible.len(), app.filter)
+        format!("{}", app.visible.len())
     };
+    let mut title = format!(" Ports ({count})");
+    if app.hide_ok {
+        title.push_str(" — needs attention");
+    }
+    if !app.filter.is_empty() || app.focus == Focus::Filter {
+        title.push_str(&format!(" — filter: {}▏", app.filter));
+    }
+    title.push(' ');
     let border_style = if app.focus == Focus::List || app.focus == Focus::Filter {
         Style::default().fg(Color::LightBlue)
     } else {
@@ -317,7 +325,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             ));
         }
         spans.push(Span::styled(
-            " Space:toggle d:defaults u:revert n/p:next-problem /:filter a:apply q:quit",
+            " Space:toggle d:defaults u:revert n/p:next-problem t:needs-attention /:filter a:apply q:quit",
             Style::default().fg(Color::DarkGray),
         ));
         Line::from(spans)
