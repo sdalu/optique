@@ -59,6 +59,12 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
+    /// When set, stale ports whose added options are all decided by
+    /// make.conf count as needing no attention.
+    pub mc_relax: bool,
+    /// When set, ports whose staged options contradict the global make.conf
+    /// OPTIONS_SET/UNSET policy are flagged (≠) as needing attention.
+    pub warn_mc: bool,
     /// Ports with options matching the filter, before hide_ok is applied.
     pub listable: usize,
     pub staging_db: StagingDb,
@@ -100,6 +106,8 @@ pub fn run(
         quit_confirm: false,
         hidden,
         hide_ok: false,
+        mc_relax: false,
+        warn_mc: false,
         listable: 0,
         staging_db,
         refresher,
@@ -196,6 +204,34 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                     false,
                 );
             }
+            KeyCode::Char('m') => {
+                app.mc_relax = !app.mc_relax;
+                let keep = app.selected_key();
+                app.rebuild_visible(keep);
+                app.rebuild_editor();
+                app.flash(
+                    if app.mc_relax {
+                        "make.conf-decided staleness counts as ok (≈, m to undo)"
+                    } else {
+                        "make.conf-decided staleness counts as stale again"
+                    },
+                    false,
+                );
+            }
+            KeyCode::Char('w') => {
+                app.warn_mc = !app.warn_mc;
+                let keep = app.selected_key();
+                app.rebuild_visible(keep);
+                app.rebuild_editor();
+                app.flash(
+                    if app.warn_mc {
+                        "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)"
+                    } else {
+                        "make.conf contradictions no longer flagged"
+                    },
+                    false,
+                );
+            }
             _ => match app.focus {
                 Focus::List => handle_list_key(app, key.code),
                 Focus::Editor => handle_editor_key(app, key.code),
@@ -284,6 +320,24 @@ impl App {
         self.list_state.selected().and_then(|i| self.visible.get(i)).cloned()
     }
 
+    /// Status with the mc_relax / warn_mc view rules applied.
+    pub fn effective_status(&self, info: &crate::model::port::PortInfo) -> UiStatus {
+        let mut status = self.session.status(info);
+        if self.mc_relax
+            && status == UiStatus::Stale
+            && self.session.stale_covered_by_makeconf(info)
+        {
+            status = UiStatus::Ok;
+        }
+        if self.warn_mc
+            && status == UiStatus::Ok
+            && !self.session.mc_deviations(info).is_empty()
+        {
+            status = UiStatus::McDeviation;
+        }
+        status
+    }
+
     fn move_selection(&mut self, delta: isize) {
         if self.visible.is_empty() {
             return;
@@ -312,7 +366,7 @@ impl App {
         for _ in 0..len {
             i = (i + dir).rem_euclid(len);
             let info = &self.session.ports[&self.visible[i as usize]];
-            if self.session.status(info) != UiStatus::Ok {
+            if self.effective_status(info) != UiStatus::Ok {
                 self.select_index(i as usize);
                 return;
             }
@@ -333,7 +387,7 @@ impl App {
                     || key.to_string().to_lowercase().contains(&filter)
                     || info.pkgname.to_lowercase().contains(&filter)
             })
-            .map(|(key, info)| (self.session.status(info), key.clone()))
+            .map(|(key, info)| (self.effective_status(info), key.clone()))
             .collect();
         items.sort();
         self.listable = items.len();

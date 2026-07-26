@@ -26,6 +26,9 @@ pub enum UiStatus {
     Edited,
     Unconfigured,
     Stale,
+    /// Staged options contradict the global make.conf OPTIONS_SET/UNSET
+    /// policy (only produced when the mc-warn view is active).
+    McDeviation,
     Ok,
 }
 
@@ -280,6 +283,54 @@ impl Session {
         }
     }
 
+    /// True when the port's staleness introduces no real decision: every
+    /// option added since the file was written has its value dictated by
+    /// make.conf (global OPTIONS_SET/UNSET, per-port _SET/_UNSET or *_FORCE),
+    /// and removed options never need a decision.
+    pub fn stale_covered_by_makeconf(&self, info: &PortInfo) -> bool {
+        let Some(state) = self.state(info) else { return false };
+        let Some(saved) = &state.saved else { return false };
+        let known: BTreeSet<&str> = saved
+            .complete
+            .iter()
+            .chain(saved.set.iter())
+            .chain(saved.unset.iter())
+            .map(String::as_str)
+            .collect();
+        let o = &info.options;
+        o.complete.iter().filter(|opt| !known.contains(opt.as_str())).all(|opt| {
+            o.mc_set.contains(opt)
+                || o.mc_unset.contains(opt)
+                || o.port_set.contains(opt)
+                || o.port_unset.contains(opt)
+                || o.force_set.contains(opt)
+                || o.force_unset.contains(opt)
+        })
+    }
+
+    /// Does this option's staged value contradict the global make.conf
+    /// policy (OPTIONS_SET / OPTIONS_UNSET)? FORCE-decided options are
+    /// excluded: the file cannot override them anyway.
+    pub fn mc_deviates(&self, info: &PortInfo, opt: &str) -> bool {
+        let Some(state) = self.state(info) else { return false };
+        let o = &info.options;
+        if o.is_forced(opt) {
+            return false;
+        }
+        (o.mc_set.contains(opt) && !state.staged.contains(opt))
+            || (o.mc_unset.contains(opt) && state.staged.contains(opt))
+    }
+
+    /// All options of the port that deviate from the global make.conf policy.
+    pub fn mc_deviations(&self, info: &PortInfo) -> Vec<String> {
+        info.options
+            .complete
+            .iter()
+            .filter(|opt| self.mc_deviates(info, opt))
+            .cloned()
+            .collect()
+    }
+
     /// Which enabled option (if any) implies `opt`, keeping it locked on.
     pub fn implied_by(&self, info: &PortInfo, opt: &str) -> Option<String> {
         let state = self.state(info)?;
@@ -455,6 +506,62 @@ mod tests {
         let info = s.ports.get(&key).unwrap();
         assert_eq!(s.status(info), UiStatus::Conflict);
         assert!(s.violations(info)[0].contains("pick one"));
+    }
+
+    #[test]
+    fn mc_coverage_of_stale_ports() {
+        // Saved file knows A; tree update added DOCS and NLS.
+        let (ports, key) = mk_port(&["A", "DOCS", "NLS"], &["A"], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp.path().join("cat_port/options"),
+            "_OPTIONS_READ=port-0.9\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+        )
+        .unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let info_key = key.clone();
+
+        // Not covered: DOCS/NLS undecided by make.conf.
+        assert!(!s.stale_covered_by_makeconf(&s.ports[&info_key]));
+        assert_eq!(s.status(&s.ports[&info_key]), UiStatus::Stale);
+
+        // Covered once make.conf unsets both globally.
+        {
+            let o = &mut s.ports.get_mut(&info_key).unwrap().options;
+            o.mc_unset.insert("DOCS".into());
+            o.mc_unset.insert("NLS".into());
+        }
+        assert!(s.stale_covered_by_makeconf(&s.ports[&info_key]));
+
+        // Deviation: staged keeps A on although make.conf globally unsets it.
+        {
+            let o = &mut s.ports.get_mut(&info_key).unwrap().options;
+            o.mc_unset.insert("A".into());
+        }
+        assert_eq!(s.mc_deviations(&s.ports[&info_key]), vec!["A".to_string()]);
+        // Forced options never count as deviations.
+        {
+            let o = &mut s.ports.get_mut(&info_key).unwrap().options;
+            o.force_set.insert("A".into());
+        }
+        assert!(s.mc_deviations(&s.ports[&info_key]).is_empty());
+
+        // A removed-options-only staleness is always covered.
+        let (ports2, key2) = mk_port(&["A"], &["A"], vec![], vec![]);
+        let tmp2 = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp2.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp2.path().join("cat_port/options"),
+            "_OPTIONS_READ=port-0.9\n_FILE_COMPLETE_OPTIONS_LIST=A GONE\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=GONE\n",
+        )
+        .unwrap();
+        let roots2: Vec<PortKey> = ports2.keys().cloned().collect();
+        let s2 = Session::new(ports2, HashMap::new(), &roots2, tmp2.path());
+        assert_eq!(s2.status(&s2.ports[&key2]), UiStatus::Stale);
+        assert!(s2.stale_covered_by_makeconf(&s2.ports[&key2]));
     }
 
     #[test]

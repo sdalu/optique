@@ -36,6 +36,7 @@ fn status_marker(status: &UiStatus) -> (&'static str, Color) {
         UiStatus::Edited => ("*", Color::Cyan),
         UiStatus::Unconfigured => ("?", Color::Yellow),
         UiStatus::Stale => ("!", Color::LightRed),
+        UiStatus::McDeviation => ("≠", Color::Magenta),
         UiStatus::Ok => ("✓", Color::DarkGray),
     }
 }
@@ -46,8 +47,14 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|key| {
             let info = &app.session.ports[key];
-            let status = app.session.status(info);
-            let (marker, color) = status_marker(&status);
+            let raw = app.session.status(info);
+            let status = app.effective_status(info);
+            // A stale port silenced by the mc_relax view keeps a hint marker.
+            let (marker, color) = if status == UiStatus::Ok && raw == UiStatus::Stale {
+                ("≈", Color::DarkGray)
+            } else {
+                status_marker(&status)
+            };
             let mut spans = vec![
                 Span::styled(format!("{marker} "), Style::default().fg(color)),
                 Span::raw(key.to_string()),
@@ -260,6 +267,13 @@ fn option_line(app: &App, info: &PortInfo, opt: &str, selected: bool) -> Line<'s
         _ => {}
     }
 
+    if app.session.mc_deviates(info, opt) {
+        spans.push(Span::styled(
+            " ≠mc",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if let Some(by) = app.session.implied_by(info, opt) {
         if on {
             spans.push(Span::styled(
@@ -296,21 +310,23 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         };
         Line::from(Span::styled(format!(" {msg} "), style))
     } else {
-        let mut counts = [0usize; 5];
+        let mut counts = [0usize; 6];
         for key in &app.visible {
-            let idx = match app.session.status(&app.session.ports[key]) {
+            let idx = match app.effective_status(&app.session.ports[key]) {
                 UiStatus::Conflict => 0,
                 UiStatus::Edited => 1,
                 UiStatus::Unconfigured => 2,
                 UiStatus::Stale => 3,
-                UiStatus::Ok => 4,
+                UiStatus::McDeviation => 4,
+                UiStatus::Ok => 5,
             };
             counts[idx] += 1;
         }
+        let mc = if app.warn_mc { format!(" {}≠", counts[4]) } else { String::new() };
         let mut spans = vec![Span::styled(
             format!(
-                " {}✗ {}* {}? {}! {}✓ (+{} optionless) ",
-                counts[0], counts[1], counts[2], counts[3], counts[4], app.hidden
+                " {}✗ {}* {}? {}!{mc} {}✓ (+{} optionless) ",
+                counts[0], counts[1], counts[2], counts[3], counts[5], app.hidden
             ),
             Style::default().fg(Color::White),
         )];
@@ -325,7 +341,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             ));
         }
         spans.push(Span::styled(
-            " Space:toggle d:defaults u:revert n/p:next-problem t:needs-attention /:filter a:apply q:quit",
+            " Space:toggle d:defaults u:revert n/p:problems t:attention-only m:mc-ok w:mc-warn /:filter a:apply q:quit",
             Style::default().fg(Color::DarkGray),
         ));
         Line::from(spans)

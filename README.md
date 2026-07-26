@@ -112,7 +112,10 @@ and then writes atomically (tmp + fsync + rename).
 
 Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 `u` revert · `n/p` next/prev problem · `t` show only ports needing attention
-(hide `✓` ok) · `/` filter · `a` apply · `q` quit.
+(hide `✓` ok) · `m` treat staleness as ok when every added option is already
+decided by make.conf (marker `≈`) · `w` flag ports whose options contradict
+the global `OPTIONS_SET/UNSET` policy (marker `≠`, badge `≠mc` on the option
+row) · `/` filter · `a` apply · `q` quit.
 
 ## Poudriere layout
 
