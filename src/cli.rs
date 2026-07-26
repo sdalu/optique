@@ -100,6 +100,13 @@ pub struct Cli {
     #[arg(short = 'n', long = "dry-run", global = true)]
     pub dry_run: bool,
 
+    /// Keep the options dir minimal on sync/apply: a port whose final
+    /// configuration equals what defaults + make.conf already produce gets
+    /// no options file — an existing identical one is removed instead of
+    /// rewritten, so only deviations are persisted
+    #[arg(short = 'm', long = "minimal", global = true)]
+    pub minimal: bool,
+
     /// More detail: scan shows each port's effective options and query
     /// warnings, sync shows the full final state per written file, clean
     /// explains why kept entries are kept

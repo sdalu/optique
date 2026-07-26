@@ -532,11 +532,22 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
             )));
         }
         lines.push(Line::from(format!(
-            "{} options file(s) will be written to {}:",
+            "{} options file(s) will be written to {}{}:",
             modal.writes.len(),
-            app.options_dir.display()
+            app.options_dir.display(),
+            if modal.removals.is_empty() {
+                String::new()
+            } else {
+                format!(", {} removed (--minimal)", modal.removals.len())
+            }
         )));
         lines.push(Line::default());
+        for r in &modal.removals {
+            lines.push(Line::from(vec![
+                Span::styled(format!("rm {:<37}", r.options_name), Style::default().fg(Color::Yellow)),
+                Span::styled(r.reason.clone(), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
         for w in modal.writes.iter().skip(modal.scroll) {
             lines.push(Line::from(vec![
                 Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),

@@ -49,6 +49,8 @@ pub enum EditorRow {
 
 pub struct ApplyModal {
     pub writes: Vec<PendingWrite>,
+    /// Files removed instead of rewritten (minimal mode).
+    pub removals: Vec<crate::clean::Removal>,
     pub warnings: Vec<String>,
     pub scroll: usize,
     pub conflicted: Vec<PortKey>,
@@ -82,6 +84,8 @@ impl WhyInfo {
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
+    /// --minimal: apply removes files that only repeat defaults + make.conf.
+    pub minimal: bool,
     /// Ports poudriere won't build for this jail/tree/set. A display and
     /// attention concern only, so it lives here and not in the Session.
     pub blacklist: crate::config::Blacklist,
@@ -154,9 +158,10 @@ pub fn run(
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
+    minimal: bool,
 ) -> Result<()> {
     ensure_terminal()?;
-    let mut app = build_app(session, options_dir, staging_db, refresher, blacklist);
+    let mut app = build_app(session, options_dir, staging_db, refresher, blacklist, minimal);
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
@@ -177,11 +182,13 @@ pub(crate) fn build_app(
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
+    minimal: bool,
 ) -> App {
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
     let mut app = App {
         session,
         options_dir,
+        minimal,
         blacklist,
         visible: Vec::new(),
         list_state: ListState::default(),
@@ -567,10 +574,21 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
             // Recompute the plan at confirmation time: a background refresh
             // may have merged new ports since the modal was opened.
-            let writes = app.compute_writes().writes;
+            let planned = app.compute_writes();
+            let writes = planned.writes;
             let summary = apply::apply(&writes);
+            let mut removed = 0usize;
             let mut text =
                 format!("{} file(s) written to {}", summary.written, app.options_dir.display());
+            for r in &planned.removals {
+                match crate::clean::remove_entry(r) {
+                    Ok(_) => removed += 1,
+                    Err(e) => text.push_str(&format!("\nFAILED rm {}: {e}", r.options_name)),
+                }
+            }
+            if removed > 0 {
+                text.push_str(&format!("\n{removed} redundant file(s) removed (--minimal)"));
+            }
             for (key, msg) in &summary.failed {
                 text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
@@ -1241,7 +1259,7 @@ impl App {
             let state = self.session.state(info)?;
             Some((key, info, state.staged.clone()))
         });
-        apply::plan_writes(staged, &self.options_dir)
+        apply::plan_writes(staged, &self.options_dir, self.minimal)
     }
 
     fn open_apply_modal(&mut self) {
@@ -1252,11 +1270,12 @@ impl App {
             .cloned()
             .collect();
         let planned = self.compute_writes();
-        if planned.writes.is_empty() {
+        if planned.writes.is_empty() && planned.removals.is_empty() {
             self.flash("nothing to write — everything is up to date", false);
         } else {
             self.modal = Some(ApplyModal {
                 writes: planned.writes,
+                removals: planned.removals,
                 warnings: planned.warnings,
                 scroll: 0,
                 conflicted,

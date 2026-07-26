@@ -112,9 +112,13 @@ pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BT
     enabled
 }
 
-/// Result of planning: the files to write plus non-fatal notes.
+/// Result of planning: the files to write, files to remove (minimal mode),
+/// plus non-fatal notes.
 pub struct PlannedWrites {
     pub writes: Vec<PendingWrite>,
+    /// Existing files whose content defaults + make.conf already produce;
+    /// only populated in minimal mode.
+    pub removals: Vec<crate::clean::Removal>,
     pub warnings: Vec<String>,
 }
 
@@ -129,9 +133,13 @@ pub struct PlannedWrites {
 /// exclude options — e.g. devel/git@lite). The file is written from the
 /// default flavor's point of view, exactly like `make config` on the plain
 /// origin would; divergent non-default flavors are reported as warnings.
+/// In `minimal` mode a port whose final enabled set equals the no-file
+/// outcome (defaults + make.conf layers, IMPLIES-closed) is not persisted:
+/// an existing file becomes a removal, a missing one is left missing.
 pub fn plan_writes<'a>(
     ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
     options_dir: &Path,
+    minimal: bool,
 ) -> PlannedWrites {
     struct Candidate<'a> {
         key: PortKey,
@@ -158,9 +166,28 @@ pub fn plan_writes<'a>(
     }
 
     let mut writes = Vec::new();
+    let mut removals = Vec::new();
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        if minimal {
+            // Compare IMPLIES-closed sets: the framework adds implied options
+            // either way, so they must not count as a deviation.
+            let closed =
+                crate::session::close_implies(chosen.info, chosen.enabled.clone());
+            if closed == crate::session::nofile_effective(chosen.info) {
+                let dir = options_dir.join(options_name);
+                if dir.join("options").is_file() {
+                    removals.push(crate::clean::Removal {
+                        options_name: options_name.clone(),
+                        dir,
+                        reason: "defaults + make.conf produce this exact configuration"
+                            .to_string(),
+                    });
+                }
+                continue;
+            }
+        }
         let chosen_complete: BTreeSet<&str> =
             chosen.info.options.complete.iter().map(String::as_str).collect();
         for other in cands.iter().filter(|c| !std::ptr::eq(*c, chosen)) {
@@ -215,7 +242,7 @@ pub fn plan_writes<'a>(
             content,
         });
     }
-    PlannedWrites { writes, warnings }
+    PlannedWrites { writes, removals, warnings }
 }
 
 /// Leftover options files owned by ports that no longer have ANY options.
@@ -345,7 +372,7 @@ mod tests {
         .unwrap();
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned =
-            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path());
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path(), false);
         assert!(planned.writes.is_empty());
         assert!(planned.warnings.is_empty());
     }
@@ -368,7 +395,7 @@ mod tests {
             (a.key.clone(), &a, ["A".to_string()].into()),
         ];
         let planned =
-            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path());
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path(), false);
         assert_eq!(planned.writes.len(), 1);
         assert_eq!(planned.writes[0].key.to_string(), "devel/git@default");
         assert!(planned.writes[0].enabled.contains("A"));
@@ -397,7 +424,7 @@ mod tests {
             (full.key.clone(), &full, ["A".to_string(), "X11".to_string()].into()),
         ];
         let planned =
-            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path());
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path(), false);
         assert_eq!(planned.writes.len(), 1);
         assert_eq!(planned.writes[0].key.to_string(), "editors/emacs@full");
         assert!(planned.warnings.is_empty(), "structural exclusion must not warn: {:?}", planned.warnings);
@@ -463,6 +490,46 @@ mod tests {
     }
 
     #[test]
+    fn minimal_mode_persists_only_deviations() {
+        let tmp = tempfile::tempdir().unwrap();
+        // defaults {A}, no make.conf: the no-file outcome is {A}.
+        let mut info = mk_info(&["A", "B"], &["A"]);
+        info.options.defaults = ["A".to_string()].into();
+
+        // Redundant state + existing file -> removal, no write.
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled.clone())),
+            tmp.path(),
+            true,
+        );
+        assert!(planned.writes.is_empty());
+        assert_eq!(planned.removals.len(), 1);
+        assert_eq!(planned.removals[0].options_name, "cat_port");
+
+        // Redundant state, no file -> nothing at all.
+        fs::remove_dir_all(tmp.path().join("cat_port")).unwrap();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled)),
+            tmp.path(),
+            true,
+        );
+        assert!(planned.writes.is_empty() && planned.removals.is_empty());
+
+        // Deviating state -> written as usual even in minimal mode.
+        let deviating: BTreeSet<String> = ["A".to_string(), "B".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, deviating)),
+            tmp.path(),
+            true,
+        );
+        assert_eq!(planned.writes.len(), 1);
+        assert!(planned.removals.is_empty());
+    }
+
+    #[test]
     fn apply_reports_failures() {
         let w = PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
@@ -485,7 +552,7 @@ mod tests {
         let info = mk_info(&["A"], &["A"]);
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned =
-            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path());
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path(), false);
         let writes = planned.writes;
         assert_eq!(writes.len(), 1);
         let summary = apply(&writes);

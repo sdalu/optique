@@ -125,7 +125,7 @@ fn clear_cache_alone_clears_and_exits() {
     let tmp = tempfile::tempdir().unwrap();
     let cache = tmp.path().join("optique");
     std::fs::create_dir_all(cache.join("drafts")).unwrap();
-    std::fs::write(cache.join("v2-x-y.jsonl"), "{}\n").unwrap();
+    std::fs::write(cache.join("v3-x-y.jsonl"), "{}\n").unwrap();
     std::fs::write(cache.join("drafts/keep.json"), "{}\n").unwrap();
     let out = optique()
         .env("XDG_CACHE_HOME", tmp.path())
@@ -133,7 +133,7 @@ fn clear_cache_alone_clears_and_exits() {
         .output()
         .unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!cache.join("v2-x-y.jsonl").exists(), "generation file must be removed");
+    assert!(!cache.join("v3-x-y.jsonl").exists(), "generation file must be removed");
     assert!(cache.join("drafts/keep.json").exists(), "drafts must survive");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("cache cleared"), "{err}");

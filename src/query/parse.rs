@@ -127,6 +127,16 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         bail!("wrapper dump incomplete (no PKGNAME):\n{}", tail(text, 6));
     }
 
+    // bsd.options.mk:288: "Some options are always enabled by default" —
+    // DOCS/NLS/EXAMPLES/IPV6 are force-added to PORT_OPTIONS when the port
+    // carries them, independent of OPTIONS_DEFAULT. Fold them into defaults
+    // so the no-file outcome and the def:on|off display match the framework.
+    for opt in ["DOCS", "NLS", "EXAMPLES", "IPV6"] {
+        if opts.complete.iter().any(|o| o == opt) {
+            opts.defaults.insert(opt.to_string());
+        }
+    }
+
     let canonical = PortKey::new(
         requested.origin.clone(),
         if flavors.is_empty() || flavor.is_empty() { None } else { Some(flavor.clone()) },
@@ -283,6 +293,18 @@ OPTIQUE|OPT_BROKEN|B|B is busted
         assert_eq!(o.defs["A"].prevents, vec!["C"]);
         assert_eq!(o.defs["A"].prevents_msg.as_deref(), Some("A and C clash"));
         assert_eq!(o.defs["B"].broken.as_deref(), Some("B is busted"));
+    }
+
+    #[test]
+    fn always_on_framework_defaults_are_folded_in() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "OPTIQUE|PKGNAME|foo-1\nOPTIQUE|COMPLETE|DOCS NLS X11\nOPTIQUE|DEFAULT|X11\n";
+        let info = parse_dump(&key, text).unwrap();
+        for opt in ["DOCS", "NLS", "X11"] {
+            assert!(info.options.defaults.contains(opt), "{opt} must be a default");
+        }
+        // EXAMPLES/IPV6 are not in this port's option list: not added.
+        assert!(!info.options.defaults.contains("EXAMPLES"));
     }
 
     #[test]

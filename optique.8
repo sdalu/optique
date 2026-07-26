@@ -11,7 +11,7 @@
 .Nd fast FreeBSD ports options and dependency configurator for poudriere
 .Sh SYNOPSIS
 .Nm
-.Op Fl v | Fl q
+.Op Fl v | Fl q | Fl m
 .Op Fl z Ar set
 .Op Fl j Ar jail
 .Op Fl p Ar tree
@@ -198,6 +198,14 @@ prints the final state of every written file, and
 explains why each kept entry is kept, for example which options deviate from
 defaults plus
 .Pa make.conf .
+.It Fl m , Fl -minimal
+Keep the options directory minimal on
+.Cm sync
+and TUI apply: a port whose final configuration equals what defaults plus
+.Pa make.conf
+already produce gets no options file.
+An existing identical file is removed instead of rewritten, so only
+deviations are persisted.
 .It Fl q , Fl -quiet
 Drop the startup banner and the per-port and per-file listings on standard
 output.

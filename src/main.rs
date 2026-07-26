@@ -362,9 +362,9 @@ fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<(
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
     if drive {
-        tui::run_driver(session, options_dir, db, refresher, blacklist)
+        tui::run_driver(session, options_dir, db, refresher, blacklist, cli.minimal)
     } else {
-        tui::run(session, options_dir, db, refresher, blacklist)
+        tui::run(session, options_dir, db, refresher, blacklist, cli.minimal)
     }
     // scanned.staging (make.conf + staging db) lives until here
 }
@@ -764,7 +764,7 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
             SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
         (key, info, apply::sync_enabled_set(info, saved.as_ref()))
     });
-    let planned = apply::plan_writes(staged, &settings.options_dir);
+    let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
     for w in &planned.warnings {
         eprintln!("warning: {w}");
     }
@@ -772,8 +772,11 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
 
     // A port that lost ALL its options never reaches plan_writes; its
     // leftover file is dead configuration and must go too (unless another
-    // flavor sharing the file still has options).
-    let stale_files = apply::plan_stale_removals(&result.ports, &settings.options_dir);
+    // flavor sharing the file still has options). --minimal adds files whose
+    // content defaults + make.conf already dictate.
+    let mut stale_files = apply::plan_stale_removals(&result.ports, &settings.options_dir);
+    stale_files.extend(planned.removals);
+    stale_files.sort_by(|a, b| a.options_name.cmp(&b.options_name));
 
     if writes.is_empty() && stale_files.is_empty() {
         eprintln!("everything up to date, nothing to write");
