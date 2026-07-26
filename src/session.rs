@@ -505,6 +505,36 @@ impl Session {
             .collect()
     }
 
+    /// Apply a draft's staged sets onto matching states. Entries for unknown
+    /// OPTIONS_NAMEs or with options no longer in the owner's option list are
+    /// dropped (per-option filtering against the owner's complete list).
+    /// Returns how many states changed.
+    pub fn restore_draft(&mut self, draft: &crate::draft::Draft) -> usize {
+        let mut changed = 0;
+        for (options_name, enabled) in &draft.staged {
+            // Judge against the file OWNER's option list, like the baseline:
+            // that is the view apply writes the file from.
+            let filtered = {
+                let Some(owner) =
+                    self.owners.get(options_name).and_then(|key| self.ports.get(key))
+                else {
+                    continue; // the draft names a port no longer in the closure
+                };
+                enabled
+                    .iter()
+                    .filter(|opt| owner.options.complete.contains(*opt))
+                    .cloned()
+                    .collect::<BTreeSet<String>>()
+            };
+            let Some(state) = self.states.get_mut(options_name) else { continue };
+            if state.staged != filtered {
+                state.staged = filtered;
+                changed += 1;
+            }
+        }
+        changed
+    }
+
     /// Any staged edit or pending baseline write (unconfigured/stale)?
     pub fn dirty(&self) -> bool {
         self.states.values().any(|s| s.staged != s.baseline)
@@ -1235,5 +1265,41 @@ mod tests {
         s.ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
         let err = s.toggle(&key, "A").unwrap_err();
         assert!(err.contains("forced"));
+    }
+
+    fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
+        crate::draft::Draft {
+            options_dir: std::path::PathBuf::from("/nonexistent"),
+            saved_at_secs: 0,
+            staged: entries
+                .iter()
+                .map(|(name, opts)| {
+                    (name.to_string(), opts.iter().map(|o| o.to_string()).collect())
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn restore_draft_filters_options_gone_from_the_port() {
+        let (ports, key) = mk_port(&["A", "B"], &["B"], vec![], vec![]);
+        let mut s = session_for(ports);
+        let draft = draft_with(&[("cat_port", &["A", "GONE"])]);
+        assert_eq!(s.restore_draft(&draft), 1);
+        let st = s.state(&s.ports[&key]).unwrap();
+        assert_eq!(st.staged, ["A".to_string()].into_iter().collect::<BTreeSet<_>>());
+        // Baseline is untouched, so the restored state still reads as edited.
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+        // Re-applying the same draft changes nothing.
+        assert_eq!(s.restore_draft(&draft), 0);
+    }
+
+    #[test]
+    fn restore_draft_drops_unknown_options_names() {
+        let (ports, key) = mk_port(&["A"], &["A"], vec![], vec![]);
+        let mut s = session_for(ports);
+        let before = s.state(&s.ports[&key]).unwrap().staged.clone();
+        assert_eq!(s.restore_draft(&draft_with(&[("other_port", &["A"])])), 0);
+        assert_eq!(s.state(&s.ports[&key]).unwrap().staged, before);
     }
 }

@@ -3,6 +3,7 @@ mod cache;
 mod clean;
 mod cli;
 mod config;
+mod draft;
 mod model;
 mod moved;
 mod optionsfile;

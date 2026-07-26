@@ -582,7 +582,7 @@ fn draw_help(f: &mut Frame) {
         ("r", "why is this port here? (dependency chain + dependents)"),
         ("? h F1", "this help"),
         ("Ctrl-L", "force a full screen repaint"),
-        ("q Ctrl-C", "quit (confirms when staged changes exist)"),
+        ("q Ctrl-C", "quit — offers saving staged edits as a draft"),
     ] {
         lines.push(Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())]));
     }
@@ -806,7 +806,9 @@ fn draw_bulk(f: &mut Frame, app: &App) {
 fn draw_quit_confirm(f: &mut Frame) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
-    let p = Paragraph::new("Unsaved staged changes — quit anyway? (y/N)")
+    let p = Paragraph::new(
+        "Unsaved staged changes — [s]ave draft & quit · [d]iscard & quit · [Esc] stay",
+    )
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).title(" quit ").border_style(Style::default().fg(Color::Red)));
     f.render_widget(p, area);

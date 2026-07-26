@@ -9,6 +9,7 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 use ratatui::widgets::ListState;
 
 use crate::apply::{self, PendingWrite};
+use crate::draft;
 use crate::model::origin::PortKey;
 use crate::optionsfile;
 use crate::query::refresher::{Refresher, RefreshEvent};
@@ -150,6 +151,7 @@ pub fn run(
         refreshing: 0,
         refresh_progress: None,
     };
+    app.restore_draft_if_any();
     app.rebuild_visible(None);
     app.rebuild_editor();
 
@@ -182,7 +184,22 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         // Modal and quit-confirm grab all keys.
         if app.quit_confirm {
             match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => return Ok(()),
+                KeyCode::Char('s') | KeyCode::Char('S') => match draft::save(&app.session, &app.options_dir) {
+                    // No flash on success: the terminal is about to be
+                    // restored. The next launch announces the draft instead.
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        app.quit_confirm = false;
+                        app.flash(&format!("draft save failed: {e:#}"), true);
+                    }
+                },
+                // 'y' kept as an alias for the old confirm-and-quit muscle
+                // memory. Drop any older draft too: quitting on purpose
+                // without saving must not resurrect stale intentions.
+                KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    draft::discard(&app.options_dir);
+                    return Ok(());
+                }
                 _ => app.quit_confirm = false,
             }
             continue;
@@ -414,6 +431,8 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
                 text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
             app.session.reload_saved(&app.options_dir);
+            // The edits are on disk now; the draft has served its purpose.
+            draft::discard(&app.options_dir);
             if let Some(modal) = app.modal.as_mut() {
                 modal.writes = writes;
                 modal.done = Some(text);
@@ -762,6 +781,32 @@ impl App {
         let keep = self.selected_key();
         self.rebuild_visible(keep);
         self.rebuild_editor();
+    }
+
+    /// Adopt the draft saved by a previous session on this options dir, if
+    /// any. Restored ports are marked pending so the background re-query
+    /// picks up the dependencies their staged options pull in.
+    fn restore_draft_if_any(&mut self) {
+        let Some(draft) = draft::load(&self.options_dir) else { return };
+        let restored = self.session.restore_draft(&draft);
+        if restored == 0 {
+            // Nothing in it still applies (ports gone, or the edits already
+            // landed) — a stale draft would only nag on every launch.
+            draft::discard(&self.options_dir);
+            return;
+        }
+        let owners: Vec<PortKey> =
+            draft.staged.keys().filter_map(|name| self.session.owners.get(name).cloned()).collect();
+        for key in owners {
+            self.mark_pending(&key);
+        }
+        self.flash(
+            &format!(
+                "restored draft with {restored} staged port(s) from {} — 'u' per port reverts, draft cleared on apply",
+                draft::age_label(draft.age_secs())
+            ),
+            false,
+        );
     }
 
     /// Schedule the port for a debounced background re-query.

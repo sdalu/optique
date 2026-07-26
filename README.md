@@ -143,6 +143,14 @@ the list within a second or two (`⟳` in the status bar). Nothing touches the
 real options dir until you hit `a` (apply), which previews every file diff
 and then writes atomically (tmp + fsync + rename).
 
+Quitting with staged changes offers to keep them: `s` saves them as a **draft**
+(under `~/.cache/optique/drafts`, keyed by the options dir), `d` throws them
+away. The next TUI launch on the same options dir restores the draft's staged
+edits — options that vanished from a port meanwhile are dropped, and the
+restored ports are re-queried so their dependencies show up again. The draft is
+cleared as soon as you apply (the edits are on disk then) or discard-quit; `u`
+reverts an individual port as usual.
+
 Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 `u` revert · `n/p` next/prev problem · `t` show only ports needing attention
 (hide `✓` ok) · `m` treat stale/unconfigured ports as ok when every added option (stale) or
