@@ -7,6 +7,7 @@ mod moved;
 mod optionsfile;
 mod query;
 mod session;
+mod staging;
 mod tui;
 
 use std::io::Write as _;
@@ -34,8 +35,29 @@ fn main() -> Result<()> {
 fn cmd_tui(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {
     let scanned = run_scan(cli, roots_args)?;
     let options_dir = scanned.settings.options_dir.clone();
-    let session = session::Session::new(scanned.result.ports, &options_dir);
-    tui::run(session, options_dir)
+    let roots = roots_args.roots()?;
+    let session = session::Session::new(
+        scanned.result.ports,
+        scanned.result.aliases,
+        &roots,
+        &options_dir,
+    );
+
+    // Background refreshes query against a staging copy of the options files
+    // so staged edits take effect before anything is applied for real.
+    let db = staging::StagingDb::create(
+        scanned.staging.path(),
+        &options_dir,
+        session.states.keys(),
+    )?;
+    let ctx = QueryCtx {
+        portsdir: scanned.settings.portsdir.clone(),
+        make_conf: scanned.settings.make_conf.clone(),
+        port_dbdir: db.path().to_path_buf(),
+    };
+    let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
+    tui::run(session, options_dir, db, refresher)
+    // scanned.staging (make.conf + staging db) lives until here
 }
 
 /// Shared setup + closure scan used by every subcommand.
@@ -43,7 +65,11 @@ struct Scanned {
     settings: config::Settings,
     result: ScanResult,
     elapsed: f32,
-    _staging: tempfile::TempDir,
+    /// Holds the layered make.conf (and the TUI's staging db) alive.
+    staging: tempfile::TempDir,
+    cache: cache::Cache,
+    moved: Moved,
+    jobs: usize,
 }
 
 fn run_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<Scanned> {
@@ -96,7 +122,15 @@ fn run_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<Scanned> {
         eprintln!("error: {key}: {msg}");
     }
 
-    Ok(Scanned { settings, result, elapsed: t0.elapsed().as_secs_f32(), _staging: staging })
+    Ok(Scanned {
+        settings,
+        result,
+        elapsed: t0.elapsed().as_secs_f32(),
+        staging,
+        cache,
+        moved,
+        jobs,
+    })
 }
 
 fn cmd_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {

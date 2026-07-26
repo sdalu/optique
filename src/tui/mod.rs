@@ -1,8 +1,8 @@
 mod ui;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -10,7 +10,13 @@ use ratatui::widgets::ListState;
 
 use crate::apply::{self, PendingWrite};
 use crate::model::origin::PortKey;
+use crate::optionsfile;
+use crate::query::refresher::{Refresher, RefreshEvent};
 use crate::session::{Session, UiStatus};
+use crate::staging::StagingDb;
+
+/// How long after the last toggle before the port is re-queried.
+const REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 
 #[derive(PartialEq)]
 pub enum Focus {
@@ -51,9 +57,21 @@ pub struct App {
     pub quit_confirm: bool,
     /// Ports hidden because they have no options (status-bar info).
     pub hidden: usize,
+    pub staging_db: StagingDb,
+    pub refresher: Refresher,
+    /// Ports awaiting a debounced background re-query.
+    pub pending: HashMap<PortKey, Instant>,
+    /// Outstanding background refresh batches.
+    pub refreshing: usize,
+    pub refresh_progress: Option<(usize, usize)>,
 }
 
-pub fn run(session: Session, options_dir: PathBuf) -> Result<()> {
+pub fn run(
+    session: Session,
+    options_dir: PathBuf,
+    staging_db: StagingDb,
+    refresher: Refresher,
+) -> Result<()> {
     use std::io::IsTerminal as _;
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         anyhow::bail!("the TUI needs a real terminal; use `optique scan` or `optique sync` in scripts");
@@ -72,6 +90,11 @@ pub fn run(session: Session, options_dir: PathBuf) -> Result<()> {
         modal: None,
         quit_confirm: false,
         hidden,
+        staging_db,
+        refresher,
+        pending: HashMap::new(),
+        refreshing: 0,
+        refresh_progress: None,
     };
     app.rebuild_visible(None);
     app.rebuild_editor();
@@ -84,8 +107,10 @@ pub fn run(session: Session, options_dir: PathBuf) -> Result<()> {
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
+        app.drain_refresh_events();
+        app.flush_due_refreshes();
         terminal.draw(|f| ui::draw(f, app))?;
-        if !event::poll(Duration::from_millis(200))? {
+        if !event::poll(Duration::from_millis(150))? {
             continue;
         }
         let Event::Key(key) = event::read()? else { continue };
@@ -188,12 +213,14 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('d') => {
             if let Some(key) = app.selected_key() {
                 app.session.reset_to_defaults(&key);
+                app.mark_pending(&key);
                 app.flash("reset to port defaults", false);
             }
         }
         KeyCode::Char('u') => {
             if let Some(key) = app.selected_key() {
                 app.session.revert(&key);
+                app.mark_pending(&key);
                 app.flash("reverted to saved state", false);
             }
         }
@@ -294,6 +321,10 @@ impl App {
     /// Rebuild the editor rows for the selected port: top-level options in
     /// COMPLETE order, then each group, then obsolete saved-only options.
     pub fn rebuild_editor(&mut self) {
+        let previous = match self.editor_rows.get(self.editor_idx) {
+            Some(EditorRow::Option(name)) => Some(name.clone()),
+            _ => None,
+        };
         self.editor_rows.clear();
         self.editor_idx = 0;
         let Some(key) = self.selected_key() else { return };
@@ -338,6 +369,17 @@ impl App {
                         self.editor_rows.push(EditorRow::Obsolete(o));
                     }
                 }
+            }
+        }
+        // Restore the cursor onto the same option if it still exists.
+        if let Some(prev) = previous {
+            if let Some(i) = self
+                .editor_rows
+                .iter()
+                .position(|r| matches!(r, EditorRow::Option(o) if *o == prev))
+            {
+                self.editor_idx = i;
+                return;
             }
         }
         self.editor_select_first();
@@ -396,11 +438,87 @@ impl App {
             }
         };
         match self.session.toggle(&key, &opt) {
-            Ok(()) => match warn {
-                Some(w) => self.flash(&w, true),
-                None => self.message = None,
-            },
+            Ok(()) => {
+                self.mark_pending(&key);
+                match warn {
+                    Some(w) => self.flash(&w, true),
+                    None => self.message = None,
+                }
+            }
             Err(e) => self.flash(&e, true),
+        }
+    }
+
+    /// Schedule the port for a debounced background re-query.
+    fn mark_pending(&mut self, key: &PortKey) {
+        self.pending.insert(key.clone(), Instant::now());
+    }
+
+    /// Push due pending ports to the refresher: write their staged options
+    /// file into the staging db, then re-scan from them.
+    fn flush_due_refreshes(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let due: Vec<PortKey> = self
+            .pending
+            .iter()
+            .filter(|(_, t)| now.duration_since(**t) >= REFRESH_DEBOUNCE)
+            .map(|(k, _)| k.clone())
+            .collect();
+        if due.is_empty() {
+            return;
+        }
+        let mut batch = Vec::new();
+        for key in due {
+            self.pending.remove(&key);
+            let Some(info) = self.session.ports.get(&key) else { continue };
+            let Some(state) = self.session.state(info) else { continue };
+            let content =
+                optionsfile::render(&info.pkgname, &info.options.complete, &state.staged);
+            if let Err(e) = self.staging_db.write(&info.options_name, content.as_bytes()) {
+                self.flash(&format!("staging write failed: {e:#}"), true);
+                continue;
+            }
+            batch.push(key);
+        }
+        if !batch.is_empty() && self.refresher.tx.send(batch).is_ok() {
+            self.refreshing += 1;
+        }
+    }
+
+    /// Merge finished background scans into the session.
+    fn drain_refresh_events(&mut self) {
+        let mut merged = None;
+        while let Ok(ev) = self.refresher.rx.try_recv() {
+            match ev {
+                RefreshEvent::Progress { done, discovered } => {
+                    self.refresh_progress = Some((done, discovered));
+                }
+                RefreshEvent::Done(result) => {
+                    self.refreshing = self.refreshing.saturating_sub(1);
+                    let (added, removed) =
+                        self.session.merge(*result, &self.options_dir.clone());
+                    let (a, r) = merged.get_or_insert((0usize, 0usize));
+                    *a += added;
+                    *r += removed;
+                }
+            }
+        }
+        if self.refreshing == 0 {
+            self.refresh_progress = None;
+        }
+        if let Some((added, removed)) = merged {
+            let keep = self.selected_key();
+            self.rebuild_visible(keep);
+            self.rebuild_editor();
+            if added > 0 || removed > 0 {
+                self.flash(
+                    &format!("dependencies refreshed: +{added} −{removed} port(s)"),
+                    false,
+                );
+            }
         }
     }
 

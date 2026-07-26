@@ -121,3 +121,54 @@ fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
     lines[lines.len().saturating_sub(n)..].join(" | ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::origin::PortKey;
+
+    /// Live test against /usr/ports: staging an options file that enables
+    /// HTTP_PERL for www/nginx must change the queried dependency set.
+    /// Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_staged_option_changes_deps() {
+        let staging = tempfile::tempdir().unwrap();
+        let ctx = QueryCtx {
+            portsdir: "/usr/ports".into(),
+            make_conf: None,
+            port_dbdir: staging.path().to_path_buf(),
+        };
+        let key = PortKey::parse("www/nginx").unwrap();
+
+        let before = run_query(&ctx, &key).expect("baseline query");
+        assert!(!before.options.complete.is_empty());
+        let had_perl =
+            before.deps.iter().any(|d| d.target.origin.starts_with("lang/perl5"));
+        assert!(!had_perl, "HTTP_PERL off by default");
+
+        // Stage HTTP_PERL=on the way the TUI does.
+        let mut enabled = before.options.effective.clone();
+        enabled.insert("HTTP_PERL".to_string());
+        let content = crate::optionsfile::render(
+            &before.pkgname,
+            &before.options.complete,
+            &enabled,
+        );
+        let db = crate::staging::StagingDb::create(
+            staging.path(),
+            staging.path(), // nothing to seed
+            std::iter::empty(),
+        )
+        .unwrap();
+        db.write(&before.options_name, content.as_bytes()).unwrap();
+
+        let ctx2 = QueryCtx { port_dbdir: db.path().to_path_buf(), ..ctx };
+        let after = run_query(&ctx2, &key).expect("staged query");
+        assert!(after.options.effective.contains("HTTP_PERL"));
+        assert!(
+            after.deps.iter().any(|d| d.target.origin.starts_with("lang/perl5")),
+            "enabling HTTP_PERL must add the perl dependency"
+        );
+    }
+}

@@ -299,19 +299,28 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             };
             counts[idx] += 1;
         }
-        Line::from(vec![
-            Span::styled(
-                format!(
-                    " {}✗ {}* {}? {}! {}✓ (+{} optionless) ",
-                    counts[0], counts[1], counts[2], counts[3], counts[4], app.hidden
-                ),
-                Style::default().fg(Color::White),
+        let mut spans = vec![Span::styled(
+            format!(
+                " {}✗ {}* {}? {}! {}✓ (+{} optionless) ",
+                counts[0], counts[1], counts[2], counts[3], counts[4], app.hidden
             ),
-            Span::styled(
-                " Space:toggle d:defaults u:revert n/p:next-problem /:filter a:apply q:quit",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ])
+            Style::default().fg(Color::White),
+        )];
+        if app.refreshing > 0 {
+            let progress = app
+                .refresh_progress
+                .map(|(d, t)| format!(" ⟳ refreshing deps {d}/{t} "))
+                .unwrap_or_else(|| " ⟳ refreshing deps… ".to_string());
+            spans.push(Span::styled(
+                progress,
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            ));
+        }
+        spans.push(Span::styled(
+            " Space:toggle d:defaults u:revert n/p:next-problem /:filter a:apply q:quit",
+            Style::default().fg(Color::DarkGray),
+        ));
+        Line::from(spans)
     };
     f.render_widget(Paragraph::new(line), area);
 }

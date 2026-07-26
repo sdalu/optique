@@ -35,23 +35,96 @@ pub struct Session {
     pub ports: BTreeMap<PortKey, PortInfo>,
     /// OPTIONS_NAME -> editable state.
     pub states: HashMap<String, OptState>,
+    /// Requested key -> canonical key (dep edges may use either form).
+    pub aliases: HashMap<PortKey, PortKey>,
+    /// Canonical roots the closure is anchored on (for reachability GC).
+    pub roots: Vec<PortKey>,
 }
 
 impl Session {
-    pub fn new(ports: BTreeMap<PortKey, PortInfo>, options_dir: &Path) -> Self {
-        let mut states = HashMap::new();
-        for info in ports.values() {
-            if !info.options.has_options() {
+    pub fn new(
+        ports: BTreeMap<PortKey, PortInfo>,
+        aliases: HashMap<PortKey, PortKey>,
+        requested_roots: &[PortKey],
+        options_dir: &Path,
+    ) -> Self {
+        let mut session =
+            Session { ports, states: HashMap::new(), aliases, roots: Vec::new() };
+        session.roots = requested_roots
+            .iter()
+            .filter_map(|r| session.resolve(r))
+            .collect();
+        if session.roots.len() != requested_roots.len() {
+            // Some root didn't resolve (e.g. MOVED rename): disable GC rather
+            // than risk collecting live ports.
+            session.roots = session.ports.keys().cloned().collect();
+        }
+        let keys: Vec<PortKey> = session.ports.keys().cloned().collect();
+        for key in keys {
+            session.ensure_state(&key, options_dir);
+        }
+        session
+    }
+
+    /// Resolve a (possibly non-canonical) key to the canonical ports-map key.
+    pub fn resolve(&self, key: &PortKey) -> Option<PortKey> {
+        if self.ports.contains_key(key) {
+            return Some(key.clone());
+        }
+        self.aliases.get(key).cloned()
+    }
+
+    fn ensure_state(&mut self, key: &PortKey, options_dir: &Path) {
+        let Some(info) = self.ports.get(key) else { return };
+        if !info.options.has_options() {
+            return;
+        }
+        if !self.states.contains_key(&info.options_name) {
+            let saved =
+                SavedOptionsFile::load(&options_dir.join(&info.options_name).join("options"));
+            let baseline = close_implies(info, apply::sync_enabled_set(info, saved.as_ref()));
+            self.states.insert(
+                info.options_name.clone(),
+                OptState { saved, staged: baseline.clone(), baseline },
+            );
+        }
+    }
+
+    /// Merge a background re-scan into the closure: replace/add ports, create
+    /// state for newcomers, then drop ports no longer reachable from the
+    /// roots. Returns (added, removed) counts. Option states are never
+    /// discarded, so a port that flip-flops out and back keeps its edits.
+    pub fn merge(&mut self, result: crate::query::scanner::ScanResult, options_dir: &Path) -> (usize, usize) {
+        self.aliases.extend(result.aliases);
+        let mut added_keys = Vec::new();
+        for (key, info) in result.ports {
+            if self.ports.insert(key.clone(), info).is_none() {
+                added_keys.push(key.clone());
+            }
+            self.ensure_state(&key, options_dir);
+        }
+        // Reachability GC from the roots.
+        let mut reachable: std::collections::HashSet<PortKey> = Default::default();
+        let mut stack: Vec<PortKey> = self.roots.iter().filter_map(|r| self.resolve(r)).collect();
+        while let Some(key) = stack.pop() {
+            if !reachable.insert(key.clone()) {
                 continue;
             }
-            states.entry(info.options_name.clone()).or_insert_with(|| {
-                let saved =
-                    SavedOptionsFile::load(&options_dir.join(&info.options_name).join("options"));
-                let baseline = close_implies(info, apply::sync_enabled_set(info, saved.as_ref()));
-                OptState { saved, staged: baseline.clone(), baseline }
-            });
+            if let Some(info) = self.ports.get(&key) {
+                for dep in &info.deps {
+                    if let Some(target) = self.resolve(&dep.target) {
+                        if !reachable.contains(&target) {
+                            stack.push(target);
+                        }
+                    }
+                }
+            }
         }
-        Session { ports, states }
+        let before = self.ports.len();
+        self.ports.retain(|k, _| reachable.contains(k));
+        let removed = before - self.ports.len();
+        let added = added_keys.iter().filter(|k| self.ports.contains_key(*k)).count();
+        (added, removed)
     }
 
     pub fn state(&self, info: &PortInfo) -> Option<&OptState> {
@@ -307,7 +380,8 @@ mod tests {
 
     fn session_for(ports: BTreeMap<PortKey, PortInfo>) -> Session {
         let tmp = tempfile::tempdir().unwrap();
-        Session::new(ports, tmp.path())
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        Session::new(ports, HashMap::new(), &roots, tmp.path())
     }
 
     #[test]
