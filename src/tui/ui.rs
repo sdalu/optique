@@ -30,7 +30,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.bulk.is_some() {
         draw_bulk(f, app);
     } else if let Some(tab) = app.help_tab {
-        draw_help(f, tab);
+        draw_help(f, tab, &mut app.help_scroll);
     } else if app.why.is_some() {
         draw_why(f, app);
     } else if app.opt_info.is_some() {
@@ -555,7 +555,7 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
 /// Help overlay tab titles; indices match `App.help_tab`.
 pub const HELP_TABS: [&str; 4] = ["Markers", "Option row", "Navigate/Edit", "Views/Actions"];
 
-fn draw_help(f: &mut Frame, tab: usize) {
+fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
     let area = centered_rect(78, 72, f.area());
     f.render_widget(Clear, area);
 
@@ -635,7 +635,8 @@ fn draw_help(f: &mut Frame, tab: usize) {
             ]));
             lines.push(Line::default());
             for (label, style, txt) in [
-                ("[x] / [ ]", Style::default(), "checkbox · (o)/( ) = single/radio group member"),
+                ("[x] / [ ]", Style::default(), "checkbox of a plain option (on / off)"),
+                ("(o) / ( )", Style::default(), "single/radio group member (pick one)"),
                 (
                     "yellow name",
                     Style::default().fg(Color::Yellow),
@@ -715,10 +716,19 @@ fn draw_help(f: &mut Frame, tab: usize) {
         ]),
     }
 
-    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+    // Clamp the scroll to what actually overflows the inner area.
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_height) as u16;
+    *scroll = (*scroll).min(max_scroll);
+    let title = if max_scroll > 0 {
+        " help — 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes "
+    } else {
+        " help — 1-4/Tab/←→ switch · any other key closes "
+    };
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((*scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" help — 1-4/Tab/←→ switch · any other key closes ")
+            .title(title)
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);

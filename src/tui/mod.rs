@@ -101,6 +101,8 @@ pub struct App {
     /// Help overlay visible?
     /// Help overlay: Some(active tab index) while open.
     pub help_tab: Option<usize>,
+    /// Vertical scroll of the help tab's content (clamped at draw time).
+    pub help_scroll: u16,
     /// Dependency-chain ("why") overlay, when open.
     pub why: Option<WhyInfo>,
     /// Option-detail overlay: (port, option name). The data is looked up at
@@ -180,6 +182,7 @@ pub(crate) fn build_app(
         staging_db,
         refresher,
         help_tab: None,
+        help_scroll: 0,
         why: None,
         opt_info: None,
         undo: Vec::new(),
@@ -269,15 +272,29 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 let idx = c as usize - '1' as usize;
                 if idx < n {
                     app.help_tab = Some(idx);
+                    app.help_scroll = 0;
                 }
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                app.help_tab = Some((tab + 1) % n)
+                app.help_tab = Some((tab + 1) % n);
+                app.help_scroll = 0;
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                app.help_tab = Some((tab + n - 1) % n)
+                app.help_tab = Some((tab + n - 1) % n);
+                app.help_scroll = 0;
             }
-            _ => app.help_tab = None,
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.help_scroll = app.help_scroll.saturating_add(1)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.help_scroll = app.help_scroll.saturating_sub(1)
+            }
+            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
+            KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(10),
+            _ => {
+                app.help_tab = None;
+                app.help_scroll = 0;
+            }
         }
         return KeyOutcome::Continue;
     }
@@ -353,7 +370,10 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             }
         }
         KeyCode::Char('/') => app.focus = Focus::Filter,
-        KeyCode::Char('?') | KeyCode::F(1) => app.help_tab = Some(0),
+        KeyCode::Char('?') | KeyCode::F(1) => {
+            app.help_tab = Some(0);
+            app.help_scroll = 0;
+        }
         KeyCode::Char('a') => app.open_apply_modal(),
         KeyCode::Char('B') => app.open_bulk(),
         // Shift-U undoes the last option change anywhere; lowercase 'u'
@@ -436,7 +456,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::PageUp => app.move_selection(-15),
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
-        KeyCode::Char('h') => app.help_tab = Some(0),
+        KeyCode::Char('h') => {
+            app.help_tab = Some(0);
+            app.help_scroll = 0;
+        }
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
