@@ -178,12 +178,12 @@ Currently only the
 .Cm scan
 status marker column is colorized; the interactive TUI is unaffected.
 .It Fl n , Fl -dry-run
-Report what would change without touching anything.
-Only
+Report what
 .Cm sync
 and
 .Cm clean
-ever write outside the interactive apply step.
+would change without touching anything.
+The TUI ignores this flag: its apply dialog previews every change instead.
 .It Fl v , Fl -verbose
 More detail per subcommand:
 .Cm scan
@@ -214,7 +214,9 @@ Drop the startup banner and the per-port and per-file listings on standard
 output.
 The summary line and all warnings and errors on standard error remain.
 Ignored by
-.Cm scan Fl -json .
+.Cm scan Fl -json ;
+mutually exclusive with
+.Fl v .
 .It Fl h , Fl -help
 Print usage and exit.
 .It Fl V , Fl -version

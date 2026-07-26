@@ -98,6 +98,9 @@ struct CleanCtx {
 /// the resolved options dir. Unlike scan/sync this walks the directory
 /// itself; a package list is only consulted for --unused.
 fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
+    if cli.minimal && !args.redundant {
+        eprintln!("note: --minimal does not affect clean; its counterpart here is --redundant");
+    }
     let has_list = !args.origins.is_empty() || !cli.files.is_empty();
     if args.unused && !has_list {
         anyhow::bail!(
@@ -333,6 +336,9 @@ pub(crate) fn split_raw_origins(
 }
 
 fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<()> {
+    if cli.dry_run {
+        eprintln!("note: --dry-run has no effect in the TUI; the apply dialog previews changes");
+    }
     // Fail before the (possibly minute-long) scan, not after. The headless
     // driver renders into memory, so it has no use for a terminal.
     if !drive {

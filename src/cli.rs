@@ -73,7 +73,8 @@ pub struct Cli {
     )]
     pub synth: Option<String>,
 
-    /// Explicit options dir (overrides poudriere resolution; e.g. /var/db/ports)
+    /// Explicit options dir, overriding the poudriere or synth resolution
+    /// (e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
     pub options_dir: Option<PathBuf>,
 
@@ -95,22 +96,24 @@ pub struct Cli {
     #[arg(long = "clear-cache", global = true)]
     pub clear_cache: bool,
 
-    /// Show what sync/clean would change without touching anything
-    /// (the only commands that write)
+    /// Show what sync/clean would change without touching anything;
+    /// the TUI previews changes in its apply dialog instead and ignores this
     #[arg(short = 'n', long = "dry-run", global = true)]
     pub dry_run: bool,
 
-    /// Keep the options dir minimal on sync/apply: a port whose final
+    /// Persist only deviations: on sync/apply, a port whose final
     /// configuration equals what defaults + make.conf already produce gets
-    /// no options file — an existing identical one is removed instead of
-    /// rewritten, so only deviations are persisted
+    /// no options file (an existing identical one is removed), and bare
+    /// defaults count as decided — scan's gate and the TUI attention views
+    /// then only flag deviations and conflicts. clean's counterpart is
+    /// --redundant
     #[arg(short = 'm', long = "minimal", global = true)]
     pub minimal: bool,
 
     /// More detail: scan shows each port's effective options and query
     /// warnings, sync shows the full final state per written file, clean
     /// explains why kept entries are kept
-    #[arg(short = 'v', long = "verbose", global = true)]
+    #[arg(short = 'v', long = "verbose", global = true, conflicts_with = "quiet")]
     pub verbose: bool,
 
     /// Quiet: drop the startup banner and the per-port/per-file listings on
