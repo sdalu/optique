@@ -177,6 +177,15 @@ concatenated: `make.conf`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
 queries see exactly what poudriere builds, including `DEFAULT_VERSIONS` and
 `OPTIONS_SET/UNSET` knobs.
 
+The `blacklist` chain is read with the same jail/tree/set expansion
+(`blacklist`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
+`<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-blacklist`); like
+poudriere, every existing file contributes entries — one port origin per
+line, `#` comments, `*` globs allowed (`www/nginx*`). Blacklisted ports are
+marked `⛔` in `scan` and in the TUI and never demand attention: poudriere
+won't build them here, so their options can't hold a build up, and they
+never trip `scan`'s exit-code gate whatever their status.
+
 ## How it works
 
 One `make` invocation per port (~0.2–0.6 s, up to 16 in parallel) pipes a

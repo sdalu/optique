@@ -343,7 +343,7 @@ fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         port_dbdir: db.path().to_path_buf(),
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
-    tui::run(session, options_dir, db, refresher)
+    tui::run(session, options_dir, db, refresher, scanned.settings.blacklist)
     // scanned.staging (make.conf + staging db) lives until here
 }
 
@@ -415,6 +415,15 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
                 );
             }
         }
+        if !settings.blacklist.is_empty() {
+            for (i, src) in settings.blacklist.sources.iter().enumerate() {
+                eprintln!(
+                    "  {}   {}",
+                    if i == 0 { "blacklist:" } else { "          " },
+                    src.display()
+                );
+            }
+        }
     }
 
     let t0 = Instant::now();
@@ -471,6 +480,8 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         undecided: Vec<String>,
         state: String,
         warnings: Vec<String>,
+        /// Blacklisted for this jail/tree/set: poudriere would never build it.
+        blacklisted: bool,
     }
     impl Row {
         /// make.conf already dictates every option this port still owes an
@@ -481,7 +492,11 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         /// Does this row make `scan` exit 1? A conflict always does (saved
         /// options violate the port's own constraints); missing or outdated
         /// configuration only does when make.conf leaves something open.
+        /// Blacklisted ports never do — they are never built here.
         fn needs_attention(&self) -> bool {
+            if self.blacklisted {
+                return false;
+            }
             match self.status {
                 UiStatus::Conflict => true,
                 UiStatus::Unconfigured | UiStatus::Stale => !self.mc_covered(),
@@ -554,6 +569,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
             undecided,
             state,
             warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
+            blacklisted: settings.blacklist.matches(&key.origin),
         });
     }
     rows.sort_by_key(|r| (r.status == UiStatus::Ok, r.key.clone()));
@@ -562,6 +578,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
     let stale = rows.iter().filter(|r| r.status == UiStatus::Stale).count();
     let conflict = rows.iter().filter(|r| r.status == UiStatus::Conflict).count();
     let ok = rows.iter().filter(|r| r.status_str() == "ok").count();
+    let blacklisted = rows.iter().filter(|r| r.blacklisted).count();
     let attention = rows.iter().filter(|r| r.needs_attention()).count();
 
     if json {
@@ -575,6 +592,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
             added: &'a [String],
             removed: &'a [String],
             mc_covered: bool,
+            blacklisted: bool,
         }
         #[derive(serde::Serialize)]
         struct JsonSummary {
@@ -584,6 +602,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
             conflict: usize,
             ok: usize,
             optionless: usize,
+            blacklisted: usize,
             attention: usize,
         }
         #[derive(serde::Serialize)]
@@ -606,6 +625,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
                     added: &r.added,
                     removed: &r.removed,
                     mc_covered: r.mc_covered(),
+                    blacklisted: r.blacklisted,
                 })
                 .collect(),
             summary: JsonSummary {
@@ -615,6 +635,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
                 conflict,
                 ok,
                 optionless: hidden,
+                blacklisted,
                 attention,
             },
         };
@@ -627,23 +648,24 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
             } else {
                 format!(" undecided: {}", row.undecided.join(" "))
             };
-            match &row.status {
-                UiStatus::Unconfigured => {
-                    println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
-                }
+            let (marker, text) = match &row.status {
+                UiStatus::Unconfigured => ("?", format!("UNCONFIGURED{decision}")),
                 UiStatus::Stale => {
-                    println!(
-                        "!  {key:<40} {pkgname:<32} STALE{}{decision}",
-                        row.stale_detail()
-                    );
+                    ("!", format!("STALE{}{decision}", row.stale_detail()))
                 }
                 UiStatus::Conflict => {
-                    println!(
-                        "✗  {key:<40} {pkgname:<32} CONFLICT (saved options violate constraints)"
-                    );
+                    ("✗", "CONFLICT (saved options violate constraints)".to_string())
                 }
-                _ => println!("   {key:<40} {pkgname:<32} ok"),
-            }
+                _ => ("", "ok".to_string()),
+            };
+            // Blacklisted ports keep their status but wear the ⛔ marker:
+            // whatever it says, nothing here is waiting on a human.
+            let (marker, tail) = if row.blacklisted {
+                ("⛔", " [blacklisted]")
+            } else {
+                (marker, "")
+            };
+            println!("{marker:<2} {key:<40} {pkgname:<32} {text}{tail}");
             if cli.verbose {
                 if !row.state.is_empty() {
                     println!("     options: {}", row.state);

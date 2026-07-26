@@ -21,6 +21,103 @@ pub struct Settings {
     pub make_conf_sources: Vec<PathBuf>,
     /// Hash identifying the make.conf layering (empty layering hashes too).
     pub conf_hash: String,
+    /// Ports poudriere(8) would refuse to build for this jail/tree/set.
+    pub blacklist: Blacklist,
+}
+
+/// Compiled blacklist: patterns from every existing poudriere(8)
+/// blacklist layer for this jail/tree/set.
+#[derive(Debug, Default)]
+pub struct Blacklist {
+    patterns: Vec<String>,
+    pub sources: Vec<PathBuf>,
+}
+
+impl Blacklist {
+    /// Read every existing layer, in poudriere(8) order. Unlike the options
+    /// dir (first match wins) all files contribute entries.
+    pub fn load(
+        poudriere_d: &Path,
+        jail: Option<&str>,
+        tree: &str,
+        set: Option<&str>,
+    ) -> Self {
+        let mut bl = Blacklist::default();
+        for name in blacklist_layers(jail, tree, set) {
+            let path = poudriere_d.join(&name);
+            let Ok(text) = fs::read_to_string(&path) else { continue };
+            for line in text.lines() {
+                let entry = match line.split_once('#') {
+                    Some((before, _)) => before,
+                    None => line,
+                }
+                .trim();
+                if !entry.is_empty() {
+                    bl.patterns.push(entry.to_string());
+                }
+            }
+            bl.sources.push(path);
+        }
+        bl
+    }
+
+    /// Is this port origin blacklisted? Entries are exact origins or
+    /// shell-style `*` globs, as poudriere(8) allows.
+    pub fn matches(&self, origin: &str) -> bool {
+        self.patterns.iter().any(|p| glob_match(p, origin))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+}
+
+/// blacklist layer names in poudriere(8) read order; every existing file
+/// contributes:
+///
+///   blacklist, <set>-blacklist, <tree>-blacklist, <jail>-blacklist,
+///   <tree>-<set>-blacklist, <jail>-<tree>-blacklist, <jail>-<set>-blacklist,
+///   <jail>-<tree>-<set>-blacklist
+fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<String> {
+    let mut v = vec!["blacklist".to_string()];
+    if let Some(s) = set {
+        v.push(format!("{s}-blacklist"));
+    }
+    v.push(format!("{tree}-blacklist"));
+    if let Some(j) = jail {
+        v.push(format!("{j}-blacklist"));
+    }
+    if let Some(s) = set {
+        v.push(format!("{tree}-{s}-blacklist"));
+    }
+    if let Some(j) = jail {
+        v.push(format!("{j}-{tree}-blacklist"));
+        if let Some(s) = set {
+            v.push(format!("{j}-{s}-blacklist"));
+            v.push(format!("{j}-{tree}-{s}-blacklist"));
+        }
+    }
+    v
+}
+
+/// Minimal glob: `*` matches any substring (including empty), everything
+/// else is literal. A pattern without `*` is an exact match.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    // First literal anchors the start, last one the end, the rest must occur
+    // in order in between (searching left to right can't backtrack wrongly:
+    // every literal is separated by an unbounded '*').
+    let Some(mut rest) = text.strip_prefix(parts[0]) else { return false };
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(parts[parts.len() - 1])
 }
 
 /// `tree` is None when -p wasn't given ("default" is used for lookups, but —
@@ -55,6 +152,8 @@ pub fn resolve(
     let (make_conf, conf_hash, make_conf_sources) =
         layer_make_conf(poudriere_d, jail, tree_name, set, staging_dir)?;
 
+    let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
+
     Ok(Settings {
         portsdir,
         options_dir,
@@ -62,6 +161,7 @@ pub fn resolve(
         make_conf,
         make_conf_sources,
         conf_hash,
+        blacklist,
     })
 }
 
@@ -301,5 +401,69 @@ mod tests {
         let idx = |needle: &str| text.find(needle).unwrap();
         let order: Vec<usize> = layers.iter().map(|(_, c)| idx(c)).collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "layers out of order: {text}");
+    }
+
+    #[test]
+    fn glob_match_handles_poudriere_style_entries() {
+        // A pattern without '*' is an exact match, nothing else.
+        assert!(glob_match("www/nginx", "www/nginx"));
+        assert!(!glob_match("www/nginx", "www/nginx-devel"));
+        assert!(!glob_match("www/nginx", "www/ngin"));
+        // Trailing '*' matches any tail, including the empty one.
+        assert!(glob_match("www/*", "www/nginx"));
+        assert!(glob_match("www/nginx*", "www/nginx-devel"));
+        assert!(glob_match("www/nginx*", "www/nginx"));
+        assert!(!glob_match("www/*", "mail/dovecot"));
+        // '*' alone matches everything, interior globs anchor both ends.
+        assert!(glob_match("*", "anything/at-all"));
+        assert!(glob_match("*", ""));
+        assert!(glob_match("*/nginx", "www/nginx"));
+        assert!(glob_match("www/*devel", "www/nginx-devel"));
+        assert!(!glob_match("www/*devel", "www/nginx"));
+    }
+
+    #[test]
+    fn blacklist_layers_and_matching() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("blacklist"), "# comment\n\nwww/nginx\n").unwrap();
+        fs::write(pd.join("s1-blacklist"), "devel/*   # globbed\n").unwrap();
+
+        let bl = Blacklist::load(&pd, None, "default", Some("s1"));
+        assert_eq!(bl.sources.len(), 2);
+        assert!(!bl.is_empty());
+        assert!(bl.matches("www/nginx"));
+        assert!(bl.matches("devel/anything"));
+        assert!(!bl.matches("mail/dovecot"));
+
+        // Without -z the set layer is not even looked at.
+        let bl = Blacklist::load(&pd, None, "default", None);
+        assert_eq!(bl.sources, vec![pd.join("blacklist")]);
+        assert!(bl.matches("www/nginx"));
+        assert!(!bl.matches("devel/anything"));
+
+        // No poudriere.d at all: empty, matches nothing.
+        let bl = Blacklist::load(&tmp.path().join("nope"), Some("j1"), "t1", Some("s1"));
+        assert!(bl.is_empty());
+        assert!(!bl.matches("www/nginx"));
+    }
+
+    #[test]
+    fn blacklist_layer_order_matches_manpage() {
+        assert_eq!(
+            blacklist_layers(Some("j"), "t", Some("s")),
+            vec![
+                "blacklist",
+                "s-blacklist",
+                "t-blacklist",
+                "j-blacklist",
+                "t-s-blacklist",
+                "j-t-blacklist",
+                "j-s-blacklist",
+                "j-t-s-blacklist"
+            ]
+        );
+        assert_eq!(blacklist_layers(None, "t", None), vec!["blacklist", "t-blacklist"]);
     }
 }

@@ -57,8 +57,10 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             let info = &app.session.ports[key];
             let raw = app.session.status(info);
             let status = app.effective_status(info);
-            // A port silenced by the mc_relax view keeps a hint marker.
-            let (marker, color) = if status == UiStatus::Ok && raw != UiStatus::Ok {
+            let blacklisted = app.is_blacklisted(info);
+            // A port silenced by the mc_relax view keeps a hint marker — but
+            // a blacklisted one is silenced for its own reason (the ⛔ below).
+            let (marker, color) = if status == UiStatus::Ok && raw != UiStatus::Ok && !blacklisted {
                 ("≈", Color::DarkGray)
             } else {
                 status_marker(&status)
@@ -67,6 +69,9 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(format!("{marker} "), Style::default().fg(color)),
                 Span::raw(key.to_string()),
             ];
+            if blacklisted {
+                spans.push(Span::styled(" ⛔", Style::default().fg(Color::DarkGray)));
+            }
             if info.broken.is_some() || info.ignore.is_some() {
                 spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
             }
@@ -543,6 +548,7 @@ fn draw_help(f: &mut Frame) {
         mark("≠", Color::Magenta, "contradicts make.conf OPTIONS_SET/UNSET (w view)"),
         mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
         mark("✓", Color::DarkGray, "ok · ⚠ port BROKEN/IGNORE with current options"),
+        mark("⛔", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
         Line::default(),
         head("Option row"),
         mark("[x]", Color::White, "checkbox · (o) single/radio group member"),

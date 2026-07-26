@@ -59,6 +59,9 @@ pub struct WhyInfo {
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
+    /// Ports poudriere won't build for this jail/tree/set. A display and
+    /// attention concern only, so it lives here and not in the Session.
+    pub blacklist: crate::config::Blacklist,
     pub visible: Vec<PortKey>,
     pub list_state: ListState,
     pub focus: Focus,
@@ -114,12 +117,14 @@ pub fn run(
     options_dir: PathBuf,
     staging_db: StagingDb,
     refresher: Refresher,
+    blacklist: crate::config::Blacklist,
 ) -> Result<()> {
     ensure_terminal()?;
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
     let mut app = App {
         session,
         options_dir,
+        blacklist,
         visible: Vec::new(),
         list_state: ListState::default(),
         focus: Focus::List,
@@ -433,8 +438,18 @@ impl App {
         self.list_state.selected().and_then(|i| self.visible.get(i)).cloned()
     }
 
+    /// Is this port blacklisted for the current jail/tree/set?
+    pub fn is_blacklisted(&self, info: &crate::model::port::PortInfo) -> bool {
+        self.blacklist.matches(&info.key.origin)
+    }
+
     /// Status with the mc_relax / warn_mc view rules applied.
     pub fn effective_status(&self, info: &crate::model::port::PortInfo) -> UiStatus {
+        // Blacklisted here means never built here, so nothing about it can
+        // demand a decision: n/p, t and the ≠ view all skip it.
+        if self.is_blacklisted(info) {
+            return UiStatus::Ok;
+        }
         let mut status = self.session.status(info);
         if self.mc_relax
             && matches!(status, UiStatus::Stale | UiStatus::Unconfigured)
