@@ -237,6 +237,13 @@ fn resolve_synth(
             "-p is a poudriere tree name; synth uses Directory_portsdir".to_string(),
         );
     }
+    // A named profile that synth.ini doesn't know silently gets built-in
+    // defaults — say so, it is usually a typo.
+    if !ini.is_empty() && !synth_ini_has_section(&ini, profile) {
+        notes.push(format!(
+            "profile '{profile}' has no section in synth.ini; using built-in defaults"
+        ));
+    }
 
     let portsdir = match setting("Directory_portsdir") {
         Some(dir) => {
@@ -268,6 +275,13 @@ fn resolve_synth(
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/var/db/ports")),
     };
+    if options_dir == Path::new("/var/db/ports") {
+        notes.push(
+            "options dir is the live /var/db/ports: minimal/redundant cleanups \
+             also affect plain `make config` workflows"
+                .to_string(),
+        );
+    }
     let options_dir_is_new = !options_dir.is_dir();
 
     let (make_conf, conf_hash, make_conf_sources) =
@@ -282,6 +296,17 @@ fn resolve_synth(
         conf_hash,
         blacklist: Blacklist::default(),
         notes,
+    })
+}
+
+/// Does synth.ini contain a `[name]` section header?
+fn synth_ini_has_section(text: &str, name: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.split([';', '#']).next().unwrap_or("").trim();
+        line.strip_prefix('[')
+            .and_then(|r| r.strip_suffix(']'))
+            .map(|s| s.trim() == name)
+            .unwrap_or(false)
     })
 }
 
@@ -616,6 +641,36 @@ not a key value line
         assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_options"), None);
         // Nothing at all: no panic, no value.
         assert_eq!(synth_ini_lookup("", "LiveSystem", "Directory_portsdir"), None);
+    }
+
+    #[test]
+    fn synth_notes_flag_missing_profile_and_live_options_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(
+            synth.join("synth.ini"),
+            "[Global Configuration]\nprofile_selected= Live\n[Live]\n",
+        )
+        .unwrap();
+
+        // Unknown named profile: noted, defaults still apply (/var/db/ports
+        // triggers the live-dir note too). /usr/ports exists on this host.
+        let s = resolve_synth(&synth, "typo", false, None, &stage).unwrap();
+        assert!(s.notes.iter().any(|n| n.contains("'typo' has no section")), "{:?}", s.notes);
+        assert!(s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
+
+        // Bare -s honours profile_selected; known section → no missing note.
+        let s = resolve_synth(&synth, "", false, None, &stage).unwrap();
+        assert!(s.notes.iter().any(|n| n.contains("profile Live (synth.ini")), "{:?}", s.notes);
+        assert!(!s.notes.iter().any(|n| n.contains("no section")), "{:?}", s.notes);
+
+        // -o override: no live-dir note.
+        let o = tmp.path().join("other");
+        let s = resolve_synth(&synth, "Live", false, Some(&o), &stage).unwrap();
+        assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
     }
 
     #[test]
