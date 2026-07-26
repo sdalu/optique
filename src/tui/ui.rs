@@ -591,19 +591,29 @@ fn draw_help(f: &mut Frame, tab: usize) {
         bar.push(Span::raw(" "));
     }
 
+    let head = |t: &str| {
+        Line::from(Span::styled(
+            format!(" {t}"),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ))
+    };
     let mut lines: Vec<Line> = vec![Line::from(bar), Line::default()];
     match tab {
         0 => lines.extend([
-            mark("✗", Color::Red, "conflict — staged options violate PREVENTS/group rules"),
-            mark("*", Color::Cyan, "edited — staged changes not yet applied"),
-            mark("?", Color::Yellow, "unconfigured — no saved options file"),
-            mark("!", Color::LightRed, "stale — option list changed since the file was written"),
-            mark("≠", Color::Magenta, "contradicts make.conf OPTIONS_SET/UNSET (w view)"),
-            mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
+            head("Status column"),
+            mark("✗", Color::Red, "conflict     staged options violate PREVENTS or group rules"),
+            mark("*", Color::Cyan, "edited       staged changes not yet applied"),
+            mark("?", Color::Yellow, "unconfigured no saved options file"),
+            mark("!", Color::LightRed, "stale        option list changed since the file was written"),
+            mark("≠", Color::Magenta, "mc-conflict  contradicts make.conf policy (w view)"),
+            mark("≈", Color::DarkGray, "mc-covered   decided by make.conf, no attention (m view)"),
             mark("✓", Color::DarkGray, "ok"),
-            mark("⚠", Color::Red, "port BROKEN/IGNORE with the current options"),
+            Line::default(),
+            head("After the port name"),
+            mark("⚠", Color::Red, "port is BROKEN/IGNORE with the current options"),
             mark("⊘", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
             Line::default(),
+            head("Port name color"),
             legend(
                 "red bold name",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -612,28 +622,74 @@ fn draw_help(f: &mut Frame, tab: usize) {
             legend("red name", Style::default().fg(Color::Red), "conflicting staged options"),
             legend("dim name", Style::default().fg(Color::DarkGray), "blacklisted"),
         ]),
-        1 => lines.extend([
-            mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
-            legend(
-                "yellow name",
-                Style::default().fg(Color::Yellow),
-                "deviates from the port default",
-            ),
-            legend(
-                "magenta name",
-                Style::default().fg(Color::Magenta),
-                "contradicts make.conf policy (≠mc)",
-            ),
-            mark("", Color::DarkGray, "def:on|off — the port's default value"),
-            mark("NEW", Color::Yellow, "added since the options file was written"),
-            mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),
-            mark("", Color::Red, "FORCED — *_FORCE knob, file cannot override (locked)"),
-            mark("", Color::Cyan, "implied by X — auto-enabled through IMPLIES (locked)"),
-            mark("⚠", Color::Red, "broken/ignored — enabling marks the port BROKEN/IGNORE"),
-            mark("≠mc", Color::Magenta, "value contradicts the global make.conf policy"),
-            mark("", Color::DarkGray, "struck-through = obsolete, dropped on apply;"),
-            mark("", Color::DarkGray, "'not in this flavor' = managed via the default flavor"),
-        ]),
+        1 => {
+            // A realistic sample row, styled exactly like the editor renders it.
+            lines.push(head("A row, piece by piece"));
+            lines.push(Line::from(vec![
+                Span::styled("   [x] ", Style::default()),
+                Span::styled("OPENSSL     ", Style::default().fg(Color::Yellow)),
+                Span::styled(" def:off", Style::default().fg(Color::DarkGray)),
+                Span::styled(" NEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" mc     ", Style::default().fg(Color::Green)),
+                Span::styled("  Use OpenSSL", Style::default().fg(Color::DarkGray)),
+            ]));
+            lines.push(Line::default());
+            for (label, style, txt) in [
+                ("[x] / [ ]", Style::default(), "checkbox · (o)/( ) = single/radio group member"),
+                (
+                    "yellow name",
+                    Style::default().fg(Color::Yellow),
+                    "differs from the port default",
+                ),
+                (
+                    "magenta name",
+                    Style::default().fg(Color::Magenta),
+                    "contradicts make.conf (≠mc badge)",
+                ),
+                ("def:on|off", Style::default().fg(Color::DarkGray), "the port's default value"),
+                (
+                    "NEW",
+                    Style::default().fg(Color::Yellow),
+                    "option added since the file was written",
+                ),
+                (
+                    "mc · mc:port",
+                    Style::default().fg(Color::Green),
+                    "value decided by make.conf (per-port knob = mc:port)",
+                ),
+                (
+                    "FORCED",
+                    Style::default().fg(Color::Red),
+                    "*_FORCE knob — locked, the file cannot override",
+                ),
+                (
+                    "implied by X",
+                    Style::default().fg(Color::Cyan),
+                    "auto-enabled through IMPLIES — locked while X is on",
+                ),
+                (
+                    "⚠broken",
+                    Style::default().fg(Color::Red),
+                    "enabling marks the port BROKEN (⚠ignored → IGNORE)",
+                ),
+            ] {
+                lines.push(legend(label, style, txt));
+            }
+            lines.extend([
+                Line::default(),
+                head("Trailing sections"),
+                legend(
+                    "struck-through",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                    "obsolete option — dropped on apply",
+                ),
+                legend(
+                    "not in flavor",
+                    Style::default().fg(Color::DarkGray),
+                    "managed via the default flavor's view of the shared file",
+                ),
+            ]);
+        }
         2 => lines.extend([
             keyline("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
             keyline("Enter/l", "edit selected port · h/Esc back to the list"),
