@@ -258,11 +258,9 @@ When no ports are given at all (no origins, no `-f`), synth mode uses the
 `optique -s`, `optique -s scan` or `optique -s clean --unused` operate on the
 `pkg query` origin set (flavors taken from the pkg `flavor` annotation).
 
-Two caveats the banner also points out: when `Directory_options` is the live
+One caveat the banner also points out: when `Directory_options` is the live
 `/var/db/ports`, minimal/redundant cleanups affect plain `make config`
-workflows too; and optique handles flavors fully while classic synth's flavor
-support is partial — configuring flavored origins is harmless but synth may
-not build them distinctly.
+workflows too.
 
 ## How it works
 
