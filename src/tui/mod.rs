@@ -74,6 +74,8 @@ pub struct App {
     pub listable: usize,
     pub staging_db: StagingDb,
     pub refresher: Refresher,
+    /// Help overlay visible?
+    pub show_help: bool,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
     /// Outstanding background refresh batches.
@@ -116,6 +118,7 @@ pub fn run(
         listable: 0,
         staging_db,
         refresher,
+        show_help: false,
         pending: HashMap::new(),
         refreshing: 0,
         refresh_progress: None,
@@ -152,6 +155,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         }
         if app.modal.is_some() {
             handle_modal_key(app, key.code);
+            continue;
+        }
+        if app.show_help {
+            app.show_help = false;
             continue;
         }
         // Ctrl-C always quits (with confirm if dirty) — checked before the
@@ -194,6 +201,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                 }
             }
             KeyCode::Char('/') => app.focus = Focus::Filter,
+            KeyCode::Char('?') | KeyCode::F(1) => app.show_help = true,
             KeyCode::Char('a') => app.open_apply_modal(),
             KeyCode::Char('t') => {
                 app.hide_ok = !app.hide_ok;
@@ -258,6 +266,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::PageUp => app.move_selection(-15),
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
+        KeyCode::Char('h') => app.show_help = true,
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
             if !app.editor_rows.is_empty() {
                 app.focus = Focus::Editor;

@@ -27,6 +27,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_quit_confirm(f);
     } else if app.modal.is_some() {
         draw_apply_modal(f, app);
+    } else if app.show_help {
+        draw_help(f);
     }
 }
 
@@ -108,6 +110,18 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     banner_lines(app, info, &mut lines);
 
+    // Align the name column to the longest option of this port.
+    let name_width = app
+        .editor_rows
+        .iter()
+        .filter_map(|r| match r {
+            EditorRow::Option(o) => Some(o.len()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(12)
+        .clamp(12, 28);
+
     let state = app.session.state(info);
     for (i, row) in app.editor_rows.iter().enumerate() {
         let selected = app.focus == Focus::Editor && i == app.editor_idx;
@@ -124,7 +138,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             EditorRow::Option(opt) => {
-                lines.push(option_line(app, info, opt, selected));
+                lines.push(option_line(app, info, opt, selected, name_width));
             }
             EditorRow::ExcludedHeader => {
                 lines.push(Line::from(Span::styled(
@@ -208,7 +222,13 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
     }
 }
 
-fn option_line(app: &App, info: &PortInfo, opt: &str, selected: bool) -> Line<'static> {
+fn option_line(
+    app: &App,
+    info: &PortInfo,
+    opt: &str,
+    selected: bool,
+    name_width: usize,
+) -> Line<'static> {
     let opts = &info.options;
     let state = app.session.state(info);
     let on = state.map(|s| s.staged.contains(opt)).unwrap_or(false);
@@ -231,28 +251,34 @@ fn option_line(app: &App, info: &PortInfo, opt: &str, selected: bool) -> Line<'s
     } else {
         Style::default()
     };
-    let base = format!("  {checkbox} {opt:<20}");
+    let base = format!("  {checkbox} {opt:<name_width$}");
     spans.push(Span::styled(
         base,
         if selected { name_style.add_modifier(Modifier::REVERSED) } else { name_style },
     ));
 
-    // default value column
+    // default value column (fixed width so following badges line up)
     spans.push(Span::styled(
-        format!(" (def: {})", if is_default { "on" } else { "off" }),
+        format!(" def:{:<3}", if is_default { "on" } else { "off" }),
         Style::default().fg(Color::DarkGray),
     ));
 
-    // NEW badge: option unknown to the saved file (only meaningful when a file exists)
-    if let Some(saved) = state.and_then(|s| s.saved.as_ref()) {
-        let known = saved.complete.iter().chain(saved.set.iter()).chain(saved.unset.iter());
-        if !known.into_iter().any(|o| o == opt) {
-            spans.push(Span::styled(
-                " NEW",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ));
-        }
-    }
+    // NEW badge column: option unknown to the saved file
+    let is_new = state
+        .and_then(|s| s.saved.as_ref())
+        .map(|saved| {
+            !saved
+                .complete
+                .iter()
+                .chain(saved.set.iter())
+                .chain(saved.unset.iter())
+                .any(|o| o == opt)
+        })
+        .unwrap_or(false);
+    spans.push(Span::styled(
+        if is_new { " NEW" } else { "    " },
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    ));
 
     // provenance badge
     let file_state = state
@@ -266,19 +292,14 @@ fn option_line(app: &App, info: &PortInfo, opt: &str, selected: bool) -> Line<'s
                 None
             }
         });
-    match opts.provenance(opt, file_state) {
-        Provenance::Forced => spans.push(Span::styled(
-            " FORCED",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )),
-        Provenance::MakeConfPort => {
-            spans.push(Span::styled(" mc:port", Style::default().fg(Color::Green)))
-        }
-        Provenance::MakeConfGlobal => {
-            spans.push(Span::styled(" mc", Style::default().fg(Color::Green)))
-        }
-        _ => {}
-    }
+    // provenance column (fixed width)
+    let (prov, prov_style) = match opts.provenance(opt, file_state) {
+        Provenance::Forced => ("FORCED ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Provenance::MakeConfPort => ("mc:port", Style::default().fg(Color::Green)),
+        Provenance::MakeConfGlobal => ("mc     ", Style::default().fg(Color::Green)),
+        _ => ("       ", Style::default()),
+    };
+    spans.push(Span::styled(format!(" {prov}"), prov_style));
 
     if app.session.mc_deviates(info, opt) {
         spans.push(Span::styled(
@@ -354,7 +375,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             ));
         }
         spans.push(Span::styled(
-            " Space:toggle d:defaults u:revert n/p:problems t:attention-only m:mc-ok w:mc-warn /:filter a:apply q:quit",
+            " Space:toggle n/p:problems t:attention m:mc-ok w:mc-warn /:filter a:apply ?:help q:quit",
             Style::default().fg(Color::DarkGray),
         ));
         Line::from(spans)
@@ -436,6 +457,73 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::LightYellow)));
+    f.render_widget(p, area);
+}
+
+fn draw_help(f: &mut Frame) {
+    let area = centered_rect(78, 88, f.area());
+    f.render_widget(Clear, area);
+
+    let key = |k: &str| Span::styled(format!("{k:<12}"), Style::default().fg(Color::LightBlue));
+    let head = |t: &str| {
+        Line::from(Span::styled(
+            t.to_string(),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ))
+    };
+    let mark = |m: &str, c: Color, txt: &str| {
+        Line::from(vec![
+            Span::styled(format!("  {m:<3}"), Style::default().fg(c)),
+            Span::raw(txt.to_string()),
+        ])
+    };
+
+    let mut lines: Vec<Line> = vec![
+        head("Port markers"),
+        mark("✗", Color::Red, "conflict — staged options violate PREVENTS/group rules"),
+        mark("*", Color::Cyan, "edited — staged changes not yet applied"),
+        mark("?", Color::Yellow, "unconfigured — no saved options file"),
+        mark("!", Color::LightRed, "stale — option list changed since the file was written"),
+        mark("≠", Color::Magenta, "contradicts make.conf OPTIONS_SET/UNSET (w view)"),
+        mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
+        mark("✓", Color::DarkGray, "ok · ⚠ port BROKEN/IGNORE with current options"),
+        Line::default(),
+        head("Option row"),
+        mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
+        mark("", Color::White, "yellow name = deviates from the port default"),
+        mark("", Color::DarkGray, "def:on|off — the port's default value"),
+        mark("NEW", Color::Yellow, "added since the options file was written"),
+        mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),
+        mark("", Color::Red, "FORCED — *_FORCE knob, file cannot override (locked)"),
+        mark("", Color::Cyan, "implied by X — auto-enabled through IMPLIES (locked)"),
+        mark("⚠", Color::Red, "broken/ignored — enabling marks the port BROKEN/IGNORE"),
+        mark("≠mc", Color::Magenta, "value contradicts the global make.conf policy"),
+        Line::default(),
+        head("Keys"),
+    ];
+    for (k, txt) in [
+        ("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
+        ("Enter/l", "edit selected port · h/Esc back to the list"),
+        ("Space", "toggle option (group rules enforced)"),
+        ("d / u", "reset port to defaults / revert to saved state"),
+        ("n / p", "next / previous port needing attention"),
+        ("t", "show only ports needing attention"),
+        ("m", "make.conf-decided ports count as ok (≈)"),
+        ("w", "flag make.conf contradictions (≠)"),
+        ("/", "filter the port list"),
+        ("a", "apply: preview every file diff, then write atomically"),
+        ("? h F1", "this help"),
+        ("q Ctrl-C", "quit (confirms when staged changes exist)"),
+    ] {
+        lines.push(Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())]));
+    }
+
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" help — any key to close ")
+            .border_style(Style::default().fg(Color::LightBlue)),
+    );
     f.render_widget(p, area);
 }
 
