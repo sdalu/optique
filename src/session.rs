@@ -119,6 +119,12 @@ impl Session {
             .unwrap_or(info)
     }
 
+    /// All closure ports that are flavors of the same origin, sorted;
+    /// includes `key` itself.
+    pub fn siblings(&self, key: &PortKey) -> Vec<PortKey> {
+        self.ports.keys().filter(|k| k.origin == key.origin).cloned().collect()
+    }
+
     /// Resolve a (possibly non-canonical) key to the canonical ports-map key.
     pub fn resolve(&self, key: &PortKey) -> Option<PortKey> {
         if self.ports.contains_key(key) {
@@ -941,6 +947,48 @@ mod tests {
             UiStatus::Ok,
             "nox flavor must not read the owner-written file as stale"
         );
+    }
+
+    #[test]
+    fn siblings_lists_closure_flavors() {
+        // devel/git declares three flavors but only two are in the closure.
+        let mk = |origin: &str, flavors: &[&str]| {
+            let key = PortKey::parse(origin).unwrap();
+            PortInfo {
+                pkgname: format!("{}-1.0", key.origin.split('/').next_back().unwrap()),
+                options_name: key.origin.replace('/', "_"),
+                key: key.clone(),
+                canonical: key,
+                flavors: flavors.iter().map(|s| s.to_string()).collect(),
+                options: PortOptions {
+                    complete: vec!["A".into()],
+                    ..Default::default()
+                },
+                deps: vec![],
+                broken: None,
+                ignore: None,
+                deprecated: None,
+                default_versions: vec![],
+                warnings: vec![],
+            }
+        };
+        let flavors = ["default", "lite", "tiny"];
+        let mut ports = BTreeMap::new();
+        for info in [
+            mk("devel/git@default", &flavors),
+            mk("devel/git@lite", &flavors),
+            mk("www/nginx", &[]),
+        ] {
+            ports.insert(info.canonical.clone(), info);
+        }
+        let s = session_for(ports);
+
+        let default_key = PortKey::parse("devel/git@default").unwrap();
+        let lite_key = PortKey::parse("devel/git@lite").unwrap();
+        let nginx_key = PortKey::parse("www/nginx").unwrap();
+        assert_eq!(s.siblings(&default_key), vec![default_key.clone(), lite_key.clone()]);
+        assert_eq!(s.siblings(&lite_key), vec![default_key, lite_key]);
+        assert_eq!(s.siblings(&nginx_key), vec![nginx_key]);
     }
 
     #[test]

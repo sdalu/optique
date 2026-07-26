@@ -343,6 +343,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
         KeyCode::Char('h') => app.show_help = true,
+        KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
             if !app.editor_rows.is_empty() {
@@ -362,6 +363,7 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('j') | KeyCode::Down => app.editor_move(1),
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
+        KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Char('i') => app.open_opt_info(),
         KeyCode::Char('d') => {
@@ -658,6 +660,30 @@ impl App {
                 }
             }
             Err(e) => self.flash(&e, true),
+        }
+    }
+
+    /// Move the selection to the next flavor of the selected port's origin
+    /// present in the closure, wrapping around in sorted order.
+    fn jump_flavor(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        let siblings = self.session.siblings(&key);
+        if siblings.len() < 2 {
+            let msg = format!("no other flavors of {} in the closure", key.origin);
+            self.flash(&msg, false);
+            return;
+        }
+        let cur = siblings.iter().position(|k| *k == key).unwrap_or(0);
+        let next = siblings[(cur + 1) % siblings.len()].clone();
+        match self.visible.iter().position(|v| *v == next) {
+            Some(idx) => {
+                self.select_index(idx);
+                self.flash(&format!("flavor {next}"), false);
+            }
+            None => {
+                let msg = format!("flavor {next} is hidden by the current view");
+                self.flash(&msg, false);
+            }
         }
     }
 

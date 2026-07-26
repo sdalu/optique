@@ -137,7 +137,7 @@ row) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
 keeps neighbors put while you work down the list; `n`/`p` still jump between
 problems in either order) · `/` filter · `a` apply ·
 `r` why-is-this-here (dependency chain) · `B` bulk-set an option across
-visible ports · `?`/`h`/F1 color-coded
+visible ports · `f` next flavor of the same origin · `?`/`h`/F1 color-coded
 in-TUI help (markers, badges, keys) · `q` quit.
 
 ## Poudriere layout

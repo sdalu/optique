@@ -111,7 +111,10 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
     let info = &app.session.ports[&key];
-    let title = format!(" {} — {} ", key, info.pkgname);
+    let title = match flavor_summary(app, info) {
+        Some(flavors) => format!(" {} — {} · flavors: {} ", key, info.pkgname, flavors),
+        None => format!(" {} — {} ", key, info.pkgname),
+    };
 
     let mut lines: Vec<Line> = Vec::new();
     banner_lines(app, info, &mut lines);
@@ -195,6 +198,38 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
+/// The flavors of this port, marking the current one (`‹`) and the one whose
+/// view owns the shared options file (`*`). None when the port is unflavored.
+fn flavor_summary(app: &App, info: &PortInfo) -> Option<String> {
+    if info.flavors.is_empty() {
+        return None;
+    }
+    let owner = app.session.owner_info(info).canonical.flavor.clone();
+    let current = info.canonical.flavor.clone();
+    let marked: Vec<String> = info
+        .flavors
+        .iter()
+        .map(|f| {
+            let mut s = f.clone();
+            if owner.as_deref() == Some(f.as_str()) {
+                s.push('*');
+            }
+            if current.as_deref() == Some(f.as_str()) {
+                s.push('‹');
+            }
+            s
+        })
+        .collect();
+    Some(marked.join(" "))
+}
+
+/// The port owning this one's options file, when that is a *different* port —
+/// i.e. the options are edited through another flavor's view.
+fn foreign_owner<'a>(app: &'a App, info: &'a PortInfo) -> Option<&'a PortInfo> {
+    let owner = app.session.owner_info(info);
+    (owner.canonical != info.canonical).then_some(owner)
+}
+
 fn banner_len(app: &App, info: &PortInfo) -> usize {
     let mut n = 0;
     if info.broken.is_some() {
@@ -204,6 +239,9 @@ fn banner_len(app: &App, info: &PortInfo) -> usize {
         n += 1;
     }
     if info.deprecated.is_some() {
+        n += 1;
+    }
+    if foreign_owner(app, info).is_some() {
         n += 1;
     }
     n + app.session.violations(info).len()
@@ -221,6 +259,12 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
         lines.push(Line::from(Span::styled(
             format!("DEPRECATED: {m}"),
             Style::default().fg(Color::Magenta),
+        )));
+    }
+    if let Some(owner) = foreign_owner(app, info) {
+        lines.push(Line::from(Span::styled(
+            format!("options file owned by {} (default flavor view)", owner.canonical),
+            Style::default().fg(Color::DarkGray),
         )));
     }
     for v in app.session.violations(info) {
@@ -521,6 +565,7 @@ fn draw_help(f: &mut Frame) {
         ("d / u", "reset port to defaults / revert to saved state"),
         ("B", "bulk: set an option on/off across all visible ports"),
         ("n / p", "next / previous port needing attention"),
+        ("f", "jump to the next flavor of the same origin"),
         ("t", "show only ports needing attention"),
         ("s", "toggle problems-first / stable alphabetical sort"),
         ("m", "make.conf-decided ports count as ok (≈)"),
