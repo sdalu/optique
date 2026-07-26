@@ -219,9 +219,19 @@ fn resolve_synth(
     staging_dir: &Path,
 ) -> Result<Settings> {
     let ini = fs::read_to_string(synth_dir.join("synth.ini")).unwrap_or_default();
-    let setting = |key: &str| synth_ini_lookup(&ini, profile, key);
 
     let mut notes = Vec::new();
+    // A bare -s (empty profile) follows synth's own selection.
+    let selected;
+    let profile = if profile.is_empty() {
+        selected = synth_ini_lookup(&ini, "Global Configuration", "profile_selected")
+            .unwrap_or_else(|| "LiveSystem".to_string());
+        notes.push(format!("synth profile {selected} (synth.ini profile_selected)"));
+        selected.as_str()
+    } else {
+        profile
+    };
+    let setting = |key: &str| synth_ini_lookup(&ini, profile, key);
     if tree_explicit {
         notes.push(
             "-p is a poudriere tree name; synth uses Directory_portsdir".to_string(),

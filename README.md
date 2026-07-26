@@ -240,7 +240,7 @@ never trip `scan`'s exit-code gate whatever their status.
 
 ### Synth
 
-`-s [profile]` (default profile `LiveSystem`) swaps the poudriere layout for
+`-s [profile]` (default: synth.ini's `profile_selected`, else `LiveSystem`) swaps the poudriere layout for
 [ports-mgmt/synth](https://man.freebsd.org/synth)'s, so the same commands work
 on a synth host: `optique -s scan -f list`, `optique -s sync www/nginx`,
 `optique -s -r clean`. The ports tree comes from `Directory_portsdir` and the

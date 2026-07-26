@@ -4,7 +4,7 @@ DISTVERSION=	0.1.0
 CATEGORIES=	sysutils ports-mgmt
 
 MAINTAINER=	sdalu@sdalu.com
-COMMENT=	Fast ports options/dependency configurator for poudriere
+COMMENT=	Fast ports options configurator for poudriere and synth
 # TODO: adjust when published
 WWW=		https://github.com/sdalu/optique
 

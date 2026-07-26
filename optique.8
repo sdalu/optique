@@ -123,9 +123,10 @@ Configure for
 .Xr synth 1
 instead of
 .Xr poudriere 8 ,
-using the named profile, or
-.Ql LiveSystem
-when the option is given without one.
+using the named profile; without one, synth.ini's
+.Va profile_selected
+is honoured, falling back to
+.Ql LiveSystem .
 See
 .Sx SYNTH .
 Mutually exclusive with
@@ -789,7 +790,9 @@ reads the
 .Xr synth 1
 layout instead, so the same commands serve a synth host:
 .Dl optique -s scan -f list
-The profile defaults to
+The profile defaults to synth.ini's
+.Va profile_selected ,
+then
 .Ql LiveSystem .
 The ports tree is taken from
 .Va Directory_portsdir

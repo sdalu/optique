@@ -6,8 +6,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::model::origin::PortKey;
 
-/// synth(1) profile assumed when `-s` is given without a name.
-pub const SYNTH_DEFAULT_PROFILE: &str = "LiveSystem";
+/// Sentinel for a bare `-s`: the profile then comes from synth.ini's
+/// `profile_selected`, falling back to LiveSystem.
+pub const SYNTH_DEFAULT_PROFILE: &str = "";
 
 /// Subcommand names, which `-s` must never mistake for a profile.
 const SUBCOMMANDS: [&str; 5] = ["tui", "scan", "sync", "clean", "help"];
@@ -61,7 +62,8 @@ pub struct Cli {
 
     /// Use the synth(1) layout instead of poudriere's: options dir and ports
     /// tree from /usr/local/etc/synth/synth.ini, make.conf from
-    /// <PROFILE>-make.conf [default profile: LiveSystem]
+    /// <PROFILE>-make.conf [default: synth.ini's profile_selected, else
+    /// LiveSystem]
     #[arg(
         short = 's',
         long = "synth",
