@@ -455,9 +455,30 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
     }
     let writes = planned.writes;
 
-    if writes.is_empty() {
+    // A port that lost ALL its options never reaches plan_writes; its
+    // leftover file is dead configuration and must go too.
+    let mut stale_files: Vec<clean::Removal> = Vec::new();
+    let mut seen_names: std::collections::HashSet<&str> = Default::default();
+    for info in result.ports.values() {
+        if info.options.has_options() || !seen_names.insert(&info.options_name) {
+            continue;
+        }
+        let dir = settings.options_dir.join(&info.options_name);
+        if dir.join("options").is_file() {
+            stale_files.push(clean::Removal {
+                options_name: info.options_name.clone(),
+                dir,
+                reason: "port has no options anymore".to_string(),
+            });
+        }
+    }
+
+    if writes.is_empty() && stale_files.is_empty() {
         eprintln!("everything up to date, nothing to write");
         return Ok(());
+    }
+    for r in &stale_files {
+        println!("{}  removing options file ({})", r.options_name, r.reason);
     }
     for w in &writes {
         println!("{}  {}", w.key, w.describe());
@@ -472,16 +493,34 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
         }
     }
     if dry_run {
-        eprintln!("dry run: {} file(s) would be written to {}", writes.len(), settings.options_dir.display());
+        eprintln!(
+            "dry run: {} file(s) would be written, {} removed in {}",
+            writes.len(),
+            stale_files.len(),
+            settings.options_dir.display()
+        );
         return Ok(());
     }
     let summary = apply::apply(&writes);
     for (key, msg) in &summary.failed {
         eprintln!("error: {key}: {msg}");
     }
+    let mut removed = 0usize;
+    for r in &stale_files {
+        match clean::remove_entry(r) {
+            Ok(note) => {
+                removed += 1;
+                if let Some(note) = note {
+                    eprintln!("note: {note}");
+                }
+            }
+            Err(e) => eprintln!("error: {}: {e}", r.options_name),
+        }
+    }
     eprintln!(
-        "{} file(s) written to {}{}",
+        "{} file(s) written, {} removed in {}{}",
         summary.written,
+        removed,
         settings.options_dir.display(),
         if summary.failed.is_empty() { String::new() } else { format!(", {} failed", summary.failed.len()) }
     );
