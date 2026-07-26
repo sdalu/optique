@@ -12,7 +12,8 @@ ports, and writes every options file in a single atomic pass at the end.
 
 ```sh
 # Interactive TUI over the closure of the given ports, for poudriere set
-# "workstation" (options land in /usr/local/etc/poudriere.d/workstation-options)
+# "workstation" — the options dir is resolved exactly like poudriere(8)
+# resolves it before a build (see "Poudriere layout" below)
 optique -z workstation www/nginx mail/dovecot
 
 # From poudriere pkglist file(s) — one origin[@flavor] per line, '#' comments;
@@ -112,15 +113,34 @@ and then writes atomically (tmp + fsync + rename).
 Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 `u` revert · `n/p` next/prev problem · `/` filter · `a` apply · `q` quit.
 
+## Poudriere layout
+
+Given `-j jail`, `-p tree` (default `default`), `-z set`, optique resolves
+the options directory exactly as poudriere(8) does before null-mounting one
+over the jail's /var/db/ports — first existing wins:
+
+    <jail>-<tree>-<set>-options   <jail>-<set>-options   <jail>-<tree>-options
+    <tree>-<set>-options          <set>-options          <tree>-options
+    <jail>-options                options
+
+If none exists, apply creates the one `poudriere options` would have used
+for the same flags (`[<jail>-][<tree>-][<set>-]options`, the tree component
+only when `-p` was explicit). `-o dir` bypasses all of this; without any
+poudriere.d, plain `/var/db/ports` is used.
+
+make.conf is layered in poudriere(8)'s inclusion order, all existing files
+concatenated: `make.conf`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
+`<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-make.conf` — so
+queries see exactly what poudriere builds, including `DEFAULT_VERSIONS` and
+`OPTIONS_SET/UNSET` knobs.
+
 ## How it works
 
 One `make` invocation per port (~0.2–0.6 s, up to 16 in parallel) pipes a
 wrapper makefile to `make -f /dev/stdin optique-config`: it includes the
 port's Makefile and dumps options, groups, descriptions, IMPLIES/PREVENTS,
 BROKEN/IGNORE, make.conf layers and `_UNIFIED_DEPENDS` as parse-time `.info`
-lines. poudriere's make.conf layering (`make.conf`, `<jail>-`, `<set>-`,
-`<jail>-<set>-make.conf`) is reproduced via `__MAKE_CONF`, so queries see
-exactly what poudriere builds — including `DEFAULT_VERSIONS`.
+lines, evaluated under the layered `__MAKE_CONF`.
 
 Results are cached in `~/.cache/optique/` keyed on (ports tree git HEAD,
 make.conf hash, options file content), so re-scans and background refreshes

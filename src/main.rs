@@ -126,7 +126,7 @@ struct Scanned {
 fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     let staging = tempfile::tempdir()?;
     let settings = config::resolve(
-        &cli.tree,
+        cli.tree.as_deref(),
         cli.jail.as_deref(),
         cli.set.as_deref(),
         cli.options_dir.as_deref(),
@@ -152,9 +152,10 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     };
 
     eprintln!(
-        "optique: tree {} · options dir {} · {} jobs",
+        "optique: tree {} · options dir {}{} · {} jobs",
         settings.portsdir.display(),
         settings.options_dir.display(),
+        if settings.options_dir_is_new { " (new, created on apply)" } else { "" },
         jobs
     );
 

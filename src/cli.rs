@@ -16,9 +16,9 @@ pub struct Cli {
     #[arg(short = 'j', long = "jail", global = true)]
     pub jail: Option<String>,
 
-    /// Poudriere ports tree name
-    #[arg(short = 'p', long = "ports-tree", default_value = "default", global = true)]
-    pub tree: String,
+    /// Poudriere ports tree name [default: default]
+    #[arg(short = 'p', long = "ports-tree", global = true)]
+    pub tree: Option<String>,
 
     /// Explicit options dir (overrides poudriere resolution; e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
