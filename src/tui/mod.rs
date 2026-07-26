@@ -324,8 +324,8 @@ impl App {
     pub fn effective_status(&self, info: &crate::model::port::PortInfo) -> UiStatus {
         let mut status = self.session.status(info);
         if self.mc_relax
-            && status == UiStatus::Stale
-            && self.session.stale_covered_by_makeconf(info)
+            && matches!(status, UiStatus::Stale | UiStatus::Unconfigured)
+            && self.session.covered_by_makeconf(info)
         {
             status = UiStatus::Ok;
         }

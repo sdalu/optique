@@ -49,8 +49,8 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             let info = &app.session.ports[key];
             let raw = app.session.status(info);
             let status = app.effective_status(info);
-            // A stale port silenced by the mc_relax view keeps a hint marker.
-            let (marker, color) = if status == UiStatus::Ok && raw == UiStatus::Stale {
+            // A port silenced by the mc_relax view keeps a hint marker.
+            let (marker, color) = if status == UiStatus::Ok && raw != UiStatus::Ok {
                 ("≈", Color::DarkGray)
             } else {
                 status_marker(&status)

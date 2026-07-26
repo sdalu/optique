@@ -283,20 +283,24 @@ impl Session {
         }
     }
 
-    /// True when the port's staleness introduces no real decision: every
-    /// option added since the file was written has its value dictated by
-    /// make.conf (global OPTIONS_SET/UNSET, per-port _SET/_UNSET or *_FORCE),
-    /// and removed options never need a decision.
-    pub fn stale_covered_by_makeconf(&self, info: &PortInfo) -> bool {
+    /// True when the port's Stale/Unconfigured status introduces no real
+    /// decision because make.conf (global OPTIONS_SET/UNSET, per-port
+    /// _SET/_UNSET or *_FORCE) already dictates the relevant options:
+    /// for a stale port, every option added since the file was written
+    /// (removed options never need a decision); for an unconfigured port,
+    /// every option it has.
+    pub fn covered_by_makeconf(&self, info: &PortInfo) -> bool {
         let Some(state) = self.state(info) else { return false };
-        let Some(saved) = &state.saved else { return false };
-        let known: BTreeSet<&str> = saved
-            .complete
-            .iter()
-            .chain(saved.set.iter())
-            .chain(saved.unset.iter())
-            .map(String::as_str)
-            .collect();
+        let known: BTreeSet<&str> = match &state.saved {
+            Some(saved) => saved
+                .complete
+                .iter()
+                .chain(saved.set.iter())
+                .chain(saved.unset.iter())
+                .map(String::as_str)
+                .collect(),
+            None => BTreeSet::new(),
+        };
         let o = &info.options;
         o.complete.iter().filter(|opt| !known.contains(opt.as_str())).all(|opt| {
             o.mc_set.contains(opt)
@@ -524,7 +528,7 @@ mod tests {
         let info_key = key.clone();
 
         // Not covered: DOCS/NLS undecided by make.conf.
-        assert!(!s.stale_covered_by_makeconf(&s.ports[&info_key]));
+        assert!(!s.covered_by_makeconf(&s.ports[&info_key]));
         assert_eq!(s.status(&s.ports[&info_key]), UiStatus::Stale);
 
         // Covered once make.conf unsets both globally.
@@ -533,7 +537,7 @@ mod tests {
             o.mc_unset.insert("DOCS".into());
             o.mc_unset.insert("NLS".into());
         }
-        assert!(s.stale_covered_by_makeconf(&s.ports[&info_key]));
+        assert!(s.covered_by_makeconf(&s.ports[&info_key]));
 
         // Deviation: staged keeps A on although make.conf globally unsets it.
         {
@@ -561,7 +565,22 @@ mod tests {
         let roots2: Vec<PortKey> = ports2.keys().cloned().collect();
         let s2 = Session::new(ports2, HashMap::new(), &roots2, tmp2.path());
         assert_eq!(s2.status(&s2.ports[&key2]), UiStatus::Stale);
-        assert!(s2.stale_covered_by_makeconf(&s2.ports[&key2]));
+        assert!(s2.covered_by_makeconf(&s2.ports[&key2]));
+
+        // Unconfigured port (no saved file): covered only when make.conf
+        // decides every single option.
+        let (ports3, key3) = mk_port(&["DOCS", "X11"], &["DOCS"], vec![], vec![]);
+        let tmp3 = tempfile::tempdir().unwrap();
+        let roots3: Vec<PortKey> = ports3.keys().cloned().collect();
+        let mut s3 = Session::new(ports3, HashMap::new(), &roots3, tmp3.path());
+        assert_eq!(s3.status(&s3.ports[&key3]), UiStatus::Unconfigured);
+        assert!(!s3.covered_by_makeconf(&s3.ports[&key3]));
+        {
+            let o = &mut s3.ports.get_mut(&key3).unwrap().options;
+            o.mc_unset.insert("DOCS".into());
+            o.port_set.insert("X11".into());
+        }
+        assert!(s3.covered_by_makeconf(&s3.ports[&key3]));
     }
 
     #[test]
