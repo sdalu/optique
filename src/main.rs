@@ -110,6 +110,16 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
                           removals: &mut Vec<clean::Removal>,
                           by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
             if let Some(entry) = by_key.get(&info.key) {
+                // The verdict below is only valid for the file this port
+                // actually reads; a custom/legacy OPTIONS_NAME means the
+                // entry belongs to some other port — leave it alone.
+                if info.options_name != entry.options_name {
+                    eprintln!(
+                        "warning: {}: {} uses options name {} — not this entry, left alone",
+                        entry.options_name, info.key, info.options_name
+                    );
+                    return;
+                }
                 if clean::file_is_redundant(&info) {
                     removals.push(clean::Removal {
                         options_name: entry.options_name.clone(),

@@ -49,6 +49,11 @@ pub fn scan(
     let mut pending: Vec<PortKey> = roots.to_vec();
     loop {
         while let Some(key) = pending.pop() {
+            // Dedup on the raw key first so renamed/removed ports are noted
+            // once, not once per referencing dep edge.
+            if !seen.insert(key.clone()) {
+                continue;
+            }
             // Resolve renames/removals before anything else.
             let key = match moved.resolve(&key.origin) {
                 MovedResult::Unchanged => key,
@@ -56,7 +61,11 @@ pub fn scan(
                     result
                         .moved_notes
                         .push(format!("{} moved to {origin} ({reason})", key.origin));
-                    key.with_origin(&origin)
+                    let new_key = key.with_origin(&origin);
+                    if !seen.insert(new_key.clone()) {
+                        continue;
+                    }
+                    new_key
                 }
                 MovedResult::Removed { reason } => {
                     result
@@ -65,9 +74,6 @@ pub fn scan(
                     continue;
                 }
             };
-            if !seen.insert(key.clone()) {
-                continue;
-            }
             if let Some(info) = cache.lookup(&key, &ctx.port_dbdir) {
                 result.from_cache += 1;
                 pending.extend(register(info, &mut result));

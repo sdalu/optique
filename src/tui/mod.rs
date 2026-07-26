@@ -149,6 +149,15 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             handle_modal_key(app, key.code);
             continue;
         }
+        // Ctrl-C always quits (with confirm if dirty) — checked before the
+        // filter branch so it can't be swallowed as a literal 'c'.
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            if app.session.dirty() {
+                app.quit_confirm = true;
+                continue;
+            }
+            return Ok(());
+        }
         if app.focus == Focus::Filter {
             match key.code {
                 KeyCode::Esc => {
@@ -161,7 +170,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                     app.filter.pop();
                     app.rebuild_visible(None);
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     app.filter.push(c);
                     app.rebuild_visible(None);
                 }
@@ -169,15 +178,6 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             }
             app.rebuild_editor();
             continue;
-        }
-
-        // Ctrl-C always quits (with confirm if dirty).
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            if app.session.dirty() {
-                app.quit_confirm = true;
-                continue;
-            }
-            return Ok(());
         }
 
         match key.code {
@@ -290,8 +290,11 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
 }
 
 fn handle_modal_key(app: &mut App, code: KeyCode) {
-    let Some(modal) = app.modal.as_mut() else { return };
-    if modal.done.is_some() {
+    let showing_result = match &app.modal {
+        Some(m) => m.done.is_some(),
+        None => return,
+    };
+    if showing_result {
         app.modal = None;
         // Applied files changed statuses; refresh the list (matters with hide_ok).
         let keep = app.selected_key();
@@ -301,16 +304,38 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
     }
     match code {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
-            let summary = apply::apply(&modal.writes);
-            let mut text = format!("{} file(s) written to {}", summary.written, app.options_dir.display());
+            // Recompute the plan at confirmation time: a background refresh
+            // may have merged new ports since the modal was opened.
+            let writes = match app.compute_writes() {
+                Ok(w) => w,
+                Err(e) => {
+                    app.flash(&format!("{e:#}"), true);
+                    app.modal = None;
+                    return;
+                }
+            };
+            let summary = apply::apply(&writes);
+            let mut text =
+                format!("{} file(s) written to {}", summary.written, app.options_dir.display());
             for (key, msg) in &summary.failed {
                 text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
-            modal.done = Some(text);
             app.session.reload_saved(&app.options_dir);
+            if let Some(modal) = app.modal.as_mut() {
+                modal.writes = writes;
+                modal.done = Some(text);
+            }
         }
-        KeyCode::Char('j') | KeyCode::Down => modal.scroll = modal.scroll.saturating_add(1),
-        KeyCode::Char('k') | KeyCode::Up => modal.scroll = modal.scroll.saturating_sub(1),
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(modal) = app.modal.as_mut() {
+                modal.scroll = modal.scroll.saturating_add(1);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(modal) = app.modal.as_mut() {
+                modal.scroll = modal.scroll.saturating_sub(1);
+            }
+        }
         _ => app.modal = None,
     }
 }
@@ -583,8 +608,8 @@ impl App {
                 RefreshEvent::Progress { done, discovered } => {
                     self.refresh_progress = Some((done, discovered));
                 }
-                RefreshEvent::Done(result) => {
-                    self.refreshing = self.refreshing.saturating_sub(1);
+                RefreshEvent::Done { result, batches } => {
+                    self.refreshing = self.refreshing.saturating_sub(batches);
                     let errors = result.errors.len();
                     let first_error = result.errors.first().cloned();
                     let (added, removed) =
@@ -617,6 +642,15 @@ impl App {
         }
     }
 
+    /// Plan the options files to write for the current staged state.
+    fn compute_writes(&self) -> anyhow::Result<Vec<PendingWrite>> {
+        let staged = self.session.ports.iter().filter_map(|(key, info)| {
+            let state = self.session.state(info)?;
+            Some((key, info, state.staged.clone()))
+        });
+        apply::plan_writes(staged, &self.options_dir)
+    }
+
     fn open_apply_modal(&mut self) {
         let conflicted: Vec<PortKey> = self
             .visible
@@ -624,11 +658,7 @@ impl App {
             .filter(|k| self.session.status(&self.session.ports[k]) == UiStatus::Conflict)
             .cloned()
             .collect();
-        let staged = self.session.ports.iter().filter_map(|(key, info)| {
-            let state = self.session.state(info)?;
-            Some((key, info, state.staged.clone()))
-        });
-        match apply::plan_writes(staged, &self.options_dir) {
+        match self.compute_writes() {
             Ok(writes) if writes.is_empty() => {
                 self.flash("nothing to write — everything is up to date", false)
             }
