@@ -175,9 +175,12 @@ is unset;
 .Cm always
 is an explicit request and overrides
 .Ev NO_COLOR .
-Currently only the
+Colorized are the
 .Cm scan
-status marker column is colorized; the interactive TUI is unaffected.
+status marker column on standard output and the informational standard-error
+output: banner labels, notes, warnings, errors and progress lines, with
+tty-ness judged per stream.
+The interactive TUI is unaffected.
 .It Fl n , Fl -dry-run
 Report what
 .Cm sync

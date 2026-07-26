@@ -99,7 +99,7 @@ struct CleanCtx {
 /// itself; a package list is only consulted for --unused.
 fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     if cli.minimal && !args.redundant {
-        eprintln!("note: --minimal does not affect clean; its counterpart here is --redundant");
+        eprintln!("{} --minimal does not affect clean; its counterpart here is --redundant", tint(stderr_color(cli), ansi::YELLOW, "note:"));
     }
     let has_list = !args.origins.is_empty() || !cli.files.is_empty();
     // In synth mode the installed packages are the implicit list.
@@ -168,16 +168,17 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 
     let CleanCtx { settings, moved, jobs, cache: open_cache, used, _staging } = ctx;
-    eprintln!("optique clean: options dir {}", settings.options_dir.display());
+    let paint = stderr_color(cli);
+    eprintln!("{} options dir {}", tint(paint, ansi::BOLD, "optique clean:"), settings.options_dir.display());
     for note in &settings.notes {
-        eprintln!("  note:        {note}");
+        eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
 
     let (mut removals, live, warnings) =
         clean::classify_entries(&settings.options_dir, &settings.portsdir, &moved);
     let total_entries = removals.len() + live.len();
     for w in &warnings {
-        eprintln!("warning: {w}");
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
 
     // Entries nobody in the closure reads go; the redundancy pass below then
@@ -255,12 +256,12 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
                 }
                 Ok(ScanEvent::PortError { key, msg }) => {
                     in_flight -= 1;
-                    eprintln!("warning: {key}: query failed, left alone ({msg})");
+                    eprintln!("{} {key}: query failed, left alone ({msg})", tint(paint, ansi::YELLOW, "warning:"));
                     by_key.remove(&key);
                 }
                 Err(_) => break,
             }
-            eprint!("\rchecking… {done}/{} ports", live.len());
+            eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{} ports", live.len())));
             let _ = std::io::stderr().flush();
         }
         if done > 0 {
@@ -301,10 +302,10 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             Ok(note) => {
                 removed += 1;
                 if let Some(note) = note {
-                    eprintln!("note: {note}");
+                    eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
                 }
             }
-            Err(e) => eprintln!("error: {}: {e}", r.options_name),
+            Err(e) => eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name),
         }
     }
     eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
@@ -362,7 +363,7 @@ fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
 fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<Vec<model::origin::PortKey>> {
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
         let roots = installed_roots()?;
-        eprintln!("note: no ports given; using {} installed package(s) as the list", roots.len());
+        eprintln!("{} no ports given; using {} installed package(s) as the list", tint(stderr_color(cli), ansi::YELLOW, "note:"), roots.len());
         return Ok(roots);
     }
     cli::collect_roots(origins, &cli.files)
@@ -395,7 +396,7 @@ pub(crate) fn split_raw_origins(
 
 fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<()> {
     if cli.dry_run {
-        eprintln!("note: --dry-run has no effect in the TUI; the apply dialog previews changes");
+        eprintln!("{} --dry-run has no effect in the TUI; the apply dialog previews changes", tint(stderr_color(cli), ansi::YELLOW, "note:"));
     }
     // Fail before the (possibly minute-long) scan, not after. The headless
     // driver renders into memory, so it has no use for a terminal.
@@ -485,50 +486,56 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
         port_dbdir: settings.options_dir.clone(),
     };
 
+    let paint = stderr_color(cli);
     if !cli.quiet {
-        eprintln!("optique: ports tree {} · {} jobs", settings.portsdir.display(), jobs);
+        eprintln!(
+            "{} ports tree {} · {} jobs",
+            tint(paint, ansi::BOLD, "optique:"),
+            settings.portsdir.display(),
+            jobs
+        );
         for note in &settings.notes {
-            eprintln!("  note:        {note}");
+            eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
         eprintln!(
-            "  options dir: {}{}",
+            "  {} {}{}",
+            tint(paint, ansi::CYAN, "options dir:"),
             settings.options_dir.display(),
-            if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
+            tint(
+                paint,
+                ansi::YELLOW,
+                if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
+            )
         );
         if settings.make_conf_sources.is_empty() {
-            eprintln!("  make.conf:   (none)");
+            eprintln!("  {}   (none)", tint(paint, ansi::CYAN, "make.conf:"));
         } else {
             for (i, src) in settings.make_conf_sources.iter().enumerate() {
-                eprintln!(
-                    "  {}   {}",
-                    if i == 0 { "make.conf:" } else { "          " },
-                    src.display()
-                );
+                let label = if i == 0 { "make.conf:" } else { "          " };
+                eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
         if !settings.blacklist.is_empty() {
             for (i, src) in settings.blacklist.sources.iter().enumerate() {
-                eprintln!(
-                    "  {}   {}",
-                    if i == 0 { "blacklist:" } else { "          " },
-                    src.display()
-                );
+                let label = if i == 0 { "blacklist:" } else { "          " };
+                eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
     }
 
     let t0 = Instant::now();
-    let result = scanner::scan(roots, &ctx, jobs, &mut cache, &moved, |p| {
-        eprint!("\rscanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
+    let result = scanner::scan(roots, &ctx, jobs, &mut cache, &moved, move |p| {
+        let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
+        eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();
     });
     eprintln!();
 
     for note in &result.moved_notes {
-        eprintln!("moved: {note}");
+        eprintln!("{} {note}", tint(paint, ansi::MAGENTA, "moved:"));
     }
     for (key, msg) in &result.errors {
-        eprintln!("error: {key}: {msg}");
+        eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
     }
 
     Ok(Scanned {
@@ -550,6 +557,29 @@ mod ansi {
     pub const LIGHT_RED: &str = "\x1b[91m";
     pub const YELLOW: &str = "\x1b[33m";
     pub const GRAY: &str = "\x1b[90m";
+    pub const CYAN: &str = "\x1b[36m";
+    pub const MAGENTA: &str = "\x1b[35m";
+    pub const BOLD: &str = "\x1b[1m";
+}
+
+/// Should the informational output on stderr get colors? Same policy as
+/// stdout (--color / NO_COLOR), judged against stderr's tty-ness.
+fn stderr_color(cli: &Cli) -> bool {
+    use std::io::IsTerminal as _;
+    cli::use_color(
+        cli.color,
+        std::io::stderr().is_terminal(),
+        std::env::var("NO_COLOR").ok().as_deref(),
+    )
+}
+
+/// Wrap `text` in a color when painting is enabled.
+fn tint(on: bool, color: &str, text: &str) -> String {
+    if on && !text.is_empty() {
+        format!("{color}{text}{}", ansi::RESET)
+    } else {
+        text.to_string()
+    }
 }
 
 /// Color for a scan status marker; None for the unmarked ok rows.
@@ -824,6 +854,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
 fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Result<()> {
     let scanned = run_scan(cli, roots)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
+    let paint = stderr_color(cli);
 
     let staged = result.ports.iter().map(|(key, info)| {
         let saved =
@@ -832,7 +863,7 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
     });
     let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
     for w in &planned.warnings {
-        eprintln!("warning: {w}");
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
     let writes = planned.writes;
 
@@ -876,7 +907,7 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
     }
     let summary = apply::apply(&writes);
     for (key, msg) in &summary.failed {
-        eprintln!("error: {key}: {msg}");
+        eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
     }
     let mut removed = 0usize;
     for r in &stale_files {
@@ -884,10 +915,10 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
             Ok(note) => {
                 removed += 1;
                 if let Some(note) = note {
-                    eprintln!("note: {note}");
+                    eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
                 }
             }
-            Err(e) => eprintln!("error: {}: {e}", r.options_name),
+            Err(e) => eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name),
         }
     }
     eprintln!(

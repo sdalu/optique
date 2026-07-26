@@ -125,8 +125,9 @@ pub struct Cli {
     pub quiet: bool,
 
     /// Colorize output: auto (a terminal with NO_COLOR unset), always, never.
-    /// Today this only tints the scan status marker column; it is honoured by
-    /// any colored CLI output added later. The TUI is unaffected.
+    /// Tints the scan status markers on stdout and the informational stderr
+    /// output (banner labels, notes, warnings, errors, progress); stdout and
+    /// stderr are judged for tty-ness separately. The TUI is unaffected.
     #[arg(long = "color", global = true, value_name = "WHEN", default_value = "auto")]
     pub color: ColorChoice,
 
