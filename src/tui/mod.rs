@@ -89,6 +89,9 @@ pub struct App {
     pub show_help: bool,
     /// Dependency-chain ("why") overlay, when open.
     pub why: Option<WhyInfo>,
+    /// Option-detail overlay: (port, option name). The data is looked up at
+    /// draw time so a background refresh keeps the popup current.
+    pub opt_info: Option<(PortKey, String)>,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
     /// Outstanding background refresh batches.
@@ -134,6 +137,7 @@ pub fn run(
         refresher,
         show_help: false,
         why: None,
+        opt_info: None,
         pending: HashMap::new(),
         refreshing: 0,
         refresh_progress: None,
@@ -185,6 +189,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         }
         if app.why.is_some() {
             app.why = None;
+            continue;
+        }
+        if app.opt_info.is_some() {
+            app.opt_info = None;
             continue;
         }
         // Ctrl-C always quits (with confirm if dirty) — checked before the
@@ -327,6 +335,7 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
         KeyCode::Char('r') => app.open_why(),
+        KeyCode::Char('i') => app.open_opt_info(),
         KeyCode::Char('d') => {
             if let Some(key) = app.selected_key() {
                 app.session.reset_to_defaults(&key);
@@ -634,6 +643,17 @@ impl App {
             dependents: self.session.dependents(&key),
             key,
         });
+    }
+
+    /// Open the detail overlay on the option under the editor cursor. Only
+    /// the port and option name are stored; everything shown is looked up at
+    /// draw time so the popup follows background refreshes.
+    fn open_opt_info(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        let Some(EditorRow::Option(opt)) = self.editor_rows.get(self.editor_idx) else {
+            return;
+        };
+        self.opt_info = Some((key, opt.clone()));
     }
 
     /// Schedule the port for a debounced background re-query.

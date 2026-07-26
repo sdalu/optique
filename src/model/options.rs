@@ -47,6 +47,13 @@ pub struct OptionDef {
     pub broken: Option<String>,
     /// Enabling this option marks the port IGNOREd with this message.
     pub ignore: Option<String>,
+    /// Dependencies this option adds, as (class, origins) — class is
+    /// "lib"/"run"/"build"/"fetch"/"extract"/"patch".
+    #[serde(default)]
+    pub deps: Vec<(String, Vec<String>)>,
+    /// USES frameworks the option activates (raw tokens).
+    #[serde(default)]
+    pub uses: Vec<String>,
 }
 
 /// Everything the ports framework reports about a port's options,

@@ -87,6 +87,35 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                     _ => def.ignore = Some(v.to_string()),
                 }
             }
+            // `OPTIQUE|OPT_DEP|<opt>|<class>|<value>`: the dependency lists (and
+            // USES) a single option contributes. Exotic specs are silently
+            // skipped — option-level noise does not belong in info.warnings.
+            "OPT_DEP" => {
+                let Some((name, rest)) = value.split_once('|') else { continue };
+                let Some((class, v)) = rest.split_once('|') else { continue };
+                let name = name.trim();
+                let class = class.trim();
+                let def = opts.defs.entry(name.to_string()).or_insert_with(OptionDef::default);
+                if class == "uses" {
+                    def.uses = words(v);
+                    continue;
+                }
+                let (edges, _) = parse_depends(v);
+                if edges.is_empty() {
+                    continue;
+                }
+                let origins: Vec<String> = edges.iter().map(|e| e.target.to_string()).collect();
+                match def.deps.iter_mut().find(|(c, _)| c == class) {
+                    Some((_, list)) => {
+                        for o in origins {
+                            if !list.contains(&o) {
+                                list.push(o);
+                            }
+                        }
+                    }
+                    None => def.deps.push((class.to_string(), origins)),
+                }
+            }
             _ => {}
         }
     }
@@ -280,6 +309,9 @@ make: /dev/stdin:11: OPTIQUE|DESC|LUA|3rd party lua module
 make: /dev/stdin:12: OPTIQUE|DESC|GSSAPI|GSSAPI implementation
 make: /dev/stdin:13: OPTIQUE|IMPLIES|GSSAPI_MIT|IPV6
 make: /dev/stdin:14: OPTIQUE|BROKEN|
+make: /dev/stdin:15: OPTIQUE|OPT_DEP|LUA|lib|libluajit-5.1.so:lang/luajit-openresty
+make: /dev/stdin:16: OPTIQUE|OPT_DEP|LUA|run|lua-resty-core>0:www/lua-resty-core lua-resty-core>0:www/lua-resty-core
+make: /dev/stdin:17: OPTIQUE|OPT_DEP|GSSAPI_MIT|uses|gssapi:mit
 ";
         let key = PortKey::parse("www/nginx").unwrap();
         let info = parse_dump(&key, text).unwrap();
@@ -293,5 +325,46 @@ make: /dev/stdin:14: OPTIQUE|BROKEN|
         assert_eq!(info.options.defs["GSSAPI_MIT"].implies, vec!["IPV6"]);
         assert_eq!(info.deps.len(), 1);
         assert!(info.broken.is_none());
+        let lua = &info.options.defs["LUA"];
+        assert_eq!(
+            lua.deps,
+            vec![
+                ("lib".to_string(), vec!["lang/luajit-openresty".to_string()]),
+                ("run".to_string(), vec!["www/lua-resty-core".to_string()]),
+            ],
+            "per-class origins, deduped, in emission order"
+        );
+        assert!(lua.uses.is_empty());
+        assert_eq!(info.options.defs["GSSAPI_MIT"].uses, vec!["gssapi:mit"]);
+    }
+
+    #[test]
+    fn opt_dep_skips_unparsable_and_merges_repeats() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "\
+OPTIQUE|PKGNAME|foo-1
+OPTIQUE|COMPLETE|A
+OPTIQUE|OPT_DEP|A|build|garbage
+OPTIQUE|OPT_DEP|A|run|x:cat/one
+OPTIQUE|OPT_DEP|A|run|y:cat/two x:cat/one
+";
+        let info = parse_dump(&key, text).unwrap();
+        let def = &info.options.defs["A"];
+        assert_eq!(def.deps.len(), 1, "unparsable-only record adds no class");
+        assert_eq!(def.deps[0].0, "run");
+        assert_eq!(def.deps[0].1, vec!["cat/one", "cat/two"]);
+        assert!(info.warnings.is_empty(), "option-level noise stays out of warnings");
+    }
+
+    /// Cached PortInfos are read back from JSONL written by older versions:
+    /// an OptionDef without the newer fields must still deserialize.
+    #[test]
+    fn option_def_deserializes_without_new_fields() {
+        let json = r#"{"desc":"x","implies":[],"prevents":[],"prevents_msg":null,
+                       "broken":null,"ignore":null}"#;
+        let def: OptionDef = serde_json::from_str(json).unwrap();
+        assert_eq!(def.desc, "x");
+        assert!(def.deps.is_empty());
+        assert!(def.uses.is_empty());
     }
 }

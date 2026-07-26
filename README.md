@@ -117,7 +117,9 @@ magenta (+ `≠mc` badge) = contradicts your make.conf — the option is
 mentioned there but the staged value differs from what defaults + make.conf
 alone would produce. Obsolete options (removed from the port) appear struck
 through and are dropped on apply; options excluded by the current flavor but
-managed via the default flavor are listed separately.
+managed via the default flavor are listed separately. `i` opens a detail popup
+for the selected option: description, group, IMPLIES/PREVENTS, and the
+dependencies enabling it would add.
 
 Toggling an option re-queries the port in the background against a **staging
 PORT_DBDIR** — dependencies added/removed by the option appear/disappear in

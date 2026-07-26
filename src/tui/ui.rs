@@ -31,6 +31,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_help(f);
     } else if app.why.is_some() {
         draw_why(f, app);
+    } else if app.opt_info.is_some() {
+        draw_opt_info(f, app);
     }
 }
 
@@ -224,6 +226,19 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
     }
 }
 
+/// The option's value as recorded in the saved options file, if it mentions it
+/// at all — the `file_state` argument `PortOptions::provenance` expects.
+fn file_state(app: &App, info: &PortInfo, opt: &str) -> Option<bool> {
+    let saved = app.session.state(info)?.saved.as_ref()?;
+    if saved.set.contains(opt) {
+        Some(true)
+    } else if saved.unset.contains(opt) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn option_line(
     app: &App,
     info: &PortInfo,
@@ -287,20 +302,8 @@ fn option_line(
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     ));
 
-    // provenance badge
-    let file_state = state
-        .and_then(|s| s.saved.as_ref())
-        .and_then(|s| {
-            if s.set.contains(opt) {
-                Some(true)
-            } else if s.unset.contains(opt) {
-                Some(false)
-            } else {
-                None
-            }
-        });
     // provenance column (fixed width)
-    let (prov, prov_style) = match opts.provenance(opt, file_state) {
+    let (prov, prov_style) = match opts.provenance(opt, file_state(app, info, opt)) {
         Provenance::Forced => ("FORCED ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
         Provenance::MakeConfPort => ("mc:port", Style::default().fg(Color::Green)),
         Provenance::MakeConfGlobal => ("mc     ", Style::default().fg(Color::Green)),
@@ -521,6 +524,7 @@ fn draw_help(f: &mut Frame) {
         ("w", "flag make.conf contradictions (≠)"),
         ("/", "filter the port list"),
         ("a", "apply: preview every file diff, then write atomically"),
+        ("i", "option details (description, constraints, deps it adds)"),
         ("r", "why is this port here? (dependency chain + dependents)"),
         ("? h F1", "this help"),
         ("Ctrl-L", "force a full screen repaint"),
@@ -600,6 +604,126 @@ fn draw_why(f: &mut Frame, app: &App) {
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" why {}? ", why.key))
+            .border_style(Style::default().fg(Color::LightBlue)),
+    );
+    f.render_widget(p, area);
+}
+
+/// Human-readable source of an option's current value.
+fn provenance_label(p: Provenance) -> &'static str {
+    match p {
+        Provenance::Default => "port default",
+        Provenance::MakeConfGlobal => "make.conf (mc)",
+        Provenance::MakeConfPort => "make.conf (mc:port)",
+        Provenance::File => "options file",
+        Provenance::Forced => "make.conf *_FORCE (locked)",
+    }
+}
+
+/// Everything the framework says about one option, including the dependencies
+/// enabling it pulls in. Looked up fresh on every frame.
+fn draw_opt_info(f: &mut Frame, app: &App) {
+    let Some((key, opt)) = &app.opt_info else { return };
+    let Some(info) = app.session.ports.get(key) else { return };
+    let area = centered_rect(72, 66, f.area());
+    f.render_widget(Clear, area);
+    let dim = Style::default().fg(Color::DarkGray);
+    let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+    let head = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+    let opts = &info.options;
+    let def = opts.defs.get(opt);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(desc) = def.map(|d| d.desc.as_str()).filter(|d| !d.is_empty()) {
+        lines.push(Line::from(desc.to_string()));
+        lines.push(Line::default());
+    }
+
+    let on = app.session.state(info).map(|s| s.staged.contains(opt)).unwrap_or(false);
+    lines.push(Line::from(vec![
+        Span::styled("value: ", dim),
+        Span::styled(
+            if on { "on" } else { "off" },
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(
+                " · default: {} · source: {}",
+                if opts.defaults.contains(opt) { "on" } else { "off" },
+                provenance_label(opts.provenance(opt, file_state(app, info, opt)))
+            ),
+            dim,
+        ),
+    ]));
+
+    if let Some(g) = opts.groups.iter().find(|g| g.members.iter().any(|m| m == opt)) {
+        lines.push(Line::from(vec![
+            Span::styled("group: ", dim),
+            Span::raw(g.name.clone()),
+            Span::styled(format!(" ({})", g.kind.label()), dim),
+        ]));
+    }
+    if let Some(by) = app.session.implied_by(info, opt) {
+        lines.push(Line::from(vec![
+            Span::styled("implied by: ", dim),
+            Span::styled(by, Style::default().fg(Color::Cyan)),
+        ]));
+    }
+
+    if let Some(d) = def {
+        if !d.implies.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("implies: ", dim),
+                Span::raw(d.implies.join(" ")),
+            ]));
+        }
+        if !d.prevents.is_empty() {
+            let mut spans = vec![
+                Span::styled("prevents: ", dim),
+                Span::raw(d.prevents.join(" ")),
+            ];
+            if let Some(msg) = &d.prevents_msg {
+                spans.push(Span::styled(format!(" ({msg})"), dim));
+            }
+            lines.push(Line::from(spans));
+        }
+        if let Some(msg) = &d.broken {
+            lines.push(Line::from(Span::styled(
+                format!("⚠ BROKEN when enabled: {msg}"),
+                red,
+            )));
+        }
+        if let Some(msg) = &d.ignore {
+            lines.push(Line::from(Span::styled(
+                format!("⚠ IGNORE when enabled: {msg}"),
+                red,
+            )));
+        }
+        if !d.deps.is_empty() || !d.uses.is_empty() {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled("adds when enabled", head)));
+            for (class, origins) in &d.deps {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{class} deps: "), dim),
+                    Span::raw(origins.join(" ")),
+                ]));
+            }
+            if !d.uses.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("uses: ", dim),
+                    Span::raw(d.uses.join(" ")),
+                ]));
+            }
+        }
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled("press any key to close", dim)));
+
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {opt} — {key} "))
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);

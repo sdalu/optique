@@ -35,7 +35,10 @@ impl Cache {
     }
 
     pub fn open(cache_dir: &Path, tree_key: &str, conf_hash: &str) -> Self {
-        let generation = format!("{}-{}.jsonl", &short(tree_key), &short(conf_hash));
+        // SCHEMA bumps whenever the wrapper emits new data, so entries
+        // queried by an older binary don't linger with missing fields.
+        const SCHEMA: u32 = 2;
+        let generation = format!("v{SCHEMA}-{}-{}.jsonl", &short(tree_key), &short(conf_hash));
         let path = cache_dir.join(&generation);
         let _ = fs::create_dir_all(cache_dir);
         prune_old_generations(cache_dir, &generation);
