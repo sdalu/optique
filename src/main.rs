@@ -345,6 +345,7 @@ fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey], drive: bool) -> Result<(
         scanned.result.aliases,
         roots,
         &options_dir,
+        cli.minimal,
     );
 
     // Background refreshes query against a staging copy of the options files
@@ -522,6 +523,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         scanned.result.aliases,
         roots,
         &settings.options_dir,
+        cli.minimal,
     );
 
     struct Row {
@@ -602,7 +604,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         } else {
             (Vec::new(), Vec::new())
         };
-        let undecided = session::undecided_options(info, saved);
+        let undecided = session::undecided_options(info, saved, cli.minimal);
         let state = if cli.verbose {
             info.options
                 .complete
@@ -700,7 +702,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
         for row in &rows {
             let (key, pkgname) = (&row.key, &row.pkgname);
             let decision = if row.mc_covered() {
-                " [mc-covered ≈]".to_string()
+                if cli.minimal { " [defaults/mc ≈]" } else { " [mc-covered ≈]" }.to_string()
             } else {
                 format!(" undecided: {}", row.undecided.join(" "))
             };

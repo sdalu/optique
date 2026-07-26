@@ -121,6 +121,7 @@ mod tests {
             aliases: HashMap::new(),
             roots: Vec::new(),
             owners: HashMap::new(),
+            minimal: false,
         }
     }
 

@@ -46,6 +46,9 @@ pub struct Session {
     /// default flavor). Staleness and obsolete options are judged against
     /// the owner, since apply writes the file from its point of view.
     pub owners: HashMap<String, PortKey>,
+    /// --minimal: bare defaults count as decisions, so nothing is
+    /// "undecided" — only deviations and conflicts demand attention.
+    pub minimal: bool,
 }
 
 /// Is this port the default flavor of its origin (or unflavored)?
@@ -62,6 +65,7 @@ impl Session {
         aliases: HashMap<PortKey, PortKey>,
         requested_roots: &[PortKey],
         options_dir: &Path,
+        minimal: bool,
     ) -> Self {
         let mut session = Session {
             ports,
@@ -69,6 +73,7 @@ impl Session {
             aliases,
             roots: Vec::new(),
             owners: HashMap::new(),
+            minimal,
         };
         session.roots = requested_roots
             .iter()
@@ -410,7 +415,7 @@ impl Session {
     /// every option it has.
     pub fn covered_by_makeconf(&self, info: &PortInfo) -> bool {
         let Some(state) = self.state(info) else { return false };
-        undecided_options(info, state.saved.as_ref()).is_empty()
+        undecided_options(info, state.saved.as_ref(), self.minimal).is_empty()
     }
 
     /// Does this option's staged value contradict make.conf policy?
@@ -563,7 +568,17 @@ pub fn is_blocked(info: &PortInfo) -> bool {
 /// Group semantics count as decisions too: when make.conf positively selects
 /// a member of a SINGLE (exactly one) or RADIO (at most one) group, the
 /// other members of that group are implicitly decided as off.
-pub fn undecided_options(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> Vec<String> {
+pub fn undecided_options(
+    info: &PortInfo,
+    saved: Option<&SavedOptionsFile>,
+    minimal: bool,
+) -> Vec<String> {
+    // Minimal philosophy: the default value IS the decision. Every option has
+    // one, so nothing is ever undecided — deviations and conflicts are the
+    // only things left demanding attention.
+    if minimal {
+        return Vec::new();
+    }
     let known: BTreeSet<&str> = match saved {
         Some(saved) => saved
             .complete
@@ -730,7 +745,7 @@ mod tests {
     fn session_for(ports: BTreeMap<PortKey, PortInfo>) -> Session {
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        Session::new(ports, HashMap::new(), &roots, tmp.path())
+        Session::new(ports, HashMap::new(), &roots, tmp.path(), false)
     }
 
     fn set(opts: &[&str]) -> BTreeSet<String> {
@@ -837,6 +852,20 @@ mod tests {
     }
 
     #[test]
+    fn minimal_treats_bare_defaults_as_decided() {
+        // Options with no make.conf stance at all.
+        let (ports, key) = mk_port(&["DOCS", "X11"], &["DOCS"], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports.clone(), HashMap::new(), &roots, tmp.path(), true);
+        assert!(s.covered_by_makeconf(&s.ports[&key]), "minimal: defaults decide");
+        assert!(undecided_options(&s.ports[&key], None, true).is_empty());
+        // Same port without minimal: X11 and DOCS are undecided.
+        let s2 = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        assert!(!s2.covered_by_makeconf(&s2.ports[&key]));
+    }
+
+    #[test]
     fn mc_coverage_of_stale_ports() {
         // Saved file knows A; tree update added DOCS and NLS.
         let (ports, key) = mk_port(&["A", "DOCS", "NLS"], &["A"], vec![], vec![]);
@@ -848,7 +877,7 @@ mod tests {
         )
         .unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
         let info_key = key.clone();
 
         // Not covered: DOCS/NLS undecided by make.conf.
@@ -898,7 +927,7 @@ mod tests {
         )
         .unwrap();
         let roots2: Vec<PortKey> = ports2.keys().cloned().collect();
-        let s2 = Session::new(ports2, HashMap::new(), &roots2, tmp2.path());
+        let s2 = Session::new(ports2, HashMap::new(), &roots2, tmp2.path(), false);
         assert_eq!(s2.status(&s2.ports[&key2]), UiStatus::Stale);
         assert!(s2.covered_by_makeconf(&s2.ports[&key2]));
 
@@ -907,7 +936,7 @@ mod tests {
         let (ports3, key3) = mk_port(&["DOCS", "X11"], &["DOCS"], vec![], vec![]);
         let tmp3 = tempfile::tempdir().unwrap();
         let roots3: Vec<PortKey> = ports3.keys().cloned().collect();
-        let mut s3 = Session::new(ports3, HashMap::new(), &roots3, tmp3.path());
+        let mut s3 = Session::new(ports3, HashMap::new(), &roots3, tmp3.path(), false);
         assert_eq!(s3.status(&s3.ports[&key3]), UiStatus::Unconfigured);
         assert!(!s3.covered_by_makeconf(&s3.ports[&key3]));
         {
@@ -933,7 +962,7 @@ mod tests {
             mk_port(&["GSSAPI_BASE", "GSSAPI_MIT", "GSSAPI_NONE"], &["GSSAPI_BASE"], vec![g], vec![]);
         let tmp4 = tempfile::tempdir().unwrap();
         let roots4: Vec<PortKey> = ports4.keys().cloned().collect();
-        let mut s4 = Session::new(ports4, HashMap::new(), &roots4, tmp4.path());
+        let mut s4 = Session::new(ports4, HashMap::new(), &roots4, tmp4.path(), false);
         assert!(!s4.covered_by_makeconf(&s4.ports[&key4]));
         {
             let o = &mut s4.ports.get_mut(&key4).unwrap().options;
@@ -1013,7 +1042,7 @@ mod tests {
         ports.insert(nox_key.clone(), nox);
         ports.insert(full_key.clone(), full);
         let roots = vec![full_key.clone(), nox_key.clone()];
-        let s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
 
         assert_eq!(s.owners["editors_emacs"], full_key);
         assert_eq!(s.status(&s.ports[&full_key]), UiStatus::Ok);
@@ -1076,7 +1105,7 @@ mod tests {
         let mut ports = BTreeMap::new();
         ports.insert(root_key.clone(), root);
         ports.insert(dep_key.clone(), dep.clone());
-        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], tmp.path(), false);
 
         // User edits the dependency's options.
         s.toggle(&dep_key, "DEPOPT").unwrap();
@@ -1121,7 +1150,7 @@ mod tests {
         let mid = PortKey::parse("cat/mid").unwrap();
         let leaf = PortKey::parse("cat/leaf").unwrap();
         let orphan = PortKey::parse("cat/orphan").unwrap();
-        let s = Session::new(ports, HashMap::new(), &[root.clone(), other.clone()], tmp.path());
+        let s = Session::new(ports, HashMap::new(), &[root.clone(), other.clone()], tmp.path(), false);
 
         let chain = s.why_chain(&leaf).expect("leaf is reachable");
         assert_eq!(chain.len(), 2, "shortest chain goes through cat/other");
@@ -1155,7 +1184,7 @@ mod tests {
             PortKey::parse("cat/root").unwrap(),
             PortKey::parse("cat/other").unwrap(),
         ];
-        let s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
         let deep = PortKey::parse("cat/deep").unwrap();
         assert_eq!(
             s.why_chain(&deep),
@@ -1200,7 +1229,7 @@ mod tests {
         let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Unconfigured);
 
         // Simulate an apply: a file appears on disk recording A=on.

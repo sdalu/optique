@@ -206,6 +206,9 @@ and TUI apply: a port whose final configuration equals what defaults plus
 already produce gets no options file.
 An existing identical file is removed instead of rewritten, so only
 deviations are persisted.
+Bare defaults also count as decided:
+.Cm scan
+and the TUI attention views then only flag deviations and conflicts.
 .It Fl q , Fl -quiet
 Drop the startup banner and the per-port and per-file listings on standard
 output.

@@ -52,7 +52,8 @@ optique -z workstation clean --unused --redundant --dry-run -f pkglist
 # Full hygiene pass for one package list (refresh, then garbage-collect)
 optique -z ws sync -f list && optique -z ws clean --unused --redundant -f list
 
-# -m/--minimal: persist only deviations. A port whose configuration equals
+# -m/--minimal: persist only deviations, and treat bare defaults as decided
+# (scan/TUI m-view only flag deviations and conflicts). A port whose configuration equals
 # what defaults + make.conf already produce gets no options file at all —
 # sync/apply skip writing it and remove an existing identical one
 optique -z ws -m sync -f list
