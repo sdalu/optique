@@ -31,8 +31,17 @@ fn main() -> Result<()> {
             cmd_tui(&cli, &roots)
         }
         Some(Command::Scan(args)) => {
-            let roots = cli::collect_roots(&args.origins, &cli.files)?;
-            cmd_scan(&cli, &roots)
+            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
+            // Exit code is the cron/CI gate: 1 = decisions pending, 0 = clean.
+            // Real errors keep travelling up the anyhow path (nonzero, 1 from
+            // clap's runner) — only the *clean* run may return 0.
+            let attention = cmd_scan(&cli, &roots, args.json)?;
+            if attention > 0 {
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().flush();
+                std::process::exit(1);
+            }
+            Ok(())
         }
         Some(Command::Sync(args)) => {
             let roots = cli::collect_roots(&args.origins, &cli.files)?;
@@ -169,7 +178,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         }
         runner.shutdown();
         removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
-        if cli.verbose {
+        if cli.verbose && !cli.quiet {
             kept.sort();
             for (name, why) in &kept {
                 println!("keep  {name:<38} {why}");
@@ -181,8 +190,10 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         eprintln!("nothing to clean ({total_entries} entries kept)");
         return Ok(());
     }
-    for r in &removals {
-        println!("{:<44} {}", r.options_name, r.reason);
+    if !cli.quiet {
+        for r in &removals {
+            println!("{:<44} {}", r.options_name, r.reason);
+        }
     }
     if cli.dry_run {
         eprintln!(
@@ -302,21 +313,23 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
         port_dbdir: settings.options_dir.clone(),
     };
 
-    eprintln!("optique: ports tree {} · {} jobs", settings.portsdir.display(), jobs);
-    eprintln!(
-        "  options dir: {}{}",
-        settings.options_dir.display(),
-        if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
-    );
-    if settings.make_conf_sources.is_empty() {
-        eprintln!("  make.conf:   (none)");
-    } else {
-        for (i, src) in settings.make_conf_sources.iter().enumerate() {
-            eprintln!(
-                "  {}   {}",
-                if i == 0 { "make.conf:" } else { "          " },
-                src.display()
-            );
+    if !cli.quiet {
+        eprintln!("optique: ports tree {} · {} jobs", settings.portsdir.display(), jobs);
+        eprintln!(
+            "  options dir: {}{}",
+            settings.options_dir.display(),
+            if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
+        );
+        if settings.make_conf_sources.is_empty() {
+            eprintln!("  make.conf:   (none)");
+        } else {
+            for (i, src) in settings.make_conf_sources.iter().enumerate() {
+                eprintln!(
+                    "  {}   {}",
+                    if i == 0 { "make.conf:" } else { "          " },
+                    src.display()
+                );
+            }
         }
     }
 
@@ -345,7 +358,9 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     })
 }
 
-fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
+/// Scan and report. Returns the number of ports needing a *human* decision,
+/// which main turns into exit code 1 (see `Row::needs_attention`).
+fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<usize> {
     use crate::session::UiStatus;
 
     let scanned = run_scan(cli, roots)?;
@@ -365,10 +380,50 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         key: String,
         pkgname: String,
         status: UiStatus,
-        detail: String,
+        /// Options the tree gained since the file was written (stale only).
+        added: Vec<String>,
+        /// Options the tree lost since then (stale only).
+        removed: Vec<String>,
         undecided: Vec<String>,
         state: String,
         warnings: Vec<String>,
+    }
+    impl Row {
+        /// make.conf already dictates every option this port still owes an
+        /// answer for, so no human has to decide anything.
+        fn mc_covered(&self) -> bool {
+            self.undecided.is_empty()
+        }
+        /// Does this row make `scan` exit 1? A conflict always does (saved
+        /// options violate the port's own constraints); missing or outdated
+        /// configuration only does when make.conf leaves something open.
+        fn needs_attention(&self) -> bool {
+            match self.status {
+                UiStatus::Conflict => true,
+                UiStatus::Unconfigured | UiStatus::Stale => !self.mc_covered(),
+                _ => false,
+            }
+        }
+        fn status_str(&self) -> &'static str {
+            match self.status {
+                UiStatus::Conflict => "conflict",
+                UiStatus::Unconfigured => "unconfigured",
+                UiStatus::Stale => "stale",
+                // Edited/McDeviation need staged edits, which a scan never has.
+                _ => "ok",
+            }
+        }
+        /// The " +NEW -GONE" tail printed after STALE.
+        fn stale_detail(&self) -> String {
+            let mut d = String::new();
+            for o in &self.added {
+                d.push_str(&format!(" +{o}"));
+            }
+            for o in &self.removed {
+                d.push_str(&format!(" -{o}"));
+            }
+            d
+        }
     }
     let mut rows: Vec<Row> = Vec::new();
     let mut hidden = 0usize;
@@ -379,23 +434,19 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         }
         let saved = sess.state(info).and_then(|s| s.saved.as_ref());
         let status = sess.status(info);
-        let detail = if status == UiStatus::Stale {
+        let (added, removed) = if status == UiStatus::Stale {
             let owner = sess.owner_info(info);
             let cur: std::collections::BTreeSet<&str> =
                 owner.options.complete.iter().map(String::as_str).collect();
             let was: std::collections::BTreeSet<&str> = saved
                 .map(|s| s.complete.iter().map(String::as_str).collect())
                 .unwrap_or_default();
-            let mut d = String::new();
-            for o in cur.difference(&was) {
-                d.push_str(&format!(" +{o}"));
-            }
-            for o in was.difference(&cur) {
-                d.push_str(&format!(" -{o}"));
-            }
-            d
+            (
+                cur.difference(&was).map(|o| o.to_string()).collect(),
+                was.difference(&cur).map(|o| o.to_string()).collect(),
+            )
         } else {
-            String::new()
+            (Vec::new(), Vec::new())
         };
         let undecided = session::undecided_options(info, saved);
         let state = if cli.verbose {
@@ -414,7 +465,8 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
             key: key.to_string(),
             pkgname: info.pkgname.clone(),
             status,
-            detail,
+            added,
+            removed,
             undecided,
             state,
             warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
@@ -422,51 +474,118 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
     }
     rows.sort_by_key(|r| (r.status == UiStatus::Ok, r.key.clone()));
 
-    let mut unconfigured = 0;
-    let mut stale = 0;
-    for row in &rows {
-        let (key, pkgname) = (&row.key, &row.pkgname);
-        let decision = if row.undecided.is_empty() {
-            " [mc-covered ≈]".to_string()
-        } else {
-            format!(" undecided: {}", row.undecided.join(" "))
-        };
-        match &row.status {
-            UiStatus::Unconfigured => {
-                unconfigured += 1;
-                println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
-            }
-            UiStatus::Stale => {
-                stale += 1;
-                println!("!  {key:<40} {pkgname:<32} STALE{}{decision}", row.detail);
-            }
-            UiStatus::Conflict => {
-                println!("✗  {key:<40} {pkgname:<32} CONFLICT (saved options violate constraints)");
-            }
-            _ => println!("   {key:<40} {pkgname:<32} ok"),
+    let unconfigured = rows.iter().filter(|r| r.status == UiStatus::Unconfigured).count();
+    let stale = rows.iter().filter(|r| r.status == UiStatus::Stale).count();
+    let conflict = rows.iter().filter(|r| r.status == UiStatus::Conflict).count();
+    let ok = rows.iter().filter(|r| r.status_str() == "ok").count();
+    let attention = rows.iter().filter(|r| r.needs_attention()).count();
+
+    if json {
+        // stdout must stay pure JSON: one object, no table, quiet ignored.
+        #[derive(serde::Serialize)]
+        struct JsonPort<'a> {
+            port: &'a str,
+            pkgname: &'a str,
+            status: &'static str,
+            undecided: &'a [String],
+            added: &'a [String],
+            removed: &'a [String],
+            mc_covered: bool,
         }
-        if cli.verbose {
-            if !row.state.is_empty() {
-                println!("     options: {}", row.state);
+        #[derive(serde::Serialize)]
+        struct JsonSummary {
+            total: usize,
+            unconfigured: usize,
+            stale: usize,
+            conflict: usize,
+            ok: usize,
+            optionless: usize,
+            attention: usize,
+        }
+        #[derive(serde::Serialize)]
+        struct JsonReport<'a> {
+            options_dir: String,
+            ports_tree: String,
+            ports: Vec<JsonPort<'a>>,
+            summary: JsonSummary,
+        }
+        let report = JsonReport {
+            options_dir: settings.options_dir.display().to_string(),
+            ports_tree: settings.portsdir.display().to_string(),
+            ports: rows
+                .iter()
+                .map(|r| JsonPort {
+                    port: &r.key,
+                    pkgname: &r.pkgname,
+                    status: r.status_str(),
+                    undecided: &r.undecided,
+                    added: &r.added,
+                    removed: &r.removed,
+                    mc_covered: r.mc_covered(),
+                })
+                .collect(),
+            summary: JsonSummary {
+                total: rows.len(),
+                unconfigured,
+                stale,
+                conflict,
+                ok,
+                optionless: hidden,
+                attention,
+            },
+        };
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if !cli.quiet {
+        for row in &rows {
+            let (key, pkgname) = (&row.key, &row.pkgname);
+            let decision = if row.mc_covered() {
+                " [mc-covered ≈]".to_string()
+            } else {
+                format!(" undecided: {}", row.undecided.join(" "))
+            };
+            match &row.status {
+                UiStatus::Unconfigured => {
+                    println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
+                }
+                UiStatus::Stale => {
+                    println!(
+                        "!  {key:<40} {pkgname:<32} STALE{}{decision}",
+                        row.stale_detail()
+                    );
+                }
+                UiStatus::Conflict => {
+                    println!(
+                        "✗  {key:<40} {pkgname:<32} CONFLICT (saved options violate constraints)"
+                    );
+                }
+                _ => println!("   {key:<40} {pkgname:<32} ok"),
             }
-            for w in &row.warnings {
-                println!("     warning: {w}");
+            if cli.verbose {
+                if !row.state.is_empty() {
+                    println!("     options: {}", row.state);
+                }
+                for w in &row.warnings {
+                    println!("     warning: {w}");
+                }
             }
         }
     }
 
     eprintln!(
-        "{} ports with options ({} unconfigured, {} stale) · {} without options · \
+        "{} ports with options ({} unconfigured, {} stale, {} conflict; \
+         {} awaiting a decision) · {} without options · \
          {} queried, {} cached · {:.1}s",
         rows.len(),
         unconfigured,
         stale,
+        conflict,
+        attention,
         hidden,
         queried,
         from_cache,
         elapsed
     );
-    Ok(())
+    Ok(attention)
 }
 
 fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Result<()> {
@@ -493,19 +612,21 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
         eprintln!("everything up to date, nothing to write");
         return Ok(());
     }
-    for r in &stale_files {
-        println!("{}  removing options file ({})", r.options_name, r.reason);
-    }
-    for w in &writes {
-        println!("{}  {}", w.key, w.describe());
-        if cli.verbose {
-            let state = w
-                .complete
-                .iter()
-                .map(|o| if w.enabled.contains(o) { format!("+{o}") } else { format!("-{o}") })
-                .collect::<Vec<_>>()
-                .join(" ");
-            println!("     final: {state}");
+    if !cli.quiet {
+        for r in &stale_files {
+            println!("{}  removing options file ({})", r.options_name, r.reason);
+        }
+        for w in &writes {
+            println!("{}  {}", w.key, w.describe());
+            if cli.verbose {
+                let state = w
+                    .complete
+                    .iter()
+                    .map(|o| if w.enabled.contains(o) { format!("+{o}") } else { format!("-{o}") })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                println!("     final: {state}");
+            }
         }
     }
     if dry_run {

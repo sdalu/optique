@@ -13,6 +13,19 @@ fn optique(cache: &std::path::Path) -> Command {
     c
 }
 
+/// `scan`'s exit status is a gate, not a verdict on the run: 0 = nothing
+/// pending, 1 = a human decision is pending (the usual outcome against a
+/// fresh options dir). Any other code means the scan itself broke.
+fn scan_exit_code(out: &std::process::Output) -> i32 {
+    let code = out.status.code().expect("scan must exit, not be signalled");
+    assert!(
+        code == 0 || code == 1,
+        "scan errored with exit {code}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    code
+}
+
 #[test]
 #[ignore = "needs /usr/ports on a FreeBSD host"]
 fn scan_smoke_and_cache_warmup() {
@@ -27,7 +40,7 @@ fn scan_smoke_and_cache_warmup() {
             .arg("ports-mgmt/pkg")
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        scan_exit_code(&out);
         (
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -39,6 +52,46 @@ fn scan_smoke_and_cache_warmup() {
     // Second run must be served entirely from the cache.
     let (_, stderr) = run();
     assert!(stderr.contains(" 0 queried"), "warm scan should not invoke make: {stderr}");
+}
+
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn scan_json_and_exit_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+
+    let out = optique(tmp.path())
+        .args(["scan", "--json", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    let code = scan_exit_code(&out);
+
+    // stdout must be nothing but the report object.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"));
+    let ports = report["ports"].as_array().expect("ports must be an array");
+    let pkg = ports
+        .iter()
+        .find(|p| p["port"] == "ports-mgmt/pkg")
+        .unwrap_or_else(|| panic!("ports-mgmt/pkg missing from {stdout}"));
+    assert!(pkg["pkgname"].as_str().unwrap().starts_with("pkg-"), "{pkg}");
+    assert!(pkg["undecided"].is_array() && pkg["added"].is_array() && pkg["removed"].is_array());
+    assert!(report["options_dir"].as_str().unwrap().contains("options"));
+
+    // The gate: attention > 0 <=> exit 1. pkg's DOCS is normally undecided
+    // (no make.conf stance) so this is usually the exit-1 side, but the
+    // assertion holds either way.
+    let attention =
+        report["summary"]["attention"].as_u64().expect("summary.attention must be a number");
+    assert_eq!(
+        attention > 0,
+        code == 1,
+        "exit {code} contradicts summary.attention {attention}"
+    );
 }
 
 #[test]
@@ -130,7 +183,7 @@ fn wrapper_metadata_matches_known_nginx_facts() {
         .arg("www/nginx")
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    scan_exit_code(&out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let nginx_state = stdout
         .lines()

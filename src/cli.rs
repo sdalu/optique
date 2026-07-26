@@ -48,6 +48,12 @@ pub struct Cli {
     #[arg(short = 'v', long = "verbose", global = true)]
     pub verbose: bool,
 
+    /// Quiet: drop the startup banner and the per-port/per-file listings on
+    /// stdout (scan rows, sync writes, clean entries); the summary line and
+    /// all warnings/errors on stderr stay. Ignored by `scan --json`.
+    #[arg(short = 'Q', long = "quiet", global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -56,8 +62,9 @@ pub struct Cli {
 pub enum Command {
     /// Interactive TUI to review and edit options across the closure (default)
     Tui(RootsArgs),
-    /// Scan the dependency closure and print each port's option status
-    Scan(RootsArgs),
+    /// Scan the dependency closure and print each port's option status;
+    /// exits 1 when a human decision is pending, 0 when nothing is
+    Scan(ScanArgs),
     /// Refresh options files non-interactively: keep saved choices, adopt
     /// defaults for new options, drop removed ones (like `poudriere options -C`
     /// but headless and fast)
@@ -79,6 +86,17 @@ pub struct CleanArgs {
     /// defaults + make.conf overlay outcome (removing them changes nothing)
     #[arg(short = 'r', long = "redundant")]
     pub redundant: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ScanArgs {
+    #[command(flatten)]
+    pub roots: RootsArgs,
+
+    /// Print one machine-readable JSON object on stdout instead of the
+    /// table (progress and the summary stay on stderr)
+    #[arg(long = "json")]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, Default)]

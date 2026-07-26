@@ -11,8 +11,10 @@ fn help_mentions_every_command_and_global_flag() {
     let out = optique().arg("--help").output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    for needle in ["tui", "scan", "sync", "clean", "--dry-run", "--verbose", "--file", "--no-cache"]
-    {
+    for needle in [
+        "tui", "scan", "sync", "clean", "--dry-run", "--verbose", "--file", "--no-cache",
+        "--quiet",
+    ] {
         assert!(text.contains(needle), "--help must mention {needle}\n{text}");
     }
 }
@@ -23,6 +25,24 @@ fn subcommand_help_shows_specific_flags() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("--redundant"));
     assert!(text.contains("--dry-run"));
+}
+
+#[test]
+fn scan_help_advertises_json() {
+    let out = optique().args(["scan", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("--json"), "scan --help must mention --json\n{text}");
+}
+
+#[test]
+fn quiet_is_a_global_flag() {
+    // -Q must be accepted before the subcommand and must not swallow errors:
+    // the malformed origin is still reported on stderr.
+    let out = optique().args(["-Q", "scan", "not-an-origin"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not-an-origin"), "{err}");
 }
 
 #[test]
