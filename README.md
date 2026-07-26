@@ -193,7 +193,7 @@ The `blacklist` chain is read with the same jail/tree/set expansion
 `<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-blacklist`); like
 poudriere, every existing file contributes entries — one port origin per
 line, `#` comments, `*` globs allowed (`www/nginx*`). Blacklisted ports are
-marked `⛔` in `scan` and in the TUI and never demand attention: poudriere
+marked `⊘` in `scan` and in the TUI and never demand attention: poudriere
 won't build them here, so their options can't hold a build up, and they
 never trip `scan`'s exit-code gate whatever their status.
 

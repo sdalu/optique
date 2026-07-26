@@ -468,7 +468,7 @@ fn marker_color(marker: &str) -> Option<&'static str> {
         "?" => Some(ansi::YELLOW),      // unconfigured
         "!" => Some(ansi::LIGHT_RED),   // stale
         "✗" => Some(ansi::RED),         // conflict
-        "⛔" => Some(ansi::GRAY),       // blacklisted
+        "⊘" => Some(ansi::GRAY),       // blacklisted
         _ => None,
     }
 }
@@ -689,10 +689,10 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey], json: bool) -> Result<u
                 }
                 _ => ("", "ok".to_string()),
             };
-            // Blacklisted ports keep their status but wear the ⛔ marker:
+            // Blacklisted ports keep their status but wear the ⊘ marker:
             // whatever it says, nothing here is waiting on a human.
             let (marker, tail) = if row.blacklisted {
-                ("⛔", " [blacklisted]")
+                ("⊘", " [blacklisted]")
             } else {
                 (marker, "")
             };

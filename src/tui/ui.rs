@@ -59,7 +59,7 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             let status = app.effective_status(info);
             let blacklisted = app.is_blacklisted(info);
             // A port silenced by the mc_relax view keeps a hint marker — but
-            // a blacklisted one is silenced for its own reason (the ⛔ below).
+            // a blacklisted one is silenced for its own reason (the ⊘ below).
             let (marker, color) = if status == UiStatus::Ok && raw != UiStatus::Ok && !blacklisted {
                 ("≈", Color::DarkGray)
             } else {
@@ -83,7 +83,7 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled(key.to_string(), name_style),
             ];
             if blacklisted {
-                spans.push(Span::styled(" ⛔", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" ⊘", Style::default().fg(Color::DarkGray)));
             }
             if blocked {
                 spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
@@ -602,7 +602,7 @@ fn draw_help(f: &mut Frame, tab: usize) {
             mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
             mark("✓", Color::DarkGray, "ok"),
             mark("⚠", Color::Red, "port BROKEN/IGNORE with the current options"),
-            mark("⛔", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
+            mark("⊘", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
             Line::default(),
             legend(
                 "red bold name",
