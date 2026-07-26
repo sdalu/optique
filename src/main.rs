@@ -37,11 +37,11 @@ fn main() -> Result<()> {
     }
     match &cli.command {
         Some(Command::Tui(args)) => {
-            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
+            let roots = roots_or_installed(&cli, &args.roots.origins)?;
             cmd_tui(&cli, &roots, args.drive)
         }
         Some(Command::Scan(args)) => {
-            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
+            let roots = roots_or_installed(&cli, &args.roots.origins)?;
             // Exit code is the cron/CI gate: 1 = decisions pending, 0 = clean.
             // Real errors keep travelling up the anyhow path (nonzero, 1 from
             // clap's runner) — only the *clean* run may return 0.
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Sync(args)) => {
-            let roots = cli::collect_roots(&args.origins, &cli.files)?;
+            let roots = roots_or_installed(&cli, &args.origins)?;
             cmd_sync(&cli, &roots, cli.dry_run)
         }
         Some(Command::Clean(args)) => cmd_clean(&cli, args),
@@ -68,12 +68,12 @@ fn main() -> Result<()> {
             cmd_tui(&cli, &roots, false)
         }
         None => {
-            if cli.files.is_empty() {
+            if cli.files.is_empty() && cli.synth.is_none() {
                 anyhow::bail!(
                     "no ports given; try `optique -z <set> category/port…` or `optique -f pkglist`"
                 );
             }
-            let roots = cli::collect_roots(&[], &cli.files)?;
+            let roots = roots_or_installed(&cli, &[])?;
             cmd_tui(&cli, &roots, false)
         }
     }
@@ -102,7 +102,8 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         eprintln!("note: --minimal does not affect clean; its counterpart here is --redundant");
     }
     let has_list = !args.origins.is_empty() || !cli.files.is_empty();
-    if args.unused && !has_list {
+    // In synth mode the installed packages are the implicit list.
+    if args.unused && !has_list && cli.synth.is_none() {
         anyhow::bail!(
             "clean --unused needs a package list to compare against: \
              give port origins or -f pkglist"
@@ -140,7 +141,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     // --unused: only the closure of the given list justifies keeping an entry,
     // so the closure has to be resolved first — settings, cache, MOVED and the
     // job count are then reused for the cleaning pass itself.
-    let roots = cli::collect_roots(&args.origins, &cli.files)?;
+    let roots = roots_or_installed(cli, &args.origins)?;
     let scanned = run_scan(cli, &roots)?;
     if !scanned.result.errors.is_empty() {
         // A port that failed to query is absent from the closure and would be
@@ -308,6 +309,63 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     }
     eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
     Ok(())
+}
+
+/// Origins of everything installed, from pkg(8) — synth's natural root set
+/// when no list is given (synth builds what is installed). Flavors come from
+/// the pkg "flavor" annotation.
+fn installed_roots() -> Result<Vec<model::origin::PortKey>> {
+    let origins = std::process::Command::new("pkg")
+        .args(["query", "-a", "%o"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
+    if !origins.status.success() {
+        anyhow::bail!("pkg query failed: {}", String::from_utf8_lossy(&origins.stderr).trim());
+    }
+    // One line per annotation; only the "flavor" ones matter.
+    let annots = std::process::Command::new("pkg")
+        .args(["query", "-a", "%o\t%At\t%Av"])
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
+    let mut flavor: std::collections::HashMap<String, String> = Default::default();
+    for line in String::from_utf8_lossy(&annots.stdout).lines() {
+        let mut f = line.split('\t');
+        if let (Some(origin), Some("flavor"), Some(value)) = (f.next(), f.next(), f.next()) {
+            flavor.insert(origin.to_string(), value.to_string());
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut roots = Vec::new();
+    for line in String::from_utf8_lossy(&origins.stdout).lines() {
+        let origin = line.trim();
+        if origin.is_empty() || !seen.insert(origin.to_string()) {
+            continue;
+        }
+        let spec = match flavor.get(origin) {
+            Some(fl) => format!("{origin}@{fl}"),
+            None => origin.to_string(),
+        };
+        // Packages not built from ports may carry unparsable origins: skip.
+        if let Some(key) = model::origin::PortKey::parse(&spec) {
+            roots.push(key);
+        }
+    }
+    if roots.is_empty() {
+        anyhow::bail!("no installed packages with port origins found (pkg query -a %o)");
+    }
+    roots.sort();
+    Ok(roots)
+}
+
+/// Roots for a subcommand: the given list, or — in synth mode only — the
+/// installed packages when nothing was given.
+fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<Vec<model::origin::PortKey>> {
+    if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
+        let roots = installed_roots()?;
+        eprintln!("note: no ports given; using {} installed package(s) as the list", roots.len());
+        return Ok(roots);
+    }
+    cli::collect_roots(origins, &cli.files)
 }
 
 /// Split an external-subcommand argument vector into origins and -f/--file

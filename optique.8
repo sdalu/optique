@@ -817,6 +817,19 @@ still overrides the options directory, while
 names a poudriere tree and is therefore ignored under
 .Fl s ,
 which the startup banner notes.
+.Pp
+When no ports are given at all, synth mode uses the installed packages as
+the list, mirroring how synth builds what is installed: the origins come
+from
+.Ql pkg query -a %o
+with flavors from the pkg
+.Ql flavor
+annotation.
+This applies to the TUI,
+.Cm scan ,
+.Cm sync
+and
+.Cm clean Fl -unused .
 .Sh FILES
 .Bl -tag -width "/usr/local/etc/poudriere.d/<jail>-<tree>-<set>-make.conf" -compact
 .It Pa ~/.cache/optique/

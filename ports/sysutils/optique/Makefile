@@ -1,4 +1,5 @@
 PORTNAME=	optique
+DISTVERSIONPREFIX=	v
 DISTVERSION=	0.1.0
 CATEGORIES=	sysutils ports-mgmt
 
@@ -12,8 +13,12 @@ LICENSE=	BSD2CLAUSE
 USES=		cargo
 USE_GITHUB=	yes
 GH_ACCOUNT=	sdalu
-# TODO: the v${DISTVERSION} tag must exist upstream once published
-GH_TAGNAME=	v${DISTVERSION}
+# TODO: the v${DISTVERSION} tag must exist upstream once published.
+# Until then, generate the distfile locally from the repo:
+#   git -C /root/optique archive --prefix=optique-${DISTVERSION}/ \
+#       --format=tar.gz v${DISTVERSION} \
+#       > ${DISTDIR}/${DIST_SUBDIR}/<name from `make -V DISTNAME`>.tar.gz
+# and refresh checksums with `make makesum` after publishing for real.
 
 CARGO_CRATES=	allocator-api2-0.2.21 \
 		anstream-1.0.0 \

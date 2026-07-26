@@ -253,6 +253,11 @@ blacklist. `-o dir` still overrides the options dir; `-p` is a poudriere tree
 name and is ignored (with a note) under `-s`, and `-s` cannot be combined with
 `-z`/`-j`.
 
+When no ports are given at all (no origins, no `-f`), synth mode uses the
+**installed packages** as the list — synth builds what is installed, so
+`optique -s`, `optique -s scan` or `optique -s clean --unused` operate on the
+`pkg query` origin set (flavors taken from the pkg `flavor` annotation).
+
 ## How it works
 
 One `make` invocation per port (~0.2–0.6 s, up to 16 in parallel) pipes a
