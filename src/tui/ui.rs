@@ -569,6 +569,15 @@ fn draw_help(f: &mut Frame, tab: usize) {
             Span::raw(txt.to_string()),
         ])
     };
+    // Name-color legend: the label rendered in its actual style, aligned on '='.
+    let legend = |label: &str, style: Style, txt: &str| {
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("{label:>14}"), style),
+            Span::styled(" = ", Style::default().fg(Color::DarkGray)),
+            Span::raw(txt.to_string()),
+        ])
+    };
 
     // Tab bar with the number hotkeys.
     let mut bar: Vec<Span> = vec![Span::raw(" ")];
@@ -595,14 +604,26 @@ fn draw_help(f: &mut Frame, tab: usize) {
             mark("⚠", Color::Red, "port BROKEN/IGNORE with the current options"),
             mark("⛔", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
             Line::default(),
-            mark("", Color::Red, "red bold name = will not build (BROKEN/IGNORE)"),
-            mark("", Color::Red, "red name = conflicting staged options"),
-            mark("", Color::DarkGray, "dim name = blacklisted"),
+            legend(
+                "red bold name",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                "will not build (BROKEN/IGNORE)",
+            ),
+            legend("red name", Style::default().fg(Color::Red), "conflicting staged options"),
+            legend("dim name", Style::default().fg(Color::DarkGray), "blacklisted"),
         ]),
         1 => lines.extend([
             mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
-            mark("", Color::Yellow, "yellow name = deviates from the port default"),
-            mark("", Color::Magenta, "magenta name = contradicts make.conf policy (≠mc)"),
+            legend(
+                "yellow name",
+                Style::default().fg(Color::Yellow),
+                "deviates from the port default",
+            ),
+            legend(
+                "magenta name",
+                Style::default().fg(Color::Magenta),
+                "contradicts make.conf policy (≠mc)",
+            ),
             mark("", Color::DarkGray, "def:on|off — the port's default value"),
             mark("NEW", Color::Yellow, "added since the options file was written"),
             mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),
