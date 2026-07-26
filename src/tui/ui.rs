@@ -29,6 +29,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_apply_modal(f, app);
     } else if app.show_help {
         draw_help(f);
+    } else if app.why.is_some() {
+        draw_why(f, app);
     }
 }
 
@@ -519,6 +521,7 @@ fn draw_help(f: &mut Frame) {
         ("w", "flag make.conf contradictions (≠)"),
         ("/", "filter the port list"),
         ("a", "apply: preview every file diff, then write atomically"),
+        ("r", "why is this port here? (dependency chain + dependents)"),
         ("? h F1", "this help"),
         ("Ctrl-L", "force a full screen repaint"),
         ("q Ctrl-C", "quit (confirms when staged changes exist)"),
@@ -530,6 +533,73 @@ fn draw_help(f: &mut Frame) {
         Block::default()
             .borders(Borders::ALL)
             .title(" help — any key to close ")
+            .border_style(Style::default().fg(Color::LightBlue)),
+    );
+    f.render_widget(p, area);
+}
+
+/// Cap on the dependents listed before collapsing the rest into "+ N more".
+const WHY_MAX_DEPENDENTS: usize = 15;
+
+fn draw_why(f: &mut Frame, app: &App) {
+    let Some(why) = &app.why else { return };
+    let area = centered_rect(70, 60, f.area());
+    f.render_widget(Clear, area);
+    let dim = Style::default().fg(Color::DarkGray);
+
+    let mut lines: Vec<Line> = Vec::new();
+    match &why.chain {
+        Some(chain) => {
+            // Pad the first line so the "(root)" note clears the longest key.
+            let width = chain.iter().map(|k| k.to_string().len()).max().unwrap_or(0);
+            for (depth, key) in chain.iter().enumerate() {
+                let last = depth + 1 == chain.len();
+                let style = if last {
+                    Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                let mut spans = Vec::new();
+                if depth > 0 {
+                    spans.push(Span::raw(format!("{}└─ ", " ".repeat(depth))));
+                }
+                spans.push(Span::styled(format!("{key:<width$}"), style));
+                if depth == 0 {
+                    spans.push(Span::styled("  (root)", dim));
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+        None => lines.push(Line::from(Span::styled(
+            "not reachable from the request roots (kept by fallback)",
+            Style::default().fg(Color::Yellow),
+        ))),
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!("direct dependents ({}):", why.dependents.len()),
+        Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+    )));
+    for dep in why.dependents.iter().take(WHY_MAX_DEPENDENTS) {
+        lines.push(Line::from(format!("  {dep}")));
+    }
+    match why.dependents.len().checked_sub(WHY_MAX_DEPENDENTS) {
+        Some(more) if more > 0 => {
+            lines.push(Line::from(Span::styled(format!("  + {more} more"), dim)))
+        }
+        _ => {}
+    }
+    if why.dependents.is_empty() {
+        lines.push(Line::from(Span::styled("  none in this closure", dim)));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled("press any key to close", dim)));
+
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" why {}? ", why.key))
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);

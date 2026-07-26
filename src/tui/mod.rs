@@ -48,6 +48,14 @@ pub struct ApplyModal {
     pub done: Option<String>,
 }
 
+/// "Why is this port here?" overlay content, computed when it is opened.
+pub struct WhyInfo {
+    pub key: PortKey,
+    /// Shortest root → port dependency chain, None when unreachable.
+    pub chain: Option<Vec<PortKey>>,
+    pub dependents: Vec<PortKey>,
+}
+
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
@@ -79,6 +87,8 @@ pub struct App {
     pub refresher: Refresher,
     /// Help overlay visible?
     pub show_help: bool,
+    /// Dependency-chain ("why") overlay, when open.
+    pub why: Option<WhyInfo>,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
     /// Outstanding background refresh batches.
@@ -123,6 +133,7 @@ pub fn run(
         staging_db,
         refresher,
         show_help: false,
+        why: None,
         pending: HashMap::new(),
         refreshing: 0,
         refresh_progress: None,
@@ -170,6 +181,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         }
         if app.show_help {
             app.show_help = false;
+            continue;
+        }
+        if app.why.is_some() {
+            app.why = None;
             continue;
         }
         // Ctrl-C always quits (with confirm if dirty) — checked before the
@@ -292,6 +307,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
         KeyCode::Char('h') => app.show_help = true,
+        KeyCode::Char('r') => app.open_why(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
             if !app.editor_rows.is_empty() {
                 app.focus = Focus::Editor;
@@ -310,6 +326,7 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('j') | KeyCode::Down => app.editor_move(1),
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
+        KeyCode::Char('r') => app.open_why(),
         KeyCode::Char('d') => {
             if let Some(key) = app.selected_key() {
                 app.session.reset_to_defaults(&key);
@@ -605,6 +622,18 @@ impl App {
             }
             Err(e) => self.flash(&e, true),
         }
+    }
+
+    /// Compute the dependency chain and dependents of the selected port and
+    /// open the "why" overlay on them (a snapshot: a background refresh may
+    /// change the closure while it is displayed).
+    fn open_why(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        self.why = Some(WhyInfo {
+            chain: self.session.why_chain(&key),
+            dependents: self.session.dependents(&key),
+            key,
+        });
     }
 
     /// Schedule the port for a debounced background re-query.

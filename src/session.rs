@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 
 use crate::apply;
@@ -409,6 +409,60 @@ impl Session {
         implier_of(info, &state.staged, opt)
     }
 
+    /// Shortest dependency chain from one of the roots to `target`
+    /// (inclusive on both ends): a single-element chain when the target is
+    /// itself a root, None when it is unknown or unreachable from the roots
+    /// (a port kept only by a scan fallback). Breadth-first from all roots at
+    /// once, so the first chain found is a shortest one.
+    pub fn why_chain(&self, target: &PortKey) -> Option<Vec<PortKey>> {
+        let target = self.resolve(target)?;
+        let mut pred: HashMap<PortKey, Option<PortKey>> = HashMap::new();
+        let mut queue: VecDeque<PortKey> = VecDeque::new();
+        for root in &self.roots {
+            let Some(root) = self.resolve(root) else { continue };
+            if pred.contains_key(&root) {
+                continue;
+            }
+            if root == target {
+                return Some(vec![root]);
+            }
+            pred.insert(root.clone(), None);
+            queue.push_back(root);
+        }
+        while let Some(key) = queue.pop_front() {
+            let Some(info) = self.ports.get(&key) else { continue };
+            for dep in &info.deps {
+                let Some(dep) = self.resolve(&dep.target) else { continue };
+                // Never rewrite a settled predecessor: a dependency cycle
+                // would otherwise make the chain walk loop forever.
+                if pred.contains_key(&dep) {
+                    continue;
+                }
+                pred.insert(dep.clone(), Some(key.clone()));
+                if dep == target {
+                    return Some(walk_back(&pred, dep));
+                }
+                queue.push_back(dep);
+            }
+        }
+        None
+    }
+
+    /// Direct dependents of `target` within the closure: ports with a dep edge
+    /// resolving to it, in key order.
+    pub fn dependents(&self, target: &PortKey) -> Vec<PortKey> {
+        let Some(target) = self.resolve(target) else { return Vec::new() };
+        self.ports
+            .iter()
+            .filter(|(_, info)| {
+                info.deps
+                    .iter()
+                    .any(|d| self.resolve(&d.target).as_ref() == Some(&target))
+            })
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// Any staged edit or pending baseline write (unconfigured/stale)?
     pub fn dirty(&self) -> bool {
         self.states.values().any(|s| s.staged != s.baseline)
@@ -507,6 +561,17 @@ pub(crate) fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTree
             return set;
         }
     }
+}
+
+/// Rebuild a BFS path by following predecessors back to the root, then
+/// reversing it so the chain reads root-first.
+fn walk_back(pred: &HashMap<PortKey, Option<PortKey>>, end: PortKey) -> Vec<PortKey> {
+    let mut chain = vec![end];
+    while let Some(Some(prev)) = pred.get(chain.last().expect("chain is never empty")) {
+        chain.push(prev.clone());
+    }
+    chain.reverse();
+    chain
 }
 
 /// Find an enabled option (other than `opt`) whose IMPLIES closure contains `opt`.
@@ -875,6 +940,72 @@ mod tests {
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
         assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+    }
+
+    #[test]
+    fn why_chain_and_dependents() {
+        let tmp = tempfile::tempdir().unwrap();
+        // root -> mid -> leaf and other -> leaf; orphan hangs off nothing.
+        let infos = [
+            linked_info("cat/root", &["cat/mid"], &["ROOTOPT"]),
+            linked_info("cat/mid", &["cat/leaf"], &["MIDOPT"]),
+            linked_info("cat/other", &["cat/leaf"], &["OTHEROPT"]),
+            linked_info("cat/leaf", &[], &["LEAFOPT"]),
+            linked_info("cat/orphan", &[], &["ORPHANOPT"]),
+        ];
+        let mut ports = BTreeMap::new();
+        for info in infos {
+            ports.insert(info.key.clone(), info);
+        }
+        let root = PortKey::parse("cat/root").unwrap();
+        let other = PortKey::parse("cat/other").unwrap();
+        let mid = PortKey::parse("cat/mid").unwrap();
+        let leaf = PortKey::parse("cat/leaf").unwrap();
+        let orphan = PortKey::parse("cat/orphan").unwrap();
+        let s = Session::new(ports, HashMap::new(), &[root.clone(), other.clone()], tmp.path());
+
+        let chain = s.why_chain(&leaf).expect("leaf is reachable");
+        assert_eq!(chain.len(), 2, "shortest chain goes through cat/other");
+        assert!(s.roots.contains(&chain[0]), "chain starts at a root");
+        assert_eq!(chain.last(), Some(&leaf), "chain ends at the target");
+        assert_eq!(chain, vec![other.clone(), leaf.clone()]);
+
+        assert_eq!(s.why_chain(&root), Some(vec![root]));
+        assert_eq!(s.why_chain(&orphan), None, "not reachable from the roots");
+        assert_eq!(s.dependents(&leaf), vec![mid, other]);
+        assert!(s.dependents(&orphan).is_empty());
+    }
+
+    /// A cycle in the dep graph must neither hang the chain walk nor lengthen
+    /// the chain: the predecessor of an already-visited port stays put.
+    #[test]
+    fn why_chain_survives_dependency_cycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let infos = [
+            linked_info("cat/root", &["cat/mid"], &["ROOTOPT"]),
+            linked_info("cat/mid", &["cat/leaf"], &["MIDOPT"]),
+            linked_info("cat/leaf", &["cat/mid", "cat/deep"], &["LEAFOPT"]),
+            linked_info("cat/other", &["cat/leaf"], &["OTHEROPT"]),
+            linked_info("cat/deep", &[], &["DEEPOPT"]),
+        ];
+        let mut ports = BTreeMap::new();
+        for info in infos {
+            ports.insert(info.key.clone(), info);
+        }
+        let roots = [
+            PortKey::parse("cat/root").unwrap(),
+            PortKey::parse("cat/other").unwrap(),
+        ];
+        let s = Session::new(ports, HashMap::new(), &roots, tmp.path());
+        let deep = PortKey::parse("cat/deep").unwrap();
+        assert_eq!(
+            s.why_chain(&deep),
+            Some(vec![
+                PortKey::parse("cat/other").unwrap(),
+                PortKey::parse("cat/leaf").unwrap(),
+                deep,
+            ])
+        );
     }
 
     #[test]
