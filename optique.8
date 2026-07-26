@@ -15,6 +15,7 @@
 .Op Fl z Ar set
 .Op Fl j Ar jail
 .Op Fl p Ar tree
+.Op Fl s Op Ar profile
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
 .Op Fl -no-cache
@@ -117,6 +118,25 @@ The tree's location is read from
 .Pa /usr/local/etc/poudriere.d/ports/ Ns Ar tree Ns Pa /mnt ,
 falling back to
 .Pa /usr/ports .
+.It Fl s Oo Ar profile Oc , Fl -synth Oo Ar profile Oc
+Configure for
+.Xr synth 1
+instead of
+.Xr poudriere 8 ,
+using the named profile, or
+.Ql LiveSystem
+when the option is given without one.
+See
+.Sx SYNTH .
+Mutually exclusive with
+.Fl z
+and
+.Fl j .
+Because the profile name is optional, a name that could be read as something
+else
+.Pq a subcommand, an option, or anything containing a slash
+must be attached, as
+.Ql --synth=name .
 .It Fl o Ar dir , Fl -options-dir Ar dir
 Use
 .Ar dir
@@ -750,6 +770,40 @@ Blacklisted ports are marked in
 and in the interface, never demand attention and never trip
 .Cm scan Ns 's
 exit status gate, whatever their status.
+.Ss SYNTH
+.Fl s Oo Ar profile Oc
+reads the
+.Xr synth 1
+layout instead, so the same commands serve a synth host:
+.Dl optique -s scan -f list
+The profile defaults to
+.Ql LiveSystem .
+The ports tree is taken from
+.Va Directory_portsdir
+and the options directory from
+.Va Directory_options
+in the
+.Bq Ar profile
+section of
+.Pa /usr/local/etc/synth/synth.ini ,
+falling back to that file's
+.Bq Global Configuration
+section and then to
+.Pa /usr/ports
+and
+.Pa /var/db/ports .
+.Pa make.conf
+is the single file
+.Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,
+the one synth appends to each builder's
+.Pa make.conf :
+there is no layering, and synth has no blacklist.
+.Fl o
+still overrides the options directory, while
+.Fl p
+names a poudriere tree and is therefore ignored under
+.Fl s ,
+which the startup banner notes.
 .Sh FILES
 .Bl -tag -width "/usr/local/etc/poudriere.d/<jail>-<tree>-<set>-make.conf" -compact
 .It Pa ~/.cache/optique/
@@ -794,6 +848,19 @@ The merged
 layers.
 .It Pa /usr/local/etc/poudriere.d/*blacklist
 The merged blacklist chain.
+.It Pa /usr/local/etc/synth/synth.ini
+.Xr synth 1
+configuration, read under
+.Fl s
+for
+.Va Directory_portsdir
+and
+.Va Directory_options .
+.It Pa /usr/local/etc/synth/<profile>-make.conf
+The profile's
+.Pa make.conf
+under
+.Fl s .
 .It Pa /var/db/ports/
 Fallback options directory when no poudriere configuration is present.
 .El
@@ -874,6 +941,7 @@ optique -z ws sync -f list && \e
 .Ed
 .Sh SEE ALSO
 .Xr make 1 ,
+.Xr synth 1 ,
 .Xr ports 7 ,
 .Xr poudriere 8
 .Sh HISTORY

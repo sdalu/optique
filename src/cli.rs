@@ -1,9 +1,48 @@
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::model::origin::PortKey;
+
+/// synth(1) profile assumed when `-s` is given without a name.
+pub const SYNTH_DEFAULT_PROFILE: &str = "LiveSystem";
+
+/// Subcommand names, which `-s` must never mistake for a profile.
+const SUBCOMMANDS: [&str; 5] = ["tui", "scan", "sync", "clean", "help"];
+
+/// `-s` takes an *optional* profile name, so `optique -s scan -f list` is
+/// ambiguous: clap would greedily read `scan` as the profile. Rewrite a bare
+/// `-s`/`--synth` into the attached `--synth=<default>` form whenever the
+/// following word cannot be a profile name — it is missing, another option, a
+/// subcommand name, or contains `/` (a port origin or a path). A profile that
+/// really looks like one of those can still be selected as `--synth=name`.
+/// Words after a literal `--` are left untouched.
+pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsString> {
+    let mut out: Vec<OsString> = Vec::new();
+    let mut args = args.into_iter().peekable();
+    let mut rewriting = true;
+    while let Some(arg) = args.next() {
+        if rewriting && arg == "--" {
+            rewriting = false;
+        } else if rewriting && (arg == "-s" || arg == "--synth") {
+            let next_is_profile = match args.peek() {
+                None => false,
+                // A non-UTF-8 word is neither a flag nor a subcommand.
+                Some(next) => next.to_str().is_none_or(|s| {
+                    !s.starts_with('-') && !SUBCOMMANDS.contains(&s) && !s.contains('/')
+                }),
+            };
+            if !next_is_profile {
+                out.push(OsString::from(format!("--synth={SYNTH_DEFAULT_PROFILE}")));
+                continue;
+            }
+        }
+        out.push(arg);
+    }
+    out
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "optique", version, about = "Fast FreeBSD ports options/dependency configurator", max_term_width = 80)]
@@ -19,6 +58,20 @@ pub struct Cli {
     /// Poudriere ports tree name [default: default]
     #[arg(short = 'p', long = "ports-tree", global = true)]
     pub tree: Option<String>,
+
+    /// Use the synth(1) layout instead of poudriere's: options dir and ports
+    /// tree from /usr/local/etc/synth/synth.ini, make.conf from
+    /// <PROFILE>-make.conf [default profile: LiveSystem]
+    #[arg(
+        short = 's',
+        long = "synth",
+        global = true,
+        value_name = "PROFILE",
+        num_args = 0..=1,
+        default_missing_value = SYNTH_DEFAULT_PROFILE,
+        conflicts_with_all = ["set", "jail"]
+    )]
+    pub synth: Option<String>,
 
     /// Explicit options dir (overrides poudriere resolution; e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
@@ -240,6 +293,32 @@ mod tests {
     #[test]
     fn empty_is_an_error() {
         assert!(collect_roots(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn synth_only_swallows_real_profile_names() {
+        let fix = |args: &[&str]| -> Vec<String> {
+            disambiguate_synth(args.iter().map(OsString::from))
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let dflt = format!("--synth={SYNTH_DEFAULT_PROFILE}");
+        // A subcommand, an option or nothing at all: -s stands alone.
+        assert_eq!(fix(&["optique", "-s", "scan", "-f", "l"]), ["optique", &dflt, "scan", "-f", "l"]);
+        assert_eq!(fix(&["optique", "--synth", "clean"]), ["optique", &dflt, "clean"]);
+        assert_eq!(fix(&["optique", "scan", "-s", "-o", "/d"]), ["optique", "scan", &dflt, "-o", "/d"]);
+        assert_eq!(fix(&["optique", "scan", "x/y", "-s"]), ["optique", "scan", "x/y", &dflt]);
+        // A port origin (or any path) is never mistaken for a profile.
+        assert_eq!(fix(&["optique", "scan", "-s", "www/nginx"]), ["optique", "scan", &dflt, "www/nginx"]);
+        // A plain word is one, and the attached forms are left alone.
+        assert_eq!(fix(&["optique", "-s", "Release", "scan"]), ["optique", "-s", "Release", "scan"]);
+        assert_eq!(fix(&["optique", "--synth=scan", "scan"]), ["optique", "--synth=scan", "scan"]);
+        assert_eq!(fix(&["optique", "-sRelease", "scan"]), ["optique", "-sRelease", "scan"]);
+        // Nothing is rewritten past a literal --.
+        assert_eq!(fix(&["optique", "--", "-s", "scan"]), ["optique", "--", "-s", "scan"]);
+        // Untouched when -s is absent.
+        assert_eq!(fix(&["optique", "-z", "ws", "scan"]), ["optique", "-z", "ws", "scan"]);
     }
 
     #[test]

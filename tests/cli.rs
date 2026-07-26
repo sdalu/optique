@@ -68,6 +68,40 @@ fn scan_help_advertises_json() {
     assert!(text.contains("--color"), "scan --help must mention --color\n{text}");
 }
 
+/// -s selects the synth(1) layout, -z/-j the poudriere one: asking for both is
+/// a usage error, caught by clap before any tree is touched.
+#[test]
+fn synth_conflicts_with_poudriere_flags() {
+    for args in [
+        vec!["-s", "-z", "ws", "scan", "foo/bar"],
+        vec!["--synth", "LiveSystem", "-j", "141amd64", "scan", "foo/bar"],
+    ] {
+        let out = optique().args(&args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} must be rejected");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("--synth"), "{args:?}: {err}");
+        assert!(err.contains("cannot be used with"), "{args:?}: {err}");
+    }
+}
+
+/// `-s` alone must not swallow the subcommand as its profile name: this has to
+/// reach `scan` and fail on the origin, not open the TUI.
+#[test]
+fn synth_without_a_profile_keeps_the_subcommand() {
+    let out = optique().args(["-s", "scan", "not-an-origin"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not-an-origin"), "{err}");
+}
+
+#[test]
+fn synth_is_a_global_flag() {
+    let out = optique().args(["scan", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("--synth"), "scan --help must mention --synth\n{text}");
+}
+
 #[test]
 fn color_is_rejected_unless_it_names_a_mode() {
     let out = optique().args(["--color", "sometimes", "scan", "www/nginx"]).output().unwrap();
@@ -157,7 +191,7 @@ fn man_page_documents_every_subcommand_and_flag() {
     for needle in [
         "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
         "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
-        "POUDRIERE INTEGRATION",
+        "POUDRIERE INTEGRATION", "-synth", "SYNTH",
     ] {
         assert!(text.contains(needle), "optique.8 must document {needle}");
     }

@@ -55,7 +55,8 @@ optique -z ws sync -f list && optique -z ws clean --unused --redundant -f list
 
 Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`
 (poudriere ports tree, default `default`), `-o dir` (explicit options dir,
-bypasses poudriere resolution; default `/var/db/ports`), `-f pkglist`
+bypasses poudriere resolution; default `/var/db/ports`), `-s [profile]`
+(use synth(1)'s layout instead of poudriere's, see "Synth"), `-f pkglist`
 (repeatable), `-J jobs`, `--no-cache`, `-v` (verbose: scan adds each port's
 full `+ON`/`-OFF` option state and query warnings, sync adds the final state
 per written file, clean explains kept entries — e.g. which options deviate
@@ -227,6 +228,21 @@ line, `#` comments, `*` globs allowed (`www/nginx*`). Blacklisted ports are
 marked `⊘` in `scan` and in the TUI and never demand attention: poudriere
 won't build them here, so their options can't hold a build up, and they
 never trip `scan`'s exit-code gate whatever their status.
+
+### Synth
+
+`-s [profile]` (default profile `LiveSystem`) swaps the poudriere layout for
+[ports-mgmt/synth](https://man.freebsd.org/synth)'s, so the same commands work
+on a synth host: `optique -s scan -f list`, `optique -s sync www/nginx`,
+`optique -s -r clean`. The ports tree comes from `Directory_portsdir` and the
+options dir from `Directory_options` in the profile's section of
+`/usr/local/etc/synth/synth.ini` (falling back to that file's
+`[Global Configuration]` section, then to `/usr/ports` and `/var/db/ports`),
+and make.conf is the single file `/usr/local/etc/synth/<profile>-make.conf` —
+the one synth appends to each builder's make.conf; there is no layering and no
+blacklist. `-o dir` still overrides the options dir; `-p` is a poudriere tree
+name and is ignored (with a note) under `-s`, and `-s` cannot be combined with
+`-z`/`-j`.
 
 ## How it works
 

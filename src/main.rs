@@ -25,7 +25,7 @@ use crate::query::makerunner::QueryCtx;
 use crate::query::scanner::{self, ScanResult};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(cli::disambiguate_synth(std::env::args_os()));
     if cli.clear_cache {
         let dir = cache::default_cache_dir();
         let (files, bytes) = cache::clear(&dir);
@@ -118,6 +118,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             cli.tree.as_deref(),
             cli.jail.as_deref(),
             cli.set.as_deref(),
+            cli.synth.as_deref(),
             cli.options_dir.as_deref(),
             staging.path(),
         )?;
@@ -164,6 +165,9 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 
     let CleanCtx { settings, moved, jobs, cache: open_cache, used, _staging } = ctx;
     eprintln!("optique clean: options dir {}", settings.options_dir.display());
+    for note in &settings.notes {
+        eprintln!("  note:        {note}");
+    }
 
     let (mut removals, live, warnings) =
         clean::classify_entries(&settings.options_dir, &settings.portsdir, &moved);
@@ -401,6 +405,7 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
         cli.tree.as_deref(),
         cli.jail.as_deref(),
         cli.set.as_deref(),
+        cli.synth.as_deref(),
         cli.options_dir.as_deref(),
         staging.path(),
     )?;
@@ -417,6 +422,9 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
 
     if !cli.quiet {
         eprintln!("optique: ports tree {} · {} jobs", settings.portsdir.display(), jobs);
+        for note in &settings.notes {
+            eprintln!("  note:        {note}");
+        }
         eprintln!(
             "  options dir: {}{}",
             settings.options_dir.display(),
