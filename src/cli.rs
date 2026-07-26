@@ -1,6 +1,9 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+
+use crate::model::origin::PortKey;
 
 #[derive(Parser, Debug)]
 #[command(name = "optique", version, about = "Fast FreeBSD ports options/dependency configurator")]
@@ -20,6 +23,11 @@ pub struct Cli {
     /// Explicit options dir (overrides poudriere resolution; e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
     pub options_dir: Option<PathBuf>,
+
+    /// Port list file, one origin[@flavor] per line, '#' comments
+    /// (poudriere pkglist format); repeatable, duplicates are dropped
+    #[arg(short = 'f', long = "file", global = true, value_name = "PKGLIST")]
+    pub files: Vec<PathBuf>,
 
     /// Parallel make jobs (default: min(16, ncpu))
     #[arg(short = 'J', long = "jobs", global = true)]
@@ -49,6 +57,12 @@ pub enum Command {
     Origins(Vec<String>),
 }
 
+#[derive(Args, Debug, Default)]
+pub struct RootsArgs {
+    /// Port origins (category/name[@flavor])
+    pub origins: Vec<String>,
+}
+
 #[derive(Args, Debug)]
 pub struct SyncArgs {
     #[command(flatten)]
@@ -59,46 +73,88 @@ pub struct SyncArgs {
     pub dry_run: bool,
 }
 
-#[derive(Args, Debug)]
-pub struct RootsArgs {
-    /// Port origins (category/name[@flavor])
-    pub origins: Vec<String>,
-
-    /// File(s) with one origin per line (poudriere pkglist format)
-    #[arg(short = 'f', long = "file")]
-    pub files: Vec<PathBuf>,
+/// Merge positional origins and pkglist files into parsed root keys,
+/// dropping duplicates while preserving first-seen order.
+pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<PortKey>> {
+    let mut out: Vec<PortKey> = Vec::new();
+    let mut seen: HashSet<PortKey> = HashSet::new();
+    let mut push = |spec: &str, source: &str| -> anyhow::Result<()> {
+        // Strip inline comments and surrounding whitespace.
+        let spec = spec.split('#').next().unwrap_or("").trim();
+        if spec.is_empty() {
+            return Ok(());
+        }
+        match PortKey::parse(spec) {
+            Some(k) => {
+                if seen.insert(k.clone()) {
+                    out.push(k);
+                }
+                Ok(())
+            }
+            None => anyhow::bail!("malformed port origin {spec:?} in {source}"),
+        }
+    };
+    for o in origins {
+        push(o, "arguments")?;
+    }
+    for f in files {
+        let text = std::fs::read_to_string(f)
+            .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
+        for line in text.lines() {
+            push(line, &f.display().to_string())?;
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("no port origins given (arguments or -f pkglist)");
+    }
+    Ok(out)
 }
 
-impl RootsArgs {
-    /// Merge positional origins and list files into parsed keys.
-    pub fn roots(&self) -> anyhow::Result<Vec<crate::model::origin::PortKey>> {
-        let mut out = Vec::new();
-        let mut push = |spec: &str| -> anyhow::Result<()> {
-            let spec = spec.trim();
-            if spec.is_empty() || spec.starts_with('#') {
-                return Ok(());
-            }
-            match crate::model::origin::PortKey::parse(spec) {
-                Some(k) => {
-                    out.push(k);
-                    Ok(())
-                }
-                None => anyhow::bail!("malformed port origin: {spec:?}"),
-            }
-        };
-        for o in &self.origins {
-            push(o)?;
-        }
-        for f in &self.files {
-            let text = std::fs::read_to_string(f)
-                .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
-            for line in text.lines() {
-                push(line)?;
-            }
-        }
-        if out.is_empty() {
-            anyhow::bail!("no port origins given (arguments or -f listfile)");
-        }
-        Ok(out)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn dedup_and_comments() {
+        let mut f1 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            f1,
+            "# workstation list\nwww/nginx\ndevel/py-Automat@py312   # keep\n\nmail/dovecot"
+        )
+        .unwrap();
+        let mut f2 = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f2, "www/nginx\nmail/dovecot\nsysutils/tmux").unwrap();
+
+        let roots = collect_roots(
+            &["www/nginx".to_string(), "editors/vim".to_string()],
+            &[f1.path().to_path_buf(), f2.path().to_path_buf()],
+        )
+        .unwrap();
+        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "www/nginx",
+                "editors/vim",
+                "devel/py-Automat@py312",
+                "mail/dovecot",
+                "sysutils/tmux"
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_line_names_the_file() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "not-an-origin").unwrap();
+        let err = collect_roots(&[], &[f.path().to_path_buf()]).unwrap_err().to_string();
+        assert!(err.contains("not-an-origin"));
+        assert!(err.contains(&f.path().display().to_string()));
+    }
+
+    #[test]
+    fn empty_is_an_error() {
+        assert!(collect_roots(&[], &[]).is_err());
     }
 }

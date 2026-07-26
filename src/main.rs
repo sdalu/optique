@@ -26,27 +26,71 @@ use crate::query::scanner::{self, ScanResult};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
-        Some(Command::Tui(roots)) => cmd_tui(&cli, roots),
-        Some(Command::Scan(roots)) => cmd_scan(&cli, roots),
-        Some(Command::Sync(args)) => cmd_sync(&cli, args),
-        Some(Command::Origins(origins)) => {
-            let roots = cli::RootsArgs { origins: origins.clone(), files: vec![] };
+        Some(Command::Tui(args)) => {
+            let roots = cli::collect_roots(&args.origins, &cli.files)?;
+            cmd_tui(&cli, &roots)
+        }
+        Some(Command::Scan(args)) => {
+            let roots = cli::collect_roots(&args.origins, &cli.files)?;
+            cmd_scan(&cli, &roots)
+        }
+        Some(Command::Sync(args)) => {
+            let roots = cli::collect_roots(&args.roots.origins, &cli.files)?;
+            cmd_sync(&cli, &roots, args.dry_run)
+        }
+        Some(Command::Origins(raw)) => {
+            // Bare origins (default TUI). Tolerate -f/--file mixed in after
+            // the first origin, where clap no longer parses flags.
+            let (origins, files) = split_raw_origins(raw)?;
+            let mut all_files = cli.files.clone();
+            all_files.extend(files);
+            let roots = cli::collect_roots(&origins, &all_files)?;
             cmd_tui(&cli, &roots)
         }
         None => {
-            anyhow::bail!("no ports given; try `optique -z <set> category/port…` or `optique help`")
+            if cli.files.is_empty() {
+                anyhow::bail!(
+                    "no ports given; try `optique -z <set> category/port…` or `optique -f pkglist`"
+                );
+            }
+            let roots = cli::collect_roots(&[], &cli.files)?;
+            cmd_tui(&cli, &roots)
         }
     }
 }
 
-fn cmd_tui(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {
-    let scanned = run_scan(cli, roots_args)?;
+/// Split an external-subcommand argument vector into origins and -f/--file
+/// values (clap stops parsing flags once the first bare origin appears).
+fn split_raw_origins(raw: &[String]) -> Result<(Vec<String>, Vec<std::path::PathBuf>)> {
+    let mut origins = Vec::new();
+    let mut files = Vec::new();
+    let mut it = raw.iter();
+    while let Some(arg) = it.next() {
+        if arg == "-f" || arg == "--file" {
+            let path = it
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("{arg} needs a pkglist file argument"))?;
+            files.push(path.into());
+        } else if let Some(path) = arg.strip_prefix("--file=") {
+            files.push(path.into());
+        } else if arg.starts_with('-') {
+            anyhow::bail!("unexpected flag {arg} after port origins; put flags before the first origin");
+        } else {
+            origins.push(arg.clone());
+        }
+    }
+    Ok((origins, files))
+}
+
+fn cmd_tui(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
+    // Fail before the (possibly minute-long) scan, not after.
+    tui::ensure_terminal()?;
+    let scanned = run_scan(cli, roots)?;
     let options_dir = scanned.settings.options_dir.clone();
-    let roots = roots_args.roots()?;
     let session = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        &roots,
+        roots,
         &options_dir,
     );
 
@@ -79,8 +123,7 @@ struct Scanned {
     jobs: usize,
 }
 
-fn run_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<Scanned> {
-    let roots = roots_args.roots()?;
+fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     let staging = tempfile::tempdir()?;
     let settings = config::resolve(
         &cli.tree,
@@ -116,7 +159,7 @@ fn run_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<Scanned> {
     );
 
     let t0 = Instant::now();
-    let result = scanner::scan(&roots, &ctx, jobs, &mut cache, &moved, |p| {
+    let result = scanner::scan(roots, &ctx, jobs, &mut cache, &moved, |p| {
         eprint!("\rscanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         let _ = std::io::stderr().flush();
     });
@@ -140,8 +183,8 @@ fn run_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<Scanned> {
     })
 }
 
-fn cmd_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {
-    let scanned = run_scan(cli, roots_args)?;
+fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
+    let scanned = run_scan(cli, roots)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
 
     let mut rows: Vec<(String, String, PortStatus)> = Vec::new();
@@ -194,8 +237,8 @@ fn cmd_scan(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sync(cli: &Cli, args: &cli::SyncArgs) -> Result<()> {
-    let scanned = run_scan(cli, &args.roots)?;
+fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Result<()> {
+    let scanned = run_scan(cli, roots)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
 
     let staged = result.ports.iter().map(|(key, info)| {
@@ -212,7 +255,7 @@ fn cmd_sync(cli: &Cli, args: &cli::SyncArgs) -> Result<()> {
     for w in &writes {
         println!("{}  {}", w.key, w.describe());
     }
-    if args.dry_run {
+    if dry_run {
         eprintln!("dry run: {} file(s) would be written to {}", writes.len(), settings.options_dir.display());
         return Ok(());
     }

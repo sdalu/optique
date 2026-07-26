@@ -15,8 +15,10 @@ ports, and writes every options file in a single atomic pass at the end.
 # "workstation" (options land in /usr/local/etc/poudriere.d/workstation-options)
 optique -z workstation www/nginx mail/dovecot
 
-# From a poudriere pkglist file
-optique -z server tui -f /usr/local/etc/poudriere.d/pkglist
+# From poudriere pkglist file(s) — one origin[@flavor] per line, '#' comments;
+# -f is repeatable and duplicates across files/arguments are dropped
+optique -z server -f /usr/local/etc/poudriere.d/pkglist
+optique -z server -f base-list -f extra-list www/nginx
 
 # Non-interactive check: which ports are unconfigured or stale?
 optique -z workstation scan -f pkglist
@@ -29,8 +31,8 @@ optique -z workstation sync -f pkglist
 
 Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`
 (poudriere ports tree, default `default`), `-o dir` (explicit options dir,
-bypasses poudriere resolution; default `/var/db/ports`), `-J jobs`,
-`--no-cache`.
+bypasses poudriere resolution; default `/var/db/ports`), `-f pkglist`
+(repeatable), `-J jobs`, `--no-cache`.
 
 ## What the TUI shows
 

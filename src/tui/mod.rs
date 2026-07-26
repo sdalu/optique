@@ -66,16 +66,21 @@ pub struct App {
     pub refresh_progress: Option<(usize, usize)>,
 }
 
+pub fn ensure_terminal() -> Result<()> {
+    use std::io::IsTerminal as _;
+    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
+        anyhow::bail!("the TUI needs a real terminal; use `optique scan` or `optique sync` in scripts");
+    }
+    Ok(())
+}
+
 pub fn run(
     session: Session,
     options_dir: PathBuf,
     staging_db: StagingDb,
     refresher: Refresher,
 ) -> Result<()> {
-    use std::io::IsTerminal as _;
-    if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        anyhow::bail!("the TUI needs a real terminal; use `optique scan` or `optique sync` in scripts");
-    }
+    ensure_terminal()?;
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
     let mut app = App {
         session,
