@@ -6,6 +6,8 @@ mod model;
 mod moved;
 mod optionsfile;
 mod query;
+mod session;
+mod tui;
 
 use std::io::Write as _;
 use std::time::Instant;
@@ -23,9 +25,17 @@ use crate::query::scanner::{self, ScanResult};
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
+        Command::Tui(roots) => cmd_tui(&cli, roots),
         Command::Scan(roots) => cmd_scan(&cli, roots),
         Command::Sync(args) => cmd_sync(&cli, args),
     }
+}
+
+fn cmd_tui(cli: &Cli, roots_args: &cli::RootsArgs) -> Result<()> {
+    let scanned = run_scan(cli, roots_args)?;
+    let options_dir = scanned.settings.options_dir.clone();
+    let session = session::Session::new(scanned.result.ports, &options_dir);
+    tui::run(session, options_dir)
 }
 
 /// Shared setup + closure scan used by every subcommand.

@@ -35,6 +35,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    /// Interactive TUI to review and edit options across the closure
+    Tui(RootsArgs),
     /// Scan the dependency closure and print each port's option status
     Scan(RootsArgs),
     /// Refresh options files non-interactively: keep saved choices, adopt
