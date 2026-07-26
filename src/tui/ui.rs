@@ -701,7 +701,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("n / p", "next / previous port needing attention"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
-            keyline("r", "why is this port here? (dependency chain + dependents)"),
+            keyline("r", "why is this port here? — navigable chain, Enter jumps"),
         ]),
         _ => lines.extend([
             keyline("t", "show only ports needing attention"),
@@ -735,7 +735,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
 }
 
 /// Cap on the dependents listed before collapsing the rest into "+ N more".
-const WHY_MAX_DEPENDENTS: usize = 15;
+pub(crate) const WHY_MAX_DEPENDENTS: usize = 15;
 
 fn draw_why(f: &mut Frame, app: &App) {
     let Some(why) = &app.why else { return };
@@ -744,17 +744,21 @@ fn draw_why(f: &mut Frame, app: &App) {
     let dim = Style::default().fg(Color::DarkGray);
 
     let mut lines: Vec<Line> = Vec::new();
+    let chain_len = why.chain.as_ref().map(Vec::len).unwrap_or(0);
     match &why.chain {
         Some(chain) => {
             // Pad the first line so the "(root)" note clears the longest key.
             let width = chain.iter().map(|k| k.to_string().len()).max().unwrap_or(0);
             for (depth, key) in chain.iter().enumerate() {
                 let last = depth + 1 == chain.len();
-                let style = if last {
+                let mut style = if last {
                     Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
+                if depth == why.selected {
+                    style = style.add_modifier(Modifier::REVERSED);
+                }
                 let mut spans = Vec::new();
                 if depth > 0 {
                     spans.push(Span::raw(format!("{}└─ ", " ".repeat(depth))));
@@ -777,8 +781,13 @@ fn draw_why(f: &mut Frame, app: &App) {
         format!("direct dependents ({}):", why.dependents.len()),
         Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     )));
-    for dep in why.dependents.iter().take(WHY_MAX_DEPENDENTS) {
-        lines.push(Line::from(format!("  {dep}")));
+    for (i, dep) in why.dependents.iter().take(WHY_MAX_DEPENDENTS).enumerate() {
+        let style = if chain_len + i == why.selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(format!("  {dep}"), style)));
     }
     match why.dependents.len().checked_sub(WHY_MAX_DEPENDENTS) {
         Some(more) if more > 0 => {
@@ -790,7 +799,10 @@ fn draw_why(f: &mut Frame, app: &App) {
         lines.push(Line::from(Span::styled("  none in this closure", dim)));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled("press any key to close", dim)));
+    lines.push(Line::from(Span::styled(
+        "↑/↓ move · Enter jump to port · r why of selection · other key closes",
+        dim,
+    )));
 
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()

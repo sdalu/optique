@@ -62,6 +62,21 @@ pub struct WhyInfo {
     /// Shortest root → port dependency chain, None when unreachable.
     pub chain: Option<Vec<PortKey>>,
     pub dependents: Vec<PortKey>,
+    /// Cursor over the navigable entries (chain first, then the shown
+    /// dependents): Enter jumps to that port, 'r' re-opens why on it.
+    pub selected: usize,
+}
+
+impl WhyInfo {
+    /// Chain and shown dependents, in cursor order.
+    pub fn entries(&self) -> Vec<&PortKey> {
+        let mut out: Vec<&PortKey> = Vec::new();
+        if let Some(chain) = &self.chain {
+            out.extend(chain.iter());
+        }
+        out.extend(self.dependents.iter().take(crate::tui::ui::WHY_MAX_DEPENDENTS));
+        out
+    }
 }
 
 pub struct App {
@@ -298,8 +313,35 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         }
         return KeyOutcome::Continue;
     }
-    if app.why.is_some() {
-        app.why = None;
+    if let Some(why) = &mut app.why {
+        let count = why.entries().len();
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') if count > 0 => {
+                why.selected = (why.selected + 1).min(count - 1);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                why.selected = why.selected.saturating_sub(1);
+            }
+            KeyCode::Enter | KeyCode::Char('l') => {
+                let target = why.entries().get(why.selected).cloned().cloned();
+                app.why = None;
+                if let Some(target) = target {
+                    app.jump_to_port(&target);
+                }
+            }
+            KeyCode::Char('r') => {
+                // Walk the graph: re-open why on the highlighted port.
+                if let Some(target) = why.entries().get(why.selected).cloned().cloned() {
+                    app.why = Some(WhyInfo {
+                        chain: app.session.why_chain(&target),
+                        dependents: app.session.dependents(&target),
+                        key: target,
+                        selected: 0,
+                    });
+                }
+            }
+            _ => app.why = None,
+        }
         return KeyOutcome::Continue;
     }
     if app.opt_info.is_some() {
@@ -836,7 +878,41 @@ impl App {
             chain: self.session.why_chain(&key),
             dependents: self.session.dependents(&key),
             key,
+            selected: 0,
         });
+    }
+
+    /// Move the list selection to the given port. A view that hides the
+    /// target (filter, t, optionless ports never listed) is widened as far
+    /// as needed — the user asked to go there.
+    fn jump_to_port(&mut self, target: &PortKey) {
+        if !self.session.ports.contains_key(target) {
+            self.flash(&format!("{target}: not in the closure"), true);
+            return;
+        }
+        if let Some(idx) = self.visible.iter().position(|v| v == target) {
+            self.select_index(idx);
+            self.flash(&format!("jumped to {target}"), false);
+            return;
+        }
+        let mut widened = Vec::new();
+        if !self.filter.is_empty() {
+            self.filter.clear();
+            widened.push("filter cleared");
+            self.rebuild_visible(Some(target.clone()));
+        }
+        if self.hide_ok && !self.visible.contains(target) {
+            self.hide_ok = false;
+            widened.push("showing ok ports");
+            self.rebuild_visible(Some(target.clone()));
+        }
+        if self.visible.contains(target) {
+            self.rebuild_editor();
+            self.flash(&format!("jumped to {target} ({})", widened.join(", ")), false);
+        } else {
+            // Only optionless ports remain unlistable.
+            self.flash(&format!("{target} has no options and is not listed"), true);
+        }
     }
 
     /// Open the detail overlay on the option under the editor cursor. Only
