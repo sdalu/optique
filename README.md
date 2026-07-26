@@ -34,6 +34,54 @@ Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`
 bypasses poudriere resolution; default `/var/db/ports`), `-f pkglist`
 (repeatable), `-J jobs`, `--no-cache`.
 
+## Workflow
+
+The typical cycle, replacing `poudriere options -C` before a bulk build:
+
+1. **Update the ports tree** (`poudriere ports -u` / `git -C /usr/ports pull`).
+   Tree updates add or remove options on some ports and pull new dependencies
+   in — every affected port needs a configuration decision before building.
+
+2. **Scan.** `optique -z <set> -f <pkglist>` resolves the full dependency
+   closure of your package list in parallel — for each port: its options,
+   groups, flavors, dependencies, and how the poudriere make.conf layers
+   affect it. The first run on a fresh tree takes about a minute per
+   thousand ports; afterwards the cache brings it down to well under a
+   second, so re-opening optique is free.
+
+3. **Triage.** The TUI opens with problems sorted to the top: `?` ports
+   never configured, `!` ports whose option list changed since their file
+   was written (with the added/removed options named), `✗` conflicts.
+   `n`/`p` jumps between them; everything already consistent sits dimmed
+   at the bottom. Ports without any options are handled automatically and
+   never shown.
+
+4. **Decide.** For each flagged port, either accept what's proposed (the
+   saved choices plus defaults for `NEW` options — that is exactly what
+   Apply will write if you touch nothing) or edit: `Space` toggles with
+   group rules enforced, `IMPLIES` chains auto-enable, `FORCED` and implied
+   options are locked with an explanation, `⚠` warns when a choice marks
+   the port BROKEN. When a toggle changes the dependency set, the closure
+   refreshes in the background within a second or two — newly appeared
+   dependencies show up flagged `?`/`!` and join the triage, dropped ones
+   vanish (keeping their edits in case you flip back).
+
+5. **Apply.** `a` previews every file that would change as a diff
+   (`+OPT`, `-OPT`, `new: OPT(on)`, `dropped: OPT`), warns if conflicts
+   remain, then writes all options files atomically in one pass to the
+   set's options dir. Nothing on disk changes before this point, so
+   quitting without applying is always safe.
+
+6. **Build.** Run `poudriere bulk` as usual — it finds every port already
+   configured and starts building immediately instead of stopping at
+   dialog after dialog.
+
+For unattended use (cron, CI), step 3–5 collapse into
+`optique -z <set> sync -f <pkglist>`: it keeps all saved choices, adopts
+defaults for new options, drops removed ones, and prints what it changed —
+add `--dry-run` to only report. A later interactive session can then revisit
+anything sync decided.
+
 ## What the TUI shows
 
 Left pane: every port in the dependency closure **that has options**
