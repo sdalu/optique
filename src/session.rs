@@ -371,17 +371,26 @@ impl Session {
         undecided_options(info, state.saved.as_ref()).is_empty()
     }
 
-    /// Does this option's staged value contradict the global make.conf
-    /// policy (OPTIONS_SET / OPTIONS_UNSET)? FORCE-decided options are
-    /// excluded: the file cannot override them anyway.
+    /// Does this option's staged value contradict make.conf policy?
+    /// Outcome-based: make.conf must take a stance on the option (any
+    /// OPTIONS_SET/UNSET or per-port _SET/_UNSET mention) and the staged
+    /// value must differ from what defaults + make.conf alone would yield.
+    /// FORCE-decided options are excluded: the file cannot override them.
     pub fn mc_deviates(&self, info: &PortInfo, opt: &str) -> bool {
         let Some(state) = self.state(info) else { return false };
         let o = &info.options;
         if o.is_forced(opt) {
             return false;
         }
-        (o.mc_set.contains(opt) && !state.staged.contains(opt))
-            || (o.mc_unset.contains(opt) && state.staged.contains(opt))
+        let mentioned = o.mc_set.contains(opt)
+            || o.mc_unset.contains(opt)
+            || o.port_set.contains(opt)
+            || o.port_unset.contains(opt);
+        if !mentioned {
+            return false;
+        }
+        let nofile_on = nofile_effective(info).contains(opt);
+        state.staged.contains(opt) != nofile_on
     }
 
     /// All options of the port that deviate from the global make.conf policy.
@@ -447,6 +456,37 @@ pub fn undecided_options(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> V
         .filter(|opt| !mc_decided(opt) && !group_decided.contains(opt.as_str()))
         .cloned()
         .collect()
+}
+
+/// Effective options as they would be WITHOUT any options file: the
+/// bsd.options.mk application order (defaults, make.conf layers, FORCE,
+/// IMPLIES closure) minus the options-file layer.
+pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
+    let o = &info.options;
+    let complete: BTreeSet<&str> = o.complete.iter().map(String::as_str).collect();
+    let mut set: BTreeSet<String> = o
+        .defaults
+        .iter()
+        .filter(|d| complete.contains(d.as_str()))
+        .cloned()
+        .collect();
+    for opt in o.mc_set.iter().chain(o.port_set.iter()) {
+        if complete.contains(opt.as_str()) {
+            set.insert(opt.clone());
+        }
+    }
+    for opt in o.mc_unset.iter().chain(o.port_unset.iter()) {
+        set.remove(opt);
+    }
+    for opt in &o.force_set {
+        if complete.contains(opt.as_str()) {
+            set.insert(opt.clone());
+        }
+    }
+    for opt in &o.force_unset {
+        set.remove(opt);
+    }
+    close_implies(info, set)
 }
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
@@ -641,6 +681,17 @@ mod tests {
         }
         assert!(s.covered_by_makeconf(&s.ports[&info_key]));
 
+        // No stance -> no deviation, even when differing from the port default
+        // (that's the plain yellow case, not ≠mc).
+        assert!(!s.mc_deviates(&s.ports[&info_key], "A"));
+        // Per-port knobs count as make.conf stance too.
+        {
+            let o = &mut s.ports.get_mut(&info_key).unwrap().options;
+            o.port_unset.insert("NLS".into());
+        }
+        // NLS staged? baseline had no file... staged came from effective which
+        // is defaults ({A}) here, so NLS is off == nofile outcome -> no deviation.
+        assert!(!s.mc_deviates(&s.ports[&info_key], "NLS"));
         // Deviation: staged keeps A on although make.conf globally unsets it.
         {
             let o = &mut s.ports.get_mut(&info_key).unwrap().options;

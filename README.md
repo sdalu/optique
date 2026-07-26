@@ -112,8 +112,12 @@ added since the file was written, provenance badges (`mc` = global
 OPTIONS_SET/UNSET, `mc:port` = per-port, `FORCED` = *_FORCE knobs that the
 options file cannot override — toggle locked), `implied by X` locks from
 `IMPLIES` chains, and `⚠broken/ignored` for options carrying `<OPT>_BROKEN` /
-`<OPT>_IGNORE`. Obsolete options (removed from the port) appear struck
-through and are dropped on apply.
+`<OPT>_IGNORE`. Name colors: yellow = deviates from the port's default,
+magenta (+ `≠mc` badge) = contradicts your make.conf — the option is
+mentioned there but the staged value differs from what defaults + make.conf
+alone would produce. Obsolete options (removed from the port) appear struck
+through and are dropped on apply; options excluded by the current flavor but
+managed via the default flavor are listed separately.
 
 Toggling an option re-queries the port in the background against a **staging
 PORT_DBDIR** — dependencies added/removed by the option appear/disappear in

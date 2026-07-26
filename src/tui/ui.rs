@@ -246,7 +246,12 @@ fn option_line(
     };
 
     let mut spans: Vec<Span> = Vec::new();
-    let name_style = if on != is_default {
+    // Magenta: contradicts make.conf policy; yellow: deviates from the
+    // port default; plain: matches the port default.
+    let deviates_mc = app.session.mc_deviates(info, opt);
+    let name_style = if deviates_mc {
+        Style::default().fg(Color::Magenta)
+    } else if on != is_default {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
@@ -301,7 +306,7 @@ fn option_line(
     };
     spans.push(Span::styled(format!(" {prov}"), prov_style));
 
-    if app.session.mc_deviates(info, opt) {
+    if deviates_mc {
         spans.push(Span::styled(
             " ≠mc",
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
@@ -490,7 +495,8 @@ fn draw_help(f: &mut Frame) {
         Line::default(),
         head("Option row"),
         mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
-        mark("", Color::White, "yellow name = deviates from the port default"),
+        mark("", Color::Yellow, "yellow name = deviates from the port default"),
+        mark("", Color::Magenta, "magenta name = contradicts make.conf policy (≠mc)"),
         mark("", Color::DarkGray, "def:on|off — the port's default value"),
         mark("NEW", Color::Yellow, "added since the options file was written"),
         mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),

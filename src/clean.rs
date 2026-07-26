@@ -79,41 +79,11 @@ pub fn classify_entries(
     (removals, live, warnings)
 }
 
-/// Effective options as they would be WITHOUT any options file: the
-/// bsd.options.mk application order minus the options-file layer.
-fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
-    let o = &info.options;
-    let complete: BTreeSet<&str> = o.complete.iter().map(String::as_str).collect();
-    let mut set: BTreeSet<String> = o
-        .defaults
-        .iter()
-        .filter(|d| complete.contains(d.as_str()))
-        .cloned()
-        .collect();
-    for opt in o.mc_set.iter().chain(o.port_set.iter()) {
-        if complete.contains(opt.as_str()) {
-            set.insert(opt.clone());
-        }
-    }
-    for opt in o.mc_unset.iter().chain(o.port_unset.iter()) {
-        set.remove(opt);
-    }
-    for opt in &o.force_set {
-        if complete.contains(opt.as_str()) {
-            set.insert(opt.clone());
-        }
-    }
-    for opt in &o.force_unset {
-        set.remove(opt);
-    }
-    crate::session::close_implies(info, set)
-}
-
 /// How the options file changes the outcome versus defaults + make.conf:
 /// `+OPT` = the file turns it on, `-OPT` = the file turns it off.
 /// Empty means the file is redundant.
 pub fn redundancy_diff(info: &PortInfo) -> Vec<String> {
-    let nofile = nofile_effective(info);
+    let nofile = crate::session::nofile_effective(info);
     let effective = &info.options.effective;
     let mut out: Vec<String> =
         effective.difference(&nofile).map(|o| format!("+{o}")).collect();
