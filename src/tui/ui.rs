@@ -235,12 +235,24 @@ fn foreign_owner<'a>(app: &'a App, info: &'a PortInfo) -> Option<&'a PortInfo> {
     (owner.canonical != info.canonical).then_some(owner)
 }
 
+/// The option changes blamed for this port's BROKEN/IGNORE state, when it has
+/// one and a background refresh attributed it.
+fn blame_of<'a>(app: &'a App, info: &PortInfo) -> Option<&'a String> {
+    if !crate::session::is_blocked(info) {
+        return None;
+    }
+    app.blame.get(&info.options_name)
+}
+
 fn banner_len(app: &App, info: &PortInfo) -> usize {
     let mut n = 0;
     if info.broken.is_some() {
         n += 1;
     }
     if info.ignore.is_some() {
+        n += 1;
+    }
+    if blame_of(app, info).is_some() {
         n += 1;
     }
     if info.deprecated.is_some() {
@@ -259,6 +271,12 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
     }
     if let Some(m) = &info.ignore {
         lines.push(Line::from(Span::styled(format!("IGNORE: {m}"), red)));
+    }
+    if let Some(blame) = blame_of(app, info) {
+        lines.push(Line::from(Span::styled(
+            format!("likely cause: {blame}"),
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        )));
     }
     if let Some(m) = &info.deprecated {
         lines.push(Line::from(Span::styled(

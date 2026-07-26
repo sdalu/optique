@@ -100,6 +100,12 @@ pub struct App {
     pub opt_info: Option<(PortKey, String)>,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
+    /// options_name -> staged set at the time of the last submitted refresh,
+    /// plus the previous refresh's set for attribution diffs.
+    pub refresh_snapshots: HashMap<String, (BTreeSet<String>, Option<BTreeSet<String>>)>,
+    /// options_name -> the option changes blamed for the port having just
+    /// turned IGNORE/BROKEN (e.g. `+HTTP_AUTH_KRB5 -GSSAPI_MIT`).
+    pub blame: HashMap<String, String>,
     /// Outstanding background refresh batches.
     pub refreshing: usize,
     pub refresh_progress: Option<(usize, usize)>,
@@ -148,6 +154,8 @@ pub fn run(
         why: None,
         opt_info: None,
         pending: HashMap::new(),
+        refresh_snapshots: HashMap::new(),
+        blame: HashMap::new(),
         refreshing: 0,
         refresh_progress: None,
     };
@@ -431,6 +439,9 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
                 text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
             app.session.reload_saved(&app.options_dir);
+            // The files on disk changed: attributions built on the pre-apply
+            // staged history would now point at the wrong changes.
+            app.blame.clear();
             // The edits are on disk now; the draft has served its purpose.
             draft::discard(&app.options_dir);
             if let Some(modal) = app.modal.as_mut() {
@@ -835,17 +846,87 @@ impl App {
             self.pending.remove(&key);
             let Some(info) = self.session.ports.get(&key) else { continue };
             let Some(state) = self.session.state(info) else { continue };
-            let content =
-                optionsfile::render(&info.pkgname, &info.options.complete, &state.staged);
-            if let Err(e) = self.staging_db.write(&info.options_name, content.as_bytes()) {
+            let options_name = info.options_name.clone();
+            let staged = state.staged.clone();
+            let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
+            if let Err(e) = self.staging_db.write(&options_name, content.as_bytes()) {
                 self.flash(&format!("staging write failed: {e:#}"), true);
                 continue;
             }
+            self.record_snapshot(options_name, staged);
             batch.push(key);
         }
         if !batch.is_empty() && self.refresher.tx.send(batch).is_ok() {
             self.refreshing += 1;
         }
+    }
+
+    /// Remember the staged set a refresh was submitted with, keeping the
+    /// previous one for attribution. A resubmission of an unchanged set (the
+    /// other flavors of an origin share the file, and a revert can land on the
+    /// same set) keeps the recorded history instead of flattening it.
+    fn record_snapshot(&mut self, options_name: String, staged: BTreeSet<String>) {
+        match self.refresh_snapshots.get_mut(&options_name) {
+            Some((current, previous)) => {
+                if *current != staged {
+                    *previous = Some(std::mem::replace(current, staged));
+                }
+            }
+            None => {
+                self.refresh_snapshots.insert(options_name, (staged, None));
+            }
+        }
+    }
+
+    /// The option changes to blame when a port turns IGNORE/BROKEN: the diff
+    /// between the last two staged sets submitted for its options file, or
+    /// staged-vs-baseline when only one refresh is on record.
+    fn blame_diff(&self, info: &crate::model::port::PortInfo) -> String {
+        if let Some((current, Some(previous))) = self.refresh_snapshots.get(&info.options_name) {
+            return crate::session::staged_diff(previous, current);
+        }
+        match self.session.state(info) {
+            Some(state) => crate::session::staged_diff(&state.baseline, &state.staged),
+            None => String::new(),
+        }
+    }
+
+    /// Attribute freshly discovered IGNORE/BROKEN states to recent option
+    /// changes, comparing the incoming scan against the still-unmerged
+    /// session. Returns the flash text for the last port that just turned
+    /// bad, if any; ports that came back clean drop their attribution.
+    fn attribute_blame(
+        &mut self,
+        fresh: &std::collections::BTreeMap<PortKey, crate::model::port::PortInfo>,
+    ) -> Option<String> {
+        use crate::session::is_blocked;
+        let mut flash = None;
+        for (key, info) in fresh {
+            let was = self.session.ports.get(key).map(is_blocked).unwrap_or(false);
+            match (was, is_blocked(info)) {
+                (true, false) => {
+                    self.blame.remove(&info.options_name);
+                }
+                (false, true) => {
+                    let diff = self.blame_diff(info);
+                    if diff.is_empty() {
+                        continue; // nothing recent to point at
+                    }
+                    let (label, reason) = match (&info.broken, &info.ignore) {
+                        (Some(m), _) => ("BROKEN", m.as_str()),
+                        (None, Some(m)) => ("IGNORE", m.as_str()),
+                        (None, None) => continue,
+                    };
+                    flash = Some(format!(
+                        "{key}: now {label} ({}) — {diff}",
+                        trim_reason(reason)
+                    ));
+                    self.blame.insert(info.options_name.clone(), diff);
+                }
+                _ => {}
+            }
+        }
+        flash
     }
 
     /// Merge finished background scans into the session.
@@ -860,6 +941,8 @@ impl App {
                     self.refreshing = self.refreshing.saturating_sub(batches);
                     let errors = result.errors.len();
                     let first_error = result.errors.first().cloned();
+                    // Blame before the merge: it needs the pre-merge flags.
+                    let blamed = self.attribute_blame(&result.ports);
                     let (added, removed) =
                         self.session.merge(*result, &self.options_dir.clone());
                     let (a, r) = merged.get_or_insert((0usize, 0usize));
@@ -870,6 +953,10 @@ impl App {
                             &format!("refresh: {errors} dep error(s), e.g. {key}: {msg}"),
                             true,
                         );
+                    }
+                    // A port that just broke outranks dep errors on the line.
+                    if let Some(msg) = blamed {
+                        self.flash(&msg, true);
                     }
                 }
             }
@@ -922,6 +1009,17 @@ impl App {
 
     fn flash(&mut self, msg: &str, error: bool) {
         self.message = Some((msg.to_string(), error));
+    }
+}
+
+/// Squeeze a BROKEN/IGNORE message onto one status-bar line: whitespace
+/// collapsed, elided past ~80 characters.
+fn trim_reason(msg: &str) -> String {
+    const MAX: usize = 80;
+    let msg: String = msg.split_whitespace().collect::<Vec<&str>>().join(" ");
+    match msg.char_indices().nth(MAX) {
+        None => msg,
+        Some((cut, _)) => format!("{}…", &msg[..cut]),
     }
 }
 

@@ -541,6 +541,21 @@ impl Session {
     }
 }
 
+/// Format the option changes between two staged snapshots as `+ADDED` /
+/// `-REMOVED` tokens (additions first, each group in option order); the empty
+/// string when the two sets are identical.
+pub fn staged_diff(before: &BTreeSet<String>, after: &BTreeSet<String>) -> String {
+    let added = after.difference(before).map(|opt| format!("+{opt}"));
+    let removed = before.difference(after).map(|opt| format!("-{opt}"));
+    added.chain(removed).collect::<Vec<String>>().join(" ")
+}
+
+/// Does the port refuse to build as queried (port-level BROKEN or IGNORE)?
+/// The two are one condition for attribution: either one blocks the build.
+pub fn is_blocked(info: &PortInfo) -> bool {
+    info.broken.is_some() || info.ignore.is_some()
+}
+
 /// Options that genuinely need a human decision: not recorded in the saved
 /// file (all of them, for an unconfigured port) and not dictated by any
 /// make.conf layer (global OPTIONS_SET/UNSET, per-port _SET/_UNSET, *_FORCE).
@@ -716,6 +731,36 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
         Session::new(ports, HashMap::new(), &roots, tmp.path())
+    }
+
+    fn set(opts: &[&str]) -> BTreeSet<String> {
+        opts.iter().map(|o| o.to_string()).collect()
+    }
+
+    #[test]
+    fn staged_diff_formats_changes() {
+        assert_eq!(staged_diff(&set(&["A"]), &set(&["A", "B"])), "+B");
+        // Additions first, each side in option order.
+        assert_eq!(staged_diff(&set(&["A", "B"]), &set(&["C"])), "+C -A -B");
+        assert_eq!(staged_diff(&set(&["A", "B"]), &set(&["B", "A"])), "");
+        assert_eq!(staged_diff(&BTreeSet::new(), &BTreeSet::new()), "");
+        assert_eq!(staged_diff(&set(&["A"]), &BTreeSet::new()), "-A");
+    }
+
+    #[test]
+    fn is_blocked_covers_broken_and_ignore() {
+        let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
+        let mut info = ports[&key].clone();
+        assert!(!is_blocked(&info));
+        info.ignore = Some("needs a GSSAPI implementation".into());
+        assert!(is_blocked(&info));
+        info.ignore = None;
+        info.broken = Some("does not build".into());
+        assert!(is_blocked(&info));
+        // DEPRECATED alone is not a build blocker.
+        info.broken = None;
+        info.deprecated = Some("use something else".into());
+        assert!(!is_blocked(&info));
     }
 
     #[test]

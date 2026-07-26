@@ -135,7 +135,9 @@ alone would produce. Obsolete options (removed from the port) appear struck
 through and are dropped on apply; options excluded by the current flavor but
 managed via the default flavor are listed separately. `i` opens a detail popup
 for the selected option: description, group, IMPLIES/PREVENTS, and the
-dependencies enabling it would add.
+dependencies enabling it would add. When a background refresh turns a port
+BROKEN/IGNORE, the banner adds a `likely cause:` line naming the recent option
+changes (`+OPT`/`-OPT`) that most likely caused it.
 
 Toggling an option re-queries the port in the background against a **staging
 PORT_DBDIR** — dependencies added/removed by the option appear/disappear in
