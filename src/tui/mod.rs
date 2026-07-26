@@ -37,6 +37,7 @@ pub enum EditorRow {
 
 pub struct ApplyModal {
     pub writes: Vec<PendingWrite>,
+    pub warnings: Vec<String>,
     pub scroll: usize,
     pub conflicted: Vec<PortKey>,
     /// Result text once applied.
@@ -306,14 +307,7 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
             // Recompute the plan at confirmation time: a background refresh
             // may have merged new ports since the modal was opened.
-            let writes = match app.compute_writes() {
-                Ok(w) => w,
-                Err(e) => {
-                    app.flash(&format!("{e:#}"), true);
-                    app.modal = None;
-                    return;
-                }
-            };
+            let writes = app.compute_writes().writes;
             let summary = apply::apply(&writes);
             let mut text =
                 format!("{} file(s) written to {}", summary.written, app.options_dir.display());
@@ -643,7 +637,7 @@ impl App {
     }
 
     /// Plan the options files to write for the current staged state.
-    fn compute_writes(&self) -> anyhow::Result<Vec<PendingWrite>> {
+    fn compute_writes(&self) -> apply::PlannedWrites {
         let staged = self.session.ports.iter().filter_map(|(key, info)| {
             let state = self.session.state(info)?;
             Some((key, info, state.staged.clone()))
@@ -658,14 +652,17 @@ impl App {
             .filter(|k| self.session.status(&self.session.ports[k]) == UiStatus::Conflict)
             .cloned()
             .collect();
-        match self.compute_writes() {
-            Ok(writes) if writes.is_empty() => {
-                self.flash("nothing to write — everything is up to date", false)
-            }
-            Ok(writes) => {
-                self.modal = Some(ApplyModal { writes, scroll: 0, conflicted, done: None })
-            }
-            Err(e) => self.flash(&format!("{e:#}"), true),
+        let planned = self.compute_writes();
+        if planned.writes.is_empty() {
+            self.flash("nothing to write — everything is up to date", false);
+        } else {
+            self.modal = Some(ApplyModal {
+                writes: planned.writes,
+                warnings: planned.warnings,
+                scroll: 0,
+                conflicted,
+                done: None,
+            });
         }
     }
 

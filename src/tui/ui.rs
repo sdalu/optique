@@ -383,6 +383,12 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
+        for w in &modal.warnings {
+            lines.push(Line::from(Span::styled(
+                format!("note: {w}"),
+                Style::default().fg(Color::Magenta),
+            )));
+        }
         if !modal.conflicted.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!(

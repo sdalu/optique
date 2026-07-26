@@ -398,7 +398,11 @@ fn cmd_sync(cli: &Cli, roots: &[model::origin::PortKey], dry_run: bool) -> Resul
             SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
         (key, info, apply::sync_enabled_set(info, saved.as_ref()))
     });
-    let writes = apply::plan_writes(staged, &settings.options_dir)?;
+    let planned = apply::plan_writes(staged, &settings.options_dir);
+    for w in &planned.warnings {
+        eprintln!("warning: {w}");
+    }
+    let writes = planned.writes;
 
     if writes.is_empty() {
         eprintln!("everything up to date, nothing to write");

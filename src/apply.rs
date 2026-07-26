@@ -112,59 +112,87 @@ pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BT
     enabled
 }
 
+/// Result of planning: the files to write plus non-fatal notes.
+pub struct PlannedWrites {
+    pub writes: Vec<PendingWrite>,
+    pub warnings: Vec<String>,
+}
+
 /// Build the list of files that actually need (re)writing.
 ///
 /// A file is skipped when it is semantically identical: same complete option
 /// list and same enabled set (pkgname-only changes don't force a rewrite,
 /// matching `make config-conditional` behavior).
+///
+/// Flavors of one origin share a single options file, and their computed
+/// option sets may legitimately differ (a flavor can change defaults or
+/// exclude options — e.g. devel/git@lite). The file is written from the
+/// default flavor's point of view, exactly like `make config` on the plain
+/// origin would; divergent non-default flavors are reported as warnings.
 pub fn plan_writes<'a>(
     ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
     options_dir: &Path,
-) -> Result<Vec<PendingWrite>> {
-    let mut writes = Vec::new();
-    let mut by_name: std::collections::HashMap<String, (PortKey, BTreeSet<String>)> =
-        std::collections::HashMap::new();
+) -> PlannedWrites {
+    struct Candidate<'a> {
+        key: PortKey,
+        info: &'a PortInfo,
+        enabled: BTreeSet<String>,
+        /// Default flavor of its origin (or unflavored) — owns the file.
+        preferred: bool,
+    }
+    let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
         if !info.options.has_options() {
             continue;
         }
-        // Flavors of one origin share an options file; identical states are
-        // deduplicated, conflicting states are an error.
-        if let Some((prev, prev_enabled)) = by_name.get(&info.options_name) {
-            if *prev_enabled == enabled {
-                continue;
-            }
-            anyhow::bail!(
-                "{} and {} share options file {} but stage different option sets",
-                prev,
-                key,
-                info.options_name
-            );
-        }
-        by_name.insert(info.options_name.clone(), (key.clone(), enabled.clone()));
+        let preferred = match &info.canonical.flavor {
+            None => true,
+            Some(f) => info.flavors.first() == Some(f),
+        };
+        groups.entry(info.options_name.clone()).or_default().push(Candidate {
+            key: key.clone(),
+            info,
+            enabled,
+            preferred,
+        });
+    }
 
-        let path = options_dir.join(&info.options_name).join("options");
+    let mut writes = Vec::new();
+    let mut warnings = Vec::new();
+    for (options_name, cands) in &groups {
+        let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        for other in cands.iter().filter(|c| !std::ptr::eq(*c, chosen)) {
+            if other.enabled != chosen.enabled {
+                warnings.push(format!(
+                    "{}: flavors disagree on shared options file {} — using {} (default flavor)",
+                    other.key, options_name, chosen.key
+                ));
+            }
+        }
+        let info = chosen.info;
+        let enabled = &chosen.enabled;
+        let path = options_dir.join(options_name).join("options");
         let old = SavedOptionsFile::load(&path);
         if let Some(old) = &old {
             let same_list = old.complete.iter().collect::<BTreeSet<_>>()
                 == info.options.complete.iter().collect::<BTreeSet<_>>();
-            let same_set = old.set == enabled;
+            let same_set = old.set == *enabled;
             if same_list && same_set {
                 continue;
             }
         }
-        let content = optionsfile::render(&info.pkgname, &info.options.complete, &enabled);
+        let content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
         writes.push(PendingWrite {
-            key: key.clone(),
-            options_name: info.options_name.clone(),
+            key: chosen.key.clone(),
+            options_name: options_name.clone(),
             path,
             old,
-            enabled,
+            enabled: enabled.clone(),
             complete: info.options.complete.clone(),
             content,
         });
     }
-    Ok(writes)
+    PlannedWrites { writes, warnings }
 }
 
 pub struct ApplySummary {
@@ -259,12 +287,36 @@ mod tests {
         )
         .unwrap();
         let enabled: BTreeSet<String> = ["A".to_string()].into();
-        let writes = plan_writes(
-            std::iter::once((&info.key.clone(), &info, enabled)),
-            tmp.path(),
-        )
-        .unwrap();
-        assert!(writes.is_empty());
+        let planned =
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path());
+        assert!(planned.writes.is_empty());
+        assert!(planned.warnings.is_empty());
+    }
+
+    #[test]
+    fn shared_file_uses_default_flavor() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Two flavors of one origin, default flavor first in FLAVORS.
+        let mut a = mk_info(&["A", "B"], &["A"]);
+        a.key = PortKey::parse("devel/git@default").unwrap();
+        a.canonical = a.key.clone();
+        a.flavors = vec!["default".into(), "lite".into()];
+        let mut b = mk_info(&["A"], &[]);
+        b.key = PortKey::parse("devel/git@lite").unwrap();
+        b.canonical = b.key.clone();
+        b.flavors = vec!["default".into(), "lite".into()];
+
+        let ports = vec![
+            (b.key.clone(), &b, BTreeSet::new()), // divergent non-default first
+            (a.key.clone(), &a, ["A".to_string()].into()),
+        ];
+        let planned =
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path());
+        assert_eq!(planned.writes.len(), 1);
+        assert_eq!(planned.writes[0].key.to_string(), "devel/git@default");
+        assert!(planned.writes[0].enabled.contains("A"));
+        assert_eq!(planned.warnings.len(), 1);
+        assert!(planned.warnings[0].contains("devel/git@lite"));
     }
 
     #[test]
@@ -272,8 +324,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let info = mk_info(&["A"], &["A"]);
         let enabled: BTreeSet<String> = ["A".to_string()].into();
-        let writes =
-            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path()).unwrap();
+        let planned =
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path());
+        let writes = planned.writes;
         assert_eq!(writes.len(), 1);
         let summary = apply(&writes);
         assert_eq!(summary.written, 1);
