@@ -170,6 +170,42 @@ fn clean_removes_gone_ports_only() {
 
 #[test]
 #[ignore = "needs /usr/ports on a FreeBSD host"]
+fn clean_unused_prunes_outside_closure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+
+    // Both ports are alive in the tree, so only closure membership decides:
+    // ports-mgmt/pkg is the root, www/nginx is nowhere near it.
+    fs::create_dir_all(optdir.join("ports-mgmt_pkg")).unwrap();
+    fs::write(
+        optdir.join("ports-mgmt_pkg/options"),
+        "_OPTIONS_READ=pkg-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n",
+    )
+    .unwrap();
+    fs::create_dir_all(optdir.join("www_nginx")).unwrap();
+    fs::write(
+        optdir.join("www_nginx/options"),
+        "_OPTIONS_READ=nginx-1.0\n_FILE_COMPLETE_OPTIONS_LIST=IPV6\nOPTIONS_FILE_SET+=IPV6\n",
+    )
+    .unwrap();
+
+    let out = optique(tmp.path())
+        .args(["clean", "--unused", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("www_nginx"), "{stdout}");
+    assert!(stdout.contains("not needed by the given list"), "{stdout}");
+
+    assert!(!optdir.join("www_nginx").exists(), "entry outside the closure must go");
+    assert!(optdir.join("ports-mgmt_pkg/options").exists(), "closure entry must survive");
+}
+
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
 fn wrapper_metadata_matches_known_nginx_facts() {
     // Guards the *config* target-name requirement in bsd.port.mk: if a tree
     // update changes that guard, descriptions would silently vanish.

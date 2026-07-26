@@ -40,9 +40,17 @@ optique -z workstation sync -f pkglist
 
 # Garbage-collect the options dir: drop entries whose port vanished from the
 # tree (MOVED-aware: renames and removals are explained); with --redundant,
-# also drop files that only repeat what defaults + make.conf dictate anyway
+# also drop files that only repeat what defaults + make.conf dictate anyway;
+# with --unused, also drop entries for ports outside the dependency closure
+# of a package list (origins and/or -f pkglist — the list is required, and
+# giving one without --unused is an error since plain clean ignores it)
 optique -z workstation clean --dry-run
 optique -z workstation clean --redundant
+optique -z workstation clean --unused -f pkglist
+optique -z workstation clean --unused --redundant --dry-run -f pkglist
+
+# Full hygiene pass for one package list (refresh, then garbage-collect)
+optique -z ws sync -f list && optique -z ws clean --unused --redundant -f list
 ```
 
 Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`

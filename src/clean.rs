@@ -79,6 +79,31 @@ pub fn classify_entries(
     (removals, live, warnings)
 }
 
+/// Split live entries against the set of OPTIONS_NAMEs actually reached by a
+/// dependency closure: entries nobody in the closure reads become removals.
+/// Both halves come back sorted by options name.
+pub fn split_unused(
+    live: Vec<LiveEntry>,
+    used: &std::collections::HashSet<String>,
+) -> (Vec<LiveEntry>, Vec<Removal>) {
+    let mut kept = Vec::new();
+    let mut removals = Vec::new();
+    for entry in live {
+        if used.contains(&entry.options_name) {
+            kept.push(entry);
+        } else {
+            removals.push(Removal {
+                options_name: entry.options_name,
+                dir: entry.dir,
+                reason: "not needed by the given list".to_string(),
+            });
+        }
+    }
+    kept.sort_by(|a, b| a.options_name.cmp(&b.options_name));
+    removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
+    (kept, removals)
+}
+
 /// How the options file changes the outcome versus defaults + make.conf:
 /// `+OPT` = the file turns it on, `-OPT` = the file turns it off.
 /// Empty means the file is redundant.
@@ -178,6 +203,30 @@ mod tests {
         // "weird" has no '_' -> unmappable, warned about, untouched.
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("weird"));
+    }
+
+    #[test]
+    fn split_unused_partitions() {
+        let entry = |name: &str, origin: &str| LiveEntry {
+            options_name: name.to_string(),
+            dir: PathBuf::from("/opt").join(name),
+            key: PortKey::parse(origin).unwrap(),
+        };
+        // Deliberately unsorted input, only www/nginx is in the closure.
+        let live = vec![
+            entry("www_nginx", "www/nginx"),
+            entry("mail_dovecot", "mail/dovecot"),
+            entry("cat_alive", "cat/alive"),
+        ];
+        let used: std::collections::HashSet<String> = ["www_nginx".to_string()].into();
+
+        let (kept, removals) = split_unused(live, &used);
+        let kept_names: Vec<&str> = kept.iter().map(|e| e.options_name.as_str()).collect();
+        assert_eq!(kept_names, vec!["www_nginx"]);
+        let gone: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
+        assert_eq!(gone, vec!["cat_alive", "mail_dovecot"], "removals come back sorted");
+        assert!(removals.iter().all(|r| r.reason == "not needed by the given list"));
+        assert_eq!(removals[0].dir, PathBuf::from("/opt/cat_alive"));
     }
 
     #[test]

@@ -69,21 +69,90 @@ fn main() -> Result<()> {
     }
 }
 
-/// Remove obsolete (and optionally redundant) options files from the
-/// resolved options dir. Unlike scan/sync this walks the directory itself,
-/// not a package list.
+/// Everything the cleaning pass needs, whichever path assembled it: plain
+/// `clean` resolves the settings on its own, `clean --unused` gets them from
+/// the closure scan it has to run first.
+struct CleanCtx {
+    settings: config::Settings,
+    moved: Moved,
+    jobs: usize,
+    /// An already-open query cache (the --unused path reuses the scan's).
+    cache: Option<cache::Cache>,
+    /// OPTIONS_NAMEs reached by the given list's closure; None without --unused.
+    used: Option<std::collections::HashSet<String>>,
+    /// Holds the layered make.conf alive until the pass is done.
+    _staging: tempfile::TempDir,
+}
+
+/// Remove obsolete (and optionally redundant or unused) options files from
+/// the resolved options dir. Unlike scan/sync this walks the directory
+/// itself; a package list is only consulted for --unused.
 fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
+    let has_list = !args.origins.is_empty() || !cli.files.is_empty();
+    if args.unused && !has_list {
+        anyhow::bail!(
+            "clean --unused needs a package list to compare against: \
+             give port origins or -f pkglist"
+        );
+    }
+    if !args.unused && has_list {
+        anyhow::bail!(
+            "clean walks the whole options dir; port origins and -f pkglist \
+             only mean something together with --unused"
+        );
+    }
+
+    if !args.unused {
+        let staging = tempfile::tempdir()?;
+        let settings = config::resolve(
+            cli.tree.as_deref(),
+            cli.jail.as_deref(),
+            cli.set.as_deref(),
+            cli.options_dir.as_deref(),
+            staging.path(),
+        )?;
+        let moved = Moved::load(&settings.portsdir);
+        let ctx = CleanCtx {
+            settings,
+            moved,
+            jobs: default_jobs(cli),
+            cache: None,
+            used: None,
+            _staging: staging,
+        };
+        return clean_options_dir(cli, args, ctx);
+    }
+
+    // --unused: only the closure of the given list justifies keeping an entry,
+    // so the closure has to be resolved first — settings, cache, MOVED and the
+    // job count are then reused for the cleaning pass itself.
+    let roots = cli::collect_roots(&args.origins, &cli.files)?;
+    let scanned = run_scan(cli, &roots)?;
+    if !scanned.result.errors.is_empty() {
+        // A port that failed to query is absent from the closure and would be
+        // pruned as unused — refuse rather than delete on partial knowledge.
+        anyhow::bail!(
+            "{} port(s) failed to query: the dependency closure is incomplete, \
+             refusing to prune entries",
+            scanned.result.errors.len()
+        );
+    }
+    let used = scanned.result.ports.values().map(|i| i.options_name.clone()).collect();
+    let ctx = CleanCtx {
+        settings: scanned.settings,
+        moved: scanned.moved,
+        jobs: scanned.jobs,
+        cache: Some(scanned.cache),
+        used: Some(used),
+        _staging: scanned.staging,
+    };
+    clean_options_dir(cli, args, ctx)
+}
+
+fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<()> {
     use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 
-    let staging = tempfile::tempdir()?;
-    let settings = config::resolve(
-        cli.tree.as_deref(),
-        cli.jail.as_deref(),
-        cli.set.as_deref(),
-        cli.options_dir.as_deref(),
-        staging.path(),
-    )?;
-    let moved = Moved::load(&settings.portsdir);
+    let CleanCtx { settings, moved, jobs, cache: open_cache, used, _staging } = ctx;
     eprintln!("optique clean: options dir {}", settings.options_dir.display());
 
     let (mut removals, live, warnings) =
@@ -93,17 +162,20 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         eprintln!("warning: {w}");
     }
 
+    // Entries nobody in the closure reads go; the redundancy pass below then
+    // only has to look at what --unused still keeps.
+    let live = match &used {
+        Some(used) => {
+            let (kept, unused) = clean::split_unused(live, used);
+            removals.extend(unused);
+            kept
+        }
+        None => live,
+    };
+
     // Optionally find files that only repeat defaults + make.conf.
     if args.redundant {
-        let jobs = cli.jobs.unwrap_or_else(|| {
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
-        });
-        let mut cache = if cli.no_cache {
-            cache::Cache::disabled()
-        } else {
-            let tree_key = cache::tree_key(&settings.portsdir);
-            cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
-        };
+        let mut cache = open_cache.unwrap_or_else(|| new_cache(cli, &settings));
         let ctx = QueryCtx {
             portsdir: settings.portsdir.clone(),
             make_conf: settings.make_conf.clone(),
@@ -177,7 +249,6 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             eprintln!();
         }
         runner.shutdown();
-        removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
         if cli.verbose && !cli.quiet {
             kept.sort();
             for (name, why) in &kept {
@@ -185,6 +256,9 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             }
         }
     }
+
+    // Obsolete, unused and redundant removals were collected separately.
+    removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
 
     if removals.is_empty() {
         eprintln!("nothing to clean ({total_entries} entries kept)");
@@ -285,6 +359,24 @@ struct Scanned {
     jobs: usize,
 }
 
+/// Parallel `make` jobs: -J, else min(16, ncpu).
+fn default_jobs(cli: &Cli) -> usize {
+    cli.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
+    })
+}
+
+/// Open the persistent query cache for this tree + make.conf pair (or a
+/// no-op cache under --no-cache).
+fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
+    if cli.no_cache {
+        cache::Cache::disabled()
+    } else {
+        let tree_key = cache::tree_key(&settings.portsdir);
+        cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
+    }
+}
+
 fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
     let staging = tempfile::tempdir()?;
     let settings = config::resolve(
@@ -295,16 +387,8 @@ fn run_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<Scanned> {
         staging.path(),
     )?;
 
-    let jobs = cli.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
-    });
-
-    let mut cache = if cli.no_cache {
-        cache::Cache::disabled()
-    } else {
-        let tree_key = cache::tree_key(&settings.portsdir);
-        cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
-    };
+    let jobs = default_jobs(cli);
+    let mut cache = new_cache(cli, &settings);
     let moved = Moved::load(&settings.portsdir);
 
     let ctx = QueryCtx {

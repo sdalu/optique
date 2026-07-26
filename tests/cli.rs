@@ -24,7 +24,28 @@ fn subcommand_help_shows_specific_flags() {
     let out = optique().args(["clean", "--help"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("--redundant"));
+    assert!(text.contains("--unused"));
     assert!(text.contains("--dry-run"));
+}
+
+#[test]
+fn clean_unused_requires_a_list() {
+    // No origins, no -f: there is nothing to compute a closure from, and the
+    // check must fire before any ports tree is touched.
+    let out = optique().args(["clean", "--unused"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("package list"), "{err}");
+}
+
+#[test]
+fn clean_origins_require_unused() {
+    // Plain clean walks the whole options dir; a list would be silently
+    // ignored, so it is an error instead.
+    let out = optique().args(["clean", "ports-mgmt/pkg"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--unused"), "{err}");
 }
 
 #[test]

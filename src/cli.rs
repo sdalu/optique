@@ -72,7 +72,8 @@ pub enum Command {
 
     /// Remove obsolete options files from the resolved options dir: ports
     /// that vanished from the tree, and optionally files that only repeat
-    /// what defaults + make.conf already dictate
+    /// what defaults + make.conf already dictate or belong to ports outside
+    /// a package list's dependency closure
     Clean(CleanArgs),
 
     /// Bare origins with no subcommand open the TUI: `optique -z set www/nginx`
@@ -86,6 +87,14 @@ pub struct CleanArgs {
     /// defaults + make.conf overlay outcome (removing them changes nothing)
     #[arg(short = 'r', long = "redundant")]
     pub redundant: bool,
+
+    /// Also remove entries for ports outside the dependency closure of the
+    /// given package list (positional origins and/or -f pkglist)
+    #[arg(short = 'u', long = "unused")]
+    pub unused: bool,
+
+    /// Port origins for --unused closure computation
+    pub origins: Vec<String>,
 }
 
 #[derive(Args, Debug)]
