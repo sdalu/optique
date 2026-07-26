@@ -96,7 +96,8 @@ pub struct App {
     pub staging_db: StagingDb,
     pub refresher: Refresher,
     /// Help overlay visible?
-    pub show_help: bool,
+    /// Help overlay: Some(active tab index) while open.
+    pub help_tab: Option<usize>,
     /// Dependency-chain ("why") overlay, when open.
     pub why: Option<WhyInfo>,
     /// Option-detail overlay: (port, option name). The data is looked up at
@@ -158,7 +159,7 @@ pub fn run(
         listable: 0,
         staging_db,
         refresher,
-        show_help: false,
+        help_tab: None,
         why: None,
         opt_info: None,
         undo: Vec::new(),
@@ -225,8 +226,23 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
             handle_modal_key(app, key.code);
             continue;
         }
-        if app.show_help {
-            app.show_help = false;
+        if let Some(tab) = app.help_tab {
+            let n = ui::HELP_TABS.len();
+            match key.code {
+                KeyCode::Char(c @ '1'..='9') => {
+                    let idx = c as usize - '1' as usize;
+                    if idx < n {
+                        app.help_tab = Some(idx);
+                    }
+                }
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                    app.help_tab = Some((tab + 1) % n)
+                }
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                    app.help_tab = Some((tab + n - 1) % n)
+                }
+                _ => app.help_tab = None,
+            }
             continue;
         }
         if app.why.is_some() {
@@ -301,7 +317,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
                 }
             }
             KeyCode::Char('/') => app.focus = Focus::Filter,
-            KeyCode::Char('?') | KeyCode::F(1) => app.show_help = true,
+            KeyCode::Char('?') | KeyCode::F(1) => app.help_tab = Some(0),
             KeyCode::Char('a') => app.open_apply_modal(),
             KeyCode::Char('B') => app.open_bulk(),
             // Shift-U undoes the last option change anywhere; lowercase 'u'
@@ -384,7 +400,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::PageUp => app.move_selection(-15),
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
-        KeyCode::Char('h') => app.show_help = true,
+        KeyCode::Char('h') => app.help_tab = Some(0),
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {

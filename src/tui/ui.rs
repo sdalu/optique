@@ -29,8 +29,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_apply_modal(f, app);
     } else if app.bulk.is_some() {
         draw_bulk(f, app);
-    } else if app.show_help {
-        draw_help(f);
+    } else if let Some(tab) = app.help_tab {
+        draw_help(f, tab);
     } else if app.why.is_some() {
         draw_why(f, app);
     } else if app.opt_info.is_some() {
@@ -65,14 +65,27 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 status_marker(&status)
             };
+            // The port name itself carries the severity: red bold for a port
+            // that will not build (BROKEN/IGNORE), red for conflicting staged
+            // options, dim for blacklisted ports.
+            let blocked = info.broken.is_some() || info.ignore.is_some();
+            let name_style = if blacklisted {
+                Style::default().fg(Color::DarkGray)
+            } else if blocked {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else if status == UiStatus::Conflict {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default()
+            };
             let mut spans = vec![
                 Span::styled(format!("{marker} "), Style::default().fg(color)),
-                Span::raw(key.to_string()),
+                Span::styled(key.to_string(), name_style),
             ];
             if blacklisted {
                 spans.push(Span::styled(" ⛔", Style::default().fg(Color::DarkGray)));
             }
-            if info.broken.is_some() || info.ignore.is_some() {
+            if blocked {
                 spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
             }
             ListItem::new(Line::from(spans))
@@ -539,16 +552,16 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_help(f: &mut Frame) {
-    let area = centered_rect(78, 88, f.area());
+/// Help overlay tab titles; indices match `App.help_tab`.
+pub const HELP_TABS: [&str; 4] = ["Markers", "Option row", "Navigate/Edit", "Views/Actions"];
+
+fn draw_help(f: &mut Frame, tab: usize) {
+    let area = centered_rect(78, 72, f.area());
     f.render_widget(Clear, area);
 
     let key = |k: &str| Span::styled(format!("{k:<12}"), Style::default().fg(Color::LightBlue));
-    let head = |t: &str| {
-        Line::from(Span::styled(
-            t.to_string(),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ))
+    let keyline = |k: &str, txt: &str| {
+        Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())])
     };
     let mark = |m: &str, c: Color, txt: &str| {
         Line::from(vec![
@@ -557,59 +570,78 @@ fn draw_help(f: &mut Frame) {
         ])
     };
 
-    let mut lines: Vec<Line> = vec![
-        head("Port markers"),
-        mark("✗", Color::Red, "conflict — staged options violate PREVENTS/group rules"),
-        mark("*", Color::Cyan, "edited — staged changes not yet applied"),
-        mark("?", Color::Yellow, "unconfigured — no saved options file"),
-        mark("!", Color::LightRed, "stale — option list changed since the file was written"),
-        mark("≠", Color::Magenta, "contradicts make.conf OPTIONS_SET/UNSET (w view)"),
-        mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
-        mark("✓", Color::DarkGray, "ok · ⚠ port BROKEN/IGNORE with current options"),
-        mark("⛔", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
-        Line::default(),
-        head("Option row"),
-        mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
-        mark("", Color::Yellow, "yellow name = deviates from the port default"),
-        mark("", Color::Magenta, "magenta name = contradicts make.conf policy (≠mc)"),
-        mark("", Color::DarkGray, "def:on|off — the port's default value"),
-        mark("NEW", Color::Yellow, "added since the options file was written"),
-        mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),
-        mark("", Color::Red, "FORCED — *_FORCE knob, file cannot override (locked)"),
-        mark("", Color::Cyan, "implied by X — auto-enabled through IMPLIES (locked)"),
-        mark("⚠", Color::Red, "broken/ignored — enabling marks the port BROKEN/IGNORE"),
-        mark("≠mc", Color::Magenta, "value contradicts the global make.conf policy"),
-        Line::default(),
-        head("Keys"),
-    ];
-    for (k, txt) in [
-        ("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
-        ("Enter/l", "edit selected port · h/Esc back to the list"),
-        ("Space", "toggle option (group rules enforced)"),
-        ("d / u", "reset port to defaults / revert to saved state"),
-        ("U", "undo the last option change (u = revert port to saved)"),
-        ("B", "bulk: set an option on/off across all visible ports"),
-        ("n / p", "next / previous port needing attention"),
-        ("f", "jump to the next flavor of the same origin"),
-        ("t", "show only ports needing attention"),
-        ("s", "toggle problems-first / stable alphabetical sort"),
-        ("m", "make.conf-decided ports count as ok (≈)"),
-        ("w", "flag make.conf contradictions (≠)"),
-        ("/", "filter the port list"),
-        ("a", "apply: preview every file diff, then write atomically"),
-        ("i", "option details (description, constraints, deps it adds)"),
-        ("r", "why is this port here? (dependency chain + dependents)"),
-        ("? h F1", "this help"),
-        ("Ctrl-L", "force a full screen repaint"),
-        ("q Ctrl-C", "quit — offers saving staged edits as a draft"),
-    ] {
-        lines.push(Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())]));
+    // Tab bar with the number hotkeys.
+    let mut bar: Vec<Span> = vec![Span::raw(" ")];
+    for (i, name) in HELP_TABS.iter().enumerate() {
+        let label = format!(" {}:{} ", i + 1, name);
+        bar.push(if i == tab {
+            Span::styled(label, Style::default().fg(Color::Black).bg(Color::LightBlue))
+        } else {
+            Span::styled(label, Style::default().fg(Color::DarkGray))
+        });
+        bar.push(Span::raw(" "));
+    }
+
+    let mut lines: Vec<Line> = vec![Line::from(bar), Line::default()];
+    match tab {
+        0 => lines.extend([
+            mark("✗", Color::Red, "conflict — staged options violate PREVENTS/group rules"),
+            mark("*", Color::Cyan, "edited — staged changes not yet applied"),
+            mark("?", Color::Yellow, "unconfigured — no saved options file"),
+            mark("!", Color::LightRed, "stale — option list changed since the file was written"),
+            mark("≠", Color::Magenta, "contradicts make.conf OPTIONS_SET/UNSET (w view)"),
+            mark("≈", Color::DarkGray, "needs no attention: decided by make.conf (m view)"),
+            mark("✓", Color::DarkGray, "ok"),
+            mark("⚠", Color::Red, "port BROKEN/IGNORE with the current options"),
+            mark("⛔", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
+            Line::default(),
+            mark("", Color::Red, "red bold name = will not build (BROKEN/IGNORE)"),
+            mark("", Color::Red, "red name = conflicting staged options"),
+            mark("", Color::DarkGray, "dim name = blacklisted"),
+        ]),
+        1 => lines.extend([
+            mark("[x]", Color::White, "checkbox · (o) single/radio group member"),
+            mark("", Color::Yellow, "yellow name = deviates from the port default"),
+            mark("", Color::Magenta, "magenta name = contradicts make.conf policy (≠mc)"),
+            mark("", Color::DarkGray, "def:on|off — the port's default value"),
+            mark("NEW", Color::Yellow, "added since the options file was written"),
+            mark("mc", Color::Green, "value from make.conf (mc:port = per-port knob)"),
+            mark("", Color::Red, "FORCED — *_FORCE knob, file cannot override (locked)"),
+            mark("", Color::Cyan, "implied by X — auto-enabled through IMPLIES (locked)"),
+            mark("⚠", Color::Red, "broken/ignored — enabling marks the port BROKEN/IGNORE"),
+            mark("≠mc", Color::Magenta, "value contradicts the global make.conf policy"),
+            mark("", Color::DarkGray, "struck-through = obsolete, dropped on apply;"),
+            mark("", Color::DarkGray, "'not in this flavor' = managed via the default flavor"),
+        ]),
+        2 => lines.extend([
+            keyline("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
+            keyline("Enter/l", "edit selected port · h/Esc back to the list"),
+            keyline("Space", "toggle option (group rules enforced)"),
+            keyline("d / u", "reset port to defaults / revert to saved state"),
+            keyline("U", "undo the last option change"),
+            keyline("B", "bulk: set an option on/off across all visible ports"),
+            keyline("n / p", "next / previous port needing attention"),
+            keyline("f", "jump to the next flavor of the same origin"),
+            keyline("i", "option details (description, constraints, deps it adds)"),
+            keyline("r", "why is this port here? (dependency chain + dependents)"),
+        ]),
+        _ => lines.extend([
+            keyline("t", "show only ports needing attention"),
+            keyline("s", "toggle problems-first / stable alphabetical sort"),
+            keyline("m", "make.conf-decided ports count as ok (≈)"),
+            keyline("w", "flag make.conf contradictions (≠)"),
+            keyline("/", "filter the port list"),
+            keyline("a", "apply: preview every file diff, then write atomically"),
+            keyline("? h F1", "this help"),
+            keyline("Ctrl-L", "force a full screen repaint"),
+            keyline("q Ctrl-C", "quit — offers saving staged edits as a draft"),
+        ]),
     }
 
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" help — any key to close ")
+            .title(" help — 1-4/Tab/←→ switch · any other key closes ")
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);
