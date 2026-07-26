@@ -127,7 +127,8 @@ Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 every option at all (unconfigured) is already decided by make.conf
 (marker `≈`) · `w` flag ports whose options contradict
 the global `OPTIONS_SET/UNSET` policy (marker `≠`, badge `≠mc` on the option
-row) · `/` filter · `a` apply · `q` quit.
+row) · `/` filter · `a` apply · `?`/`h`/F1 color-coded in-TUI help
+(markers, badges, keys) · `q` quit.
 
 ## Poudriere layout
 
