@@ -198,7 +198,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
     let scanned = run_scan(cli, roots)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
 
-    let mut rows: Vec<(String, String, PortStatus)> = Vec::new();
+    let mut rows: Vec<(String, String, PortStatus, Vec<String>)> = Vec::new();
     let mut hidden = 0usize;
     for (key, info) in &result.ports {
         if !info.options.has_options() {
@@ -207,17 +207,23 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
         }
         let saved =
             SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
-        rows.push((key.to_string(), info.pkgname.clone(), info.status(saved.as_ref())));
+        let undecided = session::undecided_options(info, saved.as_ref());
+        rows.push((key.to_string(), info.pkgname.clone(), info.status(saved.as_ref()), undecided));
     }
-    rows.sort_by_key(|(key, _, status)| (matches!(status, PortStatus::Ok), key.clone()));
+    rows.sort_by_key(|(key, _, status, _)| (matches!(status, PortStatus::Ok), key.clone()));
 
     let mut unconfigured = 0;
     let mut stale = 0;
-    for (key, pkgname, status) in &rows {
+    for (key, pkgname, status, undecided) in &rows {
+        let decision = if undecided.is_empty() {
+            " [mc-covered ≈]".to_string()
+        } else {
+            format!(" undecided: {}", undecided.join(" "))
+        };
         match status {
             PortStatus::Unconfigured => {
                 unconfigured += 1;
-                println!("?  {key:<40} {pkgname:<32} UNCONFIGURED");
+                println!("?  {key:<40} {pkgname:<32} UNCONFIGURED{decision}");
             }
             PortStatus::Stale { added, removed } => {
                 stale += 1;
@@ -228,7 +234,7 @@ fn cmd_scan(cli: &Cli, roots: &[model::origin::PortKey]) -> Result<()> {
                 if !removed.is_empty() {
                     detail.push_str(&format!(" -{}", removed.join(" -")));
                 }
-                println!("!  {key:<40} {pkgname:<32} STALE{detail}");
+                println!("!  {key:<40} {pkgname:<32} STALE{detail}{decision}");
             }
             PortStatus::Ok => println!("   {key:<40} {pkgname:<32} ok"),
         }

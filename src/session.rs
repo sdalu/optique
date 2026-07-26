@@ -291,25 +291,7 @@ impl Session {
     /// every option it has.
     pub fn covered_by_makeconf(&self, info: &PortInfo) -> bool {
         let Some(state) = self.state(info) else { return false };
-        let known: BTreeSet<&str> = match &state.saved {
-            Some(saved) => saved
-                .complete
-                .iter()
-                .chain(saved.set.iter())
-                .chain(saved.unset.iter())
-                .map(String::as_str)
-                .collect(),
-            None => BTreeSet::new(),
-        };
-        let o = &info.options;
-        o.complete.iter().filter(|opt| !known.contains(opt.as_str())).all(|opt| {
-            o.mc_set.contains(opt)
-                || o.mc_unset.contains(opt)
-                || o.port_set.contains(opt)
-                || o.port_unset.contains(opt)
-                || o.force_set.contains(opt)
-                || o.force_unset.contains(opt)
-        })
+        undecided_options(info, state.saved.as_ref()).is_empty()
     }
 
     /// Does this option's staged value contradict the global make.conf
@@ -345,6 +327,49 @@ impl Session {
     pub fn dirty(&self) -> bool {
         self.states.values().any(|s| s.staged != s.baseline)
     }
+}
+
+/// Options that genuinely need a human decision: not recorded in the saved
+/// file (all of them, for an unconfigured port) and not dictated by any
+/// make.conf layer (global OPTIONS_SET/UNSET, per-port _SET/_UNSET, *_FORCE).
+///
+/// Group semantics count as decisions too: when make.conf positively selects
+/// a member of a SINGLE (exactly one) or RADIO (at most one) group, the
+/// other members of that group are implicitly decided as off.
+pub fn undecided_options(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> Vec<String> {
+    let known: BTreeSet<&str> = match saved {
+        Some(saved) => saved
+            .complete
+            .iter()
+            .chain(saved.set.iter())
+            .chain(saved.unset.iter())
+            .map(String::as_str)
+            .collect(),
+        None => BTreeSet::new(),
+    };
+    let o = &info.options;
+    let mc_selected = |opt: &str| {
+        o.mc_set.contains(opt) || o.port_set.contains(opt) || o.force_set.contains(opt)
+    };
+    let mc_decided = |opt: &str| {
+        mc_selected(opt)
+            || o.mc_unset.contains(opt)
+            || o.port_unset.contains(opt)
+            || o.force_unset.contains(opt)
+    };
+    let group_decided: BTreeSet<&str> = o
+        .groups
+        .iter()
+        .filter(|g| matches!(g.kind, GroupKind::Single | GroupKind::Radio))
+        .filter(|g| g.members.iter().any(|m| mc_selected(m)))
+        .flat_map(|g| g.members.iter().map(String::as_str))
+        .collect();
+    o.complete
+        .iter()
+        .filter(|opt| !known.contains(opt.as_str()))
+        .filter(|opt| !mc_decided(opt) && !group_decided.contains(opt.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
@@ -581,6 +606,30 @@ mod tests {
             o.port_set.insert("X11".into());
         }
         assert!(s3.covered_by_makeconf(&s3.ports[&key3]));
+
+        // A SINGLE group is decided as a whole when make.conf selects one
+        // member (e.g. OPTIONS_SET += GSSAPI_NONE).
+        let g = OptionGroup {
+            kind: GroupKind::Single,
+            name: "GSSAPI".into(),
+            desc: String::new(),
+            members: vec![
+                "GSSAPI_BASE".into(),
+                "GSSAPI_MIT".into(),
+                "GSSAPI_NONE".into(),
+            ],
+        };
+        let (ports4, key4) =
+            mk_port(&["GSSAPI_BASE", "GSSAPI_MIT", "GSSAPI_NONE"], &["GSSAPI_BASE"], vec![g], vec![]);
+        let tmp4 = tempfile::tempdir().unwrap();
+        let roots4: Vec<PortKey> = ports4.keys().cloned().collect();
+        let mut s4 = Session::new(ports4, HashMap::new(), &roots4, tmp4.path());
+        assert!(!s4.covered_by_makeconf(&s4.ports[&key4]));
+        {
+            let o = &mut s4.ports.get_mut(&key4).unwrap().options;
+            o.mc_set.insert("GSSAPI_NONE".into());
+        }
+        assert!(s4.covered_by_makeconf(&s4.ports[&key4]));
     }
 
     #[test]

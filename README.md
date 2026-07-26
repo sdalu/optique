@@ -21,7 +21,9 @@ optique -z workstation www/nginx mail/dovecot
 optique -z server -f /usr/local/etc/poudriere.d/pkglist
 optique -z server -f base-list -f extra-list www/nginx
 
-# Non-interactive check: which ports are unconfigured or stale?
+# Non-interactive check: which ports are unconfigured or stale? Each flagged
+# port lists the options make.conf does NOT decide ("undecided: …"), or
+# "[mc-covered ≈]" when make.conf decides everything
 optique -z workstation scan -f pkglist
 
 # Headless refresh (the fast `poudriere options -C` replacement):
