@@ -74,6 +74,17 @@ poudriere testport -j <jail> -p default -O optique-overlay sysutils/optique
 lands in `${STAGEDIR}`) and the man page compression that turns
 `optique.8` into `share/man/man8/optique.8.gz`.
 
+For a quick host-side validation without poudriere:
+
+```sh
+make PORTSDIR=/usr/ports NO_DEPENDS=1 BATCH=1 stage check-plist
+```
+
+`BATCH=1` matters for any scripted port build: without it the framework may
+pop an interactive dialog4ports OPTIONS screen for a dependency (the tree's
+lang/rust, for instance) and hang a non-interactive session. `NO_DEPENDS=1`
+uses the installed rust toolchain instead of building the tree's.
+
 ## Notes
 
 - `GH_TAGNAME=v${DISTVERSION}` is used, as the tag is expected to carry a `v`
