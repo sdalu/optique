@@ -291,22 +291,29 @@ at most one and
 .Dv MULTI
 at least one.
 .Pp
-Each option row carries the staged value, the port default
-.Pq Ql def:on No or Ql def:off ,
-a
-.Ql NEW
-badge for options added since the file was written, and a provenance badge:
-.Ql mc
-for a global
+Each option row starts with
+.Ql N
+when the option was added to the port since its options file was written, so
+every such option can be found down the pane's left edge, and carries the
+staged value, the port default
+.Pq Ql on No or Ql off ,
+and then a second
+.Ql on Ns / Ns Ql off :
+the value
+.Pa make.conf
+dictates, in the colour of the knob that dictates it \(em green for a global
 .Va OPTIONS_SET
 or
 .Va OPTIONS_UNSET ,
-.Ql mc:port
-for a per-port knob, and
-.Ql FORCED
-for a
+bright green for the per-port
+.Va ${OPTIONS_NAME}_SET
+or
+.Va _UNSET ,
+and red bold for a
 .Va *_FORCE
 knob that the options file cannot override, which also locks the toggle.
+That column is empty when nothing but the port default or the options file
+itself decides the value.
 Options auto-enabled through an
 .Va IMPLIES
 chain are locked and marked
@@ -316,14 +323,23 @@ and options carrying
 or
 .Va <OPT>_IGNORE
 get a warning badge.
-A yellow option name deviates from the port default; a magenta one
-.Pq badge Ql \[u2260]mc
-contradicts
+A yellow option name deviates from the port default; a magenta one contradicts
 .Pa make.conf
-policy.
+policy \(em the colour carries that on its own, the row has no badge for it.
 Options that no longer exist are struck through and dropped on apply; options
 excluded by the current flavor but managed through the default flavor are
 listed in their own section.
+.Pp
+A panel at the bottom of the pane follows the cursor: titled with the name of
+the option under it, it gives that option's description as the ports framework
+states it, wrapped to the pane instead of cut at its edge as the rows are.
+Because of that panel a row keeps its trailing description only while a useful
+amount of it fits \(em under about sixteen columns of room the row drops it
+rather than show a word fragment.
+An option the framework describes nowhere reads
+.Ql (no description) .
+The panel grows to at most a third of the pane and marks with an ellipsis
+anything it still cannot fit.
 .Pp
 Toggling an option re-queries the port in the background against a staging
 .Va PORT_DBDIR ,
@@ -348,9 +364,10 @@ and
 page.
 .It Ic Enter , l
 Edit the selected port;
-.Ic h
+.Ic Esc ,
+.Ic Tab
 or
-.Ic Esc
+.Ic \(<-
 returns to the list.
 .It Ic Space
 Toggle the selected option, enforcing group rules.
@@ -409,10 +426,21 @@ Show details for the selected option: description, group,
 and
 .Va PREVENTS ,
 and the dependencies enabling it would add.
+.It Ic h
+Show the selected port's
+.Pa pkg-help
+notes in a scrollable popup
+.Pq Ic j , k , \(ua , \(da , Ic PgUp , Ic PgDn , Ic g , Ic G ;
+any other key closes it.
+Only ports that ship the file offer this, and those advertise it with a
+.Ql [h] help
+marker at the right of the option pane's title; see
+.Sx PORT NOTES .
+The key works in both panes.
 .It Ic r
 Explain why the port is in the closure: its dependency chain and its
 dependents.
-.It Ic \&? , h , F1
+.It Ic \&? , F1
 Colour-coded in-interface help listing markers, badges and keys.
 .It Ic Ctrl-L
 Force a full screen repaint.
@@ -433,6 +461,37 @@ restored ports so their dependencies reappear.
 The draft is cleared as soon as the changes are applied or discarded;
 .Ic u
 still reverts an individual port.
+.Ss PORT NOTES
+A port may ship a
+.Pa pkg-help
+file next to its
+.Pa Makefile
+.Pq Va PKGHELP , No that is Pa ${PKGDIR}/pkg-help :
+free-form notes about its options, which
+.Xr make 1 Cm config
+offers behind the Help button of
+.Xr portconfig 1 .
+Roughly thirty ports in a tree have one
+.Pq Pa www/apache24 , Pa security/gnupg , Pa lang/gcc* , Pa mail/postfix No among them .
+.Pp
+Ports that have one advertise it with a
+.Ql [h] help
+marker at the right of the option pane's title, and
+.Ic h
+opens it from either pane.
+Whether the file exists is settled when the port is queried \(em a cache
+generation is one ports-tree commit, so it cannot appear or vanish behind a
+cached entry \(em but its contents are read from disk every time the popup is
+opened, so edits show up without restarting
+.Nm .
+.Pp
+Note that per option the framework offers nothing but the description
+.Pq Va <OPT>_DESC ,
+which the option pane already shows in full;
+.Ic F1
+in
+.Xr portconfig 1
+opens that program's own help about the ports collection, not the port's.
 .Ss DRIVE PROTOCOL
 .Nm Cm tui Fl -drive Oo Fl f Ar pkglist Oc Op Ar origin ...
 .Pp
@@ -841,7 +900,7 @@ is repeatable and restricts that implicit list to packages installed from
 the named pkg repositories, e.g.
 .Ql --repo Synth
 to consider only synth-built packages; the names are listed by
-.Ql pkg query -a %R .
+.Ql pkg query -a \&%R .
 .Pp
 Note that when
 .Va Directory_options

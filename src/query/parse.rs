@@ -19,6 +19,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut broken = String::new();
     let mut ignore = String::new();
     let mut deprecated = String::new();
+    let mut pkg_help = String::new();
     let mut default_versions: Vec<String> = Vec::new();
     let mut saw_sentinel = false;
 
@@ -47,10 +48,13 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "PORT_UNSET" => opts.port_unset = wordset(value),
             "FORCE_SET" => opts.force_set = wordset(value),
             "FORCE_UNSET" => opts.force_unset = wordset(value),
+            "PORT_FORCE_SET" => opts.port_force_set = wordset(value),
+            "PORT_FORCE_UNSET" => opts.port_force_unset = wordset(value),
             "DEFAULT_VERSIONS" => default_versions = words(value),
             "BROKEN" => broken = value.trim().to_string(),
             "IGNORE" => ignore = value.trim().to_string(),
             "DEPRECATED" => deprecated = value.trim().to_string(),
+            "PKGHELP" => pkg_help = value.trim().to_string(),
             "GROUP" | "SINGLE" | "RADIO" | "MULTI" => {
                 let kind = match tag {
                     "GROUP" => GroupKind::Group,
@@ -153,6 +157,9 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         broken: non_empty(broken),
         ignore: non_empty(ignore),
         deprecated: non_empty(deprecated),
+        // ${PKGHELP} is always defined; only the minority of ports that ship
+        // the file get the marker, so the path is kept only when it is there.
+        pkg_help: non_empty(pkg_help).filter(|p| std::path::Path::new(p).is_file()),
         default_versions,
         warnings,
     })
@@ -235,6 +242,29 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let key = PortKey::parse("cat/foo").unwrap();
         let info = parse_dump(&key, text).unwrap();
         assert_eq!(info.options.defs["A"].desc, "use X | Y syntax");
+    }
+
+    /// PKGHELP is always defined by the framework; only the ports that really
+    /// ship the file may claim one, so the path is kept only when it is there.
+    #[test]
+    fn pkg_help_is_kept_only_when_the_file_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let present = tmp.path().join("pkg-help");
+        std::fs::write(&present, "notes\n").unwrap();
+        let dump = |path: &std::path::Path| {
+            format!(
+                "make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0\n\
+                 make: /dev/stdin:3: OPTIQUE|PKGHELP|{}\n",
+                path.display()
+            )
+        };
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, &dump(&present)).unwrap();
+        assert_eq!(info.pkg_help.as_deref(), Some(present.to_str().unwrap()));
+
+        let missing = tmp.path().join("absent/pkg-help");
+        let info = parse_dump(&key, &dump(&missing)).unwrap();
+        assert_eq!(info.pkg_help, None);
     }
 
     #[test]

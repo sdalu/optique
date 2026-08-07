@@ -13,7 +13,6 @@ use crate::optionsfile::{self, SavedOptionsFile};
 #[derive(Debug)]
 pub struct PendingWrite {
     pub key: PortKey,
-    pub options_name: String,
     pub path: PathBuf,
     pub old: Option<SavedOptionsFile>,
     /// Final enabled set the file will record.
@@ -44,22 +43,22 @@ impl PendingWrite {
                 let adopted: Vec<&str> = now_known
                     .iter()
                     .filter(|o| !file_known.contains(**o))
-                    .map(|o| *o)
+                    .copied()
                     .collect();
                 let dropped: Vec<&str> = file_known
                     .iter()
                     .filter(|o| !now_known.contains(**o))
-                    .map(|o| *o)
+                    .copied()
                     .collect();
                 let turned_on: Vec<&str> = cur
                     .difference(&was)
                     .filter(|o| file_known.contains(**o))
-                    .map(|o| *o)
+                    .copied()
                     .collect();
                 let turned_off: Vec<&str> = was
                     .iter()
                     .filter(|o| now_known.contains(**o) && !cur.contains(**o))
-                    .map(|o| *o)
+                    .copied()
                     .collect();
                 if !turned_on.is_empty() {
                     parts.push(format!("+{}", turned_on.join(" +")));
@@ -234,7 +233,6 @@ pub fn plan_writes<'a>(
         let content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
         writes.push(PendingWrite {
             key: chosen.key.clone(),
-            options_name: options_name.clone(),
             path,
             old,
             enabled: enabled.clone(),
@@ -332,6 +330,7 @@ mod tests {
             broken: None,
             ignore: None,
             deprecated: None,
+            pkg_help: None,
             default_versions: vec![],
             warnings: vec![],
         }
@@ -439,7 +438,6 @@ mod tests {
         );
         let w = PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
-            options_name: "cat_port".into(),
             path: std::path::PathBuf::from("/nonexistent"),
             old: Some(old),
             // A turned off, B turned on, NEWOPT adopted on, GONE dropped.
@@ -533,7 +531,6 @@ mod tests {
     fn apply_reports_failures() {
         let w = PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
-            options_name: "cat_port".into(),
             // Parent is a file, not a dir -> create_dir_all fails.
             path: std::path::PathBuf::from("/dev/null/cat_port/options"),
             old: None,

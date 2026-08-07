@@ -591,13 +591,13 @@ pub fn undecided_options(
     };
     let o = &info.options;
     let mc_selected = |opt: &str| {
-        o.mc_set.contains(opt) || o.port_set.contains(opt) || o.force_set.contains(opt)
+        o.mc_set.contains(opt) || o.port_set.contains(opt) || o.forced_value(opt) == Some(true)
     };
     let mc_decided = |opt: &str| {
         mc_selected(opt)
             || o.mc_unset.contains(opt)
             || o.port_unset.contains(opt)
-            || o.force_unset.contains(opt)
+            || o.forced_value(opt) == Some(false)
     };
     let group_decided: BTreeSet<&str> = o
         .groups
@@ -626,21 +626,30 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
         .filter(|d| complete.contains(d.as_str()))
         .cloned()
         .collect();
-    for opt in o.mc_set.iter().chain(o.port_set.iter()) {
-        if complete.contains(opt.as_str()) {
-            set.insert(opt.clone());
+    // One pass per layer, in the framework's own order (bsd.options.mk:312,
+    // 320, 326, 334 then 370, 378, 384, 392): each scope's UNSET runs before
+    // the next scope's SET, which is what lets the per-port knob override the
+    // global one. Applying all the SETs and then all the UNSETs instead would
+    // let a global UNSET erase a per-port SET.
+    for (adds, list) in [
+        (true, &o.mc_set),
+        (false, &o.mc_unset),
+        (true, &o.port_set),
+        (false, &o.port_unset),
+        (true, &o.force_set),
+        (false, &o.force_unset),
+        (true, &o.port_force_set),
+        (false, &o.port_force_unset),
+    ] {
+        for opt in list.iter() {
+            if adds {
+                if complete.contains(opt.as_str()) {
+                    set.insert(opt.clone());
+                }
+            } else {
+                set.remove(opt);
+            }
         }
-    }
-    for opt in o.mc_unset.iter().chain(o.port_unset.iter()) {
-        set.remove(opt);
-    }
-    for opt in &o.force_set {
-        if complete.contains(opt.as_str()) {
-            set.insert(opt.clone());
-        }
-    }
-    for opt in &o.force_unset {
-        set.remove(opt);
     }
     close_implies(info, set)
 }
@@ -734,6 +743,7 @@ mod tests {
             broken: None,
             ignore: None,
             deprecated: None,
+            pkg_help: None,
             default_versions: vec![],
             warnings: vec![],
         };
@@ -849,6 +859,43 @@ mod tests {
         let info = s.ports.get(&key).unwrap();
         assert_eq!(s.status(info), UiStatus::Conflict);
         assert!(s.violations(info)[0].contains("pick one"));
+    }
+
+    /// bsd.options.mk applies each scope's SET and UNSET in turn (312, 320,
+    /// 326, 334, then the FORCE quartet at 370-392), so the per-port knob
+    /// overrides the global one. Applying every SET and only then every UNSET
+    /// used to let a global UNSET erase a per-port SET: the exact shape of
+    /// `OPTIONS_UNSET= DOCS` plus `<port>_SET= DOCS`, which then showed up as
+    /// a spurious ≠mc deviation on a port that agreed with make.conf.
+    #[test]
+    fn per_port_makeconf_knob_beats_the_global_one() {
+        let (mut ports, key) = mk_port(&["DOCS", "NLS", "X11"], &[], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.mc_unset.insert("DOCS".into());
+            o.port_set.insert("DOCS".into());
+            // The opposite order too: global on, per-port off.
+            o.mc_set.insert("NLS".into());
+            o.port_unset.insert("NLS".into());
+            // FORCE has the same two scopes, applied after both.
+            o.force_unset.insert("X11".into());
+            o.port_force_set.insert("X11".into());
+            // What make itself computes for those layers (PORT_OPTIONS), i.e.
+            // the staged set of an unconfigured port.
+            o.effective = ["DOCS", "X11"].iter().map(|s| s.to_string()).collect();
+        }
+        let info = &ports[&key];
+        let eff = nofile_effective(info);
+        assert!(eff.contains("DOCS"), "per-port _SET must survive the global UNSET");
+        assert!(!eff.contains("NLS"), "per-port _UNSET must survive the global SET");
+        assert!(eff.contains("X11"), "per-port _SET_FORCE must beat the global UNSET_FORCE");
+        assert_eq!(info.options.forced_value("X11"), Some(true));
+
+        // ...and the staged state agreeing with make.conf is not a deviation.
+        let tmp = tempfile::tempdir().unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        assert!(s.mc_deviations(&s.ports[&key]).is_empty());
     }
 
     #[test]
@@ -993,6 +1040,7 @@ mod tests {
             broken: None,
             ignore: None,
             deprecated: None,
+            pkg_help: None,
             default_versions: vec![],
             warnings: vec![],
         }
@@ -1028,6 +1076,7 @@ mod tests {
                 broken: None,
                 ignore: None,
                 deprecated: None,
+                pkg_help: None,
                 default_versions: vec![],
                 warnings: vec![],
             }
@@ -1072,6 +1121,7 @@ mod tests {
                 broken: None,
                 ignore: None,
                 deprecated: None,
+                pkg_help: None,
                 default_versions: vec![],
                 warnings: vec![],
             }
@@ -1264,6 +1314,7 @@ mod tests {
                 broken: None,
                 ignore: None,
                 deprecated: None,
+                pkg_help: None,
                 default_versions: vec![],
                 warnings: vec![],
             }

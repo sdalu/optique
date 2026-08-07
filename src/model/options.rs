@@ -74,9 +74,17 @@ pub struct PortOptions {
     /// Per-port make.conf ${OPTIONS_NAME}_SET / _UNSET.
     pub port_set: BTreeSet<String>,
     pub port_unset: BTreeSet<String>,
-    /// All *_FORCE knobs merged (these override the options file).
+    /// Global OPTIONS_SET_FORCE / OPTIONS_UNSET_FORCE (these override the
+    /// options file). Kept apart from the per-port pair below because the
+    /// framework applies the two scopes in order, so a per-port FORCE knob
+    /// overrides a global one that says the opposite.
     pub force_set: BTreeSet<String>,
     pub force_unset: BTreeSet<String>,
+    /// Per-port ${OPTIONS_NAME}_SET_FORCE / _UNSET_FORCE.
+    #[serde(default)]
+    pub port_force_set: BTreeSet<String>,
+    #[serde(default)]
+    pub port_force_unset: BTreeSet<String>,
 }
 
 /// Where an option's current value comes from, following the
@@ -97,7 +105,25 @@ impl PortOptions {
 
     /// Whether toggling this option in the options file can have any effect.
     pub fn is_forced(&self, opt: &str) -> bool {
-        self.force_set.contains(opt) || self.force_unset.contains(opt)
+        self.forced_value(opt).is_some()
+    }
+
+    /// The value a *_FORCE knob pins the option to, None when none does.
+    /// The four knobs are applied in the framework's order, last one wins:
+    /// global SET, global UNSET, per-port SET, per-port UNSET.
+    pub fn forced_value(&self, opt: &str) -> Option<bool> {
+        let mut value = None;
+        for (v, list) in [
+            (true, &self.force_set),
+            (false, &self.force_unset),
+            (true, &self.port_force_set),
+            (false, &self.port_force_unset),
+        ] {
+            if list.contains(opt) {
+                value = Some(v);
+            }
+        }
+        value
     }
 
     /// Provenance of the option's value given the enabled set recorded in the

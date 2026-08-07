@@ -92,7 +92,7 @@ The typical cycle, replacing `poudriere options -C` before a bulk build:
    never shown.
 
 4. **Decide.** For each flagged port, either accept what's proposed (the
-   saved choices plus defaults for `NEW` options — that is exactly what
+   saved choices plus defaults for the `N`-marked new options — that is what
    Apply will write if you touch nothing) or edit: `Space` toggles with
    group rules enforced, `IMPLIES` chains auto-enable, `FORCED` and implied
    options are locked with an explanation, `⚠` warns when a choice marks
@@ -130,19 +130,40 @@ Left pane: every port in the dependency closure **that has options**
 
 Right pane: options in framework order with group headers (SINGLE = exactly
 one, RADIO = at most one, MULTI = at least one — enforced on toggle). Each row
-shows the staged value, the default (`def: on/off`), a `NEW` badge for options
-added since the file was written, provenance badges (`mc` = global
-OPTIONS_SET/UNSET, `mc:port` = per-port, `FORCED` = *_FORCE knobs that the
-options file cannot override — toggle locked), `implied by X` locks from
+starts with `N` when the option was added to the port since its options file
+was written (first column, so they are findable down the pane's left edge),
+then shows the staged value, the port default (`on`/`off`), then a second
+`on`/`off` giving the value
+**make.conf** dictates, coloured by which knob decided it: green = global
+`OPTIONS_SET`/`OPTIONS_UNSET`, bright green = the per-port
+`${OPTIONS_NAME}_SET`/`_UNSET`, red bold = a `*_FORCE` knob the options file
+cannot override (toggle locked). That column stays empty when only the port
+default or your own options file decides. Then `implied by X` locks from
 `IMPLIES` chains, and `⚠broken/ignored` for options carrying `<OPT>_BROKEN` /
 `<OPT>_IGNORE`. Name colors: yellow = deviates from the port's default,
-magenta (+ `≠mc` badge) = contradicts your make.conf — the option is
+magenta = contradicts your make.conf — the option is
 mentioned there but the staged value differs from what defaults + make.conf
 alone would produce. Obsolete options (removed from the port) appear struck
 through and are dropped on apply; options excluded by the current flavor but
-managed via the default flavor are listed separately. `i` opens a detail popup
+managed via the default flavor are listed separately. A panel at the bottom of
+that pane follows the cursor: titled with the option's name, it gives its
+description in full, wrapped — the part the rows themselves rarely have room
+for (options the framework describes nowhere say `(no description)`). A row
+that has fewer than ~16 columns left for its description drops it rather than
+showing a word fragment, since the panel below carries it whole. `i`
+opens a detail popup
 for the selected option: description, group, IMPLIES/PREVENTS, and the
-dependencies enabling it would add. When a background refresh turns a port
+dependencies enabling it would add.
+
+A `[h] help` marker on the right of that pane's title means the port ships a
+`pkg-help` file — the free-form notes `make config` offers behind its Help
+button (`${PKGDIR}/pkg-help`; ~30 ports in a tree have one, e.g. `www/apache24`
+or `security/gnupg`). `h` opens it in a scrollable popup (`j/k` `↑/↓`,
+`PgUp/PgDn`, `g/G`; any other key closes), read from disk each time. Note that
+`F1` in `make config` is portconfig's *own* Ports Collection help, not the
+port's.
+
+When a background refresh turns a port
 BROKEN/IGNORE, the banner adds a `likely cause:` line naming the recent option
 changes (`+OPT`/`-OPT`) that most likely caused it.
 
@@ -169,13 +190,13 @@ Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 (hide `✓` ok) · `m` treat stale/unconfigured ports as ok when every added option (stale) or
 every option at all (unconfigured) is already decided by make.conf
 (marker `≈`) · `w` flag ports whose options contradict
-the global `OPTIONS_SET/UNSET` policy (marker `≠`, badge `≠mc` on the option
-row) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
+the global `OPTIONS_SET/UNSET` policy (marker `≠`; the option itself is named
+in magenta) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
 keeps neighbors put while you work down the list; `n`/`p` still jump between
 problems in either order) · `/` filter · `a` apply ·
 `r` why-is-this-here (dependency chain) · `B` bulk-set an option across
-visible ports · `f` next flavor of the same origin · `?`/`h`/F1 color-coded
-in-TUI help (markers, badges, keys) · `q` quit.
+visible ports · `f` next flavor of the same origin · `h` the port's pkg-help
+notes · `?`/F1 color-coded in-TUI help (markers, badges, keys) · `q` quit.
 
 ### Debugging the TUI
 

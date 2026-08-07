@@ -179,6 +179,8 @@ fn state_json(app: &App) -> String {
         "bulk"
     } else if app.help_tab.is_some() {
         "help"
+    } else if app.port_help.is_some() {
+        "port_help"
     } else if app.why.is_some() {
         "why"
     } else if app.opt_info.is_some() {

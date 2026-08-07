@@ -116,13 +116,6 @@ pub fn redundancy_diff(info: &PortInfo) -> Vec<String> {
     out
 }
 
-/// Does the options file change nothing? True when the effective options
-/// computed WITH the file (info.options.effective, queried against the real
-/// options dir) equal what defaults + make.conf overlays alone would yield.
-pub fn file_is_redundant(info: &PortInfo) -> bool {
-    redundancy_diff(info).is_empty()
-}
-
 /// Delete the options file and (when empty) its directory.
 /// A sibling `options.local` is never touched and keeps the directory.
 pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
@@ -170,6 +163,7 @@ mod tests {
             broken: None,
             ignore: None,
             deprecated: None,
+            pkg_help: None,
             default_versions: vec![],
             warnings: vec![],
         }
@@ -248,11 +242,11 @@ mod tests {
         o.defaults = ["A".to_string()].into();
         o.mc_unset = ["B".to_string()].into();
         o.effective = ["A".to_string()].into();
-        assert!(file_is_redundant(&info_with(o.clone())));
+        assert!(redundancy_diff(&info_with(o.clone())).is_empty());
 
         // file deviates: B enabled although default+mc say off.
         o.effective = ["A".to_string(), "B".to_string()].into();
-        assert!(!file_is_redundant(&info_with(o)));
+        assert!(!redundancy_diff(&info_with(o)).is_empty());
     }
 
     #[test]

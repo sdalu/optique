@@ -81,6 +81,14 @@ impl WhyInfo {
     }
 }
 
+/// The port's pkg-help, read from disk when the overlay is opened (never
+/// cached: it is a file the user may be editing in another window).
+pub struct PortHelp {
+    pub key: PortKey,
+    pub lines: Vec<String>,
+    pub scroll: u16,
+}
+
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
@@ -127,6 +135,8 @@ pub struct App {
     /// Option-detail overlay: (port, option name). The data is looked up at
     /// draw time so a background refresh keeps the popup current.
     pub opt_info: Option<(PortKey, String)>,
+    /// pkg-help overlay of the selected port, when open.
+    pub port_help: Option<PortHelp>,
     /// Undo stack of (OPTIONS_NAME, staged set before the change), oldest
     /// first, capped at UNDO_MAX. Every TUI-driven mutation of a staged set
     /// pushes one entry; 'U' pops and restores the top one.
@@ -212,6 +222,7 @@ pub(crate) fn build_app(
         help_scroll: 0,
         why: None,
         opt_info: None,
+        port_help: None,
         undo: Vec::new(),
         pending: HashMap::new(),
         refresh_snapshots: HashMap::new(),
@@ -322,6 +333,19 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 app.help_tab = None;
                 app.help_scroll = 0;
             }
+        }
+        return KeyOutcome::Continue;
+    }
+    if let Some(help) = &mut app.port_help {
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => help.scroll = help.scroll.saturating_add(1),
+            KeyCode::Up | KeyCode::Char('k') => help.scroll = help.scroll.saturating_sub(1),
+            KeyCode::PageDown => help.scroll = help.scroll.saturating_add(10),
+            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(10),
+            KeyCode::Home | KeyCode::Char('g') => help.scroll = 0,
+            // Clamped to the real content at draw time.
+            KeyCode::End | KeyCode::Char('G') => help.scroll = u16::MAX,
+            _ => app.port_help = None,
         }
         return KeyOutcome::Continue;
     }
@@ -510,12 +534,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::PageUp => app.move_selection(-15),
         KeyCode::Char('n') => app.jump_problem(1),
         KeyCode::Char('p') => app.jump_problem(-1),
-        KeyCode::Char('h') => {
-            app.help_tab = Some(0);
-            app.help_scroll = 0;
-        }
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
+        // Same meaning as in the option pane, whose title carries the marker.
+        KeyCode::Char('h') => app.open_port_help(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
             if !app.editor_rows.is_empty() {
                 app.focus = Focus::Editor;
@@ -528,9 +550,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
 
 fn handle_editor_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc | KeyCode::Char('h') | KeyCode::Tab | KeyCode::Left => {
-            app.focus = Focus::List
-        }
+        // 'h' is the port's own help here, not vi-left: leaving the pane is
+        // Esc/Tab/←, which every other overlay uses too.
+        KeyCode::Esc | KeyCode::Tab | KeyCode::Left => app.focus = Focus::List,
+        KeyCode::Char('h') => app.open_port_help(),
         KeyCode::Char('j') | KeyCode::Down => app.editor_move(1),
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
@@ -947,6 +970,24 @@ impl App {
             return;
         };
         self.opt_info = Some((key, opt.clone()));
+    }
+
+    /// Open the selected port's pkg-help. Read here rather than at query time
+    /// so the overlay always shows what is on disk now; only the fact that the
+    /// file exists comes from the query.
+    fn open_port_help(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        let Some(path) = self.session.ports[&key].pkg_help.clone() else {
+            self.flash("this port ships no pkg-help", false);
+            return;
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let lines = text.lines().map(str::to_string).collect();
+                self.port_help = Some(PortHelp { key, lines, scroll: 0 });
+            }
+            Err(e) => self.flash(&format!("cannot read {path}: {e}"), true),
+        }
     }
 
     /// Open the bulk-decision prompt, pre-filled with the option under the

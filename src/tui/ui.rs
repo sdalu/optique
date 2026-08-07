@@ -31,6 +31,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_bulk(f, app);
     } else if let Some(tab) = app.help_tab {
         draw_help(f, tab, &mut app.help_scroll);
+    } else if app.port_help.is_some() {
+        draw_port_help(f, app);
     } else if app.why.is_some() {
         draw_why(f, app);
     } else if app.opt_info.is_some() {
@@ -149,6 +151,11 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or(12)
         .clamp(12, 28);
 
+    // Text width of the pane: the rows are cut at it, so the row builder needs
+    // it to decide whether a description still fits (the detail panel splits
+    // the pane's height, never its width).
+    let inner_width = area.width.saturating_sub(2) as usize;
+
     let state = app.session.state(info);
     for (i, row) in app.editor_rows.iter().enumerate() {
         let selected = app.focus == Focus::Editor && i == app.editor_idx;
@@ -165,7 +172,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             EditorRow::Option(opt) => {
-                lines.push(option_line(app, info, opt, selected, name_width));
+                lines.push(option_line(app, info, opt, selected, name_width, inner_width));
             }
             EditorRow::ExcludedHeader => {
                 lines.push(Line::from(Span::styled(
@@ -191,16 +198,25 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
                     .and_then(|s| s.saved.as_ref())
                     .map(|s| s.set.contains(opt))
                     .unwrap_or(false);
-                lines.push(Line::from(Span::styled(
-                    format!("  [{}] {}", if was_on { "x" } else { " " }, opt),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
-                )));
+                // The indent stays outside the struck span: a rule drawn over
+                // the leading blanks reads as part of the pane, not the row.
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}] {}", if was_on { "x" } else { " " }, opt),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                    ),
+                ]));
             }
         }
     }
 
+    // The bottom of the pane is split off for the option under the cursor:
+    // the rows above are cut at the pane's right edge, the panel is not.
+    let (rows_area, detail_area) = split_detail(app, info, area);
+
     // Keep the selected row in view: scroll so it sits inside the pane.
-    let inner_height = area.height.saturating_sub(2) as usize;
+    let inner_height = rows_area.height.saturating_sub(2) as usize;
     let selected_line = app
         .editor_rows
         .iter()
@@ -210,9 +226,141 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         .saturating_sub(1);
     let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
 
-    let p = Paragraph::new(lines)
-        .scroll((scroll, 0))
-        .block(Block::default().borders(Borders::ALL).title(title).border_style(border_style));
+    // Right of the title: the key that opens this port's pkg-help, shown only
+    // for the ports that ship one.
+    let mut block =
+        Block::default().borders(Borders::ALL).title(title).border_style(border_style);
+    if info.pkg_help.is_some() {
+        block = block.title_top(
+            Line::from(Span::styled(
+                " [h] help ",
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ))
+            .right_aligned(),
+        );
+    }
+    let p = Paragraph::new(lines).scroll((scroll, 0)).block(block);
+    f.render_widget(p, rows_area);
+
+    if let Some(detail) = detail_area {
+        draw_option_detail(f, app, info, detail, border_style);
+    }
+}
+
+/// How many rows the option rows must keep for the panel to be worth it
+/// (borders included) — below that the pane stays whole.
+const DETAIL_MIN_ROWS: u16 = 5;
+
+/// Content lines the detail panel may grow to: a third of the pane, never
+/// less than three. Past that it clips, marked with an ellipsis.
+fn detail_max_lines(area: Rect) -> usize {
+    (area.height / 3).max(3) as usize
+}
+
+/// Split the editor pane into (option rows, detail panel). The two boxes
+/// share the border line between them, so they read as one pane. The panel
+/// is dropped when the cursor is not on an option or the pane is too short.
+fn split_detail(app: &App, info: &PortInfo, area: Rect) -> (Rect, Option<Rect>) {
+    let inner = area.width.saturating_sub(2);
+    let Some((_, lines)) = option_detail(app, info, inner) else {
+        return (area, None);
+    };
+    let height = lines.len().clamp(1, detail_max_lines(area)) as u16 + 2;
+    if area.height < height + DETAIL_MIN_ROWS {
+        return (area, None);
+    }
+    let detail = Rect { y: area.y + area.height - height, height, ..area };
+    // +1: the rows box keeps its bottom border on the panel's top border row.
+    let rows = Rect { height: area.height - height + 1, ..area };
+    (rows, Some(detail))
+}
+
+/// The option under the cursor and the description the ports framework gives
+/// it, wrapped to `width` so the panel's height is exactly the line count.
+/// The name titles the panel, so it is not repeated in the body; an option
+/// the framework describes nowhere says so rather than leaving a blank box.
+/// None when the cursor sits on a header or a non-selectable row.
+fn option_detail(app: &App, info: &PortInfo, width: u16) -> Option<(String, Vec<Line<'static>>)> {
+    let Some(EditorRow::Option(opt)) = app.editor_rows.get(app.editor_idx) else {
+        return None;
+    };
+    let desc = info.options.defs.get(opt).map(|d| d.desc.as_str()).unwrap_or("");
+    let lines = if desc.is_empty() {
+        vec![Line::from(Span::styled(
+            "  (no description)",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        let style = Style::default().fg(Color::Gray);
+        wrap_text(&format!("  {desc}"), width as usize, 2)
+            .into_iter()
+            .map(|t| Line::from(Span::styled(t, style)))
+            .collect()
+    };
+    Some((opt.clone(), lines))
+}
+
+/// Greedy word wrap; continuation lines are indented by `indent`. A word
+/// longer than the line is hard-split rather than left to overflow.
+fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
+    let width = width.max(indent + 1);
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut first = true;
+    for word in text.split_whitespace() {
+        let lead = if first { text.len() - text.trim_start().len() } else { indent };
+        if cur.is_empty() {
+            cur = " ".repeat(lead);
+            first = false;
+        }
+        let sep = usize::from(!cur.trim_end().is_empty());
+        if cur.chars().count() + sep + word.chars().count() > width && !cur.trim().is_empty() {
+            out.push(std::mem::take(&mut cur));
+            cur = " ".repeat(indent);
+        }
+        if !cur.trim_end().is_empty() {
+            cur.push(' ');
+        }
+        // A word wider than the line gets broken across lines.
+        for c in word.chars() {
+            if cur.chars().count() >= width {
+                out.push(std::mem::take(&mut cur));
+                cur = " ".repeat(indent);
+            }
+            cur.push(c);
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn draw_option_detail(
+    f: &mut Frame,
+    app: &App,
+    info: &PortInfo,
+    area: Rect,
+    border_style: Style,
+) {
+    let Some((opt, mut lines)) = option_detail(app, info, area.width.saturating_sub(2)) else {
+        return;
+    };
+    // Say so when the panel cannot show it all rather than cut in silence.
+    let cap = area.height.saturating_sub(2) as usize;
+    if lines.len() > cap {
+        lines.truncate(cap);
+        if let Some(last) = lines.last_mut() {
+            last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+        }
+    }
+    let p = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {opt} "))
+            .title_style(Style::default().add_modifier(Modifier::BOLD))
+            .border_style(border_style),
+    );
     f.render_widget(p, area);
 }
 
@@ -321,12 +469,27 @@ fn file_state(app: &App, info: &PortInfo, opt: &str) -> Option<bool> {
     }
 }
 
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+/// Room a row's trailing description needs to be worth printing: below this
+/// the pane would cut it to a word fragment, and the detail panel under the
+/// rows carries it in full anyway.
+const DESC_MIN_WIDTH: usize = 16;
+
+/// One option row, laid out for a pane `avail` columns wide.
 fn option_line(
     app: &App,
     info: &PortInfo,
     opt: &str,
     selected: bool,
     name_width: usize,
+    avail: usize,
 ) -> Line<'static> {
     let opts = &info.options;
     let state = app.session.state(info);
@@ -344,30 +507,9 @@ fn option_line(
         (false, false) => "[ ]",
     };
 
-    let mut spans: Vec<Span> = Vec::new();
-    // Magenta: contradicts make.conf policy; yellow: deviates from the
-    // port default; plain: matches the port default.
-    let deviates_mc = app.session.mc_deviates(info, opt);
-    let name_style = if deviates_mc {
-        Style::default().fg(Color::Magenta)
-    } else if on != is_default {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
-    let base = format!("  {checkbox} {opt:<name_width$}");
-    spans.push(Span::styled(
-        base,
-        if selected { name_style.add_modifier(Modifier::REVERSED) } else { name_style },
-    ));
-
-    // default value column (fixed width so following badges line up)
-    spans.push(Span::styled(
-        format!(" def:{:<3}", if is_default { "on" } else { "off" }),
-        Style::default().fg(Color::DarkGray),
-    ));
-
-    // NEW badge column: option unknown to the saved file
+    // 'N' in the first column: the option is unknown to the saved file, i.e.
+    // the tree added it since. A column of its own rather than a badge, so the
+    // eye finds every new option down the left edge of the pane.
     let is_new = state
         .and_then(|s| s.saved.as_ref())
         .map(|saved| {
@@ -379,26 +521,54 @@ fn option_line(
                 .any(|o| o == opt)
         })
         .unwrap_or(false);
-    spans.push(Span::styled(
-        if is_new { " NEW" } else { "    " },
+    let mut spans: Vec<Span> = vec![Span::styled(
+        if is_new { "N" } else { " " },
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    )];
+    // Magenta: contradicts make.conf policy; yellow: deviates from the
+    // port default; plain: matches the port default.
+    let deviates_mc = app.session.mc_deviates(info, opt);
+    let name_style = if deviates_mc {
+        Style::default().fg(Color::Magenta)
+    } else if on != is_default {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    let base = format!(" {checkbox} {opt:<name_width$}");
+    spans.push(Span::styled(
+        base,
+        if selected { name_style.add_modifier(Modifier::REVERSED) } else { name_style },
     ));
 
-    // provenance column (fixed width)
-    let (prov, prov_style) = match opts.provenance(opt, file_state(app, info, opt)) {
-        Provenance::Forced => ("FORCED ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Provenance::MakeConfPort => ("mc:port", Style::default().fg(Color::Green)),
-        Provenance::MakeConfGlobal => ("mc     ", Style::default().fg(Color::Green)),
-        _ => ("       ", Style::default()),
-    };
-    spans.push(Span::styled(format!(" {prov}"), prov_style));
+    // default value column (fixed width so following badges line up)
+    spans.push(Span::styled(
+        format!(" {:<3}", on_off(is_default)),
+        Style::default().fg(Color::DarkGray),
+    ));
 
-    if deviates_mc {
-        spans.push(Span::styled(
-            " ≠mc",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ));
-    }
+    // make.conf column (fixed width): the value that layer dictates, in its
+    // own colour — green for the global knob, bright green for the per-port
+    // one, red bold for a *_FORCE knob the options file cannot override.
+    // Blank when nothing but the port default or the file decides.
+    let (prov, prov_style) = match opts.provenance(opt, file_state(app, info, opt)) {
+        Provenance::Forced => (
+            on_off(opts.forced_value(opt).unwrap_or(false)),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Provenance::MakeConfPort => (
+            on_off(opts.port_set.contains(opt)),
+            Style::default().fg(Color::LightGreen),
+        ),
+        Provenance::MakeConfGlobal => {
+            (on_off(opts.mc_set.contains(opt)), Style::default().fg(Color::Green))
+        }
+        _ => ("", Style::default()),
+    };
+    spans.push(Span::styled(format!(" {prov:<3}"), prov_style));
+
+    // No badge for a make.conf contradiction: the magenta option name above
+    // already says it, and the row needs the columns for the description.
 
     if let Some(by) = app.session.implied_by(info, opt) {
         if on {
@@ -416,7 +586,12 @@ fn option_line(
         if def.ignore.is_some() {
             spans.push(Span::styled(" ⚠ignored", Style::default().fg(Color::Red)));
         }
-        if !def.desc.is_empty() {
+        // The pane cuts the row at its right edge, so a description with only
+        // a few columns left would show as a word fragment. Drop it instead —
+        // the panel under the rows gives it in full, wrapped.
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let room = avail.saturating_sub(used + 2);
+        if !def.desc.is_empty() && room >= DESC_MIN_WIDTH {
             spans.push(Span::styled(
                 format!("  {}", def.desc),
                 Style::default().fg(Color::DarkGray),
@@ -637,11 +812,12 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             // A realistic sample row, styled exactly like the editor renders it.
             lines.push(head("A row, piece by piece"));
             lines.push(Line::from(vec![
-                Span::styled("   [x] ", Style::default()),
+                Span::styled("  ", Style::default()),
+                Span::styled("N", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" [x] ", Style::default()),
                 Span::styled("OPENSSL     ", Style::default().fg(Color::Yellow)),
-                Span::styled(" def:off", Style::default().fg(Color::DarkGray)),
-                Span::styled(" NEW", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(" mc     ", Style::default().fg(Color::Green)),
+                Span::styled(" off", Style::default().fg(Color::DarkGray)),
+                Span::styled(" on ", Style::default().fg(Color::Green)),
                 Span::styled("  Use OpenSSL", Style::default().fg(Color::DarkGray)),
             ]));
             lines.push(Line::default());
@@ -656,22 +832,31 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                 (
                     "magenta name",
                     Style::default().fg(Color::Magenta),
-                    "contradicts make.conf (≠mc badge)",
-                ),
-                ("def:on|off", Style::default().fg(Color::DarkGray), "the port's default value"),
-                (
-                    "NEW",
-                    Style::default().fg(Color::Yellow),
-                    "option added since the file was written",
+                    "contradicts make.conf policy",
                 ),
                 (
-                    "mc · mc:port",
+                    "N",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    "first column: option added since the file was written",
+                ),
+                (
+                    "on | off",
+                    Style::default().fg(Color::DarkGray),
+                    "1st column: the port's default value",
+                ),
+                (
+                    "on | off",
                     Style::default().fg(Color::Green),
-                    "value decided by make.conf (per-port knob = mc:port)",
+                    "2nd column: the value make.conf decides",
                 ),
                 (
-                    "FORCED",
-                    Style::default().fg(Color::Red),
+                    "on | off",
+                    Style::default().fg(Color::LightGreen),
+                    "same, from the per-port knob (brighter)",
+                ),
+                (
+                    "on | off",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                     "*_FORCE knob — locked, the file cannot override",
                 ),
                 (
@@ -700,11 +885,20 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                     Style::default().fg(Color::DarkGray),
                     "managed via the default flavor's view of the shared file",
                 ),
+                Line::default(),
+                head("Below the rows"),
+                legend(
+                    "option panel",
+                    Style::default().fg(Color::Gray),
+                    "the description of the option under the cursor, in",
+                ),
+                // Aligned on the legend's text column (2 + 14 + " = ").
+                Line::from(Span::raw("                   full — what the rows have no room for")),
             ]);
         }
         2 => lines.extend([
             keyline("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
-            keyline("Enter/l", "edit selected port · h/Esc back to the list"),
+            keyline("Enter/l", "edit selected port · Esc/Tab/← back to the list"),
             keyline("Space", "toggle option (group rules enforced)"),
             keyline("d / u", "reset port to defaults / revert to saved state"),
             keyline("U", "undo the last option change"),
@@ -712,6 +906,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("n / p", "next / previous port needing attention"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
+            keyline("h", "port notes (pkg-help) — marked [h] in the pane title"),
             keyline("r", "why is this port here? — navigable chain, Enter jumps"),
         ]),
         _ => lines.extend([
@@ -721,7 +916,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("w", "flag make.conf contradictions (≠)"),
             keyline("/", "filter the port list"),
             keyline("a", "apply: preview every file diff, then write atomically"),
-            keyline("? h F1", "this help"),
+            keyline("? F1", "this help"),
             keyline("Ctrl-L", "force a full screen repaint"),
             keyline("q Ctrl-C", "quit — offers saving staged edits as a draft"),
         ]),
@@ -944,6 +1139,48 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+/// The port's pkg-help file, scrollable. These are prose files with their own
+/// indentation and lines that outrun the popup, so each source line keeps its
+/// indent and wraps under itself; tabs are expanded so the wrap counts what
+/// the terminal will show.
+fn draw_port_help(f: &mut Frame, app: &mut App) {
+    let Some(help) = &mut app.port_help else { return };
+    let area = centered_rect(76, 70, f.area());
+    f.render_widget(Clear, area);
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    let lines: Vec<Line> = help
+        .lines
+        .iter()
+        .flat_map(|src| {
+            let src = src.replace('\t', "        ");
+            if src.trim().is_empty() {
+                return vec![Line::default()];
+            }
+            let indent = src.len() - src.trim_start().len();
+            wrap_text(&src, inner_w, indent + 2).into_iter().map(Line::from).collect::<Vec<_>>()
+        })
+        .collect();
+
+    let max_scroll = lines.len().saturating_sub(inner_h) as u16;
+    help.scroll = help.scroll.min(max_scroll);
+    let hint = if max_scroll > 0 {
+        " j/k ↑/↓ PgUp/PgDn scroll · any other key closes "
+    } else {
+        " any key closes "
+    };
+    let p = Paragraph::new(lines).scroll((help.scroll, 0)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" pkg-help — {} ", help.key))
+            .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))))
+            .border_style(Style::default().fg(Color::LightBlue)),
+    );
+    f.render_widget(p, area);
+}
+
 /// One-line input prompt for the bulk decision, centered on the screen.
 fn draw_bulk(f: &mut Frame, app: &App) {
     let Some(input) = &app.bulk else { return };
@@ -981,4 +1218,33 @@ fn draw_quit_confirm(f: &mut Frame) {
         .wrap(Wrap { trim: true })
         .block(Block::default().borders(Borders::ALL).title(" quit ").border_style(Style::default().fg(Color::Red)));
     f.render_widget(p, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_text_keeps_the_first_indent_and_indents_the_rest() {
+        assert_eq!(
+            wrap_text("  TLS-SRP (Secure Remote Password) support", 20, 2),
+            ["  TLS-SRP (Secure", "  Remote Password)", "  support"]
+        );
+    }
+
+    #[test]
+    fn wrap_text_breaks_a_word_wider_than_the_line() {
+        assert_eq!(wrap_text("  abcdefghij", 6, 2), ["  abcd", "  efgh", "  ij"]);
+    }
+
+    #[test]
+    fn wrap_text_of_a_fitting_line_is_the_line() {
+        assert_eq!(wrap_text("  short desc", 40, 2), ["  short desc"]);
+    }
+
+    #[test]
+    fn wrap_text_hard_splits_a_word_longer_than_the_whole_line() {
+        // An unbroken word must not overflow the panel it is wrapped for.
+        assert!(wrap_text("  supercalifragilistic", 8, 2).iter().all(|l| l.chars().count() <= 8));
+    }
 }

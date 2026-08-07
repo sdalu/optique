@@ -27,6 +27,13 @@ pub struct PortInfo {
     pub broken: Option<String>,
     pub ignore: Option<String>,
     pub deprecated: Option<String>,
+    /// The port's pkg-help file (`${PKGHELP}`, i.e. `${PKGDIR}/pkg-help`) when
+    /// it exists — the free-form port notes `make config` offers behind its
+    /// Help button. Only a minority of ports ship one. Existence is settled at
+    /// query time: a cache generation is one ports-tree commit, so the file
+    /// cannot appear or vanish under a cached entry.
+    #[serde(default)]
+    pub pkg_help: Option<String>,
     pub default_versions: Vec<String>,
     /// Non-fatal oddities (unparsable dep entries, ...).
     pub warnings: Vec<String>,

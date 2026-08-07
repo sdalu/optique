@@ -275,7 +275,11 @@ quit
     // '?' opens the help overlay on its first tab...
     assert!(dumps[1].contains("1:Markers"), "help tab bar missing:\n{}", dumps[1]);
     // ...and '2' switches to the option-row legend.
-    assert!(dumps[2].contains("def:on|off"), "option row tab missing:\n{}", dumps[2]);
+    assert!(
+        dumps[2].contains("on | off = the port's default value"),
+        "option row tab missing:\n{}",
+        dumps[2]
+    );
 
     // Typing into the filter prompt lands in the filter, not in the keymap.
     assert_eq!(states[1]["filter"], "pkg");
