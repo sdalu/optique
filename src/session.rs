@@ -590,15 +590,20 @@ pub fn undecided_options(
         None => BTreeSet::new(),
     };
     let o = &info.options;
-    let mc_selected = |opt: &str| {
-        o.mc_set.contains(opt) || o.port_set.contains(opt) || o.forced_value(opt) == Some(true)
-    };
     let mc_decided = |opt: &str| {
-        mc_selected(opt)
+        o.mc_set.contains(opt)
             || o.mc_unset.contains(opt)
+            || o.port_set.contains(opt)
             || o.port_unset.contains(opt)
-            || o.forced_value(opt) == Some(false)
+            || o.is_forced(opt)
     };
+    // Selected means make.conf ENDS UP enabling it, not merely that some layer
+    // names it: a later layer can undo an earlier one, and then the member
+    // actually in force was picked by the port default — nobody's decision.
+    // Hence the outcome (which resolves the layer order, and the IMPLIES
+    // closure with it) rather than membership of mc_set/port_set.
+    let nofile = nofile_effective(info);
+    let mc_selected = |opt: &str| mc_decided(opt) && nofile.contains(opt);
     let group_decided: BTreeSet<&str> = o
         .groups
         .iter()
@@ -867,6 +872,44 @@ mod tests {
     /// used to let a global UNSET erase a per-port SET: the exact shape of
     /// `OPTIONS_UNSET= DOCS` plus `<port>_SET= DOCS`, which then showed up as
     /// a spurious ≠mc deviation on a port that agreed with make.conf.
+    /// A member merely *mentioned* by an earlier make.conf layer does not
+    /// decide its SINGLE/RADIO group: a later layer can drop it again, and
+    /// then the member actually in force is the port's default, which nobody
+    /// decided. Counting the group as covered kept `scan` at exit 0 for a
+    /// port that still owed an answer.
+    #[test]
+    fn a_group_is_decided_only_when_makeconf_really_selects_a_member() {
+        let group = || OptionGroup {
+            kind: GroupKind::Single,
+            name: "G".into(),
+            desc: String::new(),
+            members: vec!["A".into(), "B".into()],
+        };
+        // Global picks A, the per-port knob drops it: B is on only because it
+        // is the port default, so both members still need a decision.
+        let (mut ports, key) = mk_port(&["A", "B"], &["B"], vec![group()], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.mc_set.insert("A".into());
+            o.port_unset.insert("A".into());
+        }
+        // A itself is decided — make.conf resolves it to off — but it does
+        // not carry B with it, so B is what the port still owes an answer for.
+        assert_eq!(
+            undecided_options(&ports[&key], None, false),
+            vec!["B".to_string()],
+            "an overridden member decides nothing for the rest of its group"
+        );
+
+        // Un-overridden, the same global knob does decide the whole group.
+        let (mut ports2, key2) = mk_port(&["A", "B"], &["B"], vec![group()], vec![]);
+        ports2.get_mut(&key2).unwrap().options.mc_set.insert("A".into());
+        assert!(
+            undecided_options(&ports2[&key2], None, false).is_empty(),
+            "a selected member decides its group"
+        );
+    }
+
     #[test]
     fn per_port_makeconf_knob_beats_the_global_one() {
         let (mut ports, key) = mk_port(&["DOCS", "NLS", "X11"], &[], vec![], vec![]);
