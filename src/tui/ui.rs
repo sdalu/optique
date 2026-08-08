@@ -336,6 +336,28 @@ fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
     out
 }
 
+/// Cut `lines` to `cap` rows and mark the cut with an ellipsis. The last row
+/// is shortened first when needed: the box does not wrap, so a marker appended
+/// to a full line would be clipped off the edge and the cut would look like
+/// the whole text.
+fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) {
+    if lines.len() <= cap {
+        return;
+    }
+    lines.truncate(cap);
+    let Some(last) = lines.last_mut() else { return };
+    while last.width() + 1 > width {
+        let Some(span) = last.spans.last_mut() else { break };
+        let mut text = span.content.to_string();
+        if text.pop().is_none() {
+            last.spans.pop();
+            continue;
+        }
+        span.content = text.into();
+    }
+    last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+}
+
 fn draw_option_detail(
     f: &mut Frame,
     app: &App,
@@ -347,13 +369,11 @@ fn draw_option_detail(
         return;
     };
     // Say so when the panel cannot show it all rather than cut in silence.
-    let cap = area.height.saturating_sub(2) as usize;
-    if lines.len() > cap {
-        lines.truncate(cap);
-        if let Some(last) = lines.last_mut() {
-            last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
-        }
-    }
+    mark_if_clipped(
+        &mut lines,
+        area.height.saturating_sub(2) as usize,
+        area.width.saturating_sub(2) as usize,
+    );
     let p = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1143,6 +1163,20 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
 /// indentation and lines that outrun the popup, so each source line keeps its
 /// indent and wraps under itself; tabs are expanded so the wrap counts what
 /// the terminal will show.
+/// One source line of a pkg-help, ready for the popup: tabs expanded, its own
+/// indentation kept and wrapped under itself, blank lines preserved. Both
+/// indents are capped at half the width — a deeply indented line (a code
+/// sample, say) must still wrap inside the box instead of running off it.
+fn help_line(src: &str, width: usize) -> Vec<String> {
+    let src = src.replace('\t', "        ");
+    if src.trim().is_empty() {
+        return vec![String::new()];
+    }
+    let indent = (src.len() - src.trim_start().len()).min(width / 2);
+    let hang = (indent + 2).min(width.saturating_sub(1));
+    wrap_text(&format!("{}{}", " ".repeat(indent), src.trim_start()), width, hang)
+}
+
 fn draw_port_help(f: &mut Frame, app: &mut App) {
     let Some(help) = &mut app.port_help else { return };
     let area = centered_rect(76, 70, f.area());
@@ -1150,18 +1184,8 @@ fn draw_port_help(f: &mut Frame, app: &mut App) {
     let inner_w = area.width.saturating_sub(2) as usize;
     let inner_h = area.height.saturating_sub(2) as usize;
 
-    let lines: Vec<Line> = help
-        .lines
-        .iter()
-        .flat_map(|src| {
-            let src = src.replace('\t', "        ");
-            if src.trim().is_empty() {
-                return vec![Line::default()];
-            }
-            let indent = src.len() - src.trim_start().len();
-            wrap_text(&src, inner_w, indent + 2).into_iter().map(Line::from).collect::<Vec<_>>()
-        })
-        .collect();
+    let lines: Vec<Line> =
+        help.lines.iter().flat_map(|src| help_line(src, inner_w)).map(Line::from).collect();
 
     let max_scroll = lines.len().saturating_sub(inner_h) as u16;
     help.scroll = help.scroll.min(max_scroll);
@@ -1246,5 +1270,53 @@ mod tests {
     fn wrap_text_hard_splits_a_word_longer_than_the_whole_line() {
         // An unbroken word must not overflow the panel it is wrapped for.
         assert!(wrap_text("  supercalifragilistic", 8, 2).iter().all(|l| l.chars().count() <= 8));
+    }
+
+    /// The popup does not wrap, so anything wider than it is lost off the
+    /// right edge — including a deeply indented pkg-help line.
+    #[test]
+    fn help_line_stays_inside_the_popup_however_indented() {
+        let deep = format!("{}code sample here", " ".repeat(40));
+        for line in help_line(&deep, 20) {
+            assert!(line.chars().count() <= 20, "{line:?} wider than the popup");
+        }
+        // Tabs count as the eight columns the terminal will show.
+        assert_eq!(help_line("\tx", 40), ["        x"]);
+        // Blank lines survive as blank lines.
+        assert_eq!(help_line("   ", 40), [""]);
+        // A normal line keeps its own indent and hangs the wrap under it.
+        assert_eq!(
+            help_line("  alpha beta gamma", 12),
+            ["  alpha beta", "    gamma"]
+        );
+    }
+
+    /// Cutting the panel is announced, and the marker must be visible: a full
+    /// last line has to give up a column for it, else it is clipped away and
+    /// the cut looks like the whole text.
+    #[test]
+    fn mark_if_clipped_keeps_the_marker_inside_the_width() {
+        let line = |t: &str| Line::from(Span::raw(t.to_string()));
+        let mut lines = vec![line("0123456789"), line("second"), line("third")];
+        mark_if_clipped(&mut lines, 2, 10);
+        assert_eq!(lines.len(), 2);
+        let first: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(first, "0123456789", "untouched: the cut is marked on the last row");
+        let last: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(last, "second…");
+        assert!(lines[1].width() <= 10);
+
+        // Last row already full: it loses a column so the marker fits.
+        let mut lines = vec![line("second"), line("0123456789"), line("third")];
+        mark_if_clipped(&mut lines, 2, 10);
+        let last: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(last, "012345678…");
+        assert!(lines[1].width() <= 10);
+
+        // Nothing to cut, nothing to mark.
+        let mut lines = vec![line("a"), line("b")];
+        mark_if_clipped(&mut lines, 2, 10);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[1].width(), 1);
     }
 }
