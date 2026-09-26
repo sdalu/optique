@@ -200,7 +200,8 @@ Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
 every option at all (unconfigured) is already decided by make.conf
 (marker `≈`) · `w` flag ports whose options contradict
 the global `OPTIONS_SET/UNSET` policy (marker `≠`; the option itself is named
-in magenta) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
+in magenta) · `L` list only the ports caught in a dependency loop (marker `∞`) ·
+`s` toggle problems-first vs stable alphabetical sort (alphabetical
 keeps neighbors put while you work down the list; `n`/`p` still jump between
 problems in either order) · `/` filter · `a` apply ·
 `r` why-is-this-here (dependency chain, the dependency loop when there is one,
@@ -266,12 +267,14 @@ for is therefore left out, which is why a healthy tree reports no loop at all.
 
 Loops are usually option-dependent, which is why seeing them here beats
 discovering them mid-build: turning off the option that pulls the dependency in
-breaks the loop. In the TUI the ports of a loop are marked `∞` and `r` lists it
+breaks the loop. In the TUI the ports of a loop are marked `∞`, the status bar
+counts them, `L` narrows the list to them, and `r` lists the loop
 — the cycle one port per row, rotated to start at the port you asked about, then
 the rest of the tangle, every one selectable so `Enter` jumps there and `r`
-walks the cycle port by port. Both are recomputed after every background
+walks the cycle port by port. All of it is recomputed after every background
 re-query, so a loop a toggle just created (or just broke) is announced on the
-status line. In `scan`
+status line — and breaking the last one drops the `L` view rather than leaving
+an empty list. In `scan`
 the port's row gains `[dependency loop]`, the summary counts the loops, and
 `--json` reports them under `loops` (each with `ports`, `cycle` and
 `blacklisted`) with `summary.pending` driving the exit code. A loop trips the

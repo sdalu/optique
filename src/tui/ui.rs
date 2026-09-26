@@ -103,6 +103,9 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         format!("{}", app.visible.len())
     };
     let mut title = format!(" Ports ({count})");
+    if app.only_loops {
+        title.push_str(" — in a dependency loop");
+    }
     if app.hide_ok {
         title.push_str(" — needs attention");
     }
@@ -654,6 +657,16 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             ),
             Style::default().fg(Color::White),
         )];
+        // Only when the closure actually holds one: the count of visible ports
+        // caught in it, and the key that narrows the list to them.
+        if !app.loops.is_empty() {
+            let tangled =
+                app.visible.iter().filter(|key| app.loop_of(key).is_some()).count();
+            spans.push(Span::styled(
+                format!(" {tangled}∞ L:loops "),
+                Style::default().fg(Color::Red),
+            ));
+        }
         if app.refreshing > 0 {
             let progress = app
                 .refresh_progress
@@ -938,6 +951,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("s", "toggle problems-first / stable alphabetical sort"),
             keyline("m", "make.conf-decided ports count as ok (≈)"),
             keyline("w", "flag make.conf contradictions (≠)"),
+            keyline("L", "show only the ports caught in a dependency loop (∞)"),
             keyline("/", "filter the port list"),
             keyline("a", "apply: preview every file diff, then write atomically"),
             keyline("? F1", "this help"),

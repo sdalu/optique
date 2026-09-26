@@ -154,6 +154,8 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
+    /// When set, only the ports caught in a dependency loop are listed.
+    pub only_loops: bool,
     /// Problems-first ordering (true, default) or stable alphabetical order
     /// (false) — the latter keeps neighbors put while working down the list.
     pub sort_problems_first: bool,
@@ -256,6 +258,7 @@ pub(crate) fn build_app(
         loops,
         hidden,
         hide_ok: false,
+        only_loops: false,
         sort_problems_first: true,
         mc_relax: false,
         warn_mc: false,
@@ -525,6 +528,27 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 false,
             );
         }
+        KeyCode::Char('L') => {
+            // Turning the view off must always work, even once the loop it
+            // was showing is gone; turning it on with nothing to show would
+            // only empty the list.
+            if !app.only_loops && app.loops.is_empty() {
+                app.flash("no dependency loop in this closure", false);
+            } else {
+                app.only_loops = !app.only_loops;
+                let keep = app.selected_key();
+                app.rebuild_visible(keep);
+                app.rebuild_editor();
+                app.flash(
+                    if app.only_loops {
+                        "showing only ports caught in a dependency loop (L to show all)"
+                    } else {
+                        "showing all ports"
+                    },
+                    false,
+                );
+            }
+        }
         KeyCode::Char('s') => {
             app.sort_problems_first = !app.sort_problems_first;
             let keep = app.selected_key();
@@ -767,6 +791,7 @@ impl App {
                     || key.to_string().to_lowercase().contains(&filter)
                     || info.pkgname.to_lowercase().contains(&filter)
             })
+            .filter(|(key, _)| !self.only_loops || self.loop_of(key).is_some())
             .map(|(key, info)| (self.effective_status(info), key.clone()))
             .collect();
         if self.sort_problems_first {
@@ -1391,7 +1416,14 @@ impl App {
                 self.flash(&msg, true);
             }
             None if self.loops.is_empty() && !before.is_empty() => {
-                self.flash("dependency loop gone", false);
+                // The L view would now show an empty list, which says nothing
+                // about why: leave it rather than strand the user in it.
+                if self.only_loops {
+                    self.only_loops = false;
+                    self.flash("dependency loop gone; showing all ports again", false);
+                } else {
+                    self.flash("dependency loop gone", false);
+                }
             }
             None => {}
         }
@@ -1544,14 +1576,84 @@ mod tests {
             .join("\n")
     }
 
-    /// A loop is visible without asking: both ports wear the ∞ badge.
+    /// A loop is visible without asking: both ports wear the ∞ badge, and the
+    /// status bar says how many are caught in one.
     #[test]
     fn looped_ports_are_badged_in_the_list() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = looped_app(tmp.path());
         assert_eq!(app.loops.len(), 1, "one loop over the two ports");
         let text = screen(&mut app);
-        assert_eq!(text.matches('\u{221e}').count(), 2, "both rows badged:\n{text}");
+        assert!(text.contains("cat/alpha \u{221e}"), "{text}");
+        assert!(text.contains("cat/beta \u{221e}"), "{text}");
+        assert!(text.contains("2\u{221e} L:loops"), "the status bar counts them:\n{text}");
+    }
+
+    /// `L` narrows the list to the tangle, and says so in the pane title.
+    #[test]
+    fn the_loop_view_lists_only_tangled_ports() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Two ports needing each other, plus one that needs neither.
+        let mut app = app_for(
+            tmp.path(),
+            &[
+                ("cat/alpha", &["cat/beta"]),
+                ("cat/beta", &["cat/alpha"]),
+                ("cat/loner", &[]),
+            ],
+        );
+        assert_eq!(app.visible.len(), 3);
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+        assert!(app.only_loops);
+        assert_eq!(app.visible.len(), 2, "{:?}", app.visible);
+        assert!(!app.visible.iter().any(|k| k.origin == "cat/loner"));
+        let text = screen(&mut app);
+        assert!(text.contains("in a dependency loop"), "{text}");
+
+        // And back.
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+        assert!(!app.only_loops);
+        assert_eq!(app.visible.len(), 3);
+    }
+
+    /// With nothing to show the view is refused rather than emptying the list.
+    #[test]
+    fn the_loop_view_is_refused_without_a_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/one", &[]), ("cat/two", &[])]);
+        assert!(app.loops.is_empty());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+        assert!(!app.only_loops, "the view must not turn on");
+        assert_eq!(app.visible.len(), 2, "the list is untouched");
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("no dependency loop in this closure")
+        );
+    }
+
+    /// A loop broken by an option edit leaves the view rather than stranding
+    /// the user in an empty list.
+    #[test]
+    fn breaking_the_last_loop_leaves_the_loop_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+        assert!(app.only_loops && app.visible.len() == 2);
+
+        // What a background re-query would merge: cat/beta no longer needs
+        // cat/alpha, so the cycle is gone.
+        let beta = PortKey::parse("cat/beta").unwrap();
+        app.session.ports.get_mut(&beta).unwrap().deps.clear();
+        app.refresh_loops();
+        assert!(app.loops.is_empty());
+        assert!(!app.only_loops, "the view let go");
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("dependency loop gone; showing all ports again")
+        );
+        let keep = app.selected_key();
+        app.rebuild_visible(keep);
+        assert_eq!(app.visible.len(), 2, "both ports are listed again");
     }
 
     /// `r` explains the loop, not just the chain and the dependents, and
