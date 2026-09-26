@@ -240,6 +240,42 @@ fn man_page_is_valid_mdoc() {
     }
 }
 
+/// A tagged list whose tag column is wider than its content leaves a few
+/// columns for the text and renders as a ragged word-per-line mess. mandoc
+/// says nothing about it, so the widths are checked here: the FILES section
+/// once asked for 59 columns and became unreadable.
+#[test]
+fn man_page_tag_lists_leave_room_for_their_text() {
+    // An 80-column page indents the body by width + 5, so anything past this
+    // leaves less than half the line for prose.
+    const MAX: usize = 24;
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    let text = std::fs::read_to_string(&man).unwrap();
+    for (n, line) in text.lines().enumerate() {
+        if !line.starts_with(".Bl ") {
+            continue;
+        }
+        let Some(rest) = line.split_once("-width ").map(|(_, r)| r) else { continue };
+        // Either a quoted sample string, or a scaling unit like Ds / 16n.
+        let width = match rest.strip_prefix('"') {
+            Some(quoted) => quoted.split('"').next().unwrap_or("").chars().count(),
+            None => {
+                let word = rest.split_whitespace().next().unwrap_or("");
+                match word.strip_suffix('n').and_then(|d| d.parse::<usize>().ok()) {
+                    Some(cols) => cols,
+                    // Ds and the other symbolic widths are small by definition.
+                    None => continue,
+                }
+            }
+        };
+        assert!(
+            width <= MAX,
+            "optique.8:{}: -width of {width} columns leaves too little room:\n{line}",
+            n + 1
+        );
+    }
+}
+
 #[test]
 fn man_page_documents_every_subcommand_and_flag() {
     // Cheap guard against the man page drifting from the CLI surface.
