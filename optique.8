@@ -28,11 +28,19 @@
 .Op Ar global options
 .Cm scan
 .Op Fl -json
+.Op Fl -options
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
 .Op Ar global options
 .Cm sync
+.Op Fl n
+.Op Fl -json
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Nm
+.Op Ar global options
+.Cm decide
 .Op Fl n
 .Op Fl f Ar pkglist
 .Op Ar origin ...
@@ -42,6 +50,7 @@
 .Op Fl n
 .Op Fl r
 .Op Fl u
+.Op Fl -json
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Sh DESCRIPTION
@@ -98,6 +107,54 @@ under a second.
 Renamed ports are resolved through the tree's
 .Pa MOVED
 file; ports that vanished surface as per-edge errors.
+.Ss Dependency loops
+Resolving the closure also detects dependency loops: ports that are, directly
+or through other ports, their own dependency.
+.Xr poudriere 8
+cannot build any of them, since none can be built first, so every loop is
+reported \(em whatever the subcommand \(em as a
+.Ql loop:
+line on standard error naming a shortest closed walk through it:
+.Bd -literal -offset indent
+loop: devel/a \[u2192] devel/b \[u2192] devel/a
+.Ed
+.Pp
+When the tangle is larger than that walk, because several loops share a port,
+the remaining ports follow on an
+.Ql also tangled:
+line \(em up to a dozen of them by name, the rest counted: each of them still
+reaches every other, so none of those can be built first either.
+.Pp
+Only the dependencies poudriere actually builds are followed.
+.Va TEST_DEPENDS
+belong to the closure, and their ports are configured like any other, but
+.Nm poudriere Cm bulk
+builds them only under
+.Fl t ,
+and the tree's test dependencies are cyclic on a grand scale \(em hundreds of
+ports in one tangle.
+An edge that no other dependency list
+.Pq Va PKG , EXTRACT , PATCH , FETCH , BUILD , LIB No or Va RUN
+asks for is therefore left out of the search, which is why a healthy tree
+reports no loop at all.
+.Pp
+A loop is usually option-dependent, which is why it is worth seeing before a
+build rather than during one: turning off the option that pulls the dependency
+in breaks it.
+In
+.Cm tui
+the ports of a loop carry an
+.Sq \[u221E]
+mark and
+.Ic r
+spells the loop out; both are recomputed after every background re-query, so a
+loop created or broken by an option edit is announced on the status line.
+In
+.Cm scan
+each such port's row ends with
+.Ql [dependency loop]
+and the loop counts towards the exit gate unless every one of its members is
+blacklisted.
 .Ss Global options
 These options are accepted before and after the subcommand name.
 .Bl -tag -width Ds
@@ -271,16 +328,19 @@ view.
 ok.
 .El
 .Pp
-Two further markers may trail the status one:
+Three further markers may trail the status one:
 .Sq \[u2298]
 for a port blacklisted for this jail, tree and set, which therefore never needs
-attention, and
+attention,
 .Sq \[u26A0]
 for a port that is
 .Va BROKEN
 or
 .Va IGNORE Ns d
-with its current options.
+with its current options, and
+.Sq \[u221E]
+for a port caught in a dependency loop
+.Pq see Sx Dependency loops .
 .Pp
 The right pane shows the port's options in framework order under their group
 headers, whose kind is enforced on every toggle:
@@ -438,8 +498,8 @@ marker at the right of the option pane's title; see
 .Sx PORT NOTES .
 The key works in both panes.
 .It Ic r
-Explain why the port is in the closure: its dependency chain and its
-dependents.
+Explain why the port is in the closure: its dependency chain, its dependents
+and, when it is caught in one, the dependency loop it belongs to.
 .It Ic \&? , F1
 Colour-coded in-interface help listing markers, badges and keys.
 .It Ic Ctrl-L
@@ -549,9 +609,10 @@ then one line per row with trailing blanks stripped, then
 .It Cm state
 Print a one-line JSON object with the fields
 .Va focus , selected , visible , listable , refreshing , pending , message ,
-.Va overlay , filter
+.Va overlay , filter , dirty
 and
-.Va dirty .
+.Va loops
+.Pq how many dependency loops the closure has .
 .Va overlay
 names the popup on screen, if any.
 .It Cm settle Op Ar timeout_ms
@@ -602,6 +663,13 @@ Ports that are fully
 never demand attention, and neither do blacklisted ports: poudriere will not
 build them in this jail, tree and set, so their options cannot hold a build up.
 Ports without any options are counted separately and not listed.
+.Pp
+A port caught in a dependency loop
+.Pq see Sx Dependency loops
+keeps its own status and gains a
+.Ql [dependency loop]
+annotation; the loop itself is named on standard error and counted in the
+summary.
 .Bl -tag -width Ds
 .It Fl -json
 Print one machine-readable JSON object on standard output instead of the table;
@@ -611,7 +679,8 @@ is ignored.
 The object has the keys
 .Va options_dir ,
 .Va ports_tree ,
-.Va ports
+.Va ports ,
+.Va loops
 and
 .Va summary .
 Each element of
@@ -627,10 +696,23 @@ has
 and
 .Va removed
 .Pq both for stale ports ,
-.Va mc_covered
+.Va mc_covered ,
+.Va blacklisted ,
+.Va in_loop
 and
-.Va blacklisted .
+.Va options_file
+.Pq the options-dir entry it reads .
 Non-ok ports come first, then alphabetical order.
+Each element of
+.Va loops
+has
+.Va ports
+.Pq every port of the tangle ,
+.Va cycle
+.Pq a shortest closed walk through it, its first port listed once
+and
+.Va blacklisted ,
+true when every member is blacklisted and the loop therefore holds nothing up.
 .Va summary
 holds the counts
 .Va total ,
@@ -639,10 +721,73 @@ holds the counts
 .Va conflict ,
 .Va ok ,
 .Va optionless ,
-.Va blacklisted
+.Va blacklisted ,
+.Va attention
+.Pq ports owing a decision ,
+.Va loops ,
+.Va loops_blocking
+.Pq loops with a member that is not blacklisted
 and
-.Va attention ,
-the last of which drives the exit status.
+.Va pending ,
+which is
+.Va attention
+plus
+.Va loops_blocking
+and drives the exit status.
+.It Fl -options
+With
+.Fl -json ,
+give every port its full per-option detail as well: two further keys per port,
+.Va violations
+.Pq why the status is Cm conflict
+and
+.Va options ,
+an array in the framework's option order.
+Each element has
+.Va name ,
+.Va staged
+.Pq the value that would be written ,
+.Va default
+.Pq the port's own default ,
+.Va saved
+.Pq the value the options file records, null when it has no entry for it ,
+.Va new
+.Pq added to the port since the file was written ,
+.Va makeconf ,
+.Va locked
+with
+.Va locked_by ,
+.Va deviates_makeconf ,
+.Va group ,
+.Va implies ,
+.Va prevents ,
+.Va prevents_msg ,
+.Va desc ,
+.Va broken ,
+.Va ignore ,
+.Va adds_deps
+and
+.Va uses .
+.Va makeconf
+is
+.Bro Va value , Va scope Brc
+with the scope
+.Ql global ,
+.Ql port
+or
+.Ql force ,
+and is absent when no layer mentions the option;
+.Va group
+is
+.Bro Va name , Va kind , Va members Brc
+with the kind
+.Ql group , Ql multi , Ql single No or Ql radio ;
+.Va adds_deps
+lists the port origins the option declares as dependencies.
+That is everything a decision needs without running
+.Nm make
+again \(em see
+.Sx MACHINE INTERFACE .
 .El
 .Pp
 With
@@ -699,6 +844,74 @@ reported instead.
 A later interactive session can revisit anything
 .Cm sync
 decided.
+.Bl -tag -width Ds
+.It Fl -json
+Report on standard output as one JSON object instead of the per-file listing:
+the same shape
+.Cm decide
+answers with, described under
+.Sx MACHINE INTERFACE .
+The summary and any warnings stay on standard error and
+.Fl q
+is ignored.
+.El
+.Ss decide
+.Nm Cm decide Oo Fl n Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
+.Pp
+Set option values from a plan read on standard input, for scripts and agents
+that decide without a terminal.
+The plan is one JSON object of ports, each an object of option names to
+booleans:
+.Bd -literal -offset indent
+{ "www/nginx": { "LUA": true, "DOCS": false },
+  "devel/git@lite": { "CONTRIB": false } }
+.Ed
+.Pp
+Values go through the same rules the interface enforces \(em group kinds, the
+.Va IMPLIES
+closure, the
+.Va PREVENTS
+check, and the
+.Va *_FORCE
+and implied locks \(em so a plan can never record a state
+.Cm tui
+would refuse.
+Options are applied in name order within each port, which fixes the outcome
+when one implies another or they share a single-choice group.
+.Pp
+The port list is optional: given none, the plan's own ports are the closure
+roots, so a plan is self-contained.
+Given one
+.Pq positional origins and/or Fl f Ar pkglist ,
+the closure comes from it and a plan naming a port outside it is reported as
+unknown rather than guessed at.
+.Pp
+Only the options files of the ports the plan names are written;
+.Cm sync
+refreshes the rest.
+Writing a port's file necessarily adopts its current option list, exactly as
+.Cm sync
+would: an option the tree has added since the file was written cannot be left
+unrecorded.
+.Pp
+Nothing is written unless the plan is honoured in full.
+A value the port's rules refuse, a value that some other value in the plan
+undoes, a port the closure does not hold, or a resulting configuration that
+violates
+.Va PREVENTS
+or a group rule all leave the options dir untouched and are reported in the
+.Va rejected ,
+.Va unknown
+and
+.Va conflicts
+lists, with the exit status at 1.
+Asking for a value a port already has is not a change and not an error, so a
+plan can be replayed.
+.Pp
+The report always goes to standard output as JSON
+.Pq see Sx MACHINE INTERFACE ;
+.Fl n
+previews it without writing anything.
 .Ss clean
 .Nm Cm clean Oo Fl n Oc Oo Fl r Oc Oo Fl u Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
 .Pp
@@ -729,7 +942,165 @@ which is then required.
 If any port in that closure fails to query, the closure is incomplete and
 .Nm
 refuses to prune anything rather than risk deleting live configuration.
+.It Fl -json
+Report on standard output as one JSON object instead of the per-entry listing:
+.Va options_dir ,
+.Va dry_run ,
+.Va removals
+.Pq each Bro Va options_name , Va reason Brc ,
+.Va kept
+.Pq only under Fl v ,
+.Va warnings ,
+.Va errors
+and
+.Va summary
+.Pq Va entries , Va removed , Va failed .
+The summary line stays on standard error and
+.Fl q
+is ignored.
 .El
+.Sh MACHINE INTERFACE
+Every subcommand but
+.Cm tui
+is drivable without a terminal, and every one of them can answer in JSON, so a
+script or an agent never has to read a screen or parse a table.
+Two commands carry the work:
+.Cm scan Fl -json Fl -options
+says what the closure is and what each option means, and
+.Cm decide
+sets values from a plan.
+One object per invocation goes to standard output and nothing else does;
+progress, the banner, warnings and the summary all stay on standard error, so
+stdout is safe to pipe into a parser without
+.Fl q .
+.Pp
+The loop is:
+.Bd -literal -offset indent
+# 1. what needs deciding, and what are the choices?
+optique -z ws scan --json --options -f pkglist > state.json
+
+# 2. decide (this is where the caller's judgement goes)
+jq ... < state.json > plan.json
+
+# 3. check the plan, then carry it out
+optique -z ws decide -n < plan.json
+optique -z ws decide    < plan.json
+.Ed
+.Pp
+The contract is meant to be safe to drive blind:
+.Bl -bullet -compact
+.It
+Exit status is the answer to "is there anything left to do":
+.Cm scan
+exits 1 while a decision is pending,
+.Cm decide
+exits 1 when it did not honour the plan.
+See
+.Sx EXIT STATUS .
+.It
+.Cm decide
+is all-or-nothing.
+A plan that cannot be carried out in full changes nothing, so a caller is
+never left having to work out which half of it landed.
+.It
+Everything refused is named.
+A value the rules turn down, a value another value in the plan undoes, an
+option the port does not have, a port outside the closure, a resulting
+conflict: each appears in
+.Va rejected ,
+.Va unknown
+or
+.Va conflicts
+with a reason, instead of being dropped.
+.It
+Plans are replayable.
+Asking for the value a port already has is not a change, so the same plan can
+be applied twice and the second run writes nothing.
+.It
+.Fl n
+previews.
+.Cm decide Fl n
+and
+.Cm sync Fl n
+build the whole report, including the per-file diff, and touch nothing.
+.El
+.Pp
+.Cm scan
+answers the questions a decision needs: which options are undecided
+.Pq Va undecided ,
+what the value would be if nothing were decided
+.Pq Va staged ,
+whether
+.Pa make.conf
+has already settled it
+.Pq Va makeconf , Va mc_covered ,
+whether it can be changed at all
+.Pq Va locked ,
+what enabling it drags in
+.Pq Va adds_deps
+and what the framework says it is for
+.Pq Va desc .
+.Pp
+.Cm sync
+and
+.Cm clean
+take
+.Fl -json
+too, and report in the same shapes:
+.Cm sync
+answers exactly like
+.Cm decide
+.Pq with Va rejected , Va conflicts No and Va unknown No always empty , since it
+asks for nothing ,
+which makes the two interchangeable to a caller that only wants to know what
+changed on disk.
+.Pp
+.Cm decide
+and
+.Cm sync
+report
+.Va options_dir ,
+.Va dry_run ,
+.Va applied
+.Pq whether the options dir really changed ,
+.Va writes ,
+.Va removals ,
+.Va rejected ,
+.Va conflicts ,
+.Va unknown ,
+.Va warnings ,
+.Va errors
+and
+.Va summary
+.Pq Va written , Va removed , Va failed , Va rejected , Va conflicts .
+Each element of
+.Va writes
+has
+.Va port ,
+.Va options_name ,
+.Va file
+.Pq its absolute path ,
+.Va new_file ,
+.Va diff
+.Pq Ql +OPT No and Ql -OPT No for options the file already knew ,
+.Va adopted
+.Pq options the port gained since, each Bro Va name , Va on Brc ; empty for a new file, whose whole state is Va enabled ,
+.Va dropped
+.Pq options the port no longer has ,
+.Va enabled
+.Pq the complete set the file will record
+and
+.Va new_deps
+.Pq origins the newly enabled options declare as dependencies .
+.Pp
+For driving the interface itself \(em to reproduce a rendering bug, or to test
+it in CI \(em
+.Cm tui Fl -drive
+is a keystroke-level protocol over the real keymap and drawing code; see
+.Sx DRIVE PROTOCOL .
+It is a debugging tool, not the way to configure ports from a script:
+.Cm decide
+is.
 .Sh POUDRIERE INTEGRATION
 All poudriere state is read from
 .Pa /usr/local/etc/poudriere.d .
@@ -977,13 +1348,29 @@ uses its exit status as a machine-readable gate:
 Nothing is pending: every port in the closure is configured and consistent, or
 is fully decided by
 .Pa make.conf ,
-or is blacklisted.
+or is blacklisted, and no dependency loop is left to untangle.
 .It 1
 A human decision is pending: at least one port is unconfigured or stale with
-undecided options, or has a conflict.
+undecided options, or has a conflict, or the closure holds a dependency loop
+not all of whose members are blacklisted.
 .It other
 An error occurred, for example an unreadable package list or an unresolvable
 ports tree.
+.El
+.Pp
+.Cm decide
+uses its exit status the same way:
+.Bl -tag -width Ds -compact
+.It 0
+The plan was honoured: every value asked for is the value recorded, and every
+file that had to be written was.
+.It 1
+The plan was not honoured, and nothing was written: some value was refused or
+undone, a port was not in the closure, the result would conflict, or a file
+could not be written.
+The report on standard output says which.
+.It other
+An error occurred, for example a malformed plan or an unresolvable ports tree.
 .El
 .Pp
 .Cm tui ,
@@ -1022,7 +1409,7 @@ Use the exit status as a
 .Xr cron 8
 gate that only speaks up when a decision is actually pending:
 .Bd -literal -offset indent
-optique -z ws -Q scan -f list || mail-me
+optique -z ws -q scan -f list || mail-me
 .Ed
 .Pp
 Refresh every options file without interaction, first reporting, then writing:
@@ -1036,6 +1423,29 @@ Garbage-collect the options directory, progressively more aggressively:
 optique -z workstation clean --dry-run
 optique -z workstation clean --redundant
 optique -z workstation clean --unused -f pkglist
+.Ed
+.Pp
+Drive it from a script or an agent: read the state with every option explained,
+write a plan, check it, then carry it out
+.Pq see Sx MACHINE INTERFACE :
+.Bd -literal -offset indent
+optique -z ws scan --json --options -f list > state.json
+echo '{"www/nginx": {"LUA": true}}' > plan.json
+optique -z ws decide -n < plan.json
+optique -z ws decide    < plan.json
+.Ed
+.Pp
+Turn one option off across a whole package list, without a terminal.
+Only the ports that actually carry the option go into the plan: asking for an
+option a port does not have is a plan error, not a no-op, so the
+.Fl -options
+detail is what the filter reads:
+.Bd -literal -offset indent
+optique -z ws scan --json --options -f list |
+    jq '[.ports[]
+         | select(any(.options[]; .name == "DOCS"))
+         | {(.port): {DOCS: false}}] | add' |
+    optique -z ws decide -f list
 .Ed
 .Pp
 A full hygiene pass for one package list, refreshing and then

@@ -199,6 +199,7 @@ fn state_json(app: &App) -> String {
         "overlay": overlay,
         "filter": app.filter,
         "dirty": app.session.dirty(),
+        "loops": app.loops.len(),
     })
     .to_string()
 }

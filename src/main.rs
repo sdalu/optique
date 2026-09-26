@@ -3,11 +3,14 @@ mod cache;
 mod clean;
 mod cli;
 mod config;
+mod decide;
+mod deps;
 mod draft;
 mod model;
 mod moved;
 mod optionsfile;
 mod query;
+mod report;
 mod session;
 mod staging;
 mod tui;
@@ -15,7 +18,7 @@ mod tui;
 use std::io::Write as _;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Parser;
 
 use crate::cli::{Cli, Command};
@@ -45,7 +48,7 @@ fn main() -> Result<()> {
             // Exit code is the cron/CI gate: 1 = decisions pending, 0 = clean.
             // Real errors keep travelling up the anyhow path (nonzero, 1 from
             // clap's runner) — only the *clean* run may return 0.
-            let attention = cmd_scan(&cli, &rs, args.json)?;
+            let attention = cmd_scan(&cli, &rs, args.json, args.options)?;
             if attention > 0 {
                 let _ = std::io::stdout().flush();
                 let _ = std::io::stderr().flush();
@@ -54,8 +57,18 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Command::Sync(args)) => {
-            let rs = roots_or_installed(&cli, &args.origins)?;
-            cmd_sync(&cli, &rs, cli.dry_run)
+            let rs = roots_or_installed(&cli, &args.roots.origins)?;
+            cmd_sync(&cli, &rs, cli.dry_run, args.json)
+        }
+        Some(Command::Decide(args)) => {
+            // Same gate contract as scan: 1 means "not done", not "broke".
+            let code = cmd_decide(&cli, args)?;
+            if code != 0 {
+                let _ = std::io::stdout().flush();
+                let _ = std::io::stderr().flush();
+                std::process::exit(1);
+            }
+            Ok(())
         }
         Some(Command::Clean(args)) => cmd_clean(&cli, args),
         Some(Command::Origins(raw)) => {
@@ -174,12 +187,14 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
 
-    let (mut removals, live, warnings) =
+    let (mut removals, live, mut warnings) =
         clean::classify_entries(&settings.options_dir, &settings.portsdir, &moved);
     let total_entries = removals.len() + live.len();
     for w in &warnings {
         eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
+    // Only --verbose fills this in; JSON reports it as `kept`.
+    let mut kept_entries: Vec<(String, String)> = Vec::new();
 
     // Entries nobody in the closure reads go; the redundancy pass below then
     // only has to look at what --unused still keeps.
@@ -210,16 +225,19 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         let handle = |info: model::port::PortInfo,
                           removals: &mut Vec<clean::Removal>,
                           kept: &mut Vec<(String, String)>,
+                          notes: &mut Vec<String>,
                           by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
             if let Some(entry) = by_key.get(&info.key) {
                 // The verdict below is only valid for the file this port
                 // actually reads; a custom/legacy OPTIONS_NAME means the
                 // entry belongs to some other port — leave it alone.
                 if info.options_name != entry.options_name {
-                    eprintln!(
-                        "warning: {}: {} uses options name {} — not this entry, left alone",
+                    let note = format!(
+                        "{}: {} uses options name {} — not this entry, left alone",
                         entry.options_name, info.key, info.options_name
                     );
+                    eprintln!("warning: {note}");
+                    notes.push(note);
                     return;
                 }
                 let diff = clean::redundancy_diff(&info);
@@ -240,7 +258,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         for entry in &live {
             if let Some(info) = cache.lookup(&entry.key, &settings.options_dir) {
                 done += 1;
-                handle(info, &mut removals, &mut kept, &by_key);
+                handle(info, &mut removals, &mut kept, &mut warnings, &by_key);
             } else {
                 runner.submit(entry.key.clone());
                 in_flight += 1;
@@ -252,11 +270,12 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
                     in_flight -= 1;
                     done += 1;
                     cache.insert(&info, &settings.options_dir);
-                    handle(*info, &mut removals, &mut kept, &by_key);
+                    handle(*info, &mut removals, &mut kept, &mut warnings, &by_key);
                 }
                 Ok(ScanEvent::PortError { key, msg }) => {
                     in_flight -= 1;
                     eprintln!("{} {key}: query failed, left alone ({msg})", tint(paint, ansi::YELLOW, "warning:"));
+                    warnings.push(format!("{key}: query failed, left alone ({msg})"));
                     by_key.remove(&key);
                 }
                 Err(_) => break,
@@ -268,47 +287,88 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             eprintln!();
         }
         runner.shutdown();
-        if cli.verbose && !cli.quiet {
+        if cli.verbose && !cli.quiet && !args.json {
             kept.sort();
             for (name, why) in &kept {
                 println!("keep  {name:<38} {why}");
             }
         }
+        kept.sort();
+        kept_entries = kept;
     }
 
     // Obsolete, unused and redundant removals were collected separately.
     removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
 
-    if removals.is_empty() {
-        eprintln!("nothing to clean ({total_entries} entries kept)");
-        return Ok(());
-    }
-    if !cli.quiet {
+    // stdout carries either the listing or the JSON object, never both.
+    if !args.json && !cli.quiet {
         for r in &removals {
             println!("{:<44} {}", r.options_name, r.reason);
         }
     }
-    if cli.dry_run {
+
+    let mut errors: Vec<report::ErrorEntry> = Vec::new();
+    let mut removed = 0usize;
+    if !cli.dry_run {
+        for r in &removals {
+            match clean::remove_entry(r) {
+                Ok(note) => {
+                    removed += 1;
+                    if let Some(note) = note {
+                        eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
+                        warnings.push(note);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name);
+                    errors.push(report::ErrorEntry {
+                        subject: r.options_name.clone(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    if args.json {
+        report::print(&report::CleanReport {
+            options_dir: settings.options_dir.display().to_string(),
+            dry_run: cli.dry_run,
+            removals: removals
+                .iter()
+                .map(|r| report::RemovalEntry {
+                    options_name: r.options_name.clone(),
+                    reason: r.reason.clone(),
+                })
+                .collect(),
+            kept: kept_entries
+                .iter()
+                .map(|(options_name, reason)| report::KeptEntry {
+                    options_name: options_name.clone(),
+                    reason: reason.clone(),
+                })
+                .collect(),
+            warnings,
+            summary: report::CleanSummary {
+                entries: total_entries,
+                removed,
+                failed: errors.len(),
+            },
+            errors,
+        })?;
+    }
+
+    if removals.is_empty() {
+        eprintln!("nothing to clean ({total_entries} entries kept)");
+    } else if cli.dry_run {
         eprintln!(
             "dry run: {} of {total_entries} entries would be removed from {}",
             removals.len(),
             settings.options_dir.display()
         );
-        return Ok(());
+    } else {
+        eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
     }
-    let mut removed = 0;
-    for r in &removals {
-        match clean::remove_entry(r) {
-            Ok(note) => {
-                removed += 1;
-                if let Some(note) = note {
-                    eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
-                }
-            }
-            Err(e) => eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name),
-        }
-    }
-    eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
     Ok(())
 }
 
@@ -494,6 +554,9 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
 struct Scanned {
     settings: config::Settings,
     result: ScanResult,
+    /// Dependency loops found in the scanned closure (already reported on
+    /// stderr by `run_scan`; kept for the table, the JSON and the gate).
+    dep_loops: Vec<deps::DepLoop>,
     elapsed: f32,
     /// Holds the layered make.conf (and the TUI's staging db) alive.
     staging: tempfile::TempDir,
@@ -593,9 +656,20 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
     }
 
+    // A dependency loop is a property of the closure, not of one command:
+    // whatever the caller went on to do, poudriere will not build it.
+    let dep_loops = deps::detect(&result.ports, &result.aliases);
+    for dl in &dep_loops {
+        eprintln!("{} {}", tint(paint, ansi::RED, "loop:"), dl.render());
+        if let Some(extra) = dl.extra_line() {
+            eprintln!("       also tangled: {extra}");
+        }
+    }
+
     Ok(Scanned {
         settings,
         result,
+        dep_loops,
         elapsed: t0.elapsed().as_secs_f32(),
         staging,
         cache,
@@ -656,15 +730,17 @@ fn stdout_color(cli: &Cli) -> bool {
     cli::use_color(cli.color, std::io::stdout().is_terminal(), no_color.as_deref())
 }
 
-/// Scan and report. Returns the number of ports needing a *human* decision,
-/// which main turns into exit code 1 (see `Row::needs_attention`).
-fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
+/// Scan and report. Returns how many *human* decisions are pending — ports
+/// needing one (see `Row::needs_attention`) plus dependency loops that are
+/// not entirely blacklisted — which main turns into exit code 1.
+fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<usize> {
     use crate::session::UiStatus;
 
     let scanned = run_scan(cli, rs)?;
     let (queried, from_cache, elapsed) =
         (scanned.result.queried, scanned.result.from_cache, scanned.elapsed);
     let settings = scanned.settings;
+    let dep_loops = scanned.dep_loops;
     // Session gives owner-aware statuses (flavors sharing an options file
     // are judged against the default flavor's view).
     let sess = session::Session::new(
@@ -688,6 +764,18 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
         warnings: Vec<String>,
         /// Blacklisted for this jail/tree/set: poudriere would never build it.
         blacklisted: bool,
+        /// Tangled in a dependency loop (the loop itself is reported whole,
+        /// on stderr and in the JSON; this only marks the row).
+        in_loop: bool,
+        /// OPTIONS_NAME, i.e. the options-dir entry this port reads.
+        options_name: String,
+        /// Only under `--options`: what a caller needs to decide a value.
+        detail: Option<PortDetail>,
+    }
+    /// The `--options` payload of one port.
+    struct PortDetail {
+        violations: Vec<String>,
+        options: Vec<report::OptionReport>,
     }
     impl Row {
         /// make.conf already dictates every option this port still owes an
@@ -776,6 +864,12 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
             state,
             warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
             blacklisted: settings.blacklist.matches(&key.origin),
+            in_loop: dep_loops.iter().any(|dl| dl.contains(key)),
+            options_name: info.options_name.clone(),
+            detail: with_options.then(|| PortDetail {
+                violations: sess.violations(info),
+                options: report::option_reports(&sess, info),
+            }),
         });
     }
     rows.sort_by_key(|r| (r.status == UiStatus::Ok, r.key.clone()));
@@ -785,56 +879,47 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
     let conflict = rows.iter().filter(|r| r.status == UiStatus::Conflict).count();
     let ok = rows.iter().filter(|r| r.status_str() == "ok").count();
     let blacklisted = rows.iter().filter(|r| r.blacklisted).count();
+    // A loop every member of which is blacklisted blocks nothing here:
+    // poudriere never builds any of them.
+    let loop_blacklisted = |dl: &deps::DepLoop| {
+        dl.members.iter().all(|k| settings.blacklist.matches(&k.origin))
+    };
+    let blocking_loops = dep_loops.iter().filter(|dl| !loop_blacklisted(dl)).count();
     let attention = rows.iter().filter(|r| r.needs_attention()).count();
+    // The gate: ports owing a decision, plus loops a human has to untangle.
+    let pending = attention + blocking_loops;
 
     if json {
         // stdout must stay pure JSON: one object, no table, quiet ignored.
-        #[derive(serde::Serialize)]
-        struct JsonPort<'a> {
-            port: &'a str,
-            pkgname: &'a str,
-            status: &'static str,
-            undecided: &'a [String],
-            added: &'a [String],
-            removed: &'a [String],
-            mc_covered: bool,
-            blacklisted: bool,
-        }
-        #[derive(serde::Serialize)]
-        struct JsonSummary {
-            total: usize,
-            unconfigured: usize,
-            stale: usize,
-            conflict: usize,
-            ok: usize,
-            optionless: usize,
-            blacklisted: usize,
-            attention: usize,
-        }
-        #[derive(serde::Serialize)]
-        struct JsonReport<'a> {
-            options_dir: String,
-            ports_tree: String,
-            ports: Vec<JsonPort<'a>>,
-            summary: JsonSummary,
-        }
-        let report = JsonReport {
+        let report = report::ScanReport {
             options_dir: settings.options_dir.display().to_string(),
             ports_tree: settings.portsdir.display().to_string(),
             ports: rows
                 .iter()
-                .map(|r| JsonPort {
-                    port: &r.key,
-                    pkgname: &r.pkgname,
+                .map(|r| report::PortReport {
+                    port: r.key.clone(),
+                    pkgname: r.pkgname.clone(),
                     status: r.status_str(),
-                    undecided: &r.undecided,
-                    added: &r.added,
-                    removed: &r.removed,
+                    undecided: r.undecided.clone(),
+                    added: r.added.clone(),
+                    removed: r.removed.clone(),
                     mc_covered: r.mc_covered(),
                     blacklisted: r.blacklisted,
+                    in_loop: r.in_loop,
+                    options_file: format!("{}/options", r.options_name),
+                    violations: r.detail.as_ref().map(|d| d.violations.clone()),
+                    options: r.detail.as_ref().map(|d| d.options.clone()),
                 })
                 .collect(),
-            summary: JsonSummary {
+            loops: dep_loops
+                .iter()
+                .map(|dl| report::LoopReport {
+                    ports: dl.members.iter().map(|k| k.to_string()).collect(),
+                    cycle: dl.cycle.iter().map(|k| k.to_string()).collect(),
+                    blacklisted: loop_blacklisted(dl),
+                })
+                .collect(),
+            summary: report::ScanSummary {
                 total: rows.len(),
                 unconfigured,
                 stale,
@@ -843,9 +928,12 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
                 optionless: hidden,
                 blacklisted,
                 attention,
+                loops: dep_loops.len(),
+                loops_blocking: blocking_loops,
+                pending,
             },
         };
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        report::print(&report)?;
     } else if !cli.quiet {
         let color = stdout_color(cli);
         for row in &rows {
@@ -867,11 +955,16 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
             };
             // Blacklisted ports keep their status but wear the ⊘ marker:
             // whatever it says, nothing here is waiting on a human.
-            let (marker, tail) = if row.blacklisted {
-                ("⊘", " [blacklisted]")
+            let (marker, mut tail) = if row.blacklisted {
+                ("⊘", " [blacklisted]".to_string())
             } else {
-                (marker, "")
+                (marker, String::new())
             };
+            // The loop itself is spelled out on stderr; the row only says
+            // that this port is caught in one.
+            if row.in_loop {
+                tail.push_str(" [dependency loop]");
+            }
             // Pad first, tint after: the escapes must not count as width.
             let cell = match marker_color(marker).filter(|_| color) {
                 Some(c) => format!("{c}{marker:<2}{}", ansi::RESET),
@@ -889,9 +982,14 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
         }
     }
 
+    // Loops are counted, not re-listed: run_scan already named every one.
+    let loop_note = match dep_loops.len() {
+        0 => String::new(),
+        n => format!(" · {n} dependency loop{}", if n == 1 { "" } else { "s" }),
+    };
     eprintln!(
         "{} ports with options ({} unconfigured, {} stale, {} conflict; \
-         {} awaiting a decision) · {} without options · \
+         {} awaiting a decision) · {} without options{} · \
          {} queried, {} cached · {:.1}s",
         rows.len(),
         unconfigured,
@@ -899,14 +997,121 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool) -> Result<usize> {
         conflict,
         attention,
         hidden,
+        loop_note,
         queried,
         from_cache,
         elapsed
     );
-    Ok(attention)
+    Ok(pending)
 }
 
-fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
+/// One write pass, whatever assembled it: the files to write, the entries to
+/// remove, and everything that stopped the pass from being complete.
+struct WritePass {
+    writes: Vec<apply::PendingWrite>,
+    removals: Vec<clean::Removal>,
+    warnings: Vec<String>,
+    rejected: Vec<report::RejectedEntry>,
+    conflicts: Vec<report::ConflictEntry>,
+    unknown: Vec<String>,
+}
+
+impl WritePass {
+    fn new(writes: Vec<apply::PendingWrite>, removals: Vec<clean::Removal>, warnings: Vec<String>) -> Self {
+        WritePass {
+            writes,
+            removals,
+            warnings,
+            rejected: Vec::new(),
+            conflicts: Vec::new(),
+            unknown: Vec::new(),
+        }
+    }
+
+    /// A pass that could not be carried out as asked writes nothing at all:
+    /// a caller driving this from a script must never be left guessing which
+    /// half of its plan landed.
+    fn blocked(&self) -> bool {
+        !self.rejected.is_empty() || !self.conflicts.is_empty() || !self.unknown.is_empty()
+    }
+
+    fn nothing_to_do(&self) -> bool {
+        self.writes.is_empty() && self.removals.is_empty()
+    }
+}
+
+/// Carry out a write pass — unless it is a dry run or blocked — and assemble
+/// the report `sync` and `decide` both answer with. Failures are collected
+/// rather than raised: a per-file problem must not hide the rest of the pass.
+fn commit_writes(
+    pass: &WritePass,
+    ports: &std::collections::BTreeMap<model::origin::PortKey, model::port::PortInfo>,
+    options_dir: &std::path::Path,
+    dry_run: bool,
+) -> report::WriteReport {
+    let act = !dry_run && !pass.blocked();
+    let mut errors: Vec<report::ErrorEntry> = Vec::new();
+    let mut written = 0usize;
+    let mut removed = 0usize;
+    let mut notes: Vec<String> = Vec::new();
+
+    if act {
+        let summary = apply::apply(&pass.writes);
+        written = summary.written;
+        for (key, message) in summary.failed {
+            errors.push(report::ErrorEntry { subject: key.to_string(), message });
+        }
+        for r in &pass.removals {
+            match clean::remove_entry(r) {
+                Ok(note) => {
+                    removed += 1;
+                    if let Some(note) = note {
+                        notes.push(note);
+                    }
+                }
+                Err(e) => errors.push(report::ErrorEntry {
+                    subject: r.options_name.clone(),
+                    message: e.to_string(),
+                }),
+            }
+        }
+    }
+
+    let mut warnings = pass.warnings.clone();
+    warnings.extend(notes);
+    report::WriteReport {
+        options_dir: options_dir.display().to_string(),
+        dry_run,
+        applied: written > 0 || removed > 0,
+        writes: pass
+            .writes
+            .iter()
+            .map(|w| report::write_entry(w, ports.get(&w.key)))
+            .collect(),
+        removals: pass
+            .removals
+            .iter()
+            .map(|r| report::RemovalEntry {
+                options_name: r.options_name.clone(),
+                reason: r.reason.clone(),
+            })
+            .collect(),
+        rejected: pass.rejected.clone(),
+        conflicts: pass.conflicts.clone(),
+        unknown: pass.unknown.clone(),
+        warnings,
+        summary: report::WriteSummary {
+            written,
+            removed,
+            failed: errors.len(),
+            rejected: pass.rejected.len(),
+            conflicts: pass.conflicts.len(),
+        },
+        errors,
+    }
+}
+
+fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
     let scanned = run_scan(cli, rs)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
     let paint = stderr_color(cli);
@@ -917,10 +1122,6 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
         (key, info, apply::sync_enabled_set(info, saved.as_ref()))
     });
     let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
-    for w in &planned.warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
-    }
-    let writes = planned.writes;
 
     // A port that lost ALL its options never reaches plan_writes; its
     // leftover file is dead configuration and must go too (unless another
@@ -930,15 +1131,21 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
     stale_files.extend(planned.removals);
     stale_files.sort_by(|a, b| a.options_name.cmp(&b.options_name));
 
-    if writes.is_empty() && stale_files.is_empty() {
+    let pass = WritePass::new(planned.writes, stale_files, planned.warnings);
+    for w in &pass.warnings {
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+    }
+
+    if pass.nothing_to_do() && !json {
         eprintln!("everything up to date, nothing to write");
         return Ok(());
     }
-    if !cli.quiet {
-        for r in &stale_files {
+    // stdout carries either the listing or the JSON object, never both.
+    if !json && !cli.quiet {
+        for r in &pass.removals {
             println!("{}  removing options file ({})", r.options_name, r.reason);
         }
-        for w in &writes {
+        for w in &pass.writes {
             println!("{}  {}", w.key, w.describe());
             if cli.verbose {
                 let state = w
@@ -951,39 +1158,158 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool) -> Result<()> {
             }
         }
     }
+
+    let report = commit_writes(&pass, &result.ports, &settings.options_dir, dry_run);
+    if json {
+        report::print(&report)?;
+    }
+    for e in &report.errors {
+        eprintln!("{} {}: {}", tint(paint, ansi::RED, "error:"), e.subject, e.message);
+    }
     if dry_run {
         eprintln!(
             "dry run: {} file(s) would be written, {} removed in {}",
-            writes.len(),
-            stale_files.len(),
+            pass.writes.len(),
+            pass.removals.len(),
             settings.options_dir.display()
         );
         return Ok(());
     }
-    let summary = apply::apply(&writes);
-    for (key, msg) in &summary.failed {
-        eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
-    }
-    let mut removed = 0usize;
-    for r in &stale_files {
-        match clean::remove_entry(r) {
-            Ok(note) => {
-                removed += 1;
-                if let Some(note) = note {
-                    eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
-                }
-            }
-            Err(e) => eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name),
-        }
-    }
     eprintln!(
         "{} file(s) written, {} removed in {}{}",
-        summary.written,
-        removed,
+        report.summary.written,
+        report.summary.removed,
         settings.options_dir.display(),
-        if summary.failed.is_empty() { String::new() } else { format!(", {} failed", summary.failed.len()) }
+        if report.summary.failed == 0 {
+            String::new()
+        } else {
+            format!(", {} failed", report.summary.failed)
+        }
     );
     Ok(())
+}
+
+/// Apply a JSON plan of option values read on stdin. Answers with one JSON
+/// object on stdout and exits 1 when the plan was not honoured in full, so a
+/// script can branch on the status and read the reasons from the report.
+fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
+    use std::io::Read as _;
+
+    // The plan is read before anything else: without an explicit port list it
+    // is also what says which ports to scan.
+    let mut text = String::new();
+    std::io::stdin()
+        .read_to_string(&mut text)
+        .context("reading the plan from stdin")?;
+    let plan = decide::Plan::parse(&text)?;
+
+    let rs = if args.roots.origins.is_empty() && cli.files.is_empty() {
+        RootSet {
+            roots: plan.roots(),
+            notes: vec!["no port list given; the plan's own ports are the closure roots".into()],
+        }
+    } else {
+        RootSet { roots: cli::collect_roots(&args.roots.origins, &cli.files)?, notes: Vec::new() }
+    };
+
+    let scanned = run_scan(cli, &rs)?;
+    let settings = scanned.settings;
+    let paint = stderr_color(cli);
+    let ports = scanned.result.ports.clone();
+    let mut sess = session::Session::new(
+        scanned.result.ports,
+        scanned.result.aliases,
+        &rs.roots,
+        &settings.options_dir,
+        cli.minimal,
+    );
+
+    let outcome = decide::apply_plan(&mut sess, &plan);
+
+    // Only the files of the ports the plan named are rewritten; `sync`
+    // refreshes the rest. Every closure port sharing a touched options file
+    // is handed to the planner, so the default flavor still owns the write.
+    let touched_names: std::collections::BTreeSet<String> = outcome
+        .touched
+        .iter()
+        .filter_map(|k| sess.ports.get(k))
+        .map(|i| i.options_name.clone())
+        .collect();
+    let staged = sess.ports.iter().filter_map(|(key, info)| {
+        if !touched_names.contains(&info.options_name) {
+            return None;
+        }
+        let state = sess.state(info)?;
+        Some((key, info, state.staged.clone()))
+    });
+    let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
+
+    let mut pass = WritePass::new(planned.writes, planned.removals, planned.warnings);
+    pass.rejected = outcome
+        .rejected
+        .iter()
+        .map(|(key, opt, reason)| report::RejectedEntry {
+            port: key.to_string(),
+            option: opt.clone(),
+            reason: reason.clone(),
+        })
+        .collect();
+    pass.unknown = outcome.unknown.iter().map(|k| k.to_string()).collect();
+    // A file that would record a state the port's own constraints forbid is
+    // not written, however the plan got there.
+    for name in &touched_names {
+        for (key, info) in &sess.ports {
+            if info.options_name != *name {
+                continue;
+            }
+            let violations = sess.violations(info);
+            if !violations.is_empty() {
+                pass.conflicts
+                    .push(report::ConflictEntry { port: key.to_string(), violations });
+            }
+        }
+    }
+
+    let report = commit_writes(&pass, &ports, &settings.options_dir, cli.dry_run);
+    report::print(&report)?;
+    for w in &report.warnings {
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+    }
+    for e in &report.errors {
+        eprintln!("{} {}: {}", tint(paint, ansi::RED, "error:"), e.subject, e.message);
+    }
+    if pass.blocked() {
+        let what = if outcome.complete() {
+            "the configuration it produces violates the port's own constraints"
+        } else {
+            "some values could not be set"
+        };
+        eprintln!(
+            "{} plan not honoured ({what}): {} value(s) refused, {} conflict(s), \
+             {} unknown port(s) \u{2014} nothing written",
+            tint(paint, ansi::RED, "error:"),
+            pass.rejected.len(),
+            pass.conflicts.len(),
+            pass.unknown.len()
+        );
+        return Ok(1);
+    }
+    if cli.dry_run {
+        eprintln!(
+            "dry run: {} file(s) would be written, {} removed in {}",
+            pass.writes.len(),
+            pass.removals.len(),
+            settings.options_dir.display()
+        );
+    } else {
+        eprintln!(
+            "{} file(s) written, {} removed in {}",
+            report.summary.written,
+            report.summary.removed,
+            settings.options_dir.display()
+        );
+    }
+    Ok(if report.summary.failed > 0 { 1 } else { 0 })
 }
 
 #[cfg(test)]

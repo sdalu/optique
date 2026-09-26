@@ -85,13 +85,143 @@ fn scan_json_and_exit_code() {
     // The gate: attention > 0 <=> exit 1. pkg's DOCS is normally undecided
     // (no make.conf stance) so this is usually the exit-1 side, but the
     // assertion holds either way.
-    let attention =
-        report["summary"]["attention"].as_u64().expect("summary.attention must be a number");
+    assert!(report["summary"]["attention"].is_u64(), "summary.attention must be a number");
+    let pending =
+        report["summary"]["pending"].as_u64().expect("summary.pending must be a number");
     assert_eq!(
-        attention > 0,
+        pending > 0,
         code == 1,
-        "exit {code} contradicts summary.attention {attention}"
+        "exit {code} contradicts summary.pending {pending}"
     );
+}
+
+/// Feed a plan to a command on stdin and collect everything it said.
+fn with_stdin(mut cmd: Command, input: &str) -> std::process::Output {
+    use std::io::Write as _;
+    let mut child = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawning optique");
+    child.stdin.as_mut().expect("stdin is piped").write_all(input.as_bytes()).unwrap();
+    child.wait_with_output().expect("collecting output")
+}
+
+fn parse_json(out: &std::process::Output) -> serde_json::Value {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"))
+}
+
+/// The machine path end to end: read the option detail, plan one change from
+/// it, preview it, carry it out, then replay it.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn decide_writes_a_plan_and_is_replayable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let file = optdir.join("ports-mgmt_pkg").join("options");
+    let decide = || {
+        let mut c = optique(tmp.path());
+        c.args(["decide", "-o"]).arg(&optdir).arg("ports-mgmt/pkg");
+        c
+    };
+
+    // Which option to flip comes from the port itself: the tree is free to
+    // rename them, and only an unlocked one outside a group is certain to be
+    // the file's to decide.
+    let out = optique(tmp.path())
+        .args(["scan", "--json", "--options", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    scan_exit_code(&out);
+    let report = parse_json(&out);
+    let pkg = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "ports-mgmt/pkg")
+        .unwrap_or_else(|| panic!("ports-mgmt/pkg missing from {report}"));
+    let options = pkg["options"].as_array().expect("--options must fill in options");
+    assert!(!options.is_empty(), "ports-mgmt/pkg has options");
+    for o in options {
+        for key in ["name", "staged", "default", "saved", "new", "locked", "desc"] {
+            assert!(!o[key].is_null() || key == "saved", "{key} missing from {o}");
+        }
+    }
+    let target = options
+        .iter()
+        .find(|o| o["locked"] == false && o["group"].is_null())
+        .unwrap_or_else(|| panic!("no unlocked ungrouped option in {pkg}"));
+    let name = target["name"].as_str().unwrap().to_string();
+    let want = !target["staged"].as_bool().unwrap();
+    let plan = format!("{{\"ports-mgmt/pkg\": {{\"{name}\": {want}}}}}");
+
+    // -n builds the whole report and touches nothing.
+    let mut cmd = decide();
+    cmd.arg("-n");
+    let out = with_stdin(cmd, &plan);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let preview = parse_json(&out);
+    assert_eq!(preview["dry_run"], true);
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["writes"].as_array().unwrap().len(), 1, "{preview}");
+    assert!(!file.exists(), "a dry run must write nothing");
+
+    // For real.
+    let out = with_stdin(decide(), &plan);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let done = parse_json(&out);
+    assert_eq!(done["applied"], true, "{done}");
+    assert_eq!(done["summary"]["written"], 1, "{done}");
+    assert!(done["rejected"].as_array().unwrap().is_empty(), "{done}");
+    let text = fs::read_to_string(&file).expect("the options file was written");
+    let expected = if want {
+        format!("OPTIONS_FILE_SET+={name}")
+    } else {
+        format!("OPTIONS_FILE_UNSET+={name}")
+    };
+    assert!(text.contains(&expected), "{file:?} must record {expected}:\n{text}");
+
+    // Replaying the same plan asks for values the port already has.
+    let out = with_stdin(decide(), &plan);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let again = parse_json(&out);
+    assert_eq!(again["applied"], false, "a replay changes nothing: {again}");
+    assert!(again["writes"].as_array().unwrap().is_empty(), "{again}");
+}
+
+/// A plan the port's rules cannot honour writes nothing at all and says why.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn decide_refuses_a_plan_it_cannot_honour() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+
+    let mut cmd = optique(tmp.path());
+    cmd.args(["decide", "-o"]).arg(&optdir).arg("ports-mgmt/pkg");
+    let out = with_stdin(
+        cmd,
+        r#"{"ports-mgmt/pkg": {"NO_SUCH_OPTION_HERE": true}}"#,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = parse_json(&out);
+    assert_eq!(report["applied"], false);
+    assert!(report["writes"].as_array().unwrap().is_empty(), "{report}");
+    let rejected = report["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1, "{report}");
+    assert_eq!(rejected[0]["option"], "NO_SUCH_OPTION_HERE");
+    assert!(
+        rejected[0]["reason"].as_str().unwrap().contains("no option"),
+        "{}",
+        rejected[0]
+    );
+    assert!(!optdir.join("ports-mgmt_pkg").exists(), "nothing may be written");
 }
 
 #[test]

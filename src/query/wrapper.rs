@@ -5,6 +5,10 @@
 /// including dynamically-named variables (group members, descriptions) that a
 /// plain `make -V` cannot reach generically.
 ///
+/// `DEPENDS` is `_UNIFIED_DEPENDS`, which folds `TEST_DEPENDS` in; `BUILDDEPS`
+/// repeats it without them, so an edge poudriere only builds under `bulk -t`
+/// can be told apart (see `DepEdge::test_only`).
+///
 /// Two hard constraints, both verified against /usr/ports/Mk:
 /// - The phony target name must match `*config*`: bsd.port.mk only includes
 ///   bsd.options.desc.mk (the `<OPT>_DESC` defaults) for such targets.
@@ -20,6 +24,7 @@ pub const WRAPPER: &str = "\
 .info OPTIQUE|DEFAULT|${OPTIONS_DEFAULT:U}
 .info OPTIQUE|PORT_OPTIONS|${PORT_OPTIONS:U}
 .info OPTIQUE|DEPENDS|${_UNIFIED_DEPENDS:U}
+.info OPTIQUE|BUILDDEPS|${PKG_DEPENDS_ALL:U} ${EXTRACT_DEPENDS_ALL:U} ${PATCH_DEPENDS_ALL:U} ${FETCH_DEPENDS_ALL:U} ${BUILD_DEPENDS_ALL:U} ${LIB_DEPENDS_ALL:U} ${RUN_DEPENDS_ALL:U}
 .info OPTIQUE|MC_SET|${OPTIONS_SET:U}
 .info OPTIQUE|MC_UNSET|${OPTIONS_UNSET:U}
 .info OPTIQUE|PORT_SET|${${OPTIONS_NAME}_SET:U}

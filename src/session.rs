@@ -132,10 +132,14 @@ impl Session {
 
     /// Resolve a (possibly non-canonical) key to the canonical ports-map key.
     pub fn resolve(&self, key: &PortKey) -> Option<PortKey> {
-        if self.ports.contains_key(key) {
-            return Some(key.clone());
-        }
-        self.aliases.get(key).cloned()
+        crate::deps::resolve(&self.ports, &self.aliases, key)
+    }
+
+    /// Every dependency loop in the closure (see `deps::detect`). Cheap
+    /// enough to recompute whenever the closure changes: a toggle can create
+    /// or break a loop by changing which dependencies a port pulls in.
+    pub fn dep_loops(&self) -> Vec<crate::deps::DepLoop> {
+        crate::deps::detect(&self.ports, &self.aliases)
     }
 
     fn ensure_state(&mut self, key: &PortKey, options_dir: &Path) {
@@ -1078,6 +1082,7 @@ mod tests {
                 .map(|d| crate::model::port::DepEdge {
                     target: PortKey::parse(d).unwrap(),
                     spec: format!("dep:{d}"),
+                    test_only: false,
                 })
                 .collect(),
             broken: None,

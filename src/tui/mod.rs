@@ -12,6 +12,7 @@ use ratatui::widgets::ListState;
 pub use driver::run_driver;
 
 use crate::apply::{self, PendingWrite};
+use crate::deps::DepLoop;
 use crate::draft;
 use crate::model::origin::PortKey;
 use crate::optionsfile;
@@ -108,6 +109,10 @@ pub struct App {
     pub quit_confirm: bool,
     /// Bulk-decision prompt: the text typed so far while it is open.
     pub bulk: Option<String>,
+    /// Dependency loops in the current closure, recomputed after every
+    /// background refresh: a toggle can create or break one by changing
+    /// which dependencies a port pulls in.
+    pub loops: Vec<DepLoop>,
     /// Ports hidden because they have no options (status-bar info).
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
@@ -195,6 +200,7 @@ pub(crate) fn build_app(
     minimal: bool,
 ) -> App {
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
+    let loops = session.dep_loops();
     let mut app = App {
         session,
         options_dir,
@@ -210,6 +216,7 @@ pub(crate) fn build_app(
         modal: None,
         quit_confirm: false,
         bulk: None,
+        loops,
         hidden,
         hide_ok: false,
         sort_problems_first: true,
@@ -648,6 +655,11 @@ impl App {
     /// Is this port blacklisted for the current jail/tree/set?
     pub fn is_blacklisted(&self, info: &crate::model::port::PortInfo) -> bool {
         self.blacklist.matches(&info.key.origin)
+    }
+
+    /// The dependency loop this port is caught in, if any.
+    pub fn loop_of(&self, key: &PortKey) -> Option<&DepLoop> {
+        self.loops.iter().find(|dl| dl.contains(key))
     }
 
     /// Status with the mc_relax / warn_mc view rules applied.
@@ -1291,6 +1303,10 @@ impl App {
                     false,
                 );
             }
+            // Dep edges may have changed without any port appearing or
+            // vanishing, so the loops are recomputed on every merge — and a
+            // loop that just appeared outranks the refresh line.
+            self.refresh_loops();
         }
     }
 
@@ -1322,6 +1338,23 @@ impl App {
                 conflicted,
                 done: None,
             });
+        }
+    }
+
+    /// Recompute the closure's dependency loops, announcing one that just
+    /// appeared (or the moment the last one goes away).
+    fn refresh_loops(&mut self) {
+        let before: Vec<Vec<PortKey>> = self.loops.iter().map(|dl| dl.members.clone()).collect();
+        self.loops = self.session.dep_loops();
+        match self.loops.iter().find(|dl| !before.contains(&dl.members)) {
+            Some(fresh) => {
+                let msg = format!("dependency loop: {}", fresh.render());
+                self.flash(&msg, true);
+            }
+            None if self.loops.is_empty() && !before.is_empty() => {
+                self.flash("dependency loop gone", false);
+            }
+            None => {}
         }
     }
 
@@ -1389,6 +1422,100 @@ mod tests {
         // The newest change is on top, the 50 oldest are gone.
         assert_eq!(stack.last().unwrap().0, format!("port_{}", UNDO_MAX + 49));
         assert_eq!(stack.first().unwrap().0, "port_50");
+    }
+
+    /// Build the real App over a closure with one two-port dependency loop:
+    /// same session, same keymap, same drawing code as a live TUI, only the
+    /// terminal is in memory.
+    fn looped_app(tmp: &std::path::Path) -> App {
+        use crate::model::options::PortOptions;
+        use crate::model::port::{DepEdge, PortInfo};
+
+        let port = |origin: &str, dep: &str| {
+            let key = PortKey::parse(origin).expect("test origin parses");
+            PortInfo {
+                key: key.clone(),
+                canonical: key,
+                pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
+                flavors: vec![],
+                options_name: origin.replace('/', "_"),
+                options: PortOptions {
+                    complete: vec!["DOCS".to_string()],
+                    ..Default::default()
+                },
+                deps: vec![DepEdge {
+                    target: PortKey::parse(dep).expect("test dep parses"),
+                    spec: format!("dep:{dep}"),
+                    test_only: false,
+                }],
+                broken: None,
+                ignore: None,
+                deprecated: None,
+                pkg_help: None,
+                default_versions: vec![],
+                warnings: vec![],
+            }
+        };
+        let mut ports = std::collections::BTreeMap::new();
+        for info in [port("cat/alpha", "cat/beta"), port("cat/beta", "cat/alpha")] {
+            ports.insert(info.canonical.clone(), info);
+        }
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let options_dir = tmp.join("options");
+        let session = Session::new(ports, HashMap::new(), &roots, &options_dir, false);
+        let db = StagingDb::create(tmp, &options_dir, session.states.keys())
+            .expect("staging db under a tempdir");
+        let refresher = crate::query::refresher::spawn(
+            crate::query::makerunner::QueryCtx {
+                portsdir: tmp.to_path_buf(),
+                make_conf: None,
+                port_dbdir: db.path().to_path_buf(),
+            },
+            1,
+            crate::cache::Cache::disabled(),
+            crate::moved::Moved::parse(""),
+        );
+        build_app(session, options_dir, db, refresher, Default::default(), false)
+    }
+
+    /// Everything the in-memory screen shows, rows joined by newlines.
+    fn screen(app: &mut App) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let (w, h) = (buffer.area.width as usize, buffer.area.height as usize);
+        let cells = buffer.content();
+        (0..h)
+            .map(|y| {
+                (0..w).map(|x| cells[y * w + x].symbol()).collect::<String>().trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A loop is visible without asking: both ports wear the ∞ badge.
+    #[test]
+    fn looped_ports_are_badged_in_the_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        assert_eq!(app.loops.len(), 1, "one loop over the two ports");
+        let text = screen(&mut app);
+        assert_eq!(text.matches('\u{221e}').count(), 2, "both rows badged:\n{text}");
+    }
+
+    /// `r` explains the loop, not just the chain and the dependents.
+    #[test]
+    fn why_overlay_spells_out_the_loop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        let text = screen(&mut app);
+        assert!(text.contains("caught in a dependency loop"), "{text}");
+        assert!(
+            text.contains("cat/alpha \u{2192} cat/beta \u{2192} cat/alpha"),
+            "the walk closes back on its first port:\n{text}"
+        );
     }
 
     #[test]

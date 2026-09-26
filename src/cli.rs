@@ -11,7 +11,7 @@ use crate::model::origin::PortKey;
 pub const SYNTH_DEFAULT_PROFILE: &str = "";
 
 /// Subcommand names, which `-s` must never mistake for a profile.
-const SUBCOMMANDS: [&str; 5] = ["tui", "scan", "sync", "clean", "help"];
+const SUBCOMMANDS: [&str; 6] = ["tui", "scan", "sync", "clean", "decide", "help"];
 
 /// `-s` takes an *optional* profile name, so `optique -s scan -f list` is
 /// ambiguous: clap would greedily read `scan` as the profile. Rewrite a bare
@@ -172,7 +172,14 @@ pub enum Command {
     /// Refresh options files non-interactively: keep saved choices, adopt
     /// defaults for new options, drop removed ones (like `poudriere options -C`
     /// but headless and fast)
-    Sync(RootsArgs),
+    Sync(SyncArgs),
+
+    /// Set option values from a JSON plan read on stdin, for scripts and
+    /// agents: {"www/nginx": {"LUA": true}}. Applies the same group, IMPLIES
+    /// and FORCE rules as the TUI, writes only the named ports' files, and
+    /// writes nothing unless the whole plan is honoured. Reports on stdout as
+    /// JSON; -n previews
+    Decide(DecideArgs),
 
     /// Remove obsolete options files from the resolved options dir: ports
     /// that vanished from the tree, and optionally files that only repeat
@@ -183,6 +190,23 @@ pub enum Command {
     /// Bare origins with no subcommand open the TUI: `optique -z set www/nginx`
     #[command(external_subcommand)]
     Origins(Vec<String>),
+}
+
+#[derive(Args, Debug)]
+pub struct DecideArgs {
+    #[command(flatten)]
+    pub roots: RootsArgs,
+}
+
+#[derive(Args, Debug)]
+pub struct SyncArgs {
+    #[command(flatten)]
+    pub roots: RootsArgs,
+
+    /// Report on stdout as one JSON object instead of the per-file listing
+    /// (the summary stays on stderr); -q is ignored
+    #[arg(long = "json")]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -199,6 +223,11 @@ pub struct CleanArgs {
 
     /// Port origins for --unused closure computation
     pub origins: Vec<String>,
+
+    /// Report on stdout as one JSON object instead of the per-entry listing
+    /// (the summary stays on stderr); -q is ignored
+    #[arg(long = "json")]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -221,6 +250,13 @@ pub struct ScanArgs {
     /// table (progress and the summary stay on stderr)
     #[arg(long = "json")]
     pub json: bool,
+
+    /// With --json, add every port's full per-option detail: value, default,
+    /// saved state, make.conf verdict, locks, group, IMPLIES/PREVENTS,
+    /// description and the dependencies each option adds — everything a
+    /// decision needs without re-running make
+    #[arg(long = "options", requires = "json")]
+    pub options: bool,
 }
 
 #[derive(Args, Debug, Default)]

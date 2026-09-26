@@ -9,6 +9,10 @@ pub struct DepEdge {
     pub target: PortKey,
     /// The raw dependency spec (lib.so, pkgname>=x, path, ...).
     pub spec: String,
+    /// The port asks for this one only as a `TEST_DEPENDS`. `poudriere bulk`
+    /// builds those only under `-t`, so such an edge belongs to the closure
+    /// but not to the build order.
+    pub test_only: bool,
 }
 
 /// Everything queried from the ports tree for one port@flavor.

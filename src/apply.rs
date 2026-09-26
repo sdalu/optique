@@ -22,71 +22,102 @@ pub struct PendingWrite {
     pub content: String,
 }
 
+/// How a write changes the options file, as sets rather than prose: the text
+/// summary and the JSON report are both rendered from this, so the two cannot
+/// drift apart.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Changes {
+    /// Options the file already knew, now enabled.
+    pub turned_on: Vec<String>,
+    /// Options the file already knew, now disabled.
+    pub turned_off: Vec<String>,
+    /// Options the port gained since the file was written, with the value
+    /// they are being recorded at.
+    pub adopted: Vec<(String, bool)>,
+    /// Options the port no longer has; the file stops mentioning them.
+    pub dropped: Vec<String>,
+}
+
 impl PendingWrite {
-    /// Human-readable one-line change summary.
-    pub fn describe(&self) -> String {
-        match &self.old {
-            None => format!("new file ({} options)", self.enabled.len()),
-            Some(old) => {
-                let cur: BTreeSet<&str> = self.enabled.iter().map(String::as_str).collect();
-                let was: BTreeSet<&str> = old.set.iter().map(String::as_str).collect();
-                let now_known: BTreeSet<&str> =
-                    self.complete.iter().map(String::as_str).collect();
-                let file_known: BTreeSet<&str> = old
+    /// What this write changes. Every option of a brand-new file counts as
+    /// adopted: the file knew nothing before.
+    pub fn changes(&self) -> Changes {
+        let cur: BTreeSet<&str> = self.enabled.iter().map(String::as_str).collect();
+        let now_known: BTreeSet<&str> = self.complete.iter().map(String::as_str).collect();
+        let Some(old) = &self.old else {
+            return Changes {
+                adopted: self
                     .complete
                     .iter()
-                    .chain(old.set.iter())
-                    .chain(old.unset.iter())
-                    .map(String::as_str)
-                    .collect();
-                let mut parts = Vec::new();
-                let adopted: Vec<&str> = now_known
-                    .iter()
-                    .filter(|o| !file_known.contains(**o))
-                    .copied()
-                    .collect();
-                let dropped: Vec<&str> = file_known
-                    .iter()
-                    .filter(|o| !now_known.contains(**o))
-                    .copied()
-                    .collect();
-                let turned_on: Vec<&str> = cur
-                    .difference(&was)
-                    .filter(|o| file_known.contains(**o))
-                    .copied()
-                    .collect();
-                let turned_off: Vec<&str> = was
-                    .iter()
-                    .filter(|o| now_known.contains(**o) && !cur.contains(**o))
-                    .copied()
-                    .collect();
-                if !turned_on.is_empty() {
-                    parts.push(format!("+{}", turned_on.join(" +")));
-                }
-                if !turned_off.is_empty() {
-                    parts.push(format!("-{}", turned_off.join(" -")));
-                }
-                if !adopted.is_empty() {
-                    parts.push(format!(
-                        "new: {}",
-                        adopted
-                            .iter()
-                            .map(|o| {
-                                if cur.contains(*o) { format!("{o}(on)") } else { format!("{o}(off)") }
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    ));
-                }
-                if !dropped.is_empty() {
-                    parts.push(format!("dropped: {}", dropped.join(" ")));
-                }
-                if parts.is_empty() {
-                    parts.push("option list refresh".to_string());
-                }
-                parts.join(" · ")
-            }
+                    .map(|o| (o.clone(), cur.contains(o.as_str())))
+                    .collect(),
+                ..Default::default()
+            };
+        };
+        let was: BTreeSet<&str> = old.set.iter().map(String::as_str).collect();
+        let file_known: BTreeSet<&str> = old
+            .complete
+            .iter()
+            .chain(old.set.iter())
+            .chain(old.unset.iter())
+            .map(String::as_str)
+            .collect();
+        Changes {
+            turned_on: cur
+                .difference(&was)
+                .filter(|o| file_known.contains(**o))
+                .map(|o| o.to_string())
+                .collect(),
+            turned_off: was
+                .iter()
+                .filter(|o| now_known.contains(**o) && !cur.contains(**o))
+                .map(|o| o.to_string())
+                .collect(),
+            // Kept in the port's own option order, like the file itself.
+            adopted: self
+                .complete
+                .iter()
+                .filter(|o| !file_known.contains(o.as_str()))
+                .map(|o| (o.clone(), cur.contains(o.as_str())))
+                .collect(),
+            dropped: file_known
+                .iter()
+                .filter(|o| !now_known.contains(**o))
+                .map(|o| o.to_string())
+                .collect(),
         }
+    }
+
+    /// Human-readable one-line change summary.
+    pub fn describe(&self) -> String {
+        if self.old.is_none() {
+            return format!("new file ({} options)", self.enabled.len());
+        }
+        let c = self.changes();
+        let mut parts = Vec::new();
+        if !c.turned_on.is_empty() {
+            parts.push(format!("+{}", c.turned_on.join(" +")));
+        }
+        if !c.turned_off.is_empty() {
+            parts.push(format!("-{}", c.turned_off.join(" -")));
+        }
+        if !c.adopted.is_empty() {
+            parts.push(format!(
+                "new: {}",
+                c.adopted
+                    .iter()
+                    .map(|(o, on)| format!("{o}({})", if *on { "on" } else { "off" }))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        if !c.dropped.is_empty() {
+            parts.push(format!("dropped: {}", c.dropped.join(" ")));
+        }
+        if parts.is_empty() {
+            parts.push("option list refresh".to_string());
+        }
+        parts.join(" · ")
     }
 }
 

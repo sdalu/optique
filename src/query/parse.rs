@@ -20,6 +20,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut ignore = String::new();
     let mut deprecated = String::new();
     let mut pkg_help = String::new();
+    let mut build_deps = String::new();
     let mut default_versions: Vec<String> = Vec::new();
     let mut saw_sentinel = false;
 
@@ -42,6 +43,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "DEFAULT" => opts.defaults = wordset(value),
             "PORT_OPTIONS" => opts.effective = wordset(value),
             "DEPENDS" => (deps, warnings) = parse_depends(value),
+            "BUILDDEPS" => build_deps = value.to_string(),
             "MC_SET" => opts.mc_set = wordset(value),
             "MC_UNSET" => opts.mc_unset = wordset(value),
             "PORT_SET" => opts.port_set = wordset(value),
@@ -141,6 +143,16 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         }
     }
 
+    // _UNIFIED_DEPENDS folds TEST_DEPENDS in, so mark the edges no other
+    // dependency list asks for: they are in the closure, but poudriere builds
+    // them only under `bulk -t`. Warnings from this pass are dropped — the
+    // unified list already reported every unparsable entry.
+    let built: BTreeSet<PortKey> =
+        parse_depends(&build_deps).0.into_iter().map(|e| e.target).collect();
+    for edge in &mut deps {
+        edge.test_only = !built.contains(&edge.target);
+    }
+
     let canonical = PortKey::new(
         requested.origin.clone(),
         if flavors.is_empty() || flavor.is_empty() { None } else { Some(flavor.clone()) },
@@ -178,7 +190,12 @@ pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
         match target {
             Some(t) => {
                 if seen.insert(t.clone()) {
-                    edges.push(DepEdge { target: t, spec: fields[0].to_string() });
+                    // Set by parse_dump, which alone knows the other lists.
+                    edges.push(DepEdge {
+                        target: t,
+                        spec: fields[0].to_string(),
+                        test_only: false,
+                    });
                 }
             }
             None => warnings.push(format!("unparsable dependency entry: {entry}")),
@@ -388,6 +405,40 @@ make: /dev/stdin:17: OPTIQUE|OPT_DEP|GSSAPI_MIT|uses|gssapi:mit
         );
         assert!(lua.uses.is_empty());
         assert_eq!(info.options.defs["GSSAPI_MIT"].uses, vec!["gssapi:mit"]);
+    }
+
+    /// `_UNIFIED_DEPENDS` folds `TEST_DEPENDS` in; the second list says which
+    /// edges the other dependency kinds also ask for.
+    #[test]
+    fn test_only_dependencies_are_marked() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "\
+OPTIQUE|PKGNAME|foo-1
+OPTIQUE|DEPENDS|a.so:cat/lib b>0:cat/tester c:cat/both
+OPTIQUE|BUILDDEPS|a.so:cat/lib c:cat/both
+";
+        let info = parse_dump(&key, text).unwrap();
+        let flags: Vec<(String, bool)> =
+            info.deps.iter().map(|d| (d.target.to_string(), d.test_only)).collect();
+        assert_eq!(
+            flags,
+            vec![
+                ("cat/lib".to_string(), false),
+                ("cat/tester".to_string(), true),
+                ("cat/both".to_string(), false),
+            ]
+        );
+    }
+
+    /// A dump with no BUILDDEPS line at all (a schema older than the cache
+    /// generation should never reach us, but nothing may pretend an edge is
+    /// build-relevant on no evidence).
+    #[test]
+    fn without_a_build_list_every_edge_counts_as_test_only() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let text = "OPTIQUE|PKGNAME|foo-1\nOPTIQUE|DEPENDS|a.so:cat/lib\n";
+        let info = parse_dump(&key, text).unwrap();
+        assert!(info.deps[0].test_only);
     }
 
     #[test]

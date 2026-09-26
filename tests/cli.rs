@@ -12,8 +12,8 @@ fn help_mentions_every_command_and_global_flag() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for needle in [
-        "tui", "scan", "sync", "clean", "--dry-run", "--verbose", "--file", "--no-cache",
-        "--quiet", "--color",
+        "tui", "scan", "sync", "clean", "decide", "--dry-run", "--verbose", "--file",
+        "--no-cache", "--quiet", "--color",
     ] {
         assert!(text.contains(needle), "--help must mention {needle}\n{text}");
     }
@@ -36,6 +36,63 @@ fn tui_help_documents_the_drive_flag() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("--drive"), "tui --help must mention --drive\n{text}");
+}
+
+/// `decide` parses its plan before touching a ports tree, so every bad-plan
+/// message is reachable hermetically.
+#[test]
+fn decide_rejects_a_bad_plan_before_scanning() {
+    use std::io::Write as _;
+    for (plan, needle) in [
+        ("", "empty plan"),
+        ("not json", "valid JSON"),
+        ("[]", "must be a JSON object"),
+        (r#"{"nginx": {"A": true}}"#, "not a port origin"),
+        (r#"{"www/nginx": {"A": "yes"}}"#, "expected true or false"),
+        (r#"{"www/nginx": {}}"#, "no options given"),
+    ] {
+        let mut child = optique()
+            .args(["decide", "-n"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.as_mut().unwrap().write_all(plan.as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(!out.status.success(), "{plan:?} must be refused");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(needle), "{plan:?} -> {err:?} must mention {needle:?}");
+    }
+}
+
+#[test]
+fn decide_help_describes_the_plan() {
+    let out = optique().args(["decide", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8_lossy(&out.stdout);
+    for needle in ["stdin", "JSON"] {
+        assert!(text.contains(needle), "decide --help must mention {needle}\n{text}");
+    }
+}
+
+/// `--options` only shapes the JSON, so asking for it without --json is a
+/// usage error rather than a silent no-op.
+#[test]
+fn scan_options_requires_json() {
+    let out = optique().args(["scan", "--options", "www/nginx"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--json"), "{err}");
+}
+
+#[test]
+fn sync_and_clean_advertise_json() {
+    for cmd in ["sync", "clean"] {
+        let out = optique().args([cmd, "--help"]).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("--json"), "{cmd} --help must mention --json\n{text}");
+    }
 }
 
 #[test]
@@ -191,7 +248,8 @@ fn man_page_documents_every_subcommand_and_flag() {
     for needle in [
         "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
         "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
-        "POUDRIERE INTEGRATION", "-synth", "SYNTH",
+        "POUDRIERE INTEGRATION", "-synth", "SYNTH", "Dependency loops",
+        "loops_blocking", "decide", "-options", "MACHINE INTERFACE",
     ] {
         assert!(text.contains(needle), "optique.8 must document {needle}");
     }

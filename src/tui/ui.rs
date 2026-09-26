@@ -90,6 +90,9 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             if blocked {
                 spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
             }
+            if app.loop_of(key).is_some() {
+                spans.push(Span::styled(" ∞", Style::default().fg(Color::Red)));
+            }
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -818,6 +821,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             head("After the port name"),
             mark("⚠", Color::Red, "port is BROKEN/IGNORE with the current options"),
             mark("⊘", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
+            mark("∞", Color::Red, "caught in a dependency loop — r names it, poudriere cannot build it"),
             Line::default(),
             head("Port name color"),
             legend(
@@ -1000,6 +1004,25 @@ fn draw_why(f: &mut Frame, app: &App) {
             "not reachable from the request roots (kept by fallback)",
             Style::default().fg(Color::Yellow),
         ))),
+    }
+
+    if let Some(dl) = app.loop_of(&why.key) {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            "caught in a dependency loop:",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            format!("  {}", dl.render()),
+            Style::default().fg(Color::Red),
+        )));
+        if let Some(extra) = dl.extra_line() {
+            lines.push(Line::from(Span::styled(format!("  also tangled: {extra}"), dim)));
+        }
+        lines.push(Line::from(Span::styled(
+            "  poudriere cannot build these; an option may break the loop",
+            dim,
+        )));
     }
 
     lines.push(Line::default());
