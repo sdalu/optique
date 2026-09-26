@@ -147,8 +147,14 @@ the ports of a loop carry an
 .Sq \[u221E]
 mark and
 .Ic r
-spells the loop out; both are recomputed after every background re-query, so a
-loop created or broken by an option edit is announced on the status line.
+lists the loop: the cycle one port per row, rotated to start at the port asked
+about, then the rest of the tangle, every one of them selectable so
+.Ic Enter
+jumps there and
+.Ic r
+walks on.
+Both the marks and the list are recomputed after every background re-query, so
+a loop created or broken by an option edit is announced on the status line.
 In
 .Cm scan
 each such port's row ends with
@@ -500,6 +506,12 @@ The key works in both panes.
 .It Ic r
 Explain why the port is in the closure: its dependency chain, its dependents
 and, when it is caught in one, the dependency loop it belongs to.
+Every port shown is navigable with
+.Ic \(ua Ns / Ns Ic \(da :
+.Ic Enter
+jumps the list to it and
+.Ic r
+re-opens the explanation there, which walks a loop port by port.
 .It Ic \&? , F1
 Colour-coded in-interface help listing markers, badges and keys.
 .It Ic Ctrl-L

@@ -12,7 +12,7 @@ use ratatui::widgets::ListState;
 pub use driver::run_driver;
 
 use crate::apply::{self, PendingWrite};
-use crate::deps::DepLoop;
+use crate::deps::{DepLoop, EXTRA_SHOWN};
 use crate::draft;
 use crate::model::origin::PortKey;
 use crate::optionsfile;
@@ -59,23 +59,60 @@ pub struct ApplyModal {
     pub done: Option<String>,
 }
 
+/// The dependency loop a port is caught in, as the "why" overlay shows it:
+/// the cycle first, rotated to start at the port the overlay is about, then
+/// the rest of the tangle. Every port listed is navigable.
+pub struct WhyLoop {
+    /// Ports on the shortest closed walk, in walk order.
+    pub walk: Vec<PortKey>,
+    /// Ports of the component the walk does not visit, capped for display.
+    pub tangled: Vec<PortKey>,
+    /// Tangled ports the cap left out.
+    pub hidden: usize,
+}
+
+impl WhyLoop {
+    /// Present `dl` from `key`'s point of view. The walk starts at `key` when
+    /// it lies on the cycle, so the loop reads from where the user is
+    /// standing rather than from whichever port sorted first.
+    fn of(dl: &DepLoop, key: &PortKey) -> WhyLoop {
+        let mut walk = dl.cycle.clone();
+        if let Some(at) = walk.iter().position(|k| k == key) {
+            walk.rotate_left(at);
+        }
+        let extra = dl.extra_members();
+        WhyLoop {
+            walk,
+            tangled: extra.iter().take(EXTRA_SHOWN).map(|k| (*k).clone()).collect(),
+            hidden: extra.len().saturating_sub(EXTRA_SHOWN),
+        }
+    }
+}
+
 /// "Why is this port here?" overlay content, computed when it is opened.
 pub struct WhyInfo {
     pub key: PortKey,
     /// Shortest root → port dependency chain, None when unreachable.
     pub chain: Option<Vec<PortKey>>,
+    /// The dependency loop it is caught in, when it is.
+    pub dep_loop: Option<WhyLoop>,
     pub dependents: Vec<PortKey>,
-    /// Cursor over the navigable entries (chain first, then the shown
-    /// dependents): Enter jumps to that port, 'r' re-opens why on it.
+    /// Cursor over the navigable entries (the chain, then the loop, then the
+    /// shown dependents): Enter jumps to that port, 'r' re-opens why on it.
     pub selected: usize,
 }
 
 impl WhyInfo {
-    /// Chain and shown dependents, in cursor order.
+    /// Every navigable port, in cursor order. `ui::draw_why` numbers its rows
+    /// in exactly this order, so the two must change together.
     pub fn entries(&self) -> Vec<&PortKey> {
         let mut out: Vec<&PortKey> = Vec::new();
         if let Some(chain) = &self.chain {
             out.extend(chain.iter());
+        }
+        if let Some(dl) = &self.dep_loop {
+            out.extend(dl.walk.iter());
+            out.extend(dl.tangled.iter());
         }
         out.extend(self.dependents.iter().take(crate::tui::ui::WHY_MAX_DEPENDENTS));
         out
@@ -373,14 +410,10 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 }
             }
             KeyCode::Char('r') => {
-                // Walk the graph: re-open why on the highlighted port.
+                // Walk the graph: re-open why on the highlighted port. Around
+                // a loop this steps from port to port along the cycle.
                 if let Some(target) = why.entries().get(why.selected).cloned().cloned() {
-                    app.why = Some(WhyInfo {
-                        chain: app.session.why_chain(&target),
-                        dependents: app.session.dependents(&target),
-                        key: target,
-                        selected: 0,
-                    });
+                    app.why = Some(app.why_for(target));
                 }
             }
             _ => app.why = None,
@@ -927,17 +960,23 @@ impl App {
         }
     }
 
-    /// Compute the dependency chain and dependents of the selected port and
-    /// open the "why" overlay on them (a snapshot: a background refresh may
-    /// change the closure while it is displayed).
-    fn open_why(&mut self) {
-        let Some(key) = self.selected_key() else { return };
-        self.why = Some(WhyInfo {
+    /// Assemble the "why" overlay for one port: its dependency chain, the
+    /// loop it is caught in, and its dependents. A snapshot — a background
+    /// refresh may change the closure while it is displayed.
+    fn why_for(&self, key: PortKey) -> WhyInfo {
+        WhyInfo {
             chain: self.session.why_chain(&key),
+            dep_loop: self.loop_of(&key).map(|dl| WhyLoop::of(dl, &key)),
             dependents: self.session.dependents(&key),
             key,
             selected: 0,
-        });
+        }
+    }
+
+    /// Open the "why" overlay on the selected port.
+    fn open_why(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        self.why = Some(self.why_for(key));
     }
 
     /// Move the list selection to the given port. A view that hides the
@@ -1424,14 +1463,15 @@ mod tests {
         assert_eq!(stack.first().unwrap().0, "port_50");
     }
 
-    /// Build the real App over a closure with one two-port dependency loop:
-    /// same session, same keymap, same drawing code as a live TUI, only the
-    /// terminal is in memory.
-    fn looped_app(tmp: &std::path::Path) -> App {
+    /// Build the real App over the given closure — same session, same keymap,
+    /// same drawing code as a live TUI, only the terminal is in memory. Each
+    /// entry is a port and the ports it depends on; every port carries one
+    /// option, so none of them is hidden as optionless.
+    fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
         use crate::model::options::PortOptions;
         use crate::model::port::{DepEdge, PortInfo};
 
-        let port = |origin: &str, dep: &str| {
+        let port = |origin: &str, deps: &[&str]| {
             let key = PortKey::parse(origin).expect("test origin parses");
             PortInfo {
                 key: key.clone(),
@@ -1443,11 +1483,14 @@ mod tests {
                     complete: vec!["DOCS".to_string()],
                     ..Default::default()
                 },
-                deps: vec![DepEdge {
-                    target: PortKey::parse(dep).expect("test dep parses"),
-                    spec: format!("dep:{dep}"),
-                    test_only: false,
-                }],
+                deps: deps
+                    .iter()
+                    .map(|dep| DepEdge {
+                        target: PortKey::parse(dep).expect("test dep parses"),
+                        spec: format!("dep:{dep}"),
+                        test_only: false,
+                    })
+                    .collect(),
                 broken: None,
                 ignore: None,
                 deprecated: None,
@@ -1457,7 +1500,8 @@ mod tests {
             }
         };
         let mut ports = std::collections::BTreeMap::new();
-        for info in [port("cat/alpha", "cat/beta"), port("cat/beta", "cat/alpha")] {
+        for (origin, deps) in graph {
+            let info = port(origin, deps);
             ports.insert(info.canonical.clone(), info);
         }
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
@@ -1476,6 +1520,12 @@ mod tests {
             crate::moved::Moved::parse(""),
         );
         build_app(session, options_dir, db, refresher, Default::default(), false)
+    }
+
+    /// The smallest closure with a dependency loop: two ports needing each
+    /// other.
+    fn looped_app(tmp: &std::path::Path) -> App {
+        app_for(tmp, &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])])
     }
 
     /// Everything the in-memory screen shows, rows joined by newlines.
@@ -1504,17 +1554,128 @@ mod tests {
         assert_eq!(text.matches('\u{221e}').count(), 2, "both rows badged:\n{text}");
     }
 
-    /// `r` explains the loop, not just the chain and the dependents.
+    /// `r` explains the loop, not just the chain and the dependents, and
+    /// lists its ports one per row so each can be reached.
     #[test]
-    fn why_overlay_spells_out_the_loop() {
+    fn why_overlay_lists_the_loop() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = looped_app(tmp.path());
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
         let text = screen(&mut app);
-        assert!(text.contains("caught in a dependency loop"), "{text}");
+        assert!(text.contains("caught in a dependency loop (2 ports)"), "{text}");
+        // The walk starts where the user is standing and closes back on it.
+        assert!(text.contains("cat/alpha  (this port)"), "{text}");
+        assert!(text.contains("back to cat/alpha"), "{text}");
+    }
+
+    /// The walk is rotated to the port the overlay is about, so the loop
+    /// always reads from where the user is.
+    #[test]
+    fn the_loop_walk_starts_at_the_port_asked_about() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(app.selected_key().unwrap().origin, "cat/beta");
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        let text = screen(&mut app);
+        assert!(text.contains("cat/beta  (this port)"), "{text}");
+        assert!(text.contains("back to cat/beta"), "{text}");
+    }
+
+    /// Every port of the loop is navigable: Enter on one jumps the list to
+    /// it, exactly like a chain or dependent entry.
+    #[test]
+    fn enter_on_a_loop_port_jumps_to_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        // cat/alpha is a root, so the entries are: the one-port chain, then
+        // the cycle (alpha, beta), then the dependents (beta).
+        let entries: Vec<String> =
+            app.why.as_ref().unwrap().entries().iter().map(|k| k.to_string()).collect();
+        assert_eq!(entries, ["cat/alpha", "cat/alpha", "cat/beta", "cat/beta"], "{entries:?}");
+
+        // Down twice lands on the cycle's second port.
+        for _ in 0..2 {
+            dispatch_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        assert_eq!(app.why.as_ref().unwrap().selected, 2);
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.why.is_none(), "Enter closes the overlay");
+        assert_eq!(app.selected_key().unwrap().origin, "cat/beta");
+    }
+
+    /// A port that depends on itself is a loop of one, and says so instead of
+    /// pointing back at itself twice.
+    #[test]
+    fn a_self_dependency_reads_as_one_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/solo", &["cat/solo"])]);
+        assert_eq!(app.loops.len(), 1);
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        let text = screen(&mut app);
+        assert!(text.contains("caught in a dependency loop (1 port)"), "{text}");
+        assert!(text.contains("depends on itself"), "{text}");
+        assert!(!text.contains("back to"), "no return arrow for a loop of one:\n{text}");
+    }
+
+    /// A component wider than its shortest cycle lists the rest of the tangle
+    /// too, and those ports are navigable as well: each can reach every other,
+    /// so none of them can be built first either.
+    #[test]
+    fn the_wider_tangle_is_listed_and_navigable() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A hub every spoke needs, and which needs every spoke: one component
+        // of 1 + n ports whose shortest cycle is just hub → spoke.
+        let n = EXTRA_SHOWN + 3;
+        let spokes: Vec<String> = (0..n).map(|i| format!("cat/s{i:03}")).collect();
+        let spoke_refs: Vec<&str> = spokes.iter().map(String::as_str).collect();
+        let hub: &[&str] = &spoke_refs;
+        let mut graph: Vec<(&str, &[&str])> = vec![("cat/hub", hub)];
+        let back: &[&str] = &["cat/hub"];
+        for spoke in &spoke_refs {
+            graph.push((spoke, back));
+        }
+        let mut app = app_for(tmp.path(), &graph);
+        assert_eq!(app.loops.len(), 1, "one component over every port");
+
+        app.jump_to_port(&PortKey::parse("cat/hub").unwrap());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        let text = screen(&mut app);
+        assert!(text.contains(&format!("caught in a dependency loop ({} ports)", n + 1)), "{text}");
+        assert!(text.contains("also in the tangle:"), "{text}");
+        assert!(text.contains("+ 2 more"), "the cap counts the rest:\n{text}");
+
+        // The shown tangled ports are entries, so Enter reaches them.
+        let why = app.why.as_ref().unwrap();
+        let dl = why.dep_loop.as_ref().unwrap();
+        assert_eq!(dl.walk.len(), 2, "hub -> spoke -> hub");
+        assert_eq!(dl.tangled.len(), EXTRA_SHOWN);
+        assert_eq!(dl.hidden, 2);
+        let entries = why.entries().len();
         assert!(
-            text.contains("cat/alpha \u{2192} cat/beta \u{2192} cat/alpha"),
-            "the walk closes back on its first port:\n{text}"
+            entries >= dl.walk.len() + dl.tangled.len(),
+            "the tangle must be navigable: {entries} entries"
+        );
+    }
+
+    /// `r` inside the overlay walks the cycle port by port.
+    #[test]
+    fn r_on_a_loop_port_reopens_why_there() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        for _ in 0..2 {
+            dispatch_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        let why = app.why.as_ref().expect("the overlay stays open");
+        assert_eq!(why.key.origin, "cat/beta");
+        assert_eq!(why.selected, 0, "the cursor restarts on the new port");
+        // And the new overlay's own walk starts there.
+        assert_eq!(
+            why.dep_loop.as_ref().unwrap().walk[0].origin,
+            "cat/beta"
         );
     }
 

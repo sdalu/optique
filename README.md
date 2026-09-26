@@ -203,8 +203,9 @@ the global `OPTIONS_SET/UNSET` policy (marker `≠`; the option itself is named
 in magenta) · `s` toggle problems-first vs stable alphabetical sort (alphabetical
 keeps neighbors put while you work down the list; `n`/`p` still jump between
 problems in either order) · `/` filter · `a` apply ·
-`r` why-is-this-here (dependency chain, and the dependency loop when there is
-one) · `B` bulk-set an option across
+`r` why-is-this-here (dependency chain, the dependency loop when there is one,
+and dependents — every port listed is selectable, `Enter` jumps there and `r`
+walks on) · `B` bulk-set an option across
 visible ports · `f` next flavor of the same origin · `h` the port's pkg-help
 notes · `?`/F1 color-coded in-TUI help (markers, badges, keys) · `q` quit.
 
@@ -265,9 +266,12 @@ for is therefore left out, which is why a healthy tree reports no loop at all.
 
 Loops are usually option-dependent, which is why seeing them here beats
 discovering them mid-build: turning off the option that pulls the dependency in
-breaks the loop. In the TUI the ports of a loop are marked `∞`, `r` spells the
-loop out, and both are recomputed after every background re-query — a loop a
-toggle just created (or just broke) is announced on the status line. In `scan`
+breaks the loop. In the TUI the ports of a loop are marked `∞` and `r` lists it
+— the cycle one port per row, rotated to start at the port you asked about, then
+the rest of the tangle, every one selectable so `Enter` jumps there and `r`
+walks the cycle port by port. Both are recomputed after every background
+re-query, so a loop a toggle just created (or just broke) is announced on the
+status line. In `scan`
 the port's row gains `[dependency loop]`, the summary counts the loops, and
 `--json` reports them under `loops` (each with `ports`, `cycle` and
 `blacklisted`) with `summary.pending` driving the exit code. A loop trips the

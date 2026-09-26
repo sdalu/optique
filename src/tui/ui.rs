@@ -821,7 +821,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             head("After the port name"),
             mark("⚠", Color::Red, "port is BROKEN/IGNORE with the current options"),
             mark("⊘", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
-            mark("∞", Color::Red, "caught in a dependency loop — r names it, poudriere cannot build it"),
+            mark("∞", Color::Red, "caught in a dependency loop — r lists it, Enter jumps to any port"),
             Line::default(),
             head("Port name color"),
             legend(
@@ -931,7 +931,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
             keyline("h", "port notes (pkg-help) — marked [h] in the pane title"),
-            keyline("r", "why is this port here? — navigable chain, Enter jumps"),
+            keyline("r", "why is this port here? — chain, loop, dependents; Enter jumps"),
         ]),
         _ => lines.extend([
             keyline("t", "show only ports needing attention"),
@@ -974,21 +974,34 @@ fn draw_why(f: &mut Frame, app: &App) {
     let dim = Style::default().fg(Color::DarkGray);
 
     let mut lines: Vec<Line> = Vec::new();
-    let chain_len = why.chain.as_ref().map(Vec::len).unwrap_or(0);
+    // Navigable rows are numbered in WhyInfo::entries() order — chain, then
+    // the loop's cycle, then the rest of its tangle, then the dependents.
+    // `row` is the index of the next one, and the two orders must agree.
+    let mut row = 0usize;
+    // Line the cursor sits on, so the box can scroll it into view.
+    let mut selected_line = 0usize;
+    let mark = |lines: &Vec<Line>, row: usize, selected_line: &mut usize, style: Style| {
+        if row == why.selected {
+            *selected_line = lines.len();
+            style.add_modifier(Modifier::REVERSED)
+        } else {
+            style
+        }
+    };
+
     match &why.chain {
         Some(chain) => {
             // Pad the first line so the "(root)" note clears the longest key.
             let width = chain.iter().map(|k| k.to_string().len()).max().unwrap_or(0);
             for (depth, key) in chain.iter().enumerate() {
                 let last = depth + 1 == chain.len();
-                let mut style = if last {
+                let base = if last {
                     Style::default().fg(Color::LightBlue).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
-                if depth == why.selected {
-                    style = style.add_modifier(Modifier::REVERSED);
-                }
+                let style = mark(&lines, row, &mut selected_line, base);
+                row += 1;
                 let mut spans = Vec::new();
                 if depth > 0 {
                     spans.push(Span::raw(format!("{}└─ ", " ".repeat(depth))));
@@ -1006,18 +1019,58 @@ fn draw_why(f: &mut Frame, app: &App) {
         ))),
     }
 
-    if let Some(dl) = app.loop_of(&why.key) {
+    if let Some(dl) = &why.dep_loop {
+        let total = dl.walk.len() + dl.tangled.len() + dl.hidden;
         lines.push(Line::default());
         lines.push(Line::from(Span::styled(
-            "caught in a dependency loop:",
+            format!(
+                "caught in a dependency loop ({total} port{}):",
+                if total == 1 { "" } else { "s" }
+            ),
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from(Span::styled(
-            format!("  {}", dl.render()),
-            Style::default().fg(Color::Red),
-        )));
-        if let Some(extra) = dl.extra_line() {
-            lines.push(Line::from(Span::styled(format!("  also tangled: {extra}"), dim)));
+        // The cycle, rotated to start where the user is standing.
+        let width = dl
+            .walk
+            .iter()
+            .chain(dl.tangled.iter())
+            .map(|k| k.to_string().len())
+            .max()
+            .unwrap_or(0);
+        let self_loop = dl.walk.len() == 1;
+        for (i, key) in dl.walk.iter().enumerate() {
+            let style = mark(&lines, row, &mut selected_line, Style::default().fg(Color::Red));
+            row += 1;
+            let mut spans =
+                vec![Span::raw("  "), Span::styled(format!("{key:<width$}"), style)];
+            if self_loop {
+                spans.push(Span::styled("  (this port — depends on itself)", dim));
+            } else {
+                if i == 0 {
+                    spans.push(Span::styled("  (this port)", dim));
+                }
+                if i + 1 == dl.walk.len() {
+                    spans.push(Span::styled(format!("  → back to {}", dl.walk[0]), dim));
+                }
+            }
+            lines.push(Line::from(spans));
+        }
+        // Ports of the component the cycle does not pass through: each can
+        // still reach every other, so none of them can be built first either.
+        if !dl.tangled.is_empty() {
+            lines.push(Line::from(Span::styled("  also in the tangle:", dim)));
+            for key in &dl.tangled {
+                let style =
+                    mark(&lines, row, &mut selected_line, Style::default().fg(Color::Red));
+                row += 1;
+                lines.push(Line::from(vec![
+                    Span::raw("    "),
+                    Span::styled(key.to_string(), style),
+                ]));
+            }
+            if dl.hidden > 0 {
+                lines.push(Line::from(Span::styled(format!("    + {} more", dl.hidden), dim)));
+            }
         }
         lines.push(Line::from(Span::styled(
             "  poudriere cannot build these; an option may break the loop",
@@ -1030,12 +1083,9 @@ fn draw_why(f: &mut Frame, app: &App) {
         format!("direct dependents ({}):", why.dependents.len()),
         Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     )));
-    for (i, dep) in why.dependents.iter().take(WHY_MAX_DEPENDENTS).enumerate() {
-        let style = if chain_len + i == why.selected {
-            Style::default().add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default()
-        };
+    for dep in why.dependents.iter().take(WHY_MAX_DEPENDENTS) {
+        let style = mark(&lines, row, &mut selected_line, Style::default());
+        row += 1;
         lines.push(Line::from(Span::styled(format!("  {dep}"), style)));
     }
     match why.dependents.len().checked_sub(WHY_MAX_DEPENDENTS) {
@@ -1053,7 +1103,10 @@ fn draw_why(f: &mut Frame, app: &App) {
         dim,
     )));
 
-    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+    // A loop's tangle can outrun the box; keep the cursor's row in view.
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" why {}? ", why.key))
