@@ -409,7 +409,7 @@ never trip `scan`'s exit-code gate whatever their status.
 `-s [profile]` (default: synth.ini's `profile_selected`, else `LiveSystem`) swaps the poudriere layout for
 [ports-mgmt/synth](https://man.freebsd.org/synth)'s, so the same commands work
 on a synth host: `optique -s scan -f list`, `optique -s sync www/nginx`,
-`optique -s -r clean`. The ports tree comes from `Directory_portsdir` and the
+`optique -s clean -r`. The ports tree comes from `Directory_portsdir` and the
 options dir from `Directory_options` in the profile's section of
 `/usr/local/etc/synth/synth.ini` (falling back to that file's
 `[Global Configuration]` section, then to `/usr/ports` and `/var/db/ports`),
@@ -449,18 +449,28 @@ resolved through `MOVED`; removed ones surface as per-edge errors.
 
 ## Building / testing
 
+The `Makefile` is a thin wrapper around cargo that runs under BSD make and GNU
+make alike; `make` alone lists its targets and the variables in force.
+
 ```sh
-cargo build --release        # needs lang/rust
-cargo test                   # unit tests, host-independent
-cargo test -- --ignored      # live tests against /usr/ports
+make check                   # preflight: man page lint, one release everywhere,
+                             # the port's crate list matches Cargo.lock
+make build                   # cargo build --release (needs lang/rust)
+make tests                   # unit and hermetic CLI tests, host-independent
+make tests-live              # live tests against /usr/ports on a FreeBSD host
 ```
+
+`check` runs none of optique's code. Its release and crate checks evaluate
+the port skeleton against `PORTSDIR` (default `/usr/ports`) and say
+`unchecked` where there is no ports tree.
+
+The release is `Cargo.toml`'s `version`. `make version` prints it and
+`make tag` tags `v<version>` once `check` and `tests` pass. It never pushes.
 
 ## Installing
 
-The `Makefile` is a thin BSD make (bmake) wrapper around cargo:
-
 ```sh
-make build                   # cargo build --release
+make build
 make install                 # as root
 ```
 
@@ -478,12 +488,11 @@ A FreeBSD port skeleton is also kept in-tree at
 [`ports/README.md`](ports/README.md) for how to drop it into a ports tree or
 poudriere overlay.
 
-`make deinstall` removes both files again, `make test` runs the test suite and
-`make lint` runs `mandoc -T lint` on the man page. The same thing by hand:
+`make uninstall` removes both files again. The same install by hand:
 
 ```sh
 install -s -m 555 target/release/optique /usr/local/bin/optique
-gzip -cn optique.8 > /usr/local/share/man/man8/optique.8.gz
+gzip -cn man/optique.8 > /usr/local/share/man/man8/optique.8.gz
 ```
 
 Full documentation lives in the man page — every flag, the poudriere options-dir
@@ -491,5 +500,5 @@ and make.conf resolution chains, the TUI key bindings, the `scan --json` schema
 and `scan`'s exit-code contract:
 
 ```sh
-man optique                  # or: mandoc optique.8
+man optique                  # or: mandoc man/optique.8
 ```

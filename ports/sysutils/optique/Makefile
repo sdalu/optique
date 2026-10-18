@@ -134,6 +134,6 @@ PLIST_FILES=	bin/optique \
 
 post-install:
 	@${MKDIR} ${STAGEDIR}${PREFIX}/share/man/man8
-	${INSTALL_MAN} ${WRKSRC}/optique.8 ${STAGEDIR}${PREFIX}/share/man/man8/
+	${INSTALL_MAN} ${WRKSRC}/man/optique.8 ${STAGEDIR}${PREFIX}/share/man/man8/
 
 .include <bsd.port.mk>

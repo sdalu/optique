@@ -2,10 +2,15 @@
 
 `sysutils/optique` is a ready-to-use cargo port for this repository. It is
 kept in-tree so the packaging metadata stays in sync with `Cargo.toml` and
-`Cargo.lock`, but it is **not yet complete**: `distinfo` is missing, because
-the upstream release tarball does not exist until a `v0.1.0` tag is pushed to
-<https://github.com/sdalu/optique>. Both `TODO` comments in the Makefile mark
-that.
+`Cargo.lock`, but it is **not yet published**: `distinfo` is committed, yet
+the GitHub tarball it names cannot be fetched until a `v0.1.0` tag is pushed
+to <https://github.com/sdalu/optique>. Both `TODO` comments in the Makefile
+mark that, and the second says how to generate the distfile locally until
+then.
+
+`make check-version` and `make check-crates` at the top of the checkout fail
+when `DISTVERSION`, `CARGO_CRATES` or `distinfo` drift from `Cargo.toml` and
+`Cargo.lock`.
 
 ## Using the skeleton
 
@@ -87,9 +92,9 @@ uses the installed rust toolchain instead of building the tree's.
 
 ## Notes
 
-- `GH_TAGNAME=v${DISTVERSION}` is used, as the tag is expected to carry a `v`
-  prefix. The equivalent idiom `DISTVERSIONPREFIX=v` yields a shorter
-  `DISTNAME`; either is acceptable, but do not set both.
+- `DISTVERSIONPREFIX=v` is used, as the tag carries a `v` prefix (`make tag`
+  makes it so). The equivalent idiom `GH_TAGNAME=v${DISTVERSION}` is also
+  acceptable, but do not set both.
 - The port deliberately defines no `OPTIONS_DEFINE`. The man page is the only
   extra artefact, installed by `post-install` with `INSTALL_MAN`; the
   framework compresses it, hence the `.gz` suffix in `PLIST_FILES`.

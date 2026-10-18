@@ -226,7 +226,7 @@ fn man_page_is_valid_mdoc() {
     // manual not found" for poudriere(8) on hosts without it installed), so the
     // assertion is on the absence of ERROR/UNSUPP diagnostics, not on the exit
     // status. Skipped where mandoc is not available.
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
     assert!(man.is_file(), "{} must exist", man.display());
 
     let out = match Command::new("mandoc").args(["-T", "lint"]).arg(&man).output() {
@@ -236,7 +236,7 @@ fn man_page_is_valid_mdoc() {
     let text =
         format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     for bad in ["ERROR:", "UNSUPP:", "SYSERR:"] {
-        assert!(!text.contains(bad), "mandoc reported {bad} on optique.8:\n{text}");
+        assert!(!text.contains(bad), "mandoc reported {bad} on man/optique.8:\n{text}");
     }
 }
 
@@ -249,7 +249,7 @@ fn man_page_tag_lists_leave_room_for_their_text() {
     // An 80-column page indents the body by width + 5, so anything past this
     // leaves less than half the line for prose.
     const MAX: usize = 24;
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
     let text = std::fs::read_to_string(&man).unwrap();
     for (n, line) in text.lines().enumerate() {
         if !line.starts_with(".Bl ") {
@@ -270,7 +270,7 @@ fn man_page_tag_lists_leave_room_for_their_text() {
         };
         assert!(
             width <= MAX,
-            "optique.8:{}: -width of {width} columns leaves too little room:\n{line}",
+            "man/optique.8:{}: -width of {width} columns leaves too little room:\n{line}",
             n + 1
         );
     }
@@ -279,7 +279,7 @@ fn man_page_tag_lists_leave_room_for_their_text() {
 #[test]
 fn man_page_documents_every_subcommand_and_flag() {
     // Cheap guard against the man page drifting from the CLI surface.
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
     let text = std::fs::read_to_string(&man).unwrap();
     for needle in [
         "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
@@ -287,7 +287,7 @@ fn man_page_documents_every_subcommand_and_flag() {
         "POUDRIERE INTEGRATION", "-synth", "SYNTH", "Dependency loops",
         "loops_blocking", "decide", "-options", "MACHINE INTERFACE",
     ] {
-        assert!(text.contains(needle), "optique.8 must document {needle}");
+        assert!(text.contains(needle), "man/optique.8 must document {needle}");
     }
 }
 
