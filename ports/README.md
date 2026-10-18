@@ -2,11 +2,9 @@
 
 `sysutils/optique` is a ready-to-use cargo port for this repository. It is
 kept in-tree so the packaging metadata stays in sync with `Cargo.toml` and
-`Cargo.lock`, but it is **not yet published**: `distinfo` is committed, yet
-the GitHub tarball it names cannot be fetched until a `v0.1.0` tag is pushed
-to <https://github.com/sdalu/optique>. Both `TODO` comments in the Makefile
-mark that, and the second says how to generate the distfile locally until
-then.
+`Cargo.lock`. It builds the release tagged on
+<https://github.com/sdalu/optique> (`v${DISTVERSION}`), and `distinfo` holds
+the checksum of the tarball GitHub serves for that tag.
 
 `make check-version` and `make check-crates` at the top of the checkout fail
 when `DISTVERSION`, `CARGO_CRATES` or `distinfo` drift from `Cargo.toml` and
@@ -43,10 +41,10 @@ make PORTSDIR=/usr/ports -V _DISTFILES | tr ' ' '\n' | wc -l
 
 ## Refreshing after a release
 
-Once the `v0.1.0` (or later) tag is published upstream:
+`DISTVERSION` moves with `Cargo.toml` before the tag is made (`make tag`
+refuses while `make check-version` fails). Once the tag is pushed:
 
-1. Bump `DISTVERSION` to match `Cargo.toml`'s `version`.
-2. Regenerate the crate list from the committed lock file:
+1. Regenerate the crate list from the committed lock file:
 
    ```sh
    make PORTSDIR=/usr/ports cargo-crates       # needs the distfile extracted
@@ -61,12 +59,14 @@ Once the `v0.1.0` (or later) tag is published upstream:
 
    Paste the result over the `CARGO_CRATES=` block. `make cargo-crates-merge`
    does the edit and the checksums in one step on a full ports tree.
-3. Generate `distinfo` (fetches the GitHub tarball and all 108 crates):
+2. Generate `distinfo` (fetches the GitHub tarball and all 108 crates). It
+   has to be GitHub's tarball: one made locally with `git archive` need not
+   have the same bytes.
 
    ```sh
    make PORTSDIR=/usr/ports makesum
    ```
-4. Re-run `make -V PKGNAME`/`-V _DISTFILES` and, if available, `portlint -AC`
+3. Re-run `make -V PKGNAME`/`-V _DISTFILES` and, if available, `portlint -AC`
    and `portclippy`.
 
 ## Test build
