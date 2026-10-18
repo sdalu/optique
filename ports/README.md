@@ -86,8 +86,15 @@ lands in `${STAGEDIR}`) and the man page compression that turns
 For a quick host-side validation without poudriere:
 
 ```sh
-make PORTSDIR=/usr/ports NO_DEPENDS=1 BATCH=1 stage check-plist
+make PORTSDIR=/usr/ports NO_DEPENDS=1 BATCH=1 \
+    DISTDIR=/tmp/optique/distfiles WRKDIRPREFIX=/tmp/optique/wrk \
+    stage check-plist stage-qa
 ```
+
+`DISTDIR` and `WRKDIRPREFIX` make it runnable without root: the distfiles go
+somewhere writable rather than into the shared `/usr/ports/distfiles`, and the
+`work/` directory stays out of the checkout. `stage-qa` is named because it
+otherwise runs only under `DEVELOPER=yes`.
 
 `BATCH=1` matters for any scripted port build: without it the framework may
 pop an interactive dialog4ports OPTIONS screen for a dependency (the tree's

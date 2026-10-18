@@ -12,6 +12,10 @@ Run in order; a red gate is answered before anything else.
 - [ ] `make tests-live` -- on a FreeBSD host with a real `/usr/ports`,
       when the round touched querying, the cache, sync/clean/decide or
       their JSON; otherwise say it was skipped.
+- [ ] The host-side port validation (ports/README.md, "Test build") --
+      when the round touched `ports/sysutils/optique/` or a path the port
+      installs from (`man/optique.8`, the binary's name). No test reaches the
+      port's Makefile.
 
 ## Documents
 
