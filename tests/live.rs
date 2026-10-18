@@ -2,7 +2,9 @@
 //! Run with: cargo test --test live -- --ignored
 //!
 //! They never touch real configuration: options dirs are tempdirs (-o) and
-//! the query cache is redirected via XDG_CACHE_HOME.
+//! the query cache is redirected via XDG_CACHE_HOME. Nor do they read the
+//! host's poudriere trees: -p names one no poudriere.d defines, so the ports
+//! tree resolves to /usr/ports whatever poudriere's `default` points at.
 
 use std::fs;
 use std::process::Command;
@@ -10,6 +12,7 @@ use std::process::Command;
 fn optique(cache: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_optique"));
     c.env("XDG_CACHE_HOME", cache);
+    c.args(["-p", "optique-live-tests-no-such-tree"]);
     c
 }
 
@@ -406,7 +409,7 @@ quit
     assert!(dumps[1].contains("1:Markers"), "help tab bar missing:\n{}", dumps[1]);
     // ...and '2' switches to the option-row legend.
     assert!(
-        dumps[2].contains("on | off = the port's default value"),
+        dumps[2].contains("on | off = 1st column: the port's default value"),
         "option row tab missing:\n{}",
         dumps[2]
     );

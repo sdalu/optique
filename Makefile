@@ -90,8 +90,10 @@ build:						## build the release binary (cargo build --release)
 tests:						## build and run the unit and hermetic CLI tests (cargo test)
 	${CARGO} test
 
+# --no-fail-fast: cargo otherwise stops at the first failing test binary,
+# and the end-to-end tests in tests/live.rs come after the unit tests.
 tests-live:					## the live tests against /usr/ports on a FreeBSD host; tests does not run them
-	${CARGO} test -- --ignored
+	${CARGO} test --no-fail-fast -- --ignored
 
 # --- installing ------------------------------------------------------------
 

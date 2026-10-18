@@ -466,7 +466,12 @@ mod tests {
     #[ignore]
     fn tree_key_matches_git_cli() {
         let ports = Path::new("/usr/ports");
+        // /usr/ports is usually root's and the suite runs as someone else,
+        // which git refuses as "dubious ownership"; tree_key reads .git
+        // itself and has no such check, so lift it for this one read.
         let out = std::process::Command::new("git")
+            .arg("-c")
+            .arg(format!("safe.directory={}", ports.display()))
             .arg("-C")
             .arg(ports)
             .args(["rev-parse", "HEAD"])
