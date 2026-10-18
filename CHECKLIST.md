@@ -31,8 +31,11 @@ Run in order; a red gate is answered before anything else.
 
 - [ ] Does the number move? The one file that holds it: `Cargo.toml`.
 - [ ] If it moves: bump `Cargo.toml`, `cargo build` so `Cargo.lock` follows,
-      bump the port's `DISTVERSION`, commit, then `make tag` (it reads the
-      number from `Cargo.toml` and pushes nothing).
+      refresh the port (`ports/README.md`, "Refreshing for a release", steps
+      1-3), commit, then `make tag` (it reads the number from `Cargo.toml`
+      and pushes nothing).
+- [ ] After pushing the tag: is `distinfo` finished from GitHub's tarball
+      (steps 4-5) and committed?
 
 Then capture: whatever this round learned goes to the document that owns
 it, and anything this list failed to ask becomes a line here.

@@ -39,35 +39,39 @@ make PORTSDIR=/usr/ports -V PLIST_FILES
 make PORTSDIR=/usr/ports -V _DISTFILES | tr ' ' '\n' | wc -l
 ```
 
-## Refreshing after a release
+## Refreshing for a release
 
-`DISTVERSION` moves with `Cargo.toml` before the tag is made (`make tag`
-refuses while `make check-version` fails). Once the tag is pushed:
+The port's copies of the release and the crate list are refreshed **before**
+`make tag`, which refuses while `make check-version` or `make check-crates`
+fails, and `distinfo` is finished **after** the tag is pushed, since only then
+does GitHub serve the tarball. In `ports/sysutils/optique`:
 
-1. Regenerate the crate list from the committed lock file:
-
-   ```sh
-   make PORTSDIR=/usr/ports cargo-crates       # needs the distfile extracted
-   ```
-
-   Without a distfile you can produce byte-identical output offline with the
-   framework's own script:
+1. Bump `DISTVERSION` to `Cargo.toml`'s `version`.
+2. If `Cargo.lock` changed, regenerate the crate list with the framework's own
+   script and paste the result over the `CARGO_CRATES=` block:
 
    ```sh
    awk -f /usr/ports/Mk/Scripts/cargo-crates.awk ../../../Cargo.lock
    ```
+3. Checksum the crates alone. Naming them as `DISTFILES` leaves out the
+   release tarball, which does not exist yet; the `distinfo` written has no
+   tarball line until step 4:
 
-   Paste the result over the `CARGO_CRATES=` block. `make cargo-crates-merge`
-   does the edit and the checksums in one step on a full ports tree.
-2. Generate `distinfo` (fetches the GitHub tarball and all 108 crates). It
-   has to be GitHub's tarball: one made locally with `git archive` need not
-   have the same bytes.
+   ```sh
+   make PORTSDIR=/usr/ports DISTFILES="$(make PORTSDIR=/usr/ports -V DISTFILES \
+       | tr ' ' '\n' | grep '^rust/crates/' | tr '\n' ' ')" makesum
+   ```
+
+Commit, `make tag` at the top of the checkout, push the tag, then:
+
+4. Checksum everything, which adds the GitHub tarball. It has to be GitHub's
+   tarball: one made locally with `git archive` need not have the same bytes.
 
    ```sh
    make PORTSDIR=/usr/ports makesum
    ```
-3. Re-run `make -V PKGNAME`/`-V _DISTFILES` and, if available, `portlint -AC`
-   and `portclippy`.
+5. Re-run `make -V PKGNAME`/`-V _DISTFILES` and, if available, `portlint -AC`
+   and `portclippy`, and commit `distinfo`.
 
 ## Test build
 

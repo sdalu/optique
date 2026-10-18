@@ -37,13 +37,13 @@ bad=0
 if ! cmp -s "$tmp/lock" "$tmp/port"; then
     printf '  crates: CARGO_CRATES differs from Cargo.lock (< lock, > port):\n'
     diff "$tmp/lock" "$tmp/port" | grep '^[<>]' | sed 's/^/    /' || :
-    printf '          (see ports/README.md, "Refreshing after a release")\n'
+    printf '          (see ports/README.md, "Refreshing for a release", steps 2-3)\n'
     bad=1
 fi
 if ! cmp -s "$tmp/port" "$tmp/dist"; then
     printf '  crates: distinfo differs from CARGO_CRATES (< port, > distinfo):\n'
     diff "$tmp/port" "$tmp/dist" | grep '^[<>]' | sed 's/^/    /' || :
-    printf '          (make makesum in ports/sysutils/optique)\n'
+    printf '          (ports/README.md, "Refreshing for a release", step 3)\n'
     bad=1
 fi
 
