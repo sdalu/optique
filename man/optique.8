@@ -417,6 +417,11 @@ Nothing touches the real options directory until
 .Ic a
 is pressed, which previews every file as a diff and then writes atomically
 .Pq temporary file, Xr fsync 2 , Xr rename 2 .
+Each options file is read once, at start, and judged as it was then: a file
+edited outside
+.Nm
+while the interface is open is left alone by apply unless its port is edited
+in the interface too.
 .Pp
 Key bindings:
 .Bl -tag -width "Enter, l" -compact

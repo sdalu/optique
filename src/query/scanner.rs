@@ -4,6 +4,7 @@ use crate::cache::Cache;
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::moved::{Moved, MovedResult};
+use crate::optfiles::OptionsFiles;
 use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 
 /// Result of a (full or incremental) closure scan.
@@ -31,10 +32,12 @@ pub struct ScanProgress {
 ///
 /// Every discovered dep target is resolved through MOVED, deduplicated,
 /// looked up in the cache, and queried via the runner on a miss. Cached
-/// ports still contribute their dep edges to the traversal.
+/// ports still contribute their dep edges to the traversal. `files` reads
+/// the options files of `ctx.port_dbdir` for the cache, each once.
 pub fn scan(
     roots: &[PortKey],
     ctx: &QueryCtx,
+    files: &OptionsFiles,
     jobs: usize,
     cache: &mut Cache,
     moved: &Moved,
@@ -74,7 +77,7 @@ pub fn scan(
                     continue;
                 }
             };
-            if let Some(info) = cache.lookup(&key, &ctx.port_dbdir) {
+            if let Some(info) = cache.lookup(&key, files) {
                 result.from_cache += 1;
                 pending.extend(register(info, &mut result));
             } else {
@@ -90,7 +93,7 @@ pub fn scan(
                 in_flight -= 1;
                 done += 1;
                 result.queried += 1;
-                cache.insert(&info, &ctx.port_dbdir);
+                cache.insert(&info, files);
                 pending.extend(register(*info, &mut result));
             }
             Ok(ScanEvent::PortError { key, msg }) => {
@@ -123,6 +126,7 @@ fn register(info: PortInfo, result: &mut ScanResult) -> Vec<PortKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::optfiles::OptionsFiles;
     use crate::query::makerunner::QueryCtx;
 
     /// Hermetic: the ports tree is an empty tempdir, so no `make` ever runs
@@ -144,7 +148,8 @@ mod tests {
             PortKey::parse("cat/old").unwrap(),  // renamed, target also missing
             PortKey::parse("cat/absent").unwrap(),
         ];
-        let result = scan(&roots, &ctx, 2, &mut cache, &moved, |_| {});
+        let files = OptionsFiles::new(tmp.path());
+        let result = scan(&roots, &ctx, &files, 2, &mut cache, &moved, |_| {});
         assert!(result.ports.is_empty());
         // cat/gone reported exactly once despite two references.
         let gone: Vec<_> =
@@ -156,5 +161,56 @@ mod tests {
         assert!(result.moved_notes[0].contains("cat/new"));
         assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/new"));
         assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/absent"));
+    }
+
+    /// Startup on a real closure reads each options file once, cold or warm:
+    /// the scan's cache checks, the session and the staging copy share the
+    /// reads. Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_startup_reads_each_options_file_once() {
+        use std::collections::BTreeSet;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let options_dir = tmp.path().join("options");
+        // One configured port, the rest unconfigured: both kinds are read.
+        std::fs::create_dir_all(options_dir.join("audio_lame")).unwrap();
+        std::fs::write(options_dir.join("audio_lame/options"), "OPTIONS_FILE_UNSET+=DOCS\n").unwrap();
+        let ctx = QueryCtx {
+            portsdir: "/usr/ports".into(),
+            make_conf: None,
+            port_dbdir: options_dir.clone(),
+        };
+        let roots = vec![PortKey::parse("audio/lame").unwrap()];
+        let moved = Moved::parse("");
+        let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
+
+        for run in ["cold", "warm"] {
+            let files = OptionsFiles::new(&options_dir);
+            let result = scan(&roots, &ctx, &files, 4, &mut cache, &moved, |_| {});
+            assert!(result.errors.is_empty(), "{run}: {:?}", result.errors);
+            if run == "warm" {
+                assert_eq!(result.queried, 0, "warm: everything from the cache");
+            }
+            let names: BTreeSet<&str> =
+                result.ports.values().map(|i| i.options_name.as_str()).collect();
+            assert_eq!(files.disk_reads(), names.len(), "{run}: one read per file in the scan");
+
+            let session = crate::session::Session::new(
+                result.ports.clone(),
+                result.aliases.clone(),
+                &roots,
+                &files,
+                false,
+            );
+            let stage = tempfile::tempdir().unwrap();
+            let db =
+                crate::staging::StagingDb::create(stage.path(), &files, session.states.keys()).unwrap();
+            assert_eq!(files.disk_reads(), names.len(), "{run}: session and staging read nothing");
+            assert_eq!(
+                std::fs::read(db.path().join("audio_lame/options")).unwrap(),
+                b"OPTIONS_FILE_UNSET+=DOCS\n"
+            );
+        }
     }
 }

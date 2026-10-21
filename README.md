@@ -182,6 +182,11 @@ the list within a second or two (`⟳` in the status bar). Nothing touches the
 real options dir until you hit `a` (apply), which previews every file diff
 and then writes atomically (tmp + fsync + rename).
 
+Each options file is read once, when the TUI starts, and judged as it was
+then: a file edited outside optique while the TUI is open is left alone by
+apply unless you edit its port in the TUI too (restart optique to see such
+an edit). After an apply, the files it wrote are read again.
+
 Quitting stops any in-flight background make processes (the quit dialog shows
 how many, and the count is reported on stderr), so nothing keeps churning
 after the UI is gone.

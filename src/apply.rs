@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
+use crate::optfiles::OptionsFiles;
 use crate::optionsfile::{self, SavedOptionsFile};
 
 /// One options file the apply pass wants to write.
@@ -168,7 +169,7 @@ pub struct PlannedWrites {
 /// an existing file becomes a removal, a missing one is left missing.
 pub fn plan_writes<'a>(
     ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
-    options_dir: &Path,
+    files: &OptionsFiles,
     minimal: bool,
 ) -> PlannedWrites {
     struct Candidate<'a> {
@@ -206,11 +207,10 @@ pub fn plan_writes<'a>(
             let closed =
                 crate::session::close_implies(chosen.info, chosen.enabled.clone());
             if closed == crate::session::nofile_effective(chosen.info) {
-                let dir = options_dir.join(options_name);
-                if dir.join("options").is_file() {
+                if files.bytes(options_name).is_some() {
                     removals.push(crate::clean::Removal {
                         options_name: options_name.clone(),
-                        dir,
+                        dir: files.dir().join(options_name),
                         reason: "defaults + make.conf produce this exact configuration"
                             .to_string(),
                     });
@@ -251,8 +251,8 @@ pub fn plan_writes<'a>(
         }
         let info = chosen.info;
         let enabled = &chosen.enabled;
-        let path = options_dir.join(options_name).join("options");
-        let old = SavedOptionsFile::load(&path);
+        let path = files.path(options_name);
+        let old = files.saved(options_name);
         if let Some(old) = &old {
             let same_list = old.complete.iter().collect::<BTreeSet<_>>()
                 == info.options.complete.iter().collect::<BTreeSet<_>>();
@@ -280,7 +280,7 @@ pub fn plan_writes<'a>(
 /// (e.g. glib20@bootstrap) must not delete the default flavor's file.
 pub fn plan_stale_removals(
     ports: &std::collections::BTreeMap<PortKey, PortInfo>,
-    options_dir: &Path,
+    files: &OptionsFiles,
 ) -> Vec<crate::clean::Removal> {
     let with_options: BTreeSet<&str> = ports
         .values()
@@ -296,11 +296,10 @@ pub fn plan_stale_removals(
         {
             continue;
         }
-        let dir = options_dir.join(&info.options_name);
-        if dir.join("options").is_file() {
+        if files.bytes(&info.options_name).is_some() {
             out.push(crate::clean::Removal {
                 options_name: info.options_name.clone(),
-                dir,
+                dir: files.dir().join(&info.options_name),
                 reason: "port has no options anymore".to_string(),
             });
         }
@@ -403,7 +402,7 @@ mod tests {
         .unwrap();
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned =
-            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path(), false);
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &OptionsFiles::new(tmp.path()), false);
         assert!(planned.writes.is_empty());
         assert!(planned.warnings.is_empty());
     }
@@ -426,7 +425,7 @@ mod tests {
             (a.key.clone(), &a, ["A".to_string()].into()),
         ];
         let planned =
-            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path(), false);
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), &OptionsFiles::new(tmp.path()), false);
         assert_eq!(planned.writes.len(), 1);
         assert_eq!(planned.writes[0].key.to_string(), "devel/git@default");
         assert!(planned.writes[0].enabled.contains("A"));
@@ -455,7 +454,7 @@ mod tests {
             (full.key.clone(), &full, ["A".to_string(), "X11".to_string()].into()),
         ];
         let planned =
-            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), tmp.path(), false);
+            plan_writes(ports.iter().map(|(k, i, e)| (k, *i, e.clone())), &OptionsFiles::new(tmp.path()), false);
         assert_eq!(planned.writes.len(), 1);
         assert_eq!(planned.writes[0].key.to_string(), "editors/emacs@full");
         assert!(planned.warnings.is_empty(), "structural exclusion must not warn: {:?}", planned.warnings);
@@ -514,9 +513,44 @@ mod tests {
         for i in [default, bootstrap, indexinfo] {
             ports.insert(i.key.clone(), i);
         }
-        let removals = plan_stale_removals(&ports, tmp.path());
+        let removals = plan_stale_removals(&ports, &OptionsFiles::new(tmp.path()));
         let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
         assert_eq!(names, vec!["print_indexinfo"], "glib20's shared file must survive");
+    }
+
+    /// Planning a whole closure reads nothing the session already read, and
+    /// judges each file as the session saw it.
+    #[test]
+    fn plans_against_the_store_without_reading_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let info = mk_info(&["A"], &[]);
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+        )
+        .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        assert!(files.saved("cat_port").is_some());
+        let mut gone = mk_info(&[], &[]);
+        gone.key = PortKey::parse("cat/gone").unwrap();
+        gone.options_name = "cat_gone".into();
+        assert!(files.bytes("cat_gone").is_none());
+        let reads = files.disk_reads();
+
+        // Changed on disk since: the plan still compares with what was read,
+        // so a port nobody edited is left alone rather than rewritten.
+        fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_UNSET+=A\n").unwrap();
+        fs::create_dir_all(tmp.path().join("cat_gone")).unwrap();
+        fs::write(tmp.path().join("cat_gone/options"), "x\n").unwrap();
+
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let planned = plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false);
+        assert!(planned.writes.is_empty());
+        let mut ports = std::collections::BTreeMap::new();
+        ports.insert(gone.key.clone(), gone);
+        assert!(plan_stale_removals(&ports, &files).is_empty(), "absent when read");
+        assert_eq!(files.disk_reads(), reads);
     }
 
     #[test]
@@ -532,7 +566,7 @@ mod tests {
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned = plan_writes(
             std::iter::once((&info.key.clone(), &info, enabled.clone())),
-            tmp.path(),
+            &OptionsFiles::new(tmp.path()),
             true,
         );
         assert!(planned.writes.is_empty());
@@ -543,7 +577,7 @@ mod tests {
         fs::remove_dir_all(tmp.path().join("cat_port")).unwrap();
         let planned = plan_writes(
             std::iter::once((&info.key.clone(), &info, enabled)),
-            tmp.path(),
+            &OptionsFiles::new(tmp.path()),
             true,
         );
         assert!(planned.writes.is_empty() && planned.removals.is_empty());
@@ -552,7 +586,7 @@ mod tests {
         let deviating: BTreeSet<String> = ["A".to_string(), "B".to_string()].into();
         let planned = plan_writes(
             std::iter::once((&info.key.clone(), &info, deviating)),
-            tmp.path(),
+            &OptionsFiles::new(tmp.path()),
             true,
         );
         assert_eq!(planned.writes.len(), 1);
@@ -581,13 +615,13 @@ mod tests {
         let info = mk_info(&["A"], &["A"]);
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned =
-            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), tmp.path(), false);
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &OptionsFiles::new(tmp.path()), false);
         let writes = planned.writes;
         assert_eq!(writes.len(), 1);
         let summary = apply(&writes);
         assert_eq!(summary.written, 1);
         assert!(summary.failed.is_empty());
-        let saved = SavedOptionsFile::load(&tmp.path().join("cat_port/options")).unwrap();
+        let saved = OptionsFiles::new(tmp.path()).saved("cat_port").unwrap();
         assert!(saved.set.contains("A"));
         assert_eq!(saved.options_read, "port-1.0");
     }

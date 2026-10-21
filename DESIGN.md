@@ -80,6 +80,31 @@ same enabled set), so a pkgname-only change does not force a rewrite, as with
 `make config-conditional` (`src/apply.rs`). Quitting without applying
 therefore always leaves the options dir as it was.
 
+## Options files are read once
+
+Every options file of the closure has several readers: the scan checks each
+cache entry against the file's hash, the session parses the saved choices,
+the TUI's staging dir is seeded with a copy, and planning an apply or a
+sync compares each file with what would be written. They all read through
+one store per options dir (`src/optfiles.rs`) that reads each file — or
+finds it absent — once, so a startup costs one pass over the directory,
+cold or warm. On an NFS-mounted poudriere.d every read is a round trip:
+with 1,502 files, three serial passes before the TUI opened took over ten
+minutes, and each apply added two more.
+
+The store keeps what it read, so it is the view the session judged: staging
+gets those bytes exactly (the background re-queries share the scan's cache,
+which matches entries on the file's hash), and apply compares with them, so
+a file edited outside optique while the TUI is open is neither seen nor
+overwritten unless its port is edited in the TUI. After an apply the store
+forgets the files it wrote or removed, and only those are read again. The
+staging dir itself changes under its reader, so the background re-queries
+read it through a fresh store per scan.
+
+Rejected: seeding staging alone from the session's reads, which left the
+scan's pass, the largest, as it was; and copying the files in parallel,
+which still read everything twice.
+
 ## Flavors sharing one options file: the default flavor owns it
 
 Flavors of one origin can share an `OPTIONS_NAME` and so an options file, but

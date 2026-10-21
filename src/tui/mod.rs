@@ -15,6 +15,7 @@ use crate::apply::{self, PendingWrite};
 use crate::deps::{DepLoop, EXTRA_SHOWN};
 use crate::draft;
 use crate::model::origin::PortKey;
+use crate::optfiles::OptionsFiles;
 use crate::optionsfile;
 use crate::query::refresher::{Refresher, RefreshEvent};
 use crate::session::{Session, UiStatus};
@@ -133,6 +134,10 @@ pub struct PortHelp {
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
+    /// The options dir's files as the scan read them: newcomers merged from a
+    /// background re-scan read theirs from here, and an apply forgets the
+    /// ones it changed so only those are read again.
+    pub options_files: OptionsFiles,
     /// --minimal: apply removes files that only repeat defaults + make.conf.
     pub minimal: bool,
     /// Ports poudriere won't build for this jail/tree/set. A display and
@@ -214,14 +219,14 @@ pub fn ensure_terminal() -> Result<()> {
 
 pub fn run(
     session: Session,
-    options_dir: PathBuf,
+    files: OptionsFiles,
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
     minimal: bool,
 ) -> Result<()> {
     ensure_terminal()?;
-    let mut app = build_app(session, options_dir, staging_db, refresher, blacklist, minimal);
+    let mut app = build_app(session, files, staging_db, refresher, blacklist, minimal);
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
@@ -238,7 +243,7 @@ pub fn run(
 /// start from exactly the same place.
 pub(crate) fn build_app(
     session: Session,
-    options_dir: PathBuf,
+    files: OptionsFiles,
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
@@ -248,7 +253,8 @@ pub(crate) fn build_app(
     let loops = session.dep_loops();
     let mut app = App {
         session,
-        options_dir,
+        options_dir: files.dir().to_path_buf(),
+        options_files: files,
         minimal,
         blacklist,
         visible: Vec::new(),
@@ -699,7 +705,15 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
             for (key, msg) in &summary.failed {
                 text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
-            app.session.reload_saved(&app.options_dir);
+            // Only the files apply touched are read again; the rest are as
+            // the scan read them.
+            let touched: Vec<String> = writes
+                .iter()
+                .filter_map(|w| w.path.parent()?.file_name()?.to_str().map(str::to_string))
+                .chain(planned.removals.iter().map(|r| r.options_name.clone()))
+                .collect();
+            app.options_files.forget(touched.iter().map(String::as_str));
+            app.session.reload_saved(&app.options_files);
             // The files on disk changed: attributions built on the pre-apply
             // staged history would now point at the wrong changes.
             app.blame.clear();
@@ -1379,7 +1393,7 @@ impl App {
                     // Blame before the merge: it needs the pre-merge flags.
                     let blamed = self.attribute_blame(&result.ports);
                     let (added, removed) =
-                        self.session.merge(*result, &self.options_dir.clone());
+                        self.session.merge(*result, &self.options_files);
                     let (a, r) = merged.get_or_insert((0usize, 0usize));
                     *a += added;
                     *r += removed;
@@ -1422,7 +1436,7 @@ impl App {
             let state = self.session.state(info)?;
             Some((key, info, state.staged.clone()))
         });
-        apply::plan_writes(staged, &self.options_dir, self.minimal)
+        apply::plan_writes(staged, &self.options_files, self.minimal)
     }
 
     fn open_apply_modal(&mut self) {
@@ -1580,9 +1594,9 @@ mod tests {
             ports.insert(info.canonical.clone(), info);
         }
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let options_dir = tmp.join("options");
-        let session = Session::new(ports, HashMap::new(), &roots, &options_dir, false);
-        let db = StagingDb::create(tmp, &options_dir, session.states.keys())
+        let files = OptionsFiles::new(&tmp.join("options"));
+        let session = Session::new(ports, HashMap::new(), &roots, &files, false);
+        let db = StagingDb::create(tmp, &files, session.states.keys())
             .expect("staging db under a tempdir");
         let refresher = crate::query::refresher::spawn(
             crate::query::makerunner::QueryCtx {
@@ -1594,7 +1608,40 @@ mod tests {
             crate::cache::Cache::disabled(),
             crate::moved::Moved::parse(""),
         );
-        build_app(session, options_dir, db, refresher, Default::default(), false)
+        build_app(session, files, db, refresher, Default::default(), false)
+    }
+
+    /// Opening the apply preview, confirming it and reloading afterwards read
+    /// only the files apply wrote: everything else is as the scan read it.
+    #[test]
+    fn apply_rereads_only_the_files_it_wrote() {
+        let tmp = tempfile::tempdir().unwrap();
+        // cat/beta is configured and stays as it is; cat/alpha is new.
+        let beta = tmp.path().join("options/cat_beta");
+        std::fs::create_dir_all(&beta).unwrap();
+        std::fs::write(
+            beta.join("options"),
+            "_OPTIONS_READ=beta-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n",
+        )
+        .unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        let at_start = app.options_files.disk_reads();
+        assert_eq!(at_start, 2, "one read per file to build the session");
+        assert!(tmp.path().join("db/cat_beta/options").is_file(), "staging seeded");
+        // Edited behind optique's back: apply plans against what the session
+        // read, so a port nobody touched in the TUI is not rewritten.
+        std::fs::write(beta.join("options"), "OPTIONS_FILE_SET+=DOCS\n").unwrap();
+
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(app.modal.is_some(), "the apply preview opened");
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("1 file(s) written"), "{done}");
+        assert!(tmp.path().join("options/cat_alpha/options").is_file());
+        assert_eq!(std::fs::read(beta.join("options")).unwrap(), b"OPTIONS_FILE_SET+=DOCS\n");
+        assert_eq!(app.options_files.disk_reads(), at_start + 1, "only cat_alpha re-read");
+        let alpha = PortKey::parse("cat/alpha").unwrap();
+        assert!(app.session.state(&app.session.ports[&alpha]).unwrap().saved.is_some());
     }
 
     /// 'I' opens the option pane with what the port is (off at start), and

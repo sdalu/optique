@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// Parsed form of a `${PORT_DBDIR}/<OPTIONS_NAME>/options` file as written
 /// by `make config`.
@@ -32,10 +31,6 @@ impl SavedOptionsFile {
             }
         }
         out
-    }
-
-    pub fn load(path: &Path) -> Option<Self> {
-        std::fs::read_to_string(path).ok().map(|t| Self::parse(&t))
     }
 }
 

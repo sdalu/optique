@@ -5,7 +5,6 @@
 //! and the input source differ.
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -14,6 +13,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
 use super::{build_app, dispatch_key, ui, App, Focus, KeyOutcome};
+use crate::optfiles::OptionsFiles;
 use crate::query::refresher::Refresher;
 use crate::session::Session;
 use crate::staging::StagingDb;
@@ -37,13 +37,13 @@ type DriverTerminal = Terminal<TestBackend>;
 
 pub fn run_driver(
     session: Session,
-    options_dir: PathBuf,
+    files: OptionsFiles,
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
     minimal: bool,
 ) -> Result<()> {
-    let mut app = build_app(session, options_dir, staging_db, refresher, blacklist, minimal);
+    let mut app = build_app(session, files, staging_db, refresher, blacklist, minimal);
     let mut terminal = Terminal::new(TestBackend::new(DEFAULT_COLS, DEFAULT_ROWS))?;
 
     let stdin = std::io::stdin();

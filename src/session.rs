@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::path::Path;
 
 use crate::apply;
 use crate::model::options::GroupKind;
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
+use crate::optfiles::OptionsFiles;
 use crate::optionsfile::SavedOptionsFile;
 
 /// Editable option state for one options file (shared by all flavors of an
@@ -64,7 +64,7 @@ impl Session {
         ports: BTreeMap<PortKey, PortInfo>,
         aliases: HashMap<PortKey, PortKey>,
         requested_roots: &[PortKey],
-        options_dir: &Path,
+        files: &OptionsFiles,
         minimal: bool,
     ) -> Self {
         let mut session = Session {
@@ -87,7 +87,7 @@ impl Session {
         session.rebuild_owners();
         let keys: Vec<PortKey> = session.ports.keys().cloned().collect();
         for key in keys {
-            session.ensure_state(&key, options_dir);
+            session.ensure_state(&key, files);
         }
         session
     }
@@ -142,7 +142,7 @@ impl Session {
         crate::deps::detect(&self.ports, &self.aliases)
     }
 
-    fn ensure_state(&mut self, key: &PortKey, options_dir: &Path) {
+    fn ensure_state(&mut self, key: &PortKey, files: &OptionsFiles) {
         let Some(info) = self.ports.get(key) else { return };
         if !info.options.has_options() {
             return;
@@ -151,8 +151,7 @@ impl Session {
             // The baseline follows the file OWNER's view (default flavor):
             // that's what apply will write.
             let owner = self.owner_info(info);
-            let saved =
-                SavedOptionsFile::load(&options_dir.join(&owner.options_name).join("options"));
+            let saved = files.saved(&owner.options_name);
             let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
             self.states.insert(
                 info.options_name.clone(),
@@ -165,7 +164,7 @@ impl Session {
     /// state for newcomers, then drop ports no longer reachable from the
     /// roots. Returns (added, removed) counts. Option states are never
     /// discarded, so a port that flip-flops out and back keeps its edits.
-    pub fn merge(&mut self, result: crate::query::scanner::ScanResult, options_dir: &Path) -> (usize, usize) {
+    pub fn merge(&mut self, result: crate::query::scanner::ScanResult, files: &OptionsFiles) -> (usize, usize) {
         self.aliases.extend(result.aliases);
         let mut added_keys = Vec::new();
         for (key, info) in result.ports {
@@ -175,12 +174,12 @@ impl Session {
         }
         self.rebuild_owners();
         for key in &added_keys {
-            self.ensure_state(key, options_dir);
+            self.ensure_state(key, files);
         }
         // Existing ports may have gained state-worthy options in a refresh.
         let keys: Vec<PortKey> = self.ports.keys().cloned().collect();
         for key in keys {
-            self.ensure_state(&key, options_dir);
+            self.ensure_state(&key, files);
         }
         // Reachability GC from the roots.
         let mut reachable: std::collections::HashSet<PortKey> = Default::default();
@@ -210,8 +209,10 @@ impl Session {
         self.states.get(&info.options_name)
     }
 
-    /// Reload saved files after an apply so statuses reflect reality.
-    pub fn reload_saved(&mut self, options_dir: &Path) {
+    /// Reload saved files after an apply so statuses reflect reality. Only
+    /// what `files` has forgotten (the files apply wrote or removed) is read
+    /// again from disk.
+    pub fn reload_saved(&mut self, files: &OptionsFiles) {
         let mut updates: Vec<(String, Option<SavedOptionsFile>, BTreeSet<String>)> = Vec::new();
         for info in self.ports.values() {
             if !self.states.contains_key(&info.options_name)
@@ -220,8 +221,7 @@ impl Session {
                 continue;
             }
             let owner = self.owner_info(info);
-            let saved =
-                SavedOptionsFile::load(&options_dir.join(&owner.options_name).join("options"));
+            let saved = files.saved(&owner.options_name);
             let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
             updates.push((info.options_name.clone(), saved, baseline));
         }
@@ -765,7 +765,7 @@ mod tests {
     fn session_for(ports: BTreeMap<PortKey, PortInfo>) -> Session {
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        Session::new(ports, HashMap::new(), &roots, tmp.path(), false)
+        Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false)
     }
 
     fn set(opts: &[&str]) -> BTreeSet<String> {
@@ -942,7 +942,7 @@ mod tests {
         // ...and the staged state agreeing with make.conf is not a deviation.
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         assert!(s.mc_deviations(&s.ports[&key]).is_empty());
     }
 
@@ -952,11 +952,11 @@ mod tests {
         let (ports, key) = mk_port(&["DOCS", "X11"], &["DOCS"], vec![], vec![]);
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let s = Session::new(ports.clone(), HashMap::new(), &roots, tmp.path(), true);
+        let s = Session::new(ports.clone(), HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), true);
         assert!(s.covered_by_makeconf(&s.ports[&key]), "minimal: defaults decide");
         assert!(undecided_options(&s.ports[&key], None, true).is_empty());
         // Same port without minimal: X11 and DOCS are undecided.
-        let s2 = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let s2 = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         assert!(!s2.covered_by_makeconf(&s2.ports[&key]));
     }
 
@@ -972,7 +972,7 @@ mod tests {
         )
         .unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let mut s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         let info_key = key.clone();
 
         // Not covered: DOCS/NLS undecided by make.conf.
@@ -1022,7 +1022,7 @@ mod tests {
         )
         .unwrap();
         let roots2: Vec<PortKey> = ports2.keys().cloned().collect();
-        let s2 = Session::new(ports2, HashMap::new(), &roots2, tmp2.path(), false);
+        let s2 = Session::new(ports2, HashMap::new(), &roots2, &OptionsFiles::new(tmp2.path()), false);
         assert_eq!(s2.status(&s2.ports[&key2]), UiStatus::Stale);
         assert!(s2.covered_by_makeconf(&s2.ports[&key2]));
 
@@ -1031,7 +1031,7 @@ mod tests {
         let (ports3, key3) = mk_port(&["DOCS", "X11"], &["DOCS"], vec![], vec![]);
         let tmp3 = tempfile::tempdir().unwrap();
         let roots3: Vec<PortKey> = ports3.keys().cloned().collect();
-        let mut s3 = Session::new(ports3, HashMap::new(), &roots3, tmp3.path(), false);
+        let mut s3 = Session::new(ports3, HashMap::new(), &roots3, &OptionsFiles::new(tmp3.path()), false);
         assert_eq!(s3.status(&s3.ports[&key3]), UiStatus::Unconfigured);
         assert!(!s3.covered_by_makeconf(&s3.ports[&key3]));
         {
@@ -1057,7 +1057,7 @@ mod tests {
             mk_port(&["GSSAPI_BASE", "GSSAPI_MIT", "GSSAPI_NONE"], &["GSSAPI_BASE"], vec![g], vec![]);
         let tmp4 = tempfile::tempdir().unwrap();
         let roots4: Vec<PortKey> = ports4.keys().cloned().collect();
-        let mut s4 = Session::new(ports4, HashMap::new(), &roots4, tmp4.path(), false);
+        let mut s4 = Session::new(ports4, HashMap::new(), &roots4, &OptionsFiles::new(tmp4.path()), false);
         assert!(!s4.covered_by_makeconf(&s4.ports[&key4]));
         {
             let o = &mut s4.ports.get_mut(&key4).unwrap().options;
@@ -1142,7 +1142,9 @@ mod tests {
         ports.insert(nox_key.clone(), nox);
         ports.insert(full_key.clone(), full);
         let roots = vec![full_key.clone(), nox_key.clone()];
-        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let files = OptionsFiles::new(tmp.path());
+        let s = Session::new(ports, HashMap::new(), &roots, &files, false);
+        assert_eq!(files.disk_reads(), 1, "two flavors, one shared file, one read");
 
         assert_eq!(s.owners["editors_emacs"], full_key);
         assert_eq!(s.status(&s.ports[&full_key]), UiStatus::Ok);
@@ -1207,7 +1209,7 @@ mod tests {
         let mut ports = BTreeMap::new();
         ports.insert(root_key.clone(), root);
         ports.insert(dep_key.clone(), dep.clone());
-        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], tmp.path(), false);
+        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], &OptionsFiles::new(tmp.path()), false);
 
         // User edits the dependency's options.
         s.toggle(&dep_key, "DEPOPT").unwrap();
@@ -1217,7 +1219,7 @@ mod tests {
         let updated_root = linked_info("cat/root", &[], &["ROOTOPT"]);
         let mut result = crate::query::scanner::ScanResult::default();
         result.ports.insert(root_key.clone(), updated_root);
-        let (added, removed) = s.merge(result, tmp.path());
+        let (added, removed) = s.merge(result, &OptionsFiles::new(tmp.path()));
         assert_eq!((added, removed), (0, 1));
         assert!(!s.ports.contains_key(&dep_key));
 
@@ -1225,7 +1227,7 @@ mod tests {
         let mut result = crate::query::scanner::ScanResult::default();
         result.ports.insert(root_key.clone(), linked_info("cat/root", &["cat/dep"], &["ROOTOPT"]));
         result.ports.insert(dep_key.clone(), dep);
-        let (added, removed) = s.merge(result, tmp.path());
+        let (added, removed) = s.merge(result, &OptionsFiles::new(tmp.path()));
         assert_eq!((added, removed), (1, 0));
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
@@ -1252,7 +1254,7 @@ mod tests {
         let mid = PortKey::parse("cat/mid").unwrap();
         let leaf = PortKey::parse("cat/leaf").unwrap();
         let orphan = PortKey::parse("cat/orphan").unwrap();
-        let s = Session::new(ports, HashMap::new(), &[root.clone(), other.clone()], tmp.path(), false);
+        let s = Session::new(ports, HashMap::new(), &[root.clone(), other.clone()], &OptionsFiles::new(tmp.path()), false);
 
         let chain = s.why_chain(&leaf).expect("leaf is reachable");
         assert_eq!(chain.len(), 2, "shortest chain goes through cat/other");
@@ -1286,7 +1288,7 @@ mod tests {
             PortKey::parse("cat/root").unwrap(),
             PortKey::parse("cat/other").unwrap(),
         ];
-        let s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         let deep = PortKey::parse("cat/deep").unwrap();
         assert_eq!(
             s.why_chain(&deep),
@@ -1331,7 +1333,7 @@ mod tests {
         let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
         let tmp = tempfile::tempdir().unwrap();
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let mut s = Session::new(ports, HashMap::new(), &roots, tmp.path(), false);
+        let mut s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Unconfigured);
 
         // Simulate an apply: a file appears on disk recording A=on.
@@ -1341,11 +1343,50 @@ mod tests {
             "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
         )
         .unwrap();
-        s.reload_saved(tmp.path());
+        s.reload_saved(&OptionsFiles::new(tmp.path()));
         // Baseline now follows the file; staged still empty -> Edited.
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.baseline.contains("A"));
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+    }
+
+    /// After an apply only the files it touched are read again: the store
+    /// forgets those, the rest are as the scan read them.
+    #[test]
+    fn reload_saved_rereads_only_forgotten_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let write = |name: &str, set: &str| {
+            std::fs::create_dir_all(tmp.path().join(name)).unwrap();
+            std::fs::write(
+                tmp.path().join(name).join("options"),
+                format!("_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_{set}+=A\n"),
+            )
+            .unwrap();
+        };
+        let mut ports = BTreeMap::new();
+        for name in ["cat_a", "cat_b"] {
+            let (mut p, key) = mk_port(&["A"], &[], vec![], vec![]);
+            let mut info = p.remove(&key).unwrap();
+            info.key = PortKey::parse(&name.replace('_', "/")).unwrap();
+            info.canonical = info.key.clone();
+            info.options_name = name.into();
+            ports.insert(info.key.clone(), info);
+            write(name, "UNSET");
+        }
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let files = OptionsFiles::new(tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &roots, &files, false);
+        assert_eq!(files.disk_reads(), 2);
+
+        write("cat_a", "SET");
+        write("cat_b", "SET");
+        files.forget(["cat_a"]);
+        s.reload_saved(&files);
+        assert_eq!(files.disk_reads(), 3, "only the forgotten file is read");
+        let a = PortKey::parse("cat/a").unwrap();
+        let b = PortKey::parse("cat/b").unwrap();
+        assert!(s.state(&s.ports[&a]).unwrap().baseline.contains("A"));
+        assert!(!s.state(&s.ports[&b]).unwrap().baseline.contains("A"));
     }
 
     #[test]

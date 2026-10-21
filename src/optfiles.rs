@@ -1,0 +1,200 @@
+//! The options files of one options directory, each read from disk at most
+//! once.
+//!
+//! Starting up reads every options file of the closure for three readers:
+//! the cache checks each entry against the file's hash, the session parses
+//! the saved choices, and the TUI's staging dir is seeded with a copy. On an
+//! NFS-mounted poudriere.d each read is a round trip, so they share one
+//! store instead of three serial passes over the directory.
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+
+use crate::optionsfile::SavedOptionsFile;
+
+/// Hash recorded for an options file that is not there.
+pub const ABSENT: &str = "ABSENT";
+
+pub struct OptionsFiles {
+    dir: PathBuf,
+    /// OPTIONS_NAME -> the file's bytes, None when it is absent.
+    memo: RefCell<HashMap<String, Option<Rc<[u8]>>>>,
+    /// Reads that went to disk (for tests and the curious).
+    disk_reads: Cell<usize>,
+}
+
+impl OptionsFiles {
+    pub fn new(dir: &Path) -> Self {
+        OptionsFiles {
+            dir: dir.to_path_buf(),
+            memo: RefCell::new(HashMap::new()),
+            disk_reads: Cell::new(0),
+        }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// `<dir>/<options_name>/options`.
+    pub fn path(&self, options_name: &str) -> PathBuf {
+        self.dir.join(options_name).join("options")
+    }
+
+    /// The file's bytes, None when absent. Any read error counts as absent,
+    /// as it always has for every reader: a file optique cannot read is one
+    /// make cannot read either.
+    pub fn bytes(&self, options_name: &str) -> Option<Rc<[u8]>> {
+        if let Some(hit) = self.memo.borrow().get(options_name) {
+            return hit.clone();
+        }
+        self.disk_reads.set(self.disk_reads.get() + 1);
+        let read: Option<Rc<[u8]>> = fs::read(self.path(options_name)).ok().map(Rc::from);
+        self.memo.borrow_mut().insert(options_name.to_string(), read.clone());
+        read
+    }
+
+    /// SHA-256 of the file's bytes, or `ABSENT`: what the cache records an
+    /// entry against.
+    pub fn hash(&self, options_name: &str) -> String {
+        match self.bytes(options_name) {
+            Some(bytes) => crate::cache::sha256_hex(&bytes),
+            None => ABSENT.to_string(),
+        }
+    }
+
+    /// The saved choices the file records. A file that is not UTF-8 is no
+    /// saved choice (it was never one `make config` wrote), but its bytes are
+    /// still what make sees and what staging copies.
+    pub fn saved(&self, options_name: &str) -> Option<SavedOptionsFile> {
+        let bytes = self.bytes(options_name)?;
+        std::str::from_utf8(&bytes).ok().map(SavedOptionsFile::parse)
+    }
+
+    /// Drop what is known of these files, so the next read sees the disk:
+    /// after optique itself wrote or removed them.
+    pub fn forget<'a>(&self, names: impl IntoIterator<Item = &'a str>) {
+        let mut memo = self.memo.borrow_mut();
+        for name in names {
+            memo.remove(name);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn disk_reads(&self) -> usize {
+        self.disk_reads.get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn put(dir: &Path, name: &str, content: &[u8]) {
+        fs::create_dir_all(dir.join(name)).unwrap();
+        fs::write(dir.join(name).join("options"), content).unwrap();
+    }
+
+    #[test]
+    fn each_file_is_read_once_whoever_asks() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "cat_port", b"OPTIONS_FILE_SET+=A\n");
+        let files = OptionsFiles::new(tmp.path());
+        let bytes = files.bytes("cat_port").unwrap();
+        let hash = files.hash("cat_port");
+        let saved = files.saved("cat_port").unwrap();
+        assert_eq!(files.bytes("cat_port").unwrap(), bytes);
+        assert_eq!(files.disk_reads(), 1, "bytes, hash and saved share one read");
+        assert_eq!(&*bytes, b"OPTIONS_FILE_SET+=A\n");
+        assert_eq!(hash, crate::cache::sha256_hex(b"OPTIONS_FILE_SET+=A\n"));
+        assert!(saved.set.contains("A"));
+    }
+
+    /// Absence is remembered like content: a closure with hundreds of
+    /// unconfigured ports must not ask the NFS server about each one again.
+    #[test]
+    fn an_absent_file_is_remembered_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        assert!(files.bytes("cat_none").is_none());
+        assert_eq!(files.hash("cat_none"), ABSENT);
+        assert!(files.saved("cat_none").is_none());
+        assert_eq!(files.disk_reads(), 1);
+        // It stays absent for this store, as the scan saw it...
+        put(tmp.path(), "cat_none", b"x\n");
+        assert!(files.bytes("cat_none").is_none());
+        // ...until forgotten.
+        files.forget(["cat_none"]);
+        assert_eq!(files.bytes("cat_none").as_deref(), Some(&b"x\n"[..]));
+        assert_eq!(files.disk_reads(), 2);
+    }
+
+    #[test]
+    fn forget_rereads_only_what_it_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "cat_a", b"a1\n");
+        put(tmp.path(), "cat_b", b"b1\n");
+        let files = OptionsFiles::new(tmp.path());
+        files.bytes("cat_a");
+        files.bytes("cat_b");
+        put(tmp.path(), "cat_a", b"a2\n");
+        put(tmp.path(), "cat_b", b"b2\n");
+        files.forget(["cat_a", "cat_unknown"]);
+        assert_eq!(files.bytes("cat_a").as_deref(), Some(&b"a2\n"[..]));
+        assert_eq!(files.bytes("cat_b").as_deref(), Some(&b"b1\n"[..]), "still as first read");
+        assert_eq!(files.disk_reads(), 3);
+    }
+
+    /// The hash is the cache's: entries written before the store existed
+    /// must still match.
+    #[test]
+    fn hash_is_sha256_hex_of_the_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "cat_port", b"");
+        let h = OptionsFiles::new(tmp.path()).hash("cat_port");
+        assert_eq!(h, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    /// A file that is not UTF-8 records no saved choice, but its bytes are
+    /// still what make reads, so staging and the cache keep them.
+    #[test]
+    fn a_non_utf8_file_has_bytes_but_no_saved_choice() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "cat_port", b"OPTIONS_FILE_SET+=A\n\xff\xfe\n");
+        let files = OptionsFiles::new(tmp.path());
+        assert!(files.saved("cat_port").is_none());
+        assert_eq!(files.bytes("cat_port").unwrap().len(), 23);
+        assert_ne!(files.hash("cat_port"), ABSENT);
+    }
+
+    /// Whatever cannot be read counts as absent, as it always did: an
+    /// `options` that is a directory, or one without read permission.
+    #[test]
+    fn an_unreadable_file_counts_as_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("cat_dir/options")).unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        assert!(files.bytes("cat_dir").is_none());
+        assert_eq!(files.hash("cat_dir"), ABSENT);
+
+        use std::os::unix::fs::PermissionsExt;
+        put(tmp.path(), "cat_locked", b"x\n");
+        let path = files.path("cat_locked");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        // root reads it anyway; the case only exists for everyone else.
+        if fs::read(&path).is_err() {
+            assert!(files.bytes("cat_locked").is_none());
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn path_is_the_ports_framework_layout() {
+        let files = OptionsFiles::new(Path::new("/opt/db"));
+        assert_eq!(files.dir(), Path::new("/opt/db"));
+        assert_eq!(files.path("www_nginx"), Path::new("/opt/db/www_nginx/options"));
+    }
+}

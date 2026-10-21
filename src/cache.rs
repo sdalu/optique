@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
+use crate::optfiles::OptionsFiles;
 
 /// Persistent per-generation query cache.
 ///
@@ -54,25 +55,25 @@ impl Cache {
 
     /// Return the cached PortInfo if the options file it was computed against
     /// is still byte-identical.
-    pub fn lookup(&self, key: &PortKey, port_dbdir: &Path) -> Option<PortInfo> {
+    pub fn lookup(&self, key: &PortKey, files: &OptionsFiles) -> Option<PortInfo> {
         if !self.enabled {
             return None;
         }
         let entry = self.map.get(key)?;
-        if options_hash(port_dbdir, &entry.options_name) == entry.options_hash {
+        if files.hash(&entry.options_name) == entry.options_hash {
             Some(entry.info.clone())
         } else {
             None
         }
     }
 
-    pub fn insert(&mut self, info: &PortInfo, port_dbdir: &Path) {
+    pub fn insert(&mut self, info: &PortInfo, files: &OptionsFiles) {
         if !self.enabled {
             return;
         }
         let entry = CacheEntry {
             options_name: info.options_name.clone(),
-            options_hash: options_hash(port_dbdir, &info.options_name),
+            options_hash: files.hash(&info.options_name),
             info: info.clone(),
         };
         if let Some(f) = &mut self.file {
@@ -81,14 +82,6 @@ impl Cache {
             }
         }
         self.map.insert(entry.info.key.clone(), entry);
-    }
-}
-
-/// Hash of the saved options file content, or "ABSENT".
-pub fn options_hash(port_dbdir: &Path, options_name: &str) -> String {
-    match fs::read(port_dbdir.join(options_name).join("options")) {
-        Ok(bytes) => hex(&Sha256::digest(&bytes)),
-        Err(_) => "ABSENT".to_string(),
     }
 }
 
@@ -288,6 +281,30 @@ mod tests {
         }
     }
 
+    /// A lookup and an insert for the same file, and two flavors sharing it,
+    /// cost one read between them.
+    #[test]
+    fn lookups_and_inserts_share_one_read_per_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbdir = tmp.path().join("db");
+        std::fs::create_dir_all(dbdir.join("cat_port")).unwrap();
+        std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+        let files = OptionsFiles::new(&dbdir);
+
+        let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
+        let plain = info("cat/port");
+        let mut flavored = info("cat/port");
+        flavored.key = PortKey::parse("cat/port@f").unwrap();
+        // Not in the cache yet: no file is read to find that out.
+        assert!(c.lookup(&plain.key, &files).is_none());
+        assert_eq!(files.disk_reads(), 0);
+        c.insert(&plain, &files);
+        c.insert(&flavored, &files);
+        assert!(c.lookup(&plain.key, &files).is_some());
+        assert!(c.lookup(&flavored.key, &files).is_some());
+        assert_eq!(files.disk_reads(), 1);
+    }
+
     #[test]
     fn roundtrip_and_options_file_invalidation() {
         let tmp = tempfile::tempdir().unwrap();
@@ -297,16 +314,16 @@ mod tests {
 
         let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
         let i = info("cat/port");
-        assert!(c.lookup(&i.key, &dbdir).is_none());
-        c.insert(&i, &dbdir);
-        assert!(c.lookup(&i.key, &dbdir).is_some());
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
+        c.insert(&i, &OptionsFiles::new(&dbdir));
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
 
         // Changing the options file invalidates the entry.
         std::fs::write(dbdir.join("cat_port/options"), "v2\n").unwrap();
-        assert!(c.lookup(&i.key, &dbdir).is_none());
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
         // Restoring the exact content revalidates it.
         std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
-        assert!(c.lookup(&i.key, &dbdir).is_some());
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
     }
 
     #[test]
@@ -317,21 +334,21 @@ mod tests {
         let cache_dir = tmp.path().join("cache");
 
         let mut c = Cache::open(&cache_dir, "treeA", "confA");
-        c.insert(&info("cat/port"), &dbdir);
+        c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
         drop(c);
 
         let c2 = Cache::open(&cache_dir, "treeA", "confA");
-        assert!(c2.lookup(&PortKey::parse("cat/port").unwrap(), &dbdir).is_some());
+        assert!(c2.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_some());
         let c3 = Cache::open(&cache_dir, "treeB", "confA");
-        assert!(c3.lookup(&PortKey::parse("cat/port").unwrap(), &dbdir).is_none());
+        assert!(c3.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_none());
     }
 
     #[test]
     fn disabled_never_stores() {
         let tmp = tempfile::tempdir().unwrap();
         let mut c = Cache::disabled();
-        c.insert(&info("cat/port"), tmp.path());
-        assert!(c.lookup(&PortKey::parse("cat/port").unwrap(), tmp.path()).is_none());
+        c.insert(&info("cat/port"), &OptionsFiles::new(tmp.path()));
+        assert!(c.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(tmp.path())).is_none());
     }
 
     #[test]
@@ -495,10 +512,10 @@ mod tests {
     #[test]
     fn options_hash_absent_vs_present() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(options_hash(tmp.path(), "cat_port"), "ABSENT");
+        assert_eq!(OptionsFiles::new(tmp.path()).hash("cat_port"), "ABSENT");
         std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
         std::fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
-        let h = options_hash(tmp.path(), "cat_port");
+        let h = OptionsFiles::new(tmp.path()).hash("cat_port");
         assert_ne!(h, "ABSENT");
         assert_eq!(h.len(), 64);
     }

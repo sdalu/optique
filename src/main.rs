@@ -8,6 +8,7 @@ mod deps;
 mod draft;
 mod model;
 mod moved;
+mod optfiles;
 mod optionsfile;
 mod query;
 mod report;
@@ -23,7 +24,6 @@ use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::moved::Moved;
-use crate::optionsfile::SavedOptionsFile;
 use crate::query::makerunner::QueryCtx;
 use crate::query::scanner::{self, ScanResult};
 
@@ -255,8 +255,9 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
                 }
             }
         };
+        let files = optfiles::OptionsFiles::new(&settings.options_dir);
         for entry in &live {
-            if let Some(info) = cache.lookup(&entry.key, &settings.options_dir) {
+            if let Some(info) = cache.lookup(&entry.key, &files) {
                 done += 1;
                 handle(info, &mut removals, &mut kept, &mut warnings, &by_key);
             } else {
@@ -269,7 +270,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
                 Ok(ScanEvent::PortDone(info)) => {
                     in_flight -= 1;
                     done += 1;
-                    cache.insert(&info, &settings.options_dir);
+                    cache.insert(&info, &files);
                     handle(*info, &mut removals, &mut kept, &mut warnings, &by_key);
                 }
                 Ok(ScanEvent::PortError { key, msg }) => {
@@ -519,12 +520,11 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         tui::ensure_terminal()?;
     }
     let scanned = run_scan(cli, rs)?;
-    let options_dir = scanned.settings.options_dir.clone();
     let session = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
         &rs.roots,
-        &options_dir,
+        &scanned.files,
         cli.minimal,
     );
 
@@ -532,7 +532,7 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     // so staged edits take effect before anything is applied for real.
     let db = staging::StagingDb::create(
         scanned.staging.path(),
-        &options_dir,
+        &scanned.files,
         session.states.keys(),
     )?;
     let ctx = QueryCtx {
@@ -542,10 +542,11 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
+    let files = scanned.files;
     if drive {
-        tui::run_driver(session, options_dir, db, refresher, blacklist, cli.minimal)
+        tui::run_driver(session, files, db, refresher, blacklist, cli.minimal)
     } else {
-        tui::run(session, options_dir, db, refresher, blacklist, cli.minimal)
+        tui::run(session, files, db, refresher, blacklist, cli.minimal)
     }
     // scanned.staging (make.conf + staging db) lives until here
 }
@@ -560,6 +561,9 @@ struct Scanned {
     elapsed: f32,
     /// Holds the layered make.conf (and the TUI's staging db) alive.
     staging: tempfile::TempDir,
+    /// The options dir's files as the scan read them; the session and the
+    /// TUI's staging copy read them from here, not from disk again.
+    files: optfiles::OptionsFiles,
     cache: cache::Cache,
     moved: Moved,
     jobs: usize,
@@ -648,7 +652,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     }
 
     let t0 = Instant::now();
-    let result = scanner::scan(&rs.roots, &ctx, jobs, &mut cache, &moved, move |p| {
+    let files = optfiles::OptionsFiles::new(&settings.options_dir);
+    let result = scanner::scan(&rs.roots, &ctx, &files, jobs, &mut cache, &moved, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();
@@ -678,6 +683,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         dep_loops,
         elapsed: t0.elapsed().as_secs_f32(),
         staging,
+        files,
         cache,
         moved,
         jobs,
@@ -753,7 +759,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         scanned.result.ports,
         scanned.result.aliases,
         &rs.roots,
-        &settings.options_dir,
+        &scanned.files,
         cli.minimal,
     );
 
@@ -1122,18 +1128,18 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
     let (settings, result) = (&scanned.settings, &scanned.result);
     let paint = stderr_color(cli);
 
+    let files = &scanned.files;
     let staged = result.ports.iter().map(|(key, info)| {
-        let saved =
-            SavedOptionsFile::load(&settings.options_dir.join(&info.options_name).join("options"));
+        let saved = files.saved(&info.options_name);
         (key, info, apply::sync_enabled_set(info, saved.as_ref()))
     });
-    let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
+    let planned = apply::plan_writes(staged, files, cli.minimal);
 
     // A port that lost ALL its options never reaches plan_writes; its
     // leftover file is dead configuration and must go too (unless another
     // flavor sharing the file still has options). --minimal adds files whose
     // content defaults + make.conf already dictate.
-    let mut stale_files = apply::plan_stale_removals(&result.ports, &settings.options_dir);
+    let mut stale_files = apply::plan_stale_removals(&result.ports, files);
     stale_files.extend(planned.removals);
     stale_files.sort_by(|a, b| a.options_name.cmp(&b.options_name));
 
@@ -1226,7 +1232,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         scanned.result.ports,
         scanned.result.aliases,
         &rs.roots,
-        &settings.options_dir,
+        &scanned.files,
         cli.minimal,
     );
 
@@ -1248,7 +1254,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         let state = sess.state(info)?;
         Some((key, info, state.staged.clone()))
     });
-    let planned = apply::plan_writes(staged, &settings.options_dir, cli.minimal);
+    let planned = apply::plan_writes(staged, &scanned.files, cli.minimal);
 
     let mut pass = WritePass::new(planned.writes, planned.removals, planned.warnings);
     pass.rejected = outcome

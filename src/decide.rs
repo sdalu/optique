@@ -296,7 +296,8 @@ mod tests {
         let map: std::collections::BTreeMap<_, _> =
             ports.into_iter().map(|i| (i.canonical.clone(), i)).collect();
         let roots: Vec<PortKey> = map.keys().cloned().collect();
-        let sess = Session::new(map, Default::default(), &roots, tmp.path(), false);
+        let files = crate::optfiles::OptionsFiles::new(tmp.path());
+        let sess = Session::new(map, Default::default(), &roots, &files, false);
         (sess, tmp)
     }
 

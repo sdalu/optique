@@ -3,6 +3,7 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::cache::Cache;
 use crate::model::origin::PortKey;
 use crate::moved::Moved;
+use crate::optfiles::OptionsFiles;
 use crate::query::makerunner::QueryCtx;
 use crate::query::scanner::{self, ScanResult};
 
@@ -34,7 +35,10 @@ pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved) -> Refr
                 batches += 1;
             }
             let ev_progress = ev_tx.clone();
-            let result = scanner::scan(&roots, &ctx, jobs, &mut cache, &moved, move |p| {
+            // A store per scan: the staging dir changes between scans as the
+            // user edits, and within one it spares flavors re-reading a file.
+            let files = OptionsFiles::new(&ctx.port_dbdir);
+            let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, move |p| {
                 let _ = ev_progress
                     .send(RefreshEvent::Progress { done: p.done, discovered: p.discovered });
             });

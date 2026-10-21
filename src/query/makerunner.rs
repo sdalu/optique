@@ -201,7 +201,7 @@ mod tests {
         );
         let db = crate::staging::StagingDb::create(
             staging.path(),
-            staging.path(), // nothing to seed
+            &crate::optfiles::OptionsFiles::new(staging.path()), // nothing to seed
             std::iter::empty(),
         )
         .unwrap();
@@ -228,7 +228,7 @@ mod tests {
         let make_conf = crate::config::stage_jail_make_conf(staging.path()).unwrap();
         let db = crate::staging::StagingDb::create(
             staging.path(),
-            staging.path(), // nothing to seed
+            &crate::optfiles::OptionsFiles::new(staging.path()), // nothing to seed
             std::iter::empty(),
         )
         .unwrap();
