@@ -753,6 +753,7 @@ mod tests {
             ignore: None,
             deprecated: None,
             pkg_help: None,
+            about: Default::default(),
             default_versions: vec![],
             warnings: vec![],
         };
@@ -1089,6 +1090,7 @@ mod tests {
             ignore: None,
             deprecated: None,
             pkg_help: None,
+            about: Default::default(),
             default_versions: vec![],
             warnings: vec![],
         }
@@ -1125,6 +1127,7 @@ mod tests {
                 ignore: None,
                 deprecated: None,
                 pkg_help: None,
+                about: Default::default(),
                 default_versions: vec![],
                 warnings: vec![],
             }
@@ -1170,6 +1173,7 @@ mod tests {
                 ignore: None,
                 deprecated: None,
                 pkg_help: None,
+                about: Default::default(),
                 default_versions: vec![],
                 warnings: vec![],
             }
@@ -1363,6 +1367,7 @@ mod tests {
                 ignore: None,
                 deprecated: None,
                 pkg_help: None,
+                about: Default::default(),
                 default_versions: vec![],
                 warnings: vec![],
             }

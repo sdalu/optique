@@ -220,6 +220,14 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     // The bottom of the pane is split off for the option under the cursor:
     // the rows above are cut at the pane's right edge, the panel is not.
     let (rows_area, detail_area) = split_detail(app, info, area);
+    // The top, for what the port is, out of whatever the rows leave spare.
+    let rows_needed = banner_len(app, info) + app.editor_rows.len();
+    let about_text = if app.show_about {
+        about_lines(info, rows_area.width.saturating_sub(2) as usize)
+    } else {
+        Vec::new()
+    };
+    let (rows_area, about) = split_about(about_text, rows_area, area, rows_needed);
 
     // Keep the selected row in view: scroll so it sits inside the pane.
     let inner_height = rows_area.height.saturating_sub(2) as usize;
@@ -232,12 +240,13 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         .saturating_sub(1);
     let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
 
-    // Right of the title: the key that opens this port's pkg-help, shown only
-    // for the ports that ship one.
-    let mut block =
+    // The pane's title, and right of it the key that opens this port's
+    // pkg-help, shown only for the ports that ship one. They head the pane:
+    // the description panel when it is there, the rows otherwise.
+    let mut head =
         Block::default().borders(Borders::ALL).title(title).border_style(border_style);
     if info.pkg_help.is_some() {
-        block = block.title_top(
+        head = head.title_top(
             Line::from(Span::styled(
                 " [h] help ",
                 Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
@@ -245,6 +254,13 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
             .right_aligned(),
         );
     }
+    let block = match about {
+        Some((about_area, about_lines)) => {
+            f.render_widget(Paragraph::new(about_lines).block(head), about_area);
+            Block::default().borders(Borders::ALL).border_style(border_style)
+        }
+        None => head,
+    };
     let p = Paragraph::new(lines).scroll((scroll, 0)).block(block);
     f.render_widget(p, rows_area);
 
@@ -279,6 +295,62 @@ fn split_detail(app: &App, info: &PortInfo, area: Rect) -> (Rect, Option<Rect>) 
     // +1: the rows box keeps its bottom border on the panel's top border row.
     let rows = Rect { height: area.height - height + 1, ..area };
     (rows, Some(detail))
+}
+
+/// Split the description panel holding `lines` off the top of `rows`, sized
+/// from the room the `rows_needed` lines (banner and option rows) leave
+/// spare: it never makes them scroll, shrinks to the COMMENT alone when that
+/// is all that fits, and is dropped when not even that does or the port says
+/// nothing. It is at most a third of the whole `pane`. The two boxes share a
+/// border line.
+fn split_about(
+    mut lines: Vec<Line<'static>>,
+    rows: Rect,
+    pane: Rect,
+    rows_needed: usize,
+) -> (Rect, Option<(Rect, Vec<Line<'static>>)>) {
+    let width = rows.width.saturating_sub(2) as usize;
+    // +1: the panel's bottom border is the rows' top border.
+    let spare = (rows.height as usize + 1).saturating_sub(rows_needed + 2);
+    let cap = spare.saturating_sub(2).min(detail_max_lines(pane));
+    if lines.is_empty() || cap == 0 {
+        return (rows, None);
+    }
+    mark_if_clipped(&mut lines, cap, width);
+    let height = lines.len() as u16 + 2;
+    let about = Rect { height, ..rows };
+    let rest = Rect { y: rows.y + height - 1, height: rows.height + 1 - height, ..rows };
+    (rest, Some((about, lines)))
+}
+
+/// What the port is: its COMMENT, then its pkg-descr re-wrapped to `width`,
+/// one paragraph after the other with no blank line between them (the panel
+/// is short; the `i` overlay keeps the file's own layout). A trailing `WWW:`
+/// line of an old-style pkg-descr is left to the overlay too.
+fn about_lines(info: &PortInfo, width: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if !info.about.comment.is_empty() {
+        lines.extend(wrap_text(&info.about.comment, width, 0).into_iter().map(|t| {
+            Line::from(Span::styled(t, Style::default().add_modifier(Modifier::BOLD)))
+        }));
+    }
+    let text = info
+        .about
+        .pkg_descr
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    let style = Style::default().fg(Color::Gray);
+    for para in text.split("\n\n") {
+        let para: Vec<&str> =
+            para.lines().filter(|l| !l.trim_start().starts_with("WWW:")).collect();
+        lines.extend(
+            wrap_text(&para.join(" "), width, 0)
+                .into_iter()
+                .map(|t| Line::from(Span::styled(t, style))),
+        );
+    }
+    lines
 }
 
 /// The option under the cursor and the description the ports framework gives
@@ -923,6 +995,14 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                     "managed via the default flavor's view of the shared file",
                 ),
                 Line::default(),
+                head("Above the rows"),
+                legend(
+                    "port panel",
+                    Style::default().add_modifier(Modifier::BOLD),
+                    "with I, the port's comment and pkg-descr, when the",
+                ),
+                Line::from(Span::raw("                   rows leave room for it — i on the list shows it all")),
+                Line::default(),
                 head("Below the rows"),
                 legend(
                     "option panel",
@@ -943,6 +1023,8 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("n / p", "next / previous port needing attention"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
+            keyline("", "on the list: what the port is (comment, WWW, pkg-descr)"),
+            keyline("I", "show / hide the port description above the options"),
             keyline("h", "port notes (pkg-help) — marked [h] in the pane title"),
             keyline("r", "why is this port here? — chain, loop, dependents; Enter jumps"),
         ]),
@@ -1287,7 +1369,7 @@ fn draw_port_help(f: &mut Frame, app: &mut App) {
     let p = Paragraph::new(lines).scroll((help.scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(format!(" pkg-help — {} ", help.key))
+            .title(format!(" {} — {} ", help.title, help.key))
             .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))))
             .border_style(Style::default().fg(Color::LightBlue)),
@@ -1337,6 +1419,37 @@ fn draw_quit_confirm(f: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The description panel takes only what the rows leave spare, so the
+    /// rows never scroll for it; it shrinks before it goes.
+    #[test]
+    fn about_panel_uses_only_spare_rows() {
+        let lines = || (0..8).map(|i| Line::from(format!("line {i}"))).collect::<Vec<_>>();
+        let pane = Rect::new(0, 0, 40, 30);
+        // 10 rows need 12 with borders; 30 leave 19 spare (+1 shared border),
+        // more than the third of the pane the panel may take: 10 lines.
+        let (rows, about) = split_about(lines(), pane, pane, 10);
+        let (area, shown) = about.expect("room for the panel");
+        assert_eq!(shown.len(), 8, "all eight lines fit under the cap");
+        assert_eq!(area.height, 10);
+        assert_eq!(rows.y, area.y + area.height - 1, "the border is shared");
+        assert!(rows.height as usize >= 10 + 2, "the rows still fit whole");
+
+        // 24 rows leave 30 + 1 - 26 = 5: three lines, the last one marked.
+        let (rows, about) = split_about(lines(), pane, pane, 24);
+        let (_, shown) = about.expect("room for a shrunk panel");
+        assert_eq!(shown.len(), 3);
+        assert!(shown[2].to_string().ends_with('…'));
+        assert!(rows.height as usize >= 24 + 2);
+
+        // 27 rows leave 2: not even a line with its borders.
+        let (rows, about) = split_about(lines(), pane, pane, 27);
+        assert!(about.is_none());
+        assert_eq!(rows, pane);
+
+        // A port that says nothing gets no panel.
+        assert!(split_about(Vec::new(), pane, pane, 1).1.is_none());
+    }
 
     #[test]
     fn wrap_text_keeps_the_first_indent_and_indents_the_rest() {

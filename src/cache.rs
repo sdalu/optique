@@ -232,7 +232,7 @@ fn short(s: &str) -> String {
 /// one wrote with missing fields. Part of every generation file name
 /// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
 /// by the prune pass since nothing can read them again.
-const SCHEMA: u32 = 6;
+const SCHEMA: u32 = 7;
 
 fn prune_old_generations(dir: &Path, keep: &str) {
     let Ok(entries) = fs::read_dir(dir) else { return };
@@ -282,6 +282,7 @@ mod tests {
             ignore: None,
             deprecated: None,
             pkg_help: None,
+            about: Default::default(),
             default_versions: vec![],
             warnings: vec![],
         }

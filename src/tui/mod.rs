@@ -119,9 +119,12 @@ impl WhyInfo {
     }
 }
 
-/// The port's pkg-help, read from disk when the overlay is opened (never
-/// cached: it is a file the user may be editing in another window).
+/// A port's own text — its pkg-help, or its description — read from disk
+/// when the overlay is opened (never cached: it is a file the user may be
+/// editing in another window).
 pub struct PortHelp {
+    /// What the overlay shows, for its title: "pkg-help" or "about".
+    pub title: &'static str,
     pub key: PortKey,
     pub lines: Vec<String>,
     pub scroll: u16,
@@ -154,6 +157,9 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
+    /// The option pane opens with the port's description when there is room.
+    /// Off at start; 'I' turns it on and off.
+    pub show_about: bool,
     /// When set, only the ports caught in a dependency loop are listed.
     pub only_loops: bool,
     /// Problems-first ordering (true, default) or stable alphabetical order
@@ -179,7 +185,7 @@ pub struct App {
     /// Option-detail overlay: (port, option name). The data is looked up at
     /// draw time so a background refresh keeps the popup current.
     pub opt_info: Option<(PortKey, String)>,
-    /// pkg-help overlay of the selected port, when open.
+    /// pkg-help or description overlay of the selected port, when open.
     pub port_help: Option<PortHelp>,
     /// Undo stack of (OPTIONS_NAME, staged set before the change), oldest
     /// first, capped at UNDO_MAX. Every TUI-driven mutation of a staged set
@@ -258,6 +264,7 @@ pub(crate) fn build_app(
         loops,
         hidden,
         hide_ok: false,
+        show_about: false,
         only_loops: false,
         sort_problems_first: true,
         mc_relax: false,
@@ -514,6 +521,17 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 false,
             );
         }
+        KeyCode::Char('I') => {
+            app.show_about = !app.show_about;
+            app.flash(
+                if app.show_about {
+                    "port description shown above the options when there is room"
+                } else {
+                    "port description hidden (I to show, i on the list for all of it)"
+                },
+                false,
+            );
+        }
         KeyCode::Char('m') => {
             app.mc_relax = !app.mc_relax;
             let keep = app.selected_key();
@@ -602,6 +620,8 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('r') => app.open_why(),
         // Same meaning as in the option pane, whose title carries the marker.
         KeyCode::Char('h') => app.open_port_help(),
+        // The port as a whole; in the option pane 'i' is the option's.
+        KeyCode::Char('i') => app.open_port_about(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
             if !app.editor_rows.is_empty() {
                 app.focus = Focus::Editor;
@@ -1060,10 +1080,32 @@ impl App {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let lines = text.lines().map(str::to_string).collect();
-                self.port_help = Some(PortHelp { key, lines, scroll: 0 });
+                self.port_help = Some(PortHelp { title: "pkg-help", key, lines, scroll: 0 });
             }
             Err(e) => self.flash(&format!("cannot read {path}: {e}"), true),
         }
+    }
+
+    /// Open the selected port's description: its COMMENT and WWW, then its
+    /// pkg-descr as written. A port whose pkg-descr cannot be read still
+    /// shows the rest.
+    fn open_port_about(&mut self) {
+        let Some(key) = self.selected_key() else { return };
+        let about = &self.session.ports[&key].about;
+        let mut lines = vec![about.comment.clone()];
+        for url in about.www.split_whitespace() {
+            lines.push(format!("WWW: {url}"));
+        }
+        if let Some(path) = &about.pkg_descr {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    lines.push(String::new());
+                    lines.extend(text.lines().map(str::to_string));
+                }
+                Err(e) => self.flash(&format!("cannot read {path}: {e}"), true),
+            }
+        }
+        self.port_help = Some(PortHelp { title: "about", key, lines, scroll: 0 });
     }
 
     /// Open the bulk-decision prompt, pre-filled with the option under the
@@ -1527,6 +1569,7 @@ mod tests {
                 ignore: None,
                 deprecated: None,
                 pkg_help: None,
+                about: Default::default(),
                 default_versions: vec![],
                 warnings: vec![],
             }
@@ -1552,6 +1595,43 @@ mod tests {
             crate::moved::Moved::parse(""),
         );
         build_app(session, options_dir, db, refresher, Default::default(), false)
+    }
+
+    /// 'I' opens the option pane with what the port is (off at start), and
+    /// 'i' on the list shows all of it, WWW included.
+    #[test]
+    fn port_description_panel_and_i_overlay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let descr = tmp.path().join("pkg-descr");
+        std::fs::write(&descr, "Alpha does\nthings.\n\nWWW: https://old.example/\n").unwrap();
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let about = &mut app.session.ports.get_mut(&key).unwrap().about;
+        about.comment = "The alpha port".to_string();
+        about.www = "https://alpha.example/".to_string();
+        about.pkg_descr = Some(descr.display().to_string());
+
+        assert!(!screen(&mut app).contains("The alpha port"), "the panel starts off");
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        let shown = screen(&mut app);
+        assert!(shown.contains("The alpha port"), "{shown}");
+        assert!(shown.contains("Alpha does things."), "paragraph re-wrapped: {shown}");
+        assert!(!shown.contains("old.example"), "old-style WWW: left to the overlay");
+
+        // 'I' hides it again and brings it back, from either pane.
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        assert!(!screen(&mut app).contains("Alpha does things."));
+        app.focus = Focus::Editor;
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        assert!(screen(&mut app).contains("Alpha does things."));
+        app.focus = Focus::List;
+
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let help = app.port_help.as_ref().expect("'i' on the list opens the overlay");
+        assert_eq!(help.title, "about");
+        assert_eq!(help.lines[0], "The alpha port");
+        assert_eq!(help.lines[1], "WWW: https://alpha.example/");
+        assert!(help.lines.iter().any(|l| l == "Alpha does"));
     }
 
     /// The smallest closure with a dependency loop: two ports needing each

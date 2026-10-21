@@ -15,6 +15,17 @@ pub struct DepEdge {
     pub test_only: bool,
 }
 
+/// The port's own description: `COMMENT`, `WWW` and its pkg-descr file
+/// (`${DESCR}`), kept like pkg-help — the path only when the file exists,
+/// the contents read when shown.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PortAbout {
+    pub comment: String,
+    /// Space-separated, as the Makefile gives it; some ports list several.
+    pub www: String,
+    pub pkg_descr: Option<String>,
+}
+
 /// Everything queried from the ports tree for one port@flavor.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PortInfo {
@@ -38,6 +49,9 @@ pub struct PortInfo {
     /// cannot appear or vanish under a cached entry.
     #[serde(default)]
     pub pkg_help: Option<String>,
+    /// What the port says it is, for the editor's description panel.
+    #[serde(default)]
+    pub about: PortAbout,
     pub default_versions: Vec<String>,
     /// Non-fatal oddities (unparsable dep entries, ...).
     pub warnings: Vec<String>,

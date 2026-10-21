@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 
 use crate::model::options::{GroupKind, OptionDef, OptionGroup, PortOptions};
 use crate::model::origin::PortKey;
-use crate::model::port::{DepEdge, PortInfo};
+use crate::model::port::{DepEdge, PortAbout, PortInfo};
 
 /// Parse the combined stdout+stderr of a wrapper invocation into a PortInfo.
 /// `requested` is the key the query was made for.
@@ -20,6 +20,8 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut ignore = String::new();
     let mut deprecated = String::new();
     let mut pkg_help = String::new();
+    let mut about = PortAbout::default();
+    let mut descr = String::new();
     let mut build_deps = String::new();
     let mut default_versions: Vec<String> = Vec::new();
     let mut saw_sentinel = false;
@@ -57,6 +59,9 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "IGNORE" => ignore = value.trim().to_string(),
             "DEPRECATED" => deprecated = value.trim().to_string(),
             "PKGHELP" => pkg_help = value.trim().to_string(),
+            "COMMENT" => about.comment = value.trim().to_string(),
+            "WWW" => about.www = words(value).join(" "),
+            "DESCR" => descr = value.trim().to_string(),
             "GROUP" | "SINGLE" | "RADIO" | "MULTI" => {
                 let kind = match tag {
                     "GROUP" => GroupKind::Group,
@@ -172,6 +177,10 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         // ${PKGHELP} is always defined; only the minority of ports that ship
         // the file get the marker, so the path is kept only when it is there.
         pkg_help: non_empty(pkg_help).filter(|p| std::path::Path::new(p).is_file()),
+        about: PortAbout {
+            pkg_descr: non_empty(descr).filter(|p| std::path::Path::new(p).is_file()),
+            ..about
+        },
         default_versions,
         warnings,
     })
@@ -282,6 +291,32 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let missing = tmp.path().join("absent/pkg-help");
         let info = parse_dump(&key, &dump(&missing)).unwrap();
         assert_eq!(info.pkg_help, None);
+    }
+
+    /// COMMENT and WWW are kept as given; pkg-descr, like pkg-help, only
+    /// when the file is there.
+    #[test]
+    fn about_keeps_comment_www_and_an_existing_pkg_descr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let present = tmp.path().join("pkg-descr");
+        std::fs::write(&present, "What foo is.\n").unwrap();
+        let dump = |path: &std::path::Path| {
+            format!(
+                "make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0\n\
+                 make: /dev/stdin:3: OPTIQUE|COMMENT|Does foo things \n\
+                 make: /dev/stdin:4: OPTIQUE|WWW|https://a.example/  https://b.example/\n\
+                 make: /dev/stdin:5: OPTIQUE|DESCR|{}\n",
+                path.display()
+            )
+        };
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, &dump(&present)).unwrap();
+        assert_eq!(info.about.comment, "Does foo things");
+        assert_eq!(info.about.www, "https://a.example/ https://b.example/");
+        assert_eq!(info.about.pkg_descr.as_deref(), Some(present.to_str().unwrap()));
+
+        let info = parse_dump(&key, &dump(&tmp.path().join("absent"))).unwrap();
+        assert_eq!(info.about.pkg_descr, None);
     }
 
     #[test]

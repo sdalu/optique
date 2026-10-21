@@ -208,7 +208,9 @@ problems in either order) · `/` filter · `a` apply ·
 and dependents — every port listed is selectable, `Enter` jumps there and `r`
 walks on) · `B` bulk-set an option across
 visible ports · `f` next flavor of the same origin · `h` the port's pkg-help
-notes · `?`/F1 color-coded in-TUI help (markers, badges, keys) · `q` quit.
+notes · `i` on the list: what the port is (comment, WWW, pkg-descr) · `I`
+shows or hides that description at the top of the option pane, as much of it
+as the rows leave room for (off at start) · `?`/F1 color-coded in-TUI help (markers, badges, keys) · `q` quit.
 
 ### Debugging the TUI
 
