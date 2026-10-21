@@ -165,6 +165,9 @@ pub struct App {
     /// The option pane opens with the port's description when there is room.
     /// Off at start; 'I' turns it on and off.
     pub show_about: bool,
+    /// pkg-descr text per port, read when the panel first shows that port:
+    /// the loop redraws every 150 ms and the ports tree may be on NFS.
+    pub about_text: HashMap<PortKey, String>,
     /// When set, only the ports caught in a dependency loop are listed.
     pub only_loops: bool,
     /// Problems-first ordering (true, default) or stable alphabetical order
@@ -271,6 +274,7 @@ pub(crate) fn build_app(
         hidden,
         hide_ok: false,
         show_about: false,
+        about_text: HashMap::new(),
         only_loops: false,
         sort_problems_first: true,
         mc_relax: false,
@@ -1100,6 +1104,24 @@ impl App {
         }
     }
 
+    /// Read the selected port's pkg-descr for the panel, once per port.
+    pub(crate) fn load_about_text(&mut self) {
+        if !self.show_about {
+            return;
+        }
+        let Some(key) = self.selected_key() else { return };
+        if self.about_text.contains_key(&key) {
+            return;
+        }
+        let text = self.session.ports[&key]
+            .about
+            .pkg_descr
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        self.about_text.insert(key, text);
+    }
+
     /// Open the selected port's description: its COMMENT and WWW, then its
     /// pkg-descr as written. A port whose pkg-descr cannot be read still
     /// shows the rest.
@@ -1276,8 +1298,14 @@ impl App {
 
     /// Push due pending ports to the refresher: write their staged options
     /// file into the staging db, then re-scan from them.
+    ///
+    /// Nothing is written while a re-scan is outstanding: it may still be
+    /// reading the staging copy, and its cache entries pair the bytes it saw
+    /// at lookup with what make computed, so a file rewritten under it would
+    /// file one option value's result under the other's bytes. Due ports wait
+    /// and go out together once it reports done.
     fn flush_due_refreshes(&mut self) {
-        if self.pending.is_empty() {
+        if self.pending.is_empty() || self.refreshing > 0 {
             return;
         }
         let now = Instant::now();
@@ -1609,6 +1637,44 @@ mod tests {
             crate::moved::Moved::parse(""),
         );
         build_app(session, files, db, refresher, Default::default(), false)
+    }
+
+    /// The panel reads a port's pkg-descr once, not at every redraw: the loop
+    /// redraws every 150 ms, and the ports tree may be on NFS.
+    #[test]
+    fn description_panel_reads_pkg_descr_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let descr = tmp.path().join("pkg-descr");
+        std::fs::write(&descr, "Alpha does things.\n").unwrap();
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        assert!(screen(&mut app).contains("Alpha does things."));
+        std::fs::remove_file(&descr).unwrap();
+        assert!(screen(&mut app).contains("Alpha does things."), "read again at redraw");
+    }
+
+    /// The staging copy is never rewritten while a re-scan may be reading it:
+    /// a cache entry would pair the bytes the scan saw first with a result
+    /// computed from the new ones. The port waits, and goes once it is done.
+    #[test]
+    fn staging_is_not_rewritten_under_a_running_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let staged = tmp.path().join("db/cat_alpha/options");
+        assert!(!staged.exists());
+        let due = Instant::now() - REFRESH_DEBOUNCE * 2;
+        app.pending.insert(key.clone(), due);
+        app.refreshing = 1;
+        app.flush_due_refreshes();
+        assert!(!staged.exists(), "written under a running re-scan");
+        assert!(app.pending.contains_key(&key), "the port still waits");
+        app.refreshing = 0;
+        app.flush_due_refreshes();
+        assert!(staged.is_file());
+        assert!(app.pending.is_empty());
     }
 
     /// Opening the apply preview, confirming it and reloading afterwards read

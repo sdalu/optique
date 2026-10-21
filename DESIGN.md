@@ -74,7 +74,11 @@ while the file's contents are read at every open.
 TUI edits are staged against a `PORT_DBDIR` seeded from the real options
 directory (`src/staging.rs`), re-queried in the background after a 300 ms
 debounce so a toggle's effect on the dependency closure shows up without the
-UI blocking. Apply writes every file atomically — temp file, `fsync`,
+UI blocking. The staging copy is never rewritten while a re-scan is
+outstanding: its cache entries pair the bytes a lookup saw with what make
+computed, so a file changed under it would file one option value's result
+under the other's bytes; due ports wait and go together once it is done.
+Apply writes every file atomically — temp file, `fsync`,
 rename — and skips a file that is semantically identical (same option list,
 same enabled set), so a pkgname-only change does not force a rewrite, as with
 `make config-conditional` (`src/apply.rs`). Quitting without applying

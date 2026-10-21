@@ -21,6 +21,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(outer[0]);
 
     draw_port_list(f, app, panes[0]);
+    app.load_about_text();
     draw_editor(f, app, panes[1]);
     draw_status_bar(f, app, outer[1]);
     if app.quit_confirm {
@@ -223,7 +224,8 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     // The top, for what the port is, out of whatever the rows leave spare.
     let rows_needed = banner_len(app, info) + app.editor_rows.len();
     let about_text = if app.show_about {
-        about_lines(info, rows_area.width.saturating_sub(2) as usize)
+        let descr = app.about_text.get(&key).map(String::as_str).unwrap_or("");
+        about_lines(info, descr, rows_area.width.saturating_sub(2) as usize)
     } else {
         Vec::new()
     };
@@ -323,23 +325,17 @@ fn split_about(
     (rest, Some((about, lines)))
 }
 
-/// What the port is: its COMMENT, then its pkg-descr re-wrapped to `width`,
-/// one paragraph after the other with no blank line between them (the panel
-/// is short; the `i` overlay keeps the file's own layout). A trailing `WWW:`
-/// line of an old-style pkg-descr is left to the overlay too.
-fn about_lines(info: &PortInfo, width: usize) -> Vec<Line<'static>> {
+/// What the port is: its COMMENT, then its pkg-descr `text` re-wrapped to
+/// `width`, one paragraph after the other with no blank line between them
+/// (the panel is short; the `i` overlay keeps the file's own layout). A
+/// trailing `WWW:` line of an old-style pkg-descr is left to the overlay too.
+fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if !info.about.comment.is_empty() {
         lines.extend(wrap_text(&info.about.comment, width, 0).into_iter().map(|t| {
             Line::from(Span::styled(t, Style::default().add_modifier(Modifier::BOLD)))
         }));
     }
-    let text = info
-        .about
-        .pkg_descr
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .unwrap_or_default();
     let style = Style::default().fg(Color::Gray);
     for para in text.split("\n\n") {
         let para: Vec<&str> =
