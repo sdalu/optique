@@ -4,6 +4,29 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 const POUDRIERE_D: &str = "/usr/local/etc/poudriere.d";
+
+/// What poudriere(8) writes at the top of every jail's make.conf, ahead of
+/// the poudriere.d layers (`setup_makeconf` in its common.sh), as far as it
+/// bears on evaluating a Makefile: several framework probes are skipped
+/// under `PACKAGE_BUILDING`, and some ports change option defaults with it
+/// (math/openblas turns `DYNAMIC_ARCH` on).
+const POUDRIERE_JAIL_PRELUDE: &str = "\
+# --- poudriere jail environment (optique) ---
+USE_PACKAGE_DEPENDS=yes
+BATCH=yes
+PACKAGE_BUILDING=yes
+PACKAGE_BUILDING_FLAVORS=yes
+";
+
+/// A jail's LOCALBASE is empty when poudriere gathers ports, while the host
+/// running optique has packages there that Makefiles probe with `exists()`
+/// (www/apache24's apr-util checks, Mk/Uses/iconv.mk). Pointing LOCALBASE
+/// where nothing is installed answers those probes as the jail does. It
+/// comes after the layers so that one setting LOCALBASE cannot undo it.
+const POUDRIERE_JAIL_TRAILER: &str = "\
+# --- poudriere jail environment (optique) ---
+LOCALBASE=/nonexistent
+";
 const SYNTH_DIR: &str = "/usr/local/etc/synth";
 /// Section of synth.ini whose settings apply to every profile.
 const SYNTH_GLOBAL_SECTION: &str = "Global Configuration";
@@ -24,6 +47,9 @@ pub struct Settings {
     pub make_conf_sources: Vec<PathBuf>,
     /// Hash identifying the make.conf layering (empty layering hashes too).
     pub conf_hash: String,
+    /// Queries see a poudriere jail's environment rather than the host's
+    /// (`POUDRIERE_JAIL_PRELUDE`, `POUDRIERE_JAIL_TRAILER`).
+    pub jail_env: bool,
     /// Ports poudriere(8) would refuse to build for this jail/tree/set.
     pub blacklist: Blacklist,
     /// Remarks about the resolution itself (e.g. a flag that does not apply
@@ -168,8 +194,11 @@ pub fn resolve(
         }
     };
 
+    // Without poudriere.d the target is the host's own /var/db/ports, built
+    // on the host: there what is installed is the truth, not a leak.
+    let jail_env = poudriere_d.is_dir();
     let (make_conf, conf_hash, make_conf_sources) =
-        layer_make_conf(poudriere_d, jail, tree_name, set, staging_dir)?;
+        layer_make_conf(poudriere_d, jail, tree_name, set, jail_env, staging_dir)?;
 
     let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
 
@@ -180,6 +209,7 @@ pub fn resolve(
         make_conf,
         make_conf_sources,
         conf_hash,
+        jail_env,
         blacklist,
         notes: Vec::new(),
     })
@@ -284,8 +314,13 @@ fn resolve_synth(
     }
     let options_dir_is_new = !options_dir.is_dir();
 
-    let (make_conf, conf_hash, make_conf_sources) =
-        concat_make_conf(&[synth_dir.join(format!("{profile}-make.conf"))], staging_dir)?;
+    // synth builds in a clean chroot too, but scans dependencies by running
+    // make on the host, so its own view is not known to be a jail's.
+    let (make_conf, conf_hash, make_conf_sources) = concat_make_conf(
+        &[synth_dir.join(format!("{profile}-make.conf"))],
+        false,
+        staging_dir,
+    )?;
 
     Ok(Settings {
         portsdir,
@@ -294,6 +329,7 @@ fn resolve_synth(
         make_conf,
         make_conf_sources,
         conf_hash,
+        jail_env: false,
         blacklist: Blacklist::default(),
         notes,
     })
@@ -443,22 +479,36 @@ fn layer_make_conf(
     jail: Option<&str>,
     tree: &str,
     set: Option<&str>,
+    jail_env: bool,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
-    concat_make_conf(&paths, staging_dir)
+    concat_make_conf(&paths, jail_env, staging_dir)
+}
+
+/// Stage a make.conf holding the jail environment alone, no layers.
+#[cfg(test)]
+pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
+    let (path, _, _) = concat_make_conf(&[], true, staging_dir)?;
+    Ok(path.expect("the jail environment is never empty"))
 }
 
 /// Concatenate every existing candidate, in order, into one staged
-/// `make.conf`. The hash covers the combined text (so an empty layering hashes
-/// too); nothing is written when no candidate exists.
+/// `make.conf`, between the jail prelude and trailer when `jail_env`. The
+/// hash covers the combined text (so an empty layering hashes too, and the
+/// jail environment keys a cache generation of its own); nothing is written
+/// when there is nothing to write.
 fn concat_make_conf(
     candidates: &[PathBuf],
+    jail_env: bool,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut combined = String::new();
     let mut sources = Vec::new();
+    if jail_env {
+        combined.push_str(POUDRIERE_JAIL_PRELUDE);
+    }
     for path in candidates {
         if let Ok(text) = fs::read_to_string(path) {
             combined.push_str(&format!("# --- {} ---\n", path.display()));
@@ -469,9 +519,12 @@ fn concat_make_conf(
             sources.push(path.clone());
         }
     }
+    if jail_env {
+        combined.push_str(POUDRIERE_JAIL_TRAILER);
+    }
 
     let conf_hash = crate::cache::sha256_hex(combined.as_bytes());
-    if sources.is_empty() {
+    if combined.is_empty() {
         return Ok((None, conf_hash, sources));
     }
     let path = staging_dir.join("make.conf");
@@ -573,12 +626,43 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), false, &stage).unwrap();
         assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
         let order: Vec<usize> = layers.iter().map(|(_, c)| idx(c)).collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "layers out of order: {text}");
+        assert!(!text.contains("PACKAGE_BUILDING") && !text.contains("LOCALBASE"), "{text}");
+    }
+
+    #[test]
+    fn jail_env_wraps_the_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("make.conf"), "LOCALBASE=/opt/local\n").unwrap();
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let (path, jail_hash, _) =
+            layer_make_conf(&pd, None, "t1", None, true, &stage).unwrap();
+        let text = fs::read_to_string(path.unwrap()).unwrap();
+        // poudriere's own lines come before the layers, as in a jail...
+        assert!(text.find("PACKAGE_BUILDING=yes").unwrap() < text.find("/opt/local").unwrap());
+        // ...and the hidden LOCALBASE after them, so no layer can undo it.
+        assert!(text.trim_end().ends_with("LOCALBASE=/nonexistent"), "{text}");
+
+        // The environment keys its own cache generation.
+        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, false, &stage).unwrap();
+        assert_ne!(jail_hash, host_hash);
+
+        // An empty layering still stages a make.conf in a jail's environment.
+        let empty = tmp.path().join("empty.d");
+        fs::create_dir_all(&empty).unwrap();
+        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, true, &stage).unwrap();
+        assert!(sources.is_empty());
+        assert!(path.is_some());
+        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, false, &stage).unwrap();
+        assert!(path.is_none());
     }
 
     #[test]

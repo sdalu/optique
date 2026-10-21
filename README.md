@@ -395,6 +395,17 @@ concatenated: `make.conf`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
 queries see exactly what poudriere builds, including `DEFAULT_VERSIONS` and
 `OPTIONS_SET/UNSET` knobs.
 
+Queries also see a poudriere jail's environment rather than the host's:
+the layers come after the lines poudriere puts at the top of every jail's
+make.conf (`PACKAGE_BUILDING`, `PACKAGE_BUILDING_FLAVORS`, `BATCH`,
+`USE_PACKAGE_DEPENDS`) and are followed by `LOCALBASE=/nonexistent`, since a
+jail has nothing installed when poudriere reads a port. Otherwise the host's
+packages answer the Makefiles' `exists()` probes: `www/apache24` IGNOREs
+LDAP when the host's apr-util lacks it, and `USES=iconv` ports gain a
+libiconv dependency when the host has libiconv. The banner's `environment:`
+line says when this applies; without a poudriere.d (plain `/var/db/ports`)
+queries see the host, which is then the machine that builds.
+
 The `blacklist` chain is read with the same jail/tree/set expansion
 (`blacklist`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
 `<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-blacklist`); like

@@ -633,6 +633,12 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
+        if settings.jail_env {
+            eprintln!(
+                "  {} poudriere jail (host packages under /usr/local not seen)",
+                tint(paint, ansi::CYAN, "environment:")
+            );
+        }
         if !settings.blacklist.is_empty() {
             for (i, src) in settings.blacklist.sources.iter().enumerate() {
                 let label = if i == 0 { "blacklist:" } else { "          " };

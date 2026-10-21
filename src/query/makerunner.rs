@@ -215,4 +215,52 @@ mod tests {
             "enabling HTTP_PERL must add the perl dependency"
         );
     }
+
+    /// In a poudriere jail's environment, what the host has installed must not
+    /// reach the answer. Each half fails on a host carrying the package it
+    /// names (apr without LDAP, libiconv), and passes on any host once the
+    /// environment hides LOCALBASE.
+    /// Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_jail_env_hides_host_packages() {
+        let staging = tempfile::tempdir().unwrap();
+        let make_conf = crate::config::stage_jail_make_conf(staging.path()).unwrap();
+        let db = crate::staging::StagingDb::create(
+            staging.path(),
+            staging.path(), // nothing to seed
+            std::iter::empty(),
+        )
+        .unwrap();
+        let ctx = QueryCtx {
+            portsdir: "/usr/ports".into(),
+            make_conf: Some(make_conf),
+            port_dbdir: db.path().to_path_buf(),
+        };
+
+        // Mk/Uses/iconv.mk adds libiconv when ${LOCALBASE}/include/iconv.h
+        // exists; a jail has none.
+        let lame = run_query(&ctx, &PortKey::parse("audio/lame").unwrap()).unwrap();
+        assert!(
+            !lame.deps.iter().any(|d| d.target.origin == "converters/libiconv"),
+            "the host's libiconv leaked into audio/lame: {:?}",
+            lame.deps
+        );
+
+        // www/apache24 IGNOREs LDAP when the installed apr-util lacks it,
+        // although poudriere would build apr with LDAP first.
+        let key = PortKey::parse("www/apache24").unwrap();
+        let before = run_query(&ctx, &key).unwrap();
+        let mut enabled = before.options.effective.clone();
+        enabled.insert("LDAP".to_string());
+        let content = crate::optionsfile::render(
+            &before.pkgname,
+            &before.options.complete,
+            &enabled,
+        );
+        db.write(&before.options_name, content.as_bytes()).unwrap();
+        let after = run_query(&ctx, &key).unwrap();
+        assert!(after.options.effective.contains("LDAP"));
+        assert_eq!(after.ignore, None, "the host's apr-util leaked into www/apache24");
+    }
 }

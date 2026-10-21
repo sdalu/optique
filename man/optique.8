@@ -1211,6 +1211,27 @@ and
 .Ql FORCED
 badges report.
 .Pp
+The layers are wrapped in the environment of a
+.Xr poudriere 8
+jail, not the host's: they come after the lines poudriere puts at the top
+of every jail's
+.Pa make.conf
+.Pq Va PACKAGE_BUILDING , PACKAGE_BUILDING_FLAVORS , BATCH , USE_PACKAGE_DEPENDS
+and are followed by
+.Ql LOCALBASE=/nonexistent .
+A jail has nothing installed when poudriere reads a port, while the host
+running
+.Nm
+may; port Makefiles that probe installed files would otherwise answer for
+the host, as
+.Pa www/apache24
+does when it marks LDAP IGNORE because the host's apr-util was built
+without it.
+Without a
+.Pa poudriere.d
+.Pq plain Pa /var/db/ports
+queries see the host as it is, which is then the machine that builds.
+.Pp
 The
 .Pa blacklist
 chain is read with the same jail, tree and set expansion and, again like

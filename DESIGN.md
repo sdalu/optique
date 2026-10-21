@@ -22,6 +22,39 @@ the walk: `poudriere options -C` visits ports serially with a dialog each,
 while independent make processes parallelise freely. A cold run over about a
 thousand ports takes roughly 56 seconds, a warm one (cache hit) about 0.4.
 
+## Queries see a jail, not the host
+
+poudriere reads a port inside a jail whose `/usr/local` is empty, but
+optique runs `make` on the host, where the Makefiles' `exists()` probes
+find whatever the host has installed. On a real poudriere host, 68 of a
+470-port closure answered differently: `www/apache24` IGNOREd LDAP because
+the host's apr-util was built without it, and `Mk/Uses/iconv.mk` gave 56
+ports a libiconv dependency that poudriere's own gathered graph does not
+have. Other probes in `Mk/` pick perl, openssl, ncurses, mysql,
+pgsql and ldap versions the same way.
+
+So under a poudriere.d the staged make.conf starts with what poudriere
+writes at the top of every jail's make.conf (`PACKAGE_BUILDING` and the
+three others, copied from `setup_makeconf` in its `common.sh`, which skip
+more probes and change a few option defaults) and ends with
+`LOCALBASE=/nonexistent`, after the layers so none can undo it
+(`src/config.rs`). Being part of the staged text, the environment is
+covered by the make.conf hash, so it keys its own cache generation. On the
+same closure it removed both leaks, in agreement with poudriere's graph,
+and changed nothing else but dependency spec paths and the defaults
+`PACKAGE_BUILDING` is meant to change.
+
+Rejected: re-querying only ports that come out IGNORE/BROKEN, which misses
+leaks into dependencies and defaults; running `make` inside poudriere's
+reference jail, which needs root and mounts and only exists during a build;
+hiding `/usr/local` with a preload library, fragile for a whole `make` tree.
+Copying four lines of poudriere's prelude can drift if poudriere changes
+them, and `NO_PACKAGE_BUILDING` in poudriere.conf is not read. Probes that
+spell `/usr/local` literally still see the host (one in the tree,
+`math/primecount`, affecting only a CMake flag). synth keeps the host's
+view: it builds in a clean chroot, but its dependency scan appears to run
+`make` on the host, so a jail's view is not known to be its own.
+
 ## Persistent cache, keyed on what actually changed
 
 Results are cached under `~/.cache/optique/`, keyed on the ports tree's git
