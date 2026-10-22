@@ -87,11 +87,12 @@ fn exec(
     cmd: &str,
     out: &mut impl Write,
 ) -> Result<bool> {
-    // `keys` needs the argument verbatim (spaces are keystrokes too), the
-    // others want it tidy. Only ASCII whitespace separates the verb: it is
+    // `keys` needs the argument verbatim, trailing spaces included (they are
+    // keystrokes too; the line ending is already gone), the others want it
+    // tidy. Only ASCII whitespace separates the verb: it is
     // one byte, so the argument starts on a char boundary.
     let (verb, raw) = match cmd.find(|c: char| c.is_ascii_whitespace()) {
-        Some(i) => (&cmd[..i], cmd[i + 1..].trim_end()),
+        Some(i) => (&cmd[..i], &cmd[i + 1..]),
         None => (cmd, ""),
     };
     let arg = raw.trim();
@@ -365,6 +366,16 @@ mod tests {
         let mut app = super::super::tests::app_for(tmp.path(), &[("cat/alpha", &[])]);
         let out = run(&mut app, &["key\u{a0}x", "keys\u{2003}ab"]);
         assert_eq!(out, "err unknown command: key\u{a0}x\nerr unknown command: keys\u{2003}ab\n");
+    }
+
+    /// `keys` types every character, trailing spaces included.
+    #[test]
+    fn keys_presses_trailing_spaces_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = super::super::tests::app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let out = run(&mut app, &["key /", "keys ab  "]);
+        assert_eq!(out, "ok key /\nok keys 4\n");
+        assert_eq!(app.filter, "ab  ");
     }
 
     #[test]
