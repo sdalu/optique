@@ -87,6 +87,8 @@ installed rust toolchain instead of building the tree's.
 - `DISTVERSIONPREFIX=v`: the tag carries a `v` prefix (`make tag` makes it
   so). The equivalent `GH_TAGNAME=v${DISTVERSION}` would do as well, but
   not both.
+- `LICENSE=BSD2CLAUSE`; from the first release that ships `LICENSE` (after
+  0.2.0), the port can also set `LICENSE_FILE=${WRKSRC}/LICENSE`.
 - The port defines no `OPTIONS_DEFINE`. The man page is the only extra
   artefact, installed by `post-install` with `INSTALL_MAN`; the framework
   compresses it, hence the `.gz` in `PLIST_FILES`.
