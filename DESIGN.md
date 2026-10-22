@@ -57,6 +57,10 @@ spell `/usr/local` literally still see the host (one in the tree,
 `math/primecount`, affecting only a CMake flag). synth keeps the host's
 view on purpose: it builds on the host it configures, so what that host has
 installed is part of the truth, as it is for a plain `/var/db/ports`.
+That truth changes with every `pkg install` or `pkg delete`, so for these
+host builds the size and mtime of pkg's `local.sqlite` (under `PKG_DBDIR`,
+else `/var/db/pkg`) are folded into the make.conf hash: a package change
+starts a new cache generation, and a missing database adds nothing.
 
 ## Which build is configured: poudriere.d, unless `-l` says otherwise
 

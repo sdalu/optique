@@ -208,15 +208,21 @@ pub struct Request<'a> {
 /// `Cli::check_globals` rejects the flag combinations that make no sense
 /// (-s or -l with -z/-j/-p, -p with -P), so `req` is consistent here.
 pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
+    // pkg(8)'s own default, which the environment may move.
+    let pkg_db = std::env::var_os("PKG_DBDIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("/var/db/pkg"), PathBuf::from)
+        .join("local.sqlite");
     if let Some(profile) = req.synth {
-        return resolve_synth(
+        let settings = resolve_synth(
             Path::new(SYNTH_DIR),
             profile,
             req.portsdir,
             req.options_dir,
             staging_dir,
         )?
-        .absolute();
+        .absolute()?;
+        return Ok(key_installed_packages(settings, &pkg_db));
     }
     let poudriere_d = Path::new(POUDRIERE_D);
     // Only a local build asks make for its defaults: a poudriere build
@@ -235,6 +241,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         make_conf: &make_conf,
         ports_from_make: ports.is_some(),
         db_from_make: db.is_some(),
+        pkg_db: &pkg_db,
     };
     resolve_host(&host, req, staging_dir)
 }
@@ -284,16 +291,39 @@ struct HostPaths<'a> {
     /// than the built-in defaults (the startup banner says so).
     ports_from_make: bool,
     db_from_make: bool,
+    /// pkg(8)'s database of installed packages (`local.sqlite`).
+    pkg_db: &'a Path,
 }
 
 /// A poudriere build when poudriere.d exists and -l was not given, a local
 /// one otherwise.
 fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
-    if req.local || !host.poudriere_d.is_dir() {
-        resolve_local(host, req, staging_dir)?.absolute()
+    let settings = if req.local || !host.poudriere_d.is_dir() {
+        resolve_local(host, req, staging_dir)?.absolute()?
     } else {
-        resolve_poudriere(host, req, staging_dir)?.absolute()
+        resolve_poudriere(host, req, staging_dir)?.absolute()?
+    };
+    Ok(key_installed_packages(settings, host.pkg_db))
+}
+
+/// A build on the host sees what is installed there: Makefiles probe
+/// /usr/local (Mk/Uses/iconv.mk, www/apache24's apr-util checks), so a
+/// package installed or deleted can change their answers. The size and
+/// mtime of pkg's database go into the hash for such a build, making each
+/// change to it a new cache generation; a missing database adds nothing.
+fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
+    if settings.env != QueryEnv::Host {
+        return settings;
     }
+    let Ok(meta) = fs::metadata(pkg_db) else { return settings };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    let keyed = format!("{}\n{} {} {mtime}\n", settings.conf_hash, pkg_db.display(), meta.len());
+    settings.conf_hash = crate::cache::sha256_hex(keyed.as_bytes());
+    settings
 }
 
 /// A local build: `make config` on this host, built here. What is
@@ -868,7 +898,42 @@ mod tests {
             make_conf: Path::new("/nonexistent/make.conf"),
             ports_from_make: false,
             db_from_make: false,
+            pkg_db: Path::new("/nonexistent/local.sqlite"),
         }
+    }
+
+    /// A local build sees the installed packages (Makefiles probe
+    /// /usr/local), so installing or deleting one starts a new cache
+    /// generation; a missing database adds nothing, and a poudriere jail,
+    /// which sees no package, does not follow it.
+    #[test]
+    fn host_env_generation_follows_the_pkg_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let absent = tmp.path().join("no-poudriere.d");
+        let pkg_db = tmp.path().join("local.sqlite");
+        let host = HostPaths { pkg_db: &pkg_db, ..host(tmp.path(), &absent, &ports, &db) };
+        let none = Request::default();
+        let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
+
+        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &stage).unwrap();
+        assert_eq!(hash(&host), bare, "no database, nothing to key");
+        fs::write(&pkg_db, "one package").unwrap();
+        let one = hash(&host);
+        assert_ne!(one, bare);
+        fs::write(&pkg_db, "one package, then another").unwrap();
+        assert_ne!(hash(&host), one, "an install is a new generation");
+
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        let jail = HostPaths { poudriere_d: &pd, ..host };
+        let before = hash(&jail);
+        fs::remove_file(&pkg_db).unwrap();
+        assert_eq!(hash(&jail), before, "a jail does not see the host's packages");
     }
 
     /// Resolution with and without a poudriere.d, against a fake host.

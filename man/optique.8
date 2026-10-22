@@ -1501,7 +1501,16 @@ resolve; the cache still ignores the content of included files;
 queries see the host's installed packages under
 .Pa /usr/local ,
 since they are what the build will find
-.Pq no Ql LOCALBASE=/nonexistent ;
+.Pq no Ql LOCALBASE=/nonexistent ,
+so a package install or delete starts a new cache generation: the size and
+modification time of
+.Pa local.sqlite
+in
+.Ev PKG_DBDIR ,
+else
+.Pa /var/db/pkg ,
+are part of the cache key, as they are for
+.Fl s ;
 .It
 there is no blacklist.
 .El
@@ -1529,6 +1538,10 @@ of a local build, instead of
 see
 .Sx LOCAL BUILDS .
 Poudriere and synth builds always pass their own.
+.It Ev PKG_DBDIR
+Where a local or synth build finds pkg's database, whose changes start a
+new cache generation; see
+.Sx LOCAL BUILDS .
 .It Ev NO_COLOR
 Turns colour off under
 .Fl -color Ns = Ns Cm auto .
