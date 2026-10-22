@@ -200,6 +200,8 @@ impl Session {
         }
         let before = self.ports.len();
         self.ports.retain(|k, _| reachable.contains(k));
+        // The GC may have dropped an owner whose sibling flavor stays.
+        self.rebuild_owners();
         let removed = before - self.ports.len();
         let added = added_keys.iter().filter(|k| self.ports.contains_key(*k)).count();
         (added, removed)
@@ -1340,6 +1342,36 @@ mod tests {
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
         assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+    }
+
+    /// When the GC drops the flavor that owned a shared options file while a
+    /// sibling stays, the sibling takes the file over: an owner naming a
+    /// removed port leaves every owner lookup for that file empty-handed.
+    #[test]
+    fn merge_gc_reassigns_the_owner_of_a_shared_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flavor = |f: &str| {
+            let mut info = linked_info(&format!("cat/x@{f}"), &[], &["A"]);
+            info.flavors = vec!["a".into(), "b".into()];
+            info.options_name = "cat_x".into();
+            info
+        };
+        let root_key = PortKey::parse("cat/root").unwrap();
+        let mut ports = BTreeMap::new();
+        ports.insert(root_key.clone(), linked_info("cat/root", &["cat/x@a", "cat/x@b"], &["R"]));
+        for f in ["a", "b"] {
+            let info = flavor(f);
+            ports.insert(info.key.clone(), info);
+        }
+        let files = OptionsFiles::new(tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], &files, false);
+        assert_eq!(s.owners["cat_x"].to_string(), "cat/x@a");
+
+        // Refresh: the root keeps only the non-default flavor.
+        let mut result = crate::query::scanner::ScanResult::default();
+        result.ports.insert(root_key.clone(), linked_info("cat/root", &["cat/x@b"], &["R"]));
+        assert_eq!(s.merge(result, &files), (0, 1));
+        assert_eq!(s.owners["cat_x"].to_string(), "cat/x@b", "the owner is a port still held");
     }
 
     #[test]
