@@ -1513,10 +1513,11 @@ warning.
 The options directory, the
 .Pa make.conf
 layers and the blacklist do not depend on overlays.
-The query cache is keyed on every tree: an overlay that is a git checkout of
-its own by its HEAD, any other by the count and newest modification time of
-its files down to
-.Pa category/port/file .
+The query cache is keyed on every tree, an overlay by the count and newest
+modification time of its files down to
+.Pa category/port/file ,
+even when it is a git checkout of its own: an overlay port is edited in
+place, before any commit.
 .Pp
 A local build takes
 .Va OVERLAYS

@@ -59,8 +59,9 @@ the packages installed on the host do not answer the Makefiles' probes. See
 
 Answers are cached under `~/.cache/optique/`, keyed on the ports tree's git
 HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
-`UPDATING`) and every overlay's (its HEAD when it is a checkout of its own,
-else the count and newest mtime of its files), the hash of the layered make.conf, and the content of the
+`UPDATING`) and every overlay's (the count and newest mtime of its files,
+even in a git checkout, since overlay ports are edited before any commit),
+the hash of the layered make.conf, and the content of the
 port's options file. A local or synth build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
 install or delete starts a new generation. Files a make.conf `.include`s are not part of that hash:

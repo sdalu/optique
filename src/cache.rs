@@ -128,15 +128,13 @@ pub fn trees_key(portsdir: &Path, overlays: &[PathBuf]) -> String {
     sha256_hex(text.as_bytes())
 }
 
-/// An overlay's identity: its HEAD when it is a checkout of its own (a
-/// whole tree, too big to walk), else the count and newest mtime of what it
-/// holds down to `category/port/file` (and `Mk/Uses/*.mk`, `MOVED`): an
-/// overlay is a handful of ports, often edited before any commit, and an
-/// edit to a port's Makefile touches the file, not its directory.
+/// An overlay's identity: the count and newest mtime of what it holds down
+/// to `category/port/file` (and `Mk/Uses/*.mk`, `MOVED`). Never its git
+/// HEAD, even when it is a checkout of its own: an overlay is a handful of
+/// ports edited in place before any commit, and an edit to a port's
+/// Makefile touches the file, not its directory; a commit or a checkout
+/// touches the files too.
 fn overlay_key(overlay: &Path) -> String {
-    if let Some(head) = git_head(overlay) {
-        return head;
-    }
     fn walk(dir: &Path, depth: usize, count: &mut u64, newest: &mut u128) {
         let Ok(entries) = fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
@@ -537,6 +535,21 @@ mod tests {
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
         assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "an edited port is a new generation");
+    }
+
+    /// An overlay that is a git checkout of its own is still edited in
+    /// place before any commit: its key follows the files, not the HEAD.
+    #[test]
+    fn trees_key_follows_an_uncommitted_edit_in_a_git_overlay() {
+        let (_tmp, over) = fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("refs/heads/main", &format!("{ID}\n"))]);
+        let (_tmp2, main) = fake_tree(&[]);
+        std::fs::create_dir_all(over.join("cat/port")).unwrap();
+        let makefile = over.join("cat/port/Makefile");
+        std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+        let before = trees_key(&main, std::slice::from_ref(&over));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
+        assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "same HEAD, edited port");
     }
 
     #[test]

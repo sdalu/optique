@@ -266,8 +266,9 @@ and poudriere's (`_lookup_portdir`), so the scanner, clean's vanished
 ports and MOVED's existence check all use it (`src/query/makerunner.rs`,
 `locate`). MOVED is every tree's in order, first entry winning, as
 poudriere's `parse_MOVED.awk`. The cache keys on every tree: an overlay
-that is not a checkout of its own keys on the count and newest mtime of
-its files, since it is a few ports usually edited before any commit.
+on the count and newest mtime of its files, never on its git HEAD, since
+it is a few ports edited in place before any commit (keying on HEAD served
+a stale answer for a port edited in a git overlay).
 
 Rejected: `OVERLAYS=` on make's command line (it replaces the make.conf's
 `+=` list, so a layer's overlay would vanish); requiring `Mk/` in an
