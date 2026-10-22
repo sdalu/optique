@@ -524,11 +524,13 @@ fn resolve_local(
     let (staged, mut conf_hash, make_conf_sources) =
         concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
     let mut make_conf = staged.map(|_| host.make_conf.to_path_buf());
-    // --overlay-dir, then the environment's OVERLAYS (absolute): a small
-    // make.conf setting them in that order, then including the real one,
-    // still read in place for its own .includes, whose += lines follow.
-    // The environment's go through it, not through the queries' own
-    // environment, where bmake's += would have put them first.
+    // --overlay-dir, then the environment's OVERLAYS (absolute), then the
+    // make.conf's own: a small make.conf including the real one first,
+    // still read in place for its own .includes, then putting them in
+    // front of whatever it left, so a make.conf that assigns OVERLAYS=
+    // rather than appending cannot drop them. The environment's go through
+    // it, not through the queries' own environment, where bmake's += would
+    // have put them first.
     let paths: Vec<String> = overlays
         .iter()
         .map(|o| o.path.display().to_string())
@@ -536,9 +538,9 @@ fn resolve_local(
         .collect();
     if !paths.is_empty() {
         let text = format!(
-            "OVERLAYS:={}\n.sinclude \"{}\"\n",
-            paths.join(" "),
-            std::path::absolute(host.make_conf)?.display()
+            ".sinclude \"{}\"\nOVERLAYS:={} ${{OVERLAYS}}\n",
+            std::path::absolute(host.make_conf)?.display(),
+            paths.join(" ")
         );
         let path = staging_dir.join("local-make.conf");
         fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
@@ -1325,6 +1327,12 @@ mod tests {
         let plain = resolve_host(&host, &Request::default(), &stage).unwrap();
         assert_eq!(plain.make_conf.as_deref(), Some(conf.as_path()), "read in place without one");
         assert_ne!(s.conf_hash, plain.conf_hash);
+
+        // A make.conf that assigns rather than appends keeps --overlay-dir.
+        fs::write(etc.join("overlays.conf"), format!("OVERLAYS={}\n", theirs.display())).unwrap();
+        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
+        assert_eq!(paths, [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]);
     }
 
     /// A local build's overlays, in make's order: --overlay-dir, then the
