@@ -1479,7 +1479,7 @@ impl App {
             // loop that just appeared outranks the refresh line. Before the
             // rebuild: the L view lists the loops as they are now, and is
             // left when the last one went.
-            self.refresh_loops();
+            self.refresh_loops(alerted);
             let keep = self.selected_key();
             self.rebuild_visible(keep);
             self.rebuild_editor();
@@ -1522,7 +1522,9 @@ impl App {
 
     /// Recompute the closure's dependency loops, announcing one that just
     /// appeared (or the moment the last one goes away).
-    fn refresh_loops(&mut self) {
+    /// `alerted`: an alert already holds the line; a loop gone is news, not
+    /// an alert, and leaves it there (a loop that appeared outranks it).
+    fn refresh_loops(&mut self, alerted: bool) {
         let before: Vec<Vec<PortKey>> = self.loops.iter().map(|dl| dl.members.clone()).collect();
         self.loops = self.session.dep_loops();
         match self.loops.iter().find(|dl| !before.contains(&dl.members)) {
@@ -1533,11 +1535,14 @@ impl App {
             None if self.loops.is_empty() && !before.is_empty() => {
                 // The L view would now show an empty list, which says nothing
                 // about why: leave it rather than strand the user in it.
-                if self.only_loops {
+                let msg = if self.only_loops {
                     self.only_loops = false;
-                    self.flash("dependency loop gone; showing all ports again", false);
+                    "dependency loop gone; showing all ports again"
                 } else {
-                    self.flash("dependency loop gone", false);
+                    "dependency loop gone"
+                };
+                if !alerted {
+                    self.flash(msg, false);
                 }
             }
             None => {}
@@ -2239,6 +2244,26 @@ mod tests {
         assert_eq!((msg.as_str(), err), ("refresh: 1 dep error(s), e.g. cat/broken: no such port", true));
     }
 
+    /// "dependency loop gone" is news, not an alert: posted by the same
+    /// rescan that broke a port, it leaves the blame on the line.
+    #[test]
+    fn a_loop_gone_in_the_rescan_that_broke_a_port_keeps_the_blame() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])]);
+        let (ev, _req) = fake_refresher(&mut app);
+        press(&mut app, 'L');
+        app.refresh_snapshots
+            .insert("cat_beta".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+        let mut beta = info_of(&app, "cat/beta");
+        beta.deps.clear();
+        beta.ignore = Some("needs alpha".into());
+        ev.send(done(vec![beta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.loops.is_empty() && !app.only_loops, "the L view is still left");
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!((msg.as_str(), err), ("cat/beta: now IGNORE (needs alpha) — +DOCS", true));
+    }
+
     /// The m and w views and the blacklist change what counts as a problem.
     #[test]
     fn views_change_what_counts_as_a_problem() {
@@ -2579,7 +2604,7 @@ mod tests {
         // cat/alpha, so the cycle is gone.
         let beta = PortKey::parse("cat/beta").unwrap();
         app.session.ports.get_mut(&beta).unwrap().deps.clear();
-        app.refresh_loops();
+        app.refresh_loops(false);
         assert!(app.loops.is_empty());
         assert!(!app.only_loops, "the view let go");
         assert_eq!(
