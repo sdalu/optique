@@ -13,21 +13,32 @@ pub const SYNTH_DEFAULT_PROFILE: &str = "";
 /// Subcommand names, which `-s` must never mistake for a profile.
 const SUBCOMMANDS: [&str; 6] = ["tui", "scan", "sync", "clean", "decide", "help"];
 
+/// Short flags that take no value, so may precede `s` in a cluster; after
+/// any other (`-zs`) the `s` is that flag's value.
+const BOOLEAN_SHORTS: [char; 7] = ['l', 'n', 'm', 'v', 'q', 'r', 'u'];
+
 /// `-s` takes an *optional* profile name, so `optique -s scan -f list` is
 /// ambiguous: clap would greedily read `scan` as the profile. Rewrite a bare
 /// `-s`/`--synth` into the attached `--synth=<default>` form whenever the
 /// following word cannot be a profile name — it is missing, another option, a
 /// subcommand name, or contains `/` (a port origin or a path). A profile that
 /// really looks like one of those can still be selected as `--synth=name`.
-/// Words after a literal `--` are left untouched.
+/// Words after a literal `--` are left untouched. A cluster of boolean short
+/// flags ending in `s` (`-ns`) gets the same treatment, split into the
+/// cluster without the `s` and the rewritten `-s`.
 pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsString> {
     let mut out: Vec<OsString> = Vec::new();
     let mut args = args.into_iter().peekable();
     let mut rewriting = true;
     while let Some(arg) = args.next() {
+        // The flags of `-<flags>s`, when every one of them is a boolean.
+        let cluster = arg
+            .to_str()
+            .and_then(|a| a.strip_prefix('-')?.strip_suffix('s'))
+            .filter(|f| !f.is_empty() && f.chars().all(|c| BOOLEAN_SHORTS.contains(&c)));
         if rewriting && arg == "--" {
             rewriting = false;
-        } else if rewriting && (arg == "-s" || arg == "--synth") {
+        } else if rewriting && (arg == "-s" || arg == "--synth" || cluster.is_some()) {
             let next_is_profile = match args.peek() {
                 None => false,
                 // A non-UTF-8 word is neither a flag nor a subcommand.
@@ -36,6 +47,9 @@ pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsSt
                 }),
             };
             if !next_is_profile {
+                if let Some(flags) = cluster {
+                    out.push(OsString::from(format!("-{flags}")));
+                }
                 out.push(OsString::from(format!("--synth={SYNTH_DEFAULT_PROFILE}")));
                 continue;
             }
@@ -442,6 +456,16 @@ mod tests {
         assert_eq!(fix(&["optique", "--", "-s", "scan"]), ["optique", "--", "-s", "scan"]);
         // Untouched when -s is absent.
         assert_eq!(fix(&["optique", "-z", "ws", "scan"]), ["optique", "-z", "ws", "scan"]);
+        // A cluster of boolean flags ending in s follows the same rule.
+        assert_eq!(fix(&["optique", "-ns", "scan"]), ["optique", "-n", &dflt, "scan"]);
+        assert_eq!(fix(&["optique", "-vs", "scan"]), ["optique", "-v", &dflt, "scan"]);
+        assert_eq!(fix(&["optique", "-qs", "scan"]), ["optique", "-q", &dflt, "scan"]);
+        assert_eq!(fix(&["optique", "-nms"]), ["optique", "-nm", &dflt]);
+        assert_eq!(fix(&["optique", "-ns", "Release", "scan"]), ["optique", "-ns", "Release", "scan"]);
+        // After a flag that takes a value, the s is that value, not -s.
+        assert_eq!(fix(&["optique", "-zs", "scan"]), ["optique", "-zs", "scan"]);
+        assert_eq!(fix(&["optique", "-nzs", "scan"]), ["optique", "-nzs", "scan"]);
+        assert_eq!(fix(&["optique", "--", "-ns", "scan"]), ["optique", "--", "-ns", "scan"]);
     }
 
     #[test]
