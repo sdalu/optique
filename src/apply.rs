@@ -55,14 +55,14 @@ impl PendingWrite {
                 ..Default::default()
             };
         };
-        let was: BTreeSet<&str> = old.set.iter().map(String::as_str).collect();
-        let file_known: BTreeSet<&str> = old
-            .complete
-            .iter()
-            .chain(old.set.iter())
-            .chain(old.unset.iter())
-            .map(String::as_str)
-            .collect();
+        // Read as make reads it (SavedOptionsFile::value): a value only for an
+        // option with a SET or UNSET line, UNSET winning.
+        let file_known: BTreeSet<&str> =
+            old.set.iter().chain(old.unset.iter()).map(String::as_str).collect();
+        let was: BTreeSet<&str> =
+            file_known.iter().copied().filter(|o| old.value(o) == Some(true)).collect();
+        let mentioned: BTreeSet<&str> =
+            old.complete.iter().map(String::as_str).chain(file_known.iter().copied()).collect();
         Changes {
             turned_on: cur
                 .difference(&was)
@@ -81,7 +81,7 @@ impl PendingWrite {
                 .filter(|o| !file_known.contains(o.as_str()))
                 .map(|o| (o.clone(), cur.contains(o.as_str())))
                 .collect(),
-            dropped: file_known
+            dropped: mentioned
                 .iter()
                 .filter(|o| !now_known.contains(**o))
                 .map(|o| o.to_string())
@@ -135,10 +135,9 @@ impl PendingWrite {
 pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let mut enabled = BTreeSet::new();
     for opt in &info.options.complete {
-        let on = match saved {
-            Some(s) if s.set.contains(opt) || s.unset.contains(opt) => !s.unset.contains(opt),
-            _ => info.options.effective.contains(opt),
-        };
+        let on = saved
+            .and_then(|s| s.value(opt))
+            .unwrap_or_else(|| info.options.effective.contains(opt));
         if on {
             enabled.insert(opt.clone());
         }
@@ -475,6 +474,19 @@ mod tests {
             complete: complete.iter().map(|s| s.to_string()).collect(),
             content: String::new(),
         }
+    }
+
+    /// The old file is read as make reads it: UNSET wins over SET, and an
+    /// option only in the complete list holds no value of its own, so a
+    /// rewrite that settles either is reported, never passed over.
+    #[test]
+    fn changes_read_the_old_file_as_make_does() {
+        let old = "_FILE_COMPLETE_OPTIONS_LIST=A B C\n\
+                   OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=C\n";
+        let c = pending(Some(old), &["A", "B", "C"], &["A", "B", "C"]).changes();
+        assert_eq!(c.turned_on, ["A"], "A was off for make");
+        assert_eq!(c.adopted, [("B".to_string(), true)], "B had no value in the file");
+        assert!(c.turned_off.is_empty() && c.dropped.is_empty(), "{c:?}");
     }
 
     /// A brand-new file adopts every option, at the value it is written with.

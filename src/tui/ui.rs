@@ -203,7 +203,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
             EditorRow::Obsolete(opt) => {
                 let was_on = state
                     .and_then(|s| s.saved.as_ref())
-                    .map(|s| s.set.contains(opt))
+                    .and_then(|s| s.value(opt))
                     .unwrap_or(false);
                 // The indent stays outside the struck span: a rule drawn over
                 // the leading blanks reads as part of the pane, not the row.
@@ -553,14 +553,7 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
 /// The option's value as recorded in the saved options file, if it mentions it
 /// at all — the `file_state` argument `PortOptions::provenance` expects.
 fn file_state(app: &App, info: &PortInfo, opt: &str) -> Option<bool> {
-    let saved = app.session.state(info)?.saved.as_ref()?;
-    if saved.set.contains(opt) {
-        Some(true)
-    } else if saved.unset.contains(opt) {
-        Some(false)
-    } else {
-        None
-    }
+    app.session.state(info)?.saved.as_ref()?.value(opt)
 }
 
 fn on_off(on: bool) -> &'static str {
@@ -1545,7 +1538,7 @@ mod tests {
         rows.iter()
             .map(|r| r.trim().trim_matches('│').trim().to_string())
             .filter(|r| !r.is_empty() && !r.starts_with('└') && !r.starts_with('┌'))
-            .last()
+            .next_back()
             .unwrap_or_default()
     }
 

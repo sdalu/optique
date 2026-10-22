@@ -276,15 +276,7 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
             let staged = state.map(|s| s.staged.contains(name)).unwrap_or(false);
             // What the file says about the option: Some(value) when it has an
             // entry, None when the option is new to it (or there is no file).
-            let file_value = saved.and_then(|s| {
-                if s.set.contains(name) {
-                    Some(true)
-                } else if s.unset.contains(name) || s.complete.contains(name) {
-                    Some(false)
-                } else {
-                    None
-                }
-            });
+            let file_value = saved.and_then(|s| s.value(name));
             // What make.conf asks for, regardless of what the file says —
             // the *_FORCE knobs first, since they win over the file too.
             let makeconf = match opts.forced_value(name) {
