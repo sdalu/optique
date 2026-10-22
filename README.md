@@ -12,7 +12,7 @@ need a decision first, and writes every options file in a single atomic
 pass when you apply. It reads exactly what poudriere would — the options
 directory, the make.conf layers, the blacklist — for the jail, tree and set
 you name, synth's for a synth profile, and the host's own `/var/db/ports`
-when there is no poudriere at all.
+when there is no poudriere at all or `-l` asks for a local build.
 
 <!-- screen main -->
 ```text
@@ -63,11 +63,24 @@ poudriere overlay.
 
 ## Quick start
 
+Review and set the options of a package list's whole closure, for the
+build you run:
+
 ```sh
-# Review and set the options of a package list's whole closure, for the
-# poudriere set "server"
+# poudriere: the set "server" (add -j jail, -p tree as you build them)
 optique -z server -f /usr/local/etc/poudriere.d/pkglist/server.lst
 
+# synth: synth.ini's selected profile, or one named with --synth=name
+optique -s -f server.lst
+
+# make on this host (/var/db/ports, /etc/make.conf), even where poudriere
+# is installed; without poudriere.d, -l is implied
+optique -l -f server.lst
+```
+
+The same flags select the build for every command:
+
+```sh
 # What is left to decide? Exit status 1 while anything is pending, 3 on
 # an error
 optique -z server scan -f server.lst
