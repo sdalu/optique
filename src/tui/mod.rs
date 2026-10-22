@@ -451,6 +451,9 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             app.quit_confirm = true;
             return KeyOutcome::Continue;
         }
+        // Nothing staged: a draft restored and then reverted by hand has
+        // nothing left to keep and must not come back on the next launch.
+        draft::discard(&app.options_dir);
         return KeyOutcome::Quit;
     }
     // The bulk prompt takes text input, so it grabs the keys before the
@@ -504,6 +507,8 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             if app.session.dirty() {
                 app.quit_confirm = true;
             } else {
+                // As for Ctrl-C: nothing staged leaves no draft behind.
+                draft::discard(&app.options_dir);
                 return KeyOutcome::Quit;
             }
         }
@@ -2272,6 +2277,34 @@ mod tests {
         let app = three_ports(tmp.path());
         assert!(draft::load(&app.options_dir).is_none());
         assert!(app.message.is_none());
+    }
+
+    /// A restored draft the user undoes by hand leaves nothing staged, so the
+    /// quit asks nothing — and must not leave the draft to come back on the
+    /// next launch, whichever way the session is quit.
+    #[test]
+    fn a_reverted_draft_is_not_restored_again() {
+        for quit in ['q', 'c'] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut app = three_ports(tmp.path());
+            hit(&mut app, KeyCode::Enter);
+            press(&mut app, ' ');
+            press(&mut app, 'q');
+            press(&mut app, 's');
+            drop(app);
+
+            let mut app = three_ports(tmp.path());
+            assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "restored");
+            press(&mut app, 'U');
+            assert!(!app.session.dirty());
+            let outcome = if quit == 'q' { press(&mut app, 'q') } else { ctrl(&mut app, 'c') };
+            assert!(matches!(outcome, KeyOutcome::Quit), "{quit}: nothing to lose");
+            drop(app);
+
+            let app = three_ports(tmp.path());
+            assert!(staged(&app, "cat/alpha").is_empty(), "{quit}: the draft came back");
+            assert!(draft::load(&app.options_dir).is_none(), "{quit}");
+        }
     }
 
     /// Opening the apply preview, confirming it and reloading afterwards read

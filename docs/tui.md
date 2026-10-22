@@ -344,7 +344,8 @@ options that vanished from a port meanwhile are dropped, and the
 restored ports are re-queried so their dependencies reappear. The draft
 is cleared as soon as the changes are applied (they are on disk by then)
 or discarded; `u` still reverts an individual port as usual. Quitting
-with nothing staged skips the prompt.
+with nothing staged skips the prompt and clears the draft too: a
+restored draft undone by hand has nothing left to bring back.
 
 ## Driving the TUI headless
 
