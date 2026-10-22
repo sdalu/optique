@@ -1473,11 +1473,14 @@ impl App {
     }
 
     fn open_apply_modal(&mut self) {
+        // Every port, not just the listed ones: apply writes them all, and a
+        // conflict the filter or a view hides is written all the same.
         let conflicted: Vec<PortKey> = self
-            .visible
+            .session
+            .ports
             .iter()
-            .filter(|k| self.session.status(&self.session.ports[k]) == UiStatus::Conflict)
-            .cloned()
+            .filter(|(_, info)| self.session.status(info) == UiStatus::Conflict)
+            .map(|(key, _)| key.clone())
             .collect();
         let planned = self.compute_writes();
         if planned.writes.is_empty() && planned.removals.is_empty() {
@@ -2234,6 +2237,34 @@ mod tests {
         press(&mut app, 'x');
         assert!(app.modal.is_none());
         assert!(visible(&app).is_empty(), "applied: nothing needs attention");
+    }
+
+    /// Apply writes every port, listed or not, so its preview warns about a
+    /// conflict the filter keeps off the list too.
+    #[test]
+    fn the_apply_preview_warns_about_a_conflict_hidden_by_the_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["DOCS".into(), "NLS".into()];
+        info.options.defs.insert(
+            "DOCS".into(),
+            crate::model::options::OptionDef { prevents: vec!["NLS".into()], ..Default::default() },
+        );
+        app.session.states.get_mut("cat_alpha").unwrap().staged =
+            ["DOCS".to_string(), "NLS".to_string()].into();
+        assert_eq!(app.session.status(&info_of(&app, "cat/alpha")), UiStatus::Conflict);
+        press(&mut app, '/');
+        for c in "gam".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(visible(&app), ["cat/gamma"]);
+        press(&mut app, 'a');
+        let modal = app.modal.as_ref().expect("the apply preview opened");
+        assert_eq!(modal.conflicted, [key]);
+        assert!(screen(&mut app).contains("1 port(s) still have conflicting options: cat/alpha"));
     }
 
     /// In minimal mode apply removes a file that only repeats the defaults
