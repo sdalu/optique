@@ -54,8 +54,6 @@ pub struct Settings {
     pub portsdir: PathBuf,
     /// The real options dir writes will target (PORT_DBDIR equivalent).
     pub options_dir: PathBuf,
-    /// True when `options_dir` doesn't exist yet (created on apply).
-    pub options_dir_is_new: bool,
     /// Layered make.conf (written into `staging_dir`), if any applies.
     pub make_conf: Option<PathBuf>,
     /// The poudriere.d make.conf files that were concatenated, in inclusion
@@ -181,6 +179,29 @@ impl Blacklist {
     }
 }
 
+/// The stems poudriere(8) builds every per-name layer from, in its own read
+/// order: `set`, `tree`, `jail`, `tree-set`, `jail-tree`, `jail-set`,
+/// `jail-tree-set` — each only when every name it needs was given. `tree` is
+/// optional here because `poudriere_conf_layers` counts a tree only when -p
+/// named it; `blacklist_layers` and `make_conf_layers` always have one, so
+/// they pass `Some`.
+fn layer_stems(jail: Option<&str>, tree: Option<&str>, set: Option<&str>) -> Vec<String> {
+    let mut v: Vec<String> = [set, tree, jail].into_iter().flatten().map(str::to_string).collect();
+    if let (Some(t), Some(s)) = (tree, set) {
+        v.push(format!("{t}-{s}"));
+    }
+    if let (Some(j), Some(t)) = (jail, tree) {
+        v.push(format!("{j}-{t}"));
+    }
+    if let (Some(j), Some(s)) = (jail, set) {
+        v.push(format!("{j}-{s}"));
+    }
+    if let (Some(j), Some(t), Some(s)) = (jail, tree, set) {
+        v.push(format!("{j}-{t}-{s}"));
+    }
+    v
+}
+
 /// blacklist layer names in poudriere(8) read order; every existing file
 /// contributes:
 ///
@@ -189,23 +210,7 @@ impl Blacklist {
 ///   <jail>-<tree>-<set>-blacklist
 fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<String> {
     let mut v = vec!["blacklist".to_string()];
-    if let Some(s) = set {
-        v.push(format!("{s}-blacklist"));
-    }
-    v.push(format!("{tree}-blacklist"));
-    if let Some(j) = jail {
-        v.push(format!("{j}-blacklist"));
-    }
-    if let Some(s) = set {
-        v.push(format!("{tree}-{s}-blacklist"));
-    }
-    if let Some(j) = jail {
-        v.push(format!("{j}-{tree}-blacklist"));
-        if let Some(s) = set {
-            v.push(format!("{j}-{s}-blacklist"));
-            v.push(format!("{j}-{tree}-{s}-blacklist"));
-        }
-    }
+    v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-blacklist")));
     v
 }
 
@@ -251,14 +256,19 @@ pub struct Request<'a> {
     pub overlays: &'a [OverlaySpec],
 }
 
+/// A path from the environment, `var`, ignored when it is set but empty,
+/// else `default`.
+fn env_path_or(var: &str, default: &str) -> PathBuf {
+    std::env::var_os(var)
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from(default), PathBuf::from)
+}
+
 /// `Cli::check_globals` rejects the flag combinations that make no sense
 /// (-s or -l with -z/-j/-p, -p with -P), so `req` is consistent here.
 pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     // pkg(8)'s own default, which the environment may move.
-    let pkg_db = std::env::var_os("PKG_DBDIR")
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| PathBuf::from("/var/db/pkg"), PathBuf::from)
-        .join("local.sqlite");
+    let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
     if let Some(profile) = req.synth {
         let settings = resolve_synth(
             Path::new(SYNTH_DIR),
@@ -266,10 +276,8 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
             req.portsdir,
             req.options_dir,
             staging_dir,
-        )?
-        .absolute()?;
-        let settings = with_overlays(settings, Vec::new());
-        return Ok(key_installed_packages(settings, &pkg_db));
+        )?;
+        return finish(settings, Vec::new(), &pkg_db);
     }
     let poudriere_d = Path::new(POUDRIERE_D);
     // Only a local build asks make for its defaults: a poudriere build
@@ -277,9 +285,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     let local = req.local || !poudriere_d.is_dir();
     let (ports, db) = if local { make_defaults() } else { (None, None) };
     // make's own default, which the environment may move as for any make.
-    let make_conf = std::env::var_os("__MAKE_CONF")
-        .filter(|v| !v.is_empty())
-        .map_or_else(|| PathBuf::from("/etc/make.conf"), PathBuf::from);
+    let make_conf = env_path_or("__MAKE_CONF", "/etc/make.conf");
     let host = HostPaths {
         poudriere_conf: Path::new(POUDRIERE_CONF),
         poudriere_d,
@@ -353,12 +359,11 @@ fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<S
     let local = req.local || !host.poudriere_d.is_dir();
     let given = given_overlays(host.poudriere_d, req.overlays, local)?;
     let settings = if local {
-        resolve_local(host, req, &given, staging_dir)?.absolute()?
+        resolve_local(host, req, &given, staging_dir)?
     } else {
-        resolve_poudriere(host, req, &given, staging_dir)?.absolute()?
+        resolve_poudriere(host, req, &given, staging_dir)?
     };
-    let settings = with_overlays(settings, given);
-    Ok(key_installed_packages(settings, host.pkg_db))
+    finish(settings, given, host.pkg_db)
 }
 
 /// The overlays the command line names, in its order: a -O name read from
@@ -418,8 +423,8 @@ fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
             .into_iter()
             .map(|path| {
                 let path = path.canonicalize().unwrap_or(path);
-                let name = given.iter().find(|o| o.path == path).and_then(|o| o.name.clone());
-                if name.is_none() && !given.iter().any(|o| o.path == path) {
+                let found = given.iter().find(|o| o.path == path);
+                if found.is_none() {
                     let what = if path.is_dir() {
                         "set by make.conf or the environment"
                     } else {
@@ -427,7 +432,7 @@ fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
                     };
                     settings.notes.push(format!("overlay {} {what}", path.display()));
                 }
-                Overlay { name, path }
+                Overlay { name: found.and_then(|o| o.name.clone()), path }
             })
             .collect(),
     };
@@ -481,6 +486,16 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
     settings
 }
 
+/// The finishing steps common to every backend once its own `Settings` are
+/// built: paths absolute, `overlays` settled against what make reports, and
+/// the host's installed packages keyed in. Shared by `resolve`'s synth path
+/// and `resolve_host`.
+fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Settings> {
+    let settings = settings.absolute()?;
+    let settings = with_overlays(settings, given);
+    Ok(key_installed_packages(settings, pkg_db))
+}
+
 /// A local build: `make config` on this host, built here. What is
 /// installed is then the truth, not a leak. The make.conf goes through
 /// the staging like any layer, so that the cache keys its content and the
@@ -518,7 +533,6 @@ fn resolve_local(
             host.db.to_path_buf()
         }
     };
-    let options_dir_is_new = !options_dir.is_dir();
     let (staged, mut conf_hash, make_conf_sources) =
         concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
     let mut make_conf = staged.map(|_| host.make_conf.to_path_buf());
@@ -548,7 +562,6 @@ fn resolve_local(
     Ok(Settings {
         portsdir,
         options_dir,
-        options_dir_is_new,
         make_conf,
         make_conf_sources,
         conf_hash,
@@ -573,8 +586,8 @@ fn resolve_poudriere(
         None => resolve_portsdir(poudriere_d, host.ports, tree_name, tree.is_some())?,
     };
 
-    let (options_dir, options_dir_is_new) = match req.options_dir {
-        Some(d) => (d.to_path_buf(), !d.is_dir()),
+    let options_dir = match req.options_dir {
+        Some(d) => d.to_path_buf(),
         None => resolve_options_dir(poudriere_d, jail, tree_name, tree.is_some(), set),
     };
 
@@ -588,7 +601,6 @@ fn resolve_poudriere(
     Ok(Settings {
         portsdir,
         options_dir,
-        options_dir_is_new,
         make_conf,
         make_conf_sources,
         conf_hash,
@@ -659,7 +671,7 @@ fn resolve_synth(
     // A bare -s (empty profile) follows synth's own selection.
     let selected;
     let profile = if profile.is_empty() {
-        selected = synth_ini_lookup(&ini, "Global Configuration", "profile_selected")
+        selected = synth_ini_lookup(&ini, SYNTH_GLOBAL_SECTION, "profile_selected")
             .unwrap_or_else(|| "LiveSystem".to_string());
         notes.push(format!("synth profile {selected} (synth.ini profile_selected)"));
         selected.as_str()
@@ -713,7 +725,6 @@ fn resolve_synth(
                 .to_string(),
         );
     }
-    let options_dir_is_new = !options_dir.is_dir();
 
     // synth builds on the host it configures, so the host's view is the
     // right one: no jail environment, as for a plain /var/db/ports.
@@ -731,7 +742,6 @@ fn resolve_synth(
     Ok(Settings {
         portsdir,
         options_dir,
-        options_dir_is_new,
         make_conf,
         make_conf_sources,
         conf_hash,
@@ -742,15 +752,24 @@ fn resolve_synth(
     })
 }
 
+/// The part of a synth.ini line before the first `;` or `#`: both start a
+/// comment that runs to the end of the line.
+fn ini_strip_comment(line: &str) -> &str {
+    match line.find([';', '#']) {
+        Some(i) => &line[..i],
+        None => line,
+    }
+}
+
+/// The name in a synth.ini `[name]` section header line, trimmed, if `line`
+/// (already comment-stripped) is one.
+fn ini_section_header(line: &str) -> Option<&str> {
+    line.strip_prefix('[').and_then(|r| r.strip_suffix(']')).map(str::trim)
+}
+
 /// Does synth.ini contain a `[name]` section header?
 fn synth_ini_has_section(text: &str, name: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.split([';', '#']).next().unwrap_or("").trim();
-        line.strip_prefix('[')
-            .and_then(|r| r.strip_suffix(']'))
-            .map(|s| s.trim() == name)
-            .unwrap_or(false)
-    })
+    text.lines().any(|line| ini_section_header(ini_strip_comment(line).trim()) == Some(name))
 }
 
 /// Minimal INI reader for synth.ini: the value of `key` in section
@@ -763,16 +782,12 @@ fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
     let mut in_profile = None;
     let mut in_global = None;
     for line in text.lines() {
-        let line = match line.find([';', '#']) {
-            Some(i) => &line[..i],
-            None => line,
-        }
-        .trim();
+        let line = ini_strip_comment(line).trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            section = name.trim().to_string();
+        if let Some(name) = ini_section_header(line) {
+            section = name.to_string();
             continue;
         }
         let Some((k, v)) = line.split_once('=') else { continue };
@@ -829,28 +844,15 @@ fn resolve_options_dir(
     tree: &str,
     tree_explicit: bool,
     set: Option<&str>,
-) -> (PathBuf, bool) {
+) -> PathBuf {
     for name in options_dir_candidates(jail, tree, set) {
         let dir = poudriere_d.join(&name);
         if dir.is_dir() {
-            return (dir, false);
+            return dir;
         }
     }
-    let mut name = String::new();
-    if let Some(j) = jail {
-        name.push_str(j);
-        name.push('-');
-    }
-    if tree_explicit {
-        name.push_str(tree);
-        name.push('-');
-    }
-    if let Some(s) = set {
-        name.push_str(s);
-        name.push('-');
-    }
-    name.push_str("options");
-    (poudriere_d.join(name), true)
+    let parts = [jail, tree_explicit.then_some(tree), set, Some("options")];
+    poudriere_d.join(parts.into_iter().flatten().collect::<Vec<_>>().join("-"))
 }
 
 /// make.conf layer names in poudriere(8) inclusion order (least to most
@@ -861,23 +863,7 @@ fn resolve_options_dir(
 ///   <jail>-<tree>-<set>-make.conf
 fn make_conf_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<String> {
     let mut v = vec!["make.conf".to_string()];
-    if let Some(s) = set {
-        v.push(format!("{s}-make.conf"));
-    }
-    v.push(format!("{tree}-make.conf"));
-    if let Some(j) = jail {
-        v.push(format!("{j}-make.conf"));
-    }
-    if let Some(s) = set {
-        v.push(format!("{tree}-{s}-make.conf"));
-    }
-    if let Some(j) = jail {
-        v.push(format!("{j}-{tree}-make.conf"));
-        if let Some(s) = set {
-            v.push(format!("{j}-{s}-make.conf"));
-            v.push(format!("{j}-{tree}-{s}-make.conf"));
-        }
-    }
+    v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-make.conf")));
     v
 }
 
@@ -919,20 +905,7 @@ fn no_package_building(
 /// `<set>`, `<tree>`, `<jail>`, `<tree>-<set>`, `<jail>-<tree>`,
 /// `<jail>-<set>`, `<jail>-<tree>-<set>`, each only when its names are given.
 fn poudriere_conf_layers(jail: Option<&str>, tree: Option<&str>, set: Option<&str>) -> Vec<String> {
-    let mut v: Vec<String> = [set, tree, jail].into_iter().flatten().map(str::to_string).collect();
-    if let (Some(t), Some(s)) = (tree, set) {
-        v.push(format!("{t}-{s}"));
-    }
-    if let (Some(j), Some(t)) = (jail, tree) {
-        v.push(format!("{j}-{t}"));
-    }
-    if let (Some(j), Some(s)) = (jail, set) {
-        v.push(format!("{j}-{s}"));
-    }
-    if let (Some(j), Some(t), Some(s)) = (jail, tree, set) {
-        v.push(format!("{j}-{t}-{s}"));
-    }
-    v
+    layer_stems(jail, tree, set)
 }
 
 /// The value a plain shell assignment line gives `name`, if it is one:
@@ -1058,14 +1031,14 @@ mod tests {
         fs::create_dir_all(pd.join("options")).unwrap();
         fs::create_dir_all(pd.join("s-options")).unwrap();
         // set-specific beats the generic one
-        let (dir, is_new) = resolve_options_dir(pd, None, "default", false, Some("s"));
+        let dir = resolve_options_dir(pd, None, "default", false, Some("s"));
         assert_eq!(dir, pd.join("s-options"));
-        assert!(!is_new);
+        assert!(dir.is_dir());
         // jail-specific dirs missing: falls through to the set dir
-        let (dir, _) = resolve_options_dir(pd, Some("j"), "default", false, Some("s"));
+        let dir = resolve_options_dir(pd, Some("j"), "default", false, Some("s"));
         assert_eq!(dir, pd.join("s-options"));
         // no flags: plain options
-        let (dir, _) = resolve_options_dir(pd, None, "default", false, None);
+        let dir = resolve_options_dir(pd, None, "default", false, None);
         assert_eq!(dir, pd.join("options"));
     }
 
@@ -1073,11 +1046,11 @@ mod tests {
     fn options_dir_created_name_mirrors_poudriere_options() {
         let tmp = tempfile::tempdir().unwrap();
         let pd = tmp.path();
-        let (dir, is_new) = resolve_options_dir(pd, Some("j"), "t", true, Some("s"));
+        let dir = resolve_options_dir(pd, Some("j"), "t", true, Some("s"));
         assert_eq!(dir, pd.join("j-t-s-options"));
-        assert!(is_new);
+        assert!(!dir.is_dir());
         // tree not explicit -> left out of the created name
-        let (dir, _) = resolve_options_dir(pd, None, "default", false, Some("s"));
+        let dir = resolve_options_dir(pd, None, "default", false, Some("s"));
         assert_eq!(dir, pd.join("s-options"));
     }
 
@@ -1152,11 +1125,11 @@ mod tests {
         // No poudriere.d: plain make config on this host.
         let s = resolve_host(&host, &none, &stage).unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
-        assert!(s.options_dir_is_new, "{} does not exist yet", db.display());
+        assert!(!s.options_dir.is_dir(), "{} does not exist yet", db.display());
         assert!(s.env == QueryEnv::Host && s.make_conf.is_none());
         assert!(s.notes.is_empty(), "built-in defaults earn no note: {:?}", s.notes);
         fs::create_dir_all(&db).unwrap();
-        assert!(!resolve_host(&host, &none, &stage).unwrap().options_dir_is_new);
+        assert!(resolve_host(&host, &none, &stage).unwrap().options_dir.is_dir());
         // A set, jail or tree means poudriere, which is not there.
         for req in [
             Request { jail: Some("j"), ..none },
@@ -1170,9 +1143,9 @@ mod tests {
         let mine = tmp.path().join("mine");
         let s = resolve_host(&host, &Request { options_dir: Some(&mine), ..none }, &stage).unwrap();
         assert_eq!(s.options_dir, mine);
-        assert!(s.options_dir_is_new, "created on apply");
+        assert!(!s.options_dir.is_dir(), "created on apply");
         let s = resolve_host(&host, &Request { options_dir: Some(&db), ..none }, &stage).unwrap();
-        assert!(!s.options_dir_is_new);
+        assert!(s.options_dir.is_dir());
         // No ports tree anywhere: say where it was looked for.
         let bare = tmp.path().join("bare");
         let nohost = HostPaths { ports: &bare, ..host };
@@ -1185,7 +1158,7 @@ mod tests {
         let host = HostPaths { poudriere_d: &pd, ..host };
         let s = resolve_host(&host, &Request { set: Some("s"), ..none }, &stage).unwrap();
         assert_eq!(s.options_dir, pd.join("s-options"));
-        assert!(s.options_dir_is_new);
+        assert!(!s.options_dir.is_dir());
         assert_eq!(s.env, QueryEnv::Jail { package_building: true });
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
@@ -1756,7 +1729,7 @@ not a key value line
         let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         assert_eq!(s.options_dir, opts);
-        assert!(!s.options_dir_is_new);
+        assert!(s.options_dir.is_dir());
         assert_eq!(s.make_conf_sources, vec![synth.join("LiveSystem-make.conf")]);
         let staged = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
         assert!(staged.contains("ssl=openssl"), "{staged}");
@@ -1799,9 +1772,9 @@ not a key value line
 
         let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
-        // Nonexistent Directory_options is still the target, flagged as new.
+        // Nonexistent Directory_options is still the target, not created yet.
         assert_eq!(s.options_dir, opts);
-        assert!(s.options_dir_is_new);
+        assert!(!s.options_dir.is_dir());
         // No make.conf is still one: left unset, make would read the host's
         // (/etc/make.conf or the environment's __MAKE_CONF), which a synth
         // builder never does, and which the empty hash would not key.

@@ -46,6 +46,25 @@ impl SavedOptionsFile {
             None
         }
     }
+
+    /// Options with a SET or UNSET line: the ones the file gives a value.
+    pub fn recorded(&self) -> impl Iterator<Item = &String> {
+        self.set.iter().chain(self.unset.iter())
+    }
+
+    /// Options of the file's own list that it gives no SET or UNSET line:
+    /// make leaves them at their defaults, and counts them as new, so
+    /// `make config-conditional` asks about them again. `make config` never
+    /// writes such a file; a hand edit or a write cut short does.
+    pub fn unlined(&self) -> Vec<&str> {
+        self.complete.iter().map(String::as_str).filter(|o| self.value(o).is_none()).collect()
+    }
+
+    /// Whether the file knows the option at all: a line for it, or a place
+    /// in its complete list.
+    pub fn mentions(&self, opt: &str) -> bool {
+        self.value(opt).is_some() || self.complete.iter().any(|o| o == opt)
+    }
 }
 
 /// Render an options file exactly the way `make config` does: every option of

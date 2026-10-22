@@ -515,8 +515,9 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
     for f in files {
         let text = std::fs::read_to_string(f)
             .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
+        let source = f.display().to_string();
         for line in text.lines() {
-            push(line, &f.display().to_string())?;
+            push(line, &source)?;
         }
     }
     if out.is_empty() {
@@ -529,6 +530,42 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    /// The tables `disambiguate_synth` and `check_action_first` read before
+    /// clap does are kept by hand; a flag added to the derive and not to them
+    /// would go wrong without a word, so they are checked against it here.
+    #[test]
+    fn hand_kept_tables_match_the_clap_definition() {
+        use clap::CommandFactory as _;
+        let root = Cli::command();
+        let mut args: Vec<clap::Arg> = root.get_arguments().cloned().collect();
+        for sub in root.get_subcommands() {
+            args.extend(sub.get_arguments().cloned());
+        }
+        // --synth/-s takes an optional value: it is the case the tables exist for.
+        args.retain(|a| a.get_id() != "synth" && !a.is_positional());
+        let takes = |a: &clap::Arg| a.get_action().takes_values();
+        let shorts = |value: bool| -> std::collections::BTreeSet<char> {
+            args.iter().filter(|a| takes(a) == value).filter_map(clap::Arg::get_short).collect()
+        };
+        assert_eq!(shorts(true), VALUE_SHORTS.into_iter().collect());
+        assert_eq!(shorts(false), BOOLEAN_SHORTS.into_iter().collect());
+        let longs: std::collections::BTreeSet<String> = args
+            .iter()
+            .filter(|a| takes(a))
+            .flat_map(|a| {
+                let aliases = a.get_all_aliases().unwrap_or_default();
+                a.get_long().into_iter().chain(aliases).map(|l| format!("--{l}")).collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(longs, VALUE_LONGS.iter().map(|l| l.to_string()).collect());
+        let mut subs: Vec<&str> = root.get_subcommands().map(clap::Command::get_name).collect();
+        subs.push("help");
+        subs.sort_unstable();
+        let mut table = SUBCOMMANDS.to_vec();
+        table.sort_unstable();
+        assert_eq!(subs, table);
+    }
 
     #[test]
     fn dedup_and_comments() {

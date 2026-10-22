@@ -119,8 +119,15 @@ computed, so a file changed under it would file one option value's result
 under the other's bytes; due ports wait and go together once it is done.
 Apply writes every file atomically — temp file, `fsync`,
 rename — and skips a file that is semantically identical (same option list,
-same enabled set), so a pkgname-only change does not force a rewrite, as with
-`make config-conditional` (`src/apply.rs`). Quitting without applying
+a line for every option, and make reading the same options from it as from
+the file it would write), so a pkgname-only change does not force a rewrite,
+as with `make config-conditional` (`src/apply.rs`). Identical is judged by
+running both files through the framework's own layering, IMPLIES last,
+never from the port's queried `effective`: in the TUI a refresh has queried
+make with the staged edits already in place. A file missing a line is not
+identical even when make reads it the same: such an option follows the
+defaults instead of recording a choice, and `make config-conditional`
+counts it as new, so it is warned about and completed. Quitting without applying
 therefore always leaves the options dir as it was.
 
 ## Options files are read once

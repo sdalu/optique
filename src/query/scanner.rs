@@ -75,18 +75,9 @@ pub fn scan(
                     }
                     new_key
                 }
-                MovedResult::Removed { reason } => {
-                    result
-                        .errors
-                        .push((key.clone(), format!("port removed from tree: {reason}")));
-                    resolved_away += 1;
-                    continue;
-                }
-                MovedResult::Cycle => {
-                    result.errors.push((
-                        key.clone(),
-                        "not in the tree, and its MOVED entries form a cycle".to_string(),
-                    ));
+                gone @ (MovedResult::Removed { .. } | MovedResult::Cycle) => {
+                    let reason = gone.gone_reason().expect("removed and cycle both have a reason");
+                    result.errors.push((key.clone(), reason));
                     resolved_away += 1;
                     continue;
                 }

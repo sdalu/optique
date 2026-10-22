@@ -14,6 +14,23 @@ pub enum MovedResult {
     Cycle,
 }
 
+impl MovedResult {
+    /// Why the origin leads to no port, when it does not: removed, or lost
+    /// in a cycle. None for an origin that still has (or moved to) a port.
+    pub fn gone_reason(&self) -> Option<String> {
+        match self {
+            MovedResult::Removed { reason } if !reason.is_empty() => {
+                Some(format!("port removed from tree ({reason})"))
+            }
+            MovedResult::Removed { .. } => Some("port removed from tree".to_string()),
+            MovedResult::Cycle => Some(
+                "port no longer exists in the tree (its MOVED entries form a cycle)".to_string(),
+            ),
+            MovedResult::Unchanged | MovedResult::MovedTo { .. } => None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Moved {
     /// old origin -> (new origin or None if removed, reason)

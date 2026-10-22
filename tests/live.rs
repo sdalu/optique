@@ -478,6 +478,66 @@ fn sync_drops_obsolete_options_and_optionless_files() {
     assert!(stderr.contains("everything up to date"), "{stderr}");
 }
 
+/// A file listing options it gives no SET or UNSET line is warned about,
+/// and sync completes it as `make config` would write it; once complete,
+/// neither the warning nor a write comes back.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn sync_completes_a_file_missing_lines() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(optdir.join("textproc_expat2")).unwrap();
+    let list = String::from_utf8(
+        Command::new("make")
+            .args(["-C", "/usr/ports/textproc/expat2", "-V", "COMPLETE_OPTIONS_LIST"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let opts: Vec<&str> = list.split_whitespace().collect();
+    assert!(opts.len() >= 2, "expat2 needs two options for this test: {list}");
+    // Only the last option has a line.
+    fs::write(
+        optdir.join("textproc_expat2/options"),
+        format!(
+            "_FILE_COMPLETE_OPTIONS_LIST={}\nOPTIONS_FILE_UNSET+={}\n",
+            opts.join(" "),
+            opts[opts.len() - 1]
+        ),
+    )
+    .unwrap();
+
+    let sync = || {
+        optique(tmp.path(), "sync")
+            .arg("-o")
+            .arg(&optdir)
+            .arg("textproc/expat2")
+            .output()
+            .unwrap()
+    };
+    let out = sync();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("textproc_expat2/options has no SET or UNSET line for"),
+        "{stderr}"
+    );
+    let rewritten = fs::read_to_string(optdir.join("textproc_expat2/options")).unwrap();
+    for opt in &opts {
+        assert!(
+            rewritten.contains(&format!("OPTIONS_FILE_SET+={opt}\n"))
+                || rewritten.contains(&format!("OPTIONS_FILE_UNSET+={opt}\n")),
+            "{opt} has no line after sync:\n{rewritten}"
+        );
+    }
+
+    let out = sync();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("has no SET or UNSET line"), "{stderr}");
+    assert!(stderr.contains("everything up to date"), "{stderr}");
+}
+
 #[test]
 #[ignore = "needs /usr/ports on a FreeBSD host"]
 fn clean_removes_gone_ports_only() {

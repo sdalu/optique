@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
 
+use crate::model::options::on_off;
 use crate::model::origin::PortKey;
 use crate::session::Session;
 
@@ -132,11 +133,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
             }
             // Already the wanted value: not a change, and not an error even
             // when the option is locked there.
-            let current = sess
-                .state(&info)
-                .map(|s| s.staged.contains(opt))
-                .unwrap_or(false);
-            if current == *on {
+            if sess.is_staged(&info, opt) == *on {
                 continue;
             }
             match sess.toggle(&key, opt) {
@@ -164,8 +161,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
             if refused.contains(opt) {
                 continue;
             }
-            let ended = sess.state(info).map(|s| s.staged.contains(opt)).unwrap_or(false);
-            if ended != *on {
+            if sess.is_staged(info, opt) != *on {
                 outcome.rejected.push((key.clone(), opt.clone(), why_not(sess, &key, opt, *on)));
             }
         }
@@ -189,20 +185,15 @@ fn why_not(sess: &Session, key: &PortKey, opt: &str, wanted: bool) -> String {
     if wanted {
         // Something took it away again: in practice the sibling of a
         // single-choice or radio group enabled later in the plan.
-        if let Some(g) = info
-            .options
-            .groups
-            .iter()
-            .find(|g| g.members.iter().any(|m| m == opt))
-        {
-            let staged = sess.state(info).map(|s| s.staged.clone()).unwrap_or_default();
-            let on: Vec<&String> = g.members.iter().filter(|m| staged.contains(*m)).collect();
+        if let Some(g) = info.options.group_of(opt) {
+            let on: Vec<&str> =
+                g.members.iter().filter(|m| sess.is_staged(info, m)).map(String::as_str).collect();
             if !on.is_empty() {
                 return format!(
                     "group {} ({}) ended up with {} instead",
                     g.name,
                     g.kind.label(),
-                    on.iter().map(|o| o.as_str()).collect::<Vec<_>>().join(" ")
+                    on.join(" ")
                 );
             }
         }
@@ -212,10 +203,6 @@ fn why_not(sess: &Session, key: &PortKey, opt: &str, wanted: bool) -> String {
         return format!("implied by {by}, which the plan leaves on");
     }
     "another value in the plan turned it on again".to_string()
-}
-
-fn on_off(on: bool) -> &'static str {
-    if on { "on" } else { "off" }
 }
 
 #[cfg(test)]
@@ -265,15 +252,9 @@ mod tests {
         defs: &[(&str, crate::model::options::OptionDef)],
     ) -> crate::model::port::PortInfo {
         use crate::model::options::PortOptions;
-        let key = PortKey::parse(origin).expect("test origin parses");
         let effective: std::collections::BTreeSet<String> =
             defaults.iter().map(|s| s.to_string()).collect();
         crate::model::port::PortInfo {
-            key: key.clone(),
-            canonical: key,
-            pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
-            flavors: vec![],
-            options_name: origin.replace('/', "_"),
             options: PortOptions {
                 complete: complete.iter().map(|s| s.to_string()).collect(),
                 defaults: defaults.iter().map(|s| s.to_string()).collect(),
@@ -281,14 +262,7 @@ mod tests {
                 defs: defs.iter().map(|(n, d)| (n.to_string(), d.clone())).collect(),
                 ..Default::default()
             },
-            deps: vec![],
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..crate::model::port::PortInfo::stub(origin)
         }
     }
 

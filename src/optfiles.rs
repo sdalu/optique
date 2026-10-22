@@ -56,9 +56,14 @@ impl OptionsFiles {
         &self.dir
     }
 
+    /// `<dir>/<options_name>`, the entry holding the file.
+    pub fn entry_dir(&self, options_name: &str) -> PathBuf {
+        self.dir.join(options_name)
+    }
+
     /// `<dir>/<options_name>/options`.
     pub fn path(&self, options_name: &str) -> PathBuf {
-        self.dir.join(options_name).join("options")
+        self.entry_dir(options_name).join("options")
     }
 
     fn read(&self, options_name: &str) -> Read {

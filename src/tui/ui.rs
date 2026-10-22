@@ -1,14 +1,15 @@
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget as _, Wrap};
 use ratatui::Frame;
 
-use crate::model::options::{GroupKind, Provenance};
+use crate::model::options::{on_off, Provenance};
 use crate::model::port::PortInfo;
 use crate::session::UiStatus;
 
-use super::{App, EditorRow, Focus};
+use super::{App, EditorRow, Focus, OverlayKind};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::default()
@@ -24,21 +25,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     app.load_about_text();
     draw_editor(f, app, panes[1]);
     draw_status_bar(f, app, outer[1]);
-    if app.quit_confirm {
-        draw_quit_confirm(f);
-    } else if app.modal.is_some() {
-        draw_apply_modal(f, app);
-    } else if app.bulk.is_some() {
-        draw_bulk(f, app);
-    } else if let Some(tab) = app.help_tab {
-        draw_help(f, tab, &mut app.help_scroll);
-    } else if app.port_help.is_some() {
-        draw_port_help(f, app);
-    } else if app.why.is_some() {
-        draw_why(f, app);
-    } else if app.opt_info.is_some() {
-        draw_opt_info(f, app);
+    match app.top_overlay() {
+        Some(OverlayKind::QuitConfirm) => draw_quit_confirm(f),
+        Some(OverlayKind::Apply) => draw_apply_modal(f, app),
+        Some(OverlayKind::Bulk) => draw_bulk(f, app),
+        Some(OverlayKind::Help(tab)) => draw_help(f, tab, &mut app.help_scroll),
+        Some(OverlayKind::PortHelp) => draw_port_help(f, app),
+        Some(OverlayKind::Why) => draw_why(f, app),
+        Some(OverlayKind::OptInfo) => draw_opt_info(f, app),
+        None => {}
     }
+}
+
+/// A drawn buffer as text, one string per row with trailing blanks stripped.
+pub(crate) fn screen_rows(buffer: &Buffer) -> Vec<String> {
+    let (w, h) = (buffer.area.width as usize, buffer.area.height as usize);
+    let cells = buffer.content();
+    (0..h)
+        .map(|y| (0..w).map(|x| cells[y * w + x].symbol()).collect::<String>().trim_end().to_string())
+        .collect()
 }
 
 fn status_marker(status: &UiStatus) -> (&'static str, Color) {
@@ -71,7 +76,7 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             // The port name itself carries the severity: red bold for a port
             // that will not build (BROKEN/IGNORE), red for conflicting staged
             // options, dim for blacklisted ports.
-            let blocked = info.broken.is_some() || info.ignore.is_some();
+            let blocked = crate::session::is_blocked(info);
             let name_style = if blacklisted {
                 Style::default().fg(Color::DarkGray)
             } else if blocked {
@@ -149,6 +154,8 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
 
     let mut lines: Vec<Line> = Vec::new();
     banner_lines(app, info, &mut lines);
+    // One line per banner condition, and nothing else in `lines` yet.
+    let banner = lines.len();
 
     // Align the name column to the longest option of this port.
     let name_width = app
@@ -192,7 +199,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
                 )));
             }
             EditorRow::Excluded(opt) => {
-                let on = state.map(|s| s.staged.contains(opt)).unwrap_or(false);
+                let on = app.session.is_staged(info, opt);
                 lines.push(Line::from(Span::styled(
                     format!("  [{}] {}", if on { "x" } else { " " }, opt),
                     Style::default().fg(Color::DarkGray),
@@ -226,7 +233,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     // the rows above are cut at the pane's right edge, the panel is not.
     let (rows_area, detail_area) = split_detail(app, info, area);
     // The top, for what the port is, out of whatever the rows leave spare.
-    let rows_needed = banner_len(app, info) + app.editor_rows.len();
+    let rows_needed = banner + app.editor_rows.len();
     let about_text = if app.show_about {
         let descr = app.about_text.get(&key).map(String::as_str).unwrap_or("");
         about_lines(info, descr, rows_area.width.saturating_sub(2) as usize)
@@ -237,13 +244,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
 
     // Keep the selected row in view: scroll so it sits inside the pane.
     let inner_height = rows_area.height.saturating_sub(2) as usize;
-    let selected_line = app
-        .editor_rows
-        .iter()
-        .take(app.editor_idx + 1)
-        .count()
-        .saturating_add(banner_len(app, info))
-        .saturating_sub(1);
+    let selected_line = (banner + (app.editor_idx + 1).min(app.editor_rows.len())).saturating_sub(1);
     let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
 
     // The pane's title, and right of it the key that opens this port's
@@ -503,26 +504,6 @@ fn blame_of<'a>(app: &'a App, info: &PortInfo) -> Option<&'a String> {
     app.blame.get(&info.options_name)
 }
 
-fn banner_len(app: &App, info: &PortInfo) -> usize {
-    let mut n = 0;
-    if info.broken.is_some() {
-        n += 1;
-    }
-    if info.ignore.is_some() {
-        n += 1;
-    }
-    if blame_of(app, info).is_some() {
-        n += 1;
-    }
-    if info.deprecated.is_some() {
-        n += 1;
-    }
-    if foreign_owner(app, info).is_some() {
-        n += 1;
-    }
-    n + app.session.violations(info).len()
-}
-
 fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     if let Some(m) = &info.broken {
@@ -560,14 +541,6 @@ fn file_state(app: &App, info: &PortInfo, opt: &str) -> Option<bool> {
     app.session.state(info)?.saved.as_ref()?.value(opt)
 }
 
-fn on_off(on: bool) -> &'static str {
-    if on {
-        "on"
-    } else {
-        "off"
-    }
-}
-
 /// Room a row's trailing description needs to be worth printing: below this
 /// the pane would cut it to a word fragment, and the detail panel under the
 /// rows carries it in full anyway.
@@ -584,12 +557,9 @@ fn option_line(
 ) -> Line<'static> {
     let opts = &info.options;
     let state = app.session.state(info);
-    let on = state.map(|s| s.staged.contains(opt)).unwrap_or(false);
+    let on = app.session.is_staged(info, opt);
     let is_default = opts.defaults.contains(opt);
-    let in_choice_group = opts
-        .groups
-        .iter()
-        .any(|g| matches!(g.kind, GroupKind::Single | GroupKind::Radio) && g.members.iter().any(|m| m == opt));
+    let in_choice_group = opts.exclusive_group_of(opt).is_some();
 
     let checkbox = match (in_choice_group, on) {
         (true, true) => "(o)",
@@ -601,17 +571,7 @@ fn option_line(
     // 'N' in the first column: the option is unknown to the saved file, i.e.
     // the tree added it since. A column of its own rather than a badge, so the
     // eye finds every new option down the left edge of the pane.
-    let is_new = state
-        .and_then(|s| s.saved.as_ref())
-        .map(|saved| {
-            !saved
-                .complete
-                .iter()
-                .chain(saved.set.iter())
-                .chain(saved.unset.iter())
-                .any(|o| o == opt)
-        })
-        .unwrap_or(false);
+    let is_new = state.and_then(|s| s.saved.as_ref()).is_some_and(|saved| !saved.mentions(opt));
     let mut spans: Vec<Span> = vec![Span::styled(
         if is_new { "N" } else { " " },
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
@@ -703,16 +663,9 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(format!(" {msg} "), style))
     } else {
         let mut counts = [0usize; 6];
+        // Indexed in UiStatus declaration order, Conflict first.
         for key in &app.visible {
-            let idx = match app.effective_status(&app.session.ports[key]) {
-                UiStatus::Conflict => 0,
-                UiStatus::Edited => 1,
-                UiStatus::Unconfigured => 2,
-                UiStatus::Stale => 3,
-                UiStatus::McDeviation => 4,
-                UiStatus::Ok => 5,
-            };
-            counts[idx] += 1;
+            counts[app.effective_status(&app.session.ports[key]) as usize] += 1;
         }
         let mc = if app.warn_mc { format!(" {}≠", counts[4]) } else { String::new() };
         let mut spans = vec![Span::styled(
@@ -1267,24 +1220,24 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
         lines.push(Line::default());
     }
 
-    let on = app.session.state(info).map(|s| s.staged.contains(opt)).unwrap_or(false);
+    let on = app.session.is_staged(info, opt);
     lines.push(Line::from(vec![
         Span::styled("value: ", dim),
         Span::styled(
-            if on { "on" } else { "off" },
+            on_off(on),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(
                 " · default: {} · source: {}",
-                if opts.defaults.contains(opt) { "on" } else { "off" },
+                on_off(opts.defaults.contains(opt)),
                 provenance_label(opts.provenance(opt, file_state(app, info, opt)))
             ),
             dim,
         ),
     ]));
 
-    if let Some(g) = opts.groups.iter().find(|g| g.members.iter().any(|m| m == opt)) {
+    if let Some(g) = opts.group_of(opt) {
         lines.push(Line::from(vec![
             Span::styled("group: ", dim),
             Span::raw(g.name.clone()),
@@ -1527,14 +1480,7 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(draw).unwrap();
-        let buffer = terminal.backend().buffer();
-        let cells = buffer.content();
-        (0..height as usize)
-            .map(|y| {
-                let row = &cells[y * width as usize..(y + 1) * width as usize];
-                row.iter().map(|c| c.symbol()).collect::<String>().trim_end().to_string()
-            })
-            .collect()
+        screen_rows(terminal.backend().buffer())
     }
 
     /// The last row of text inside the box, borders stripped.

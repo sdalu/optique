@@ -8,10 +8,12 @@
 //! Everything an agent needs to choose an option value is in
 //! [`OptionReport`], which `scan --json --options` fills in.
 
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 
 use crate::apply::PendingWrite;
-use crate::model::options::GroupKind;
+use crate::model::options::{GroupKind, OptionDef};
 use crate::model::port::PortInfo;
 use crate::session::Session;
 
@@ -208,6 +210,12 @@ pub struct RemovalEntry {
     pub reason: String,
 }
 
+impl From<&crate::clean::Removal> for RemovalEntry {
+    fn from(r: &crate::clean::Removal) -> Self {
+        RemovalEntry { options_name: r.options_name.clone(), reason: r.reason.clone() }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct RejectedEntry {
     pub port: String,
@@ -277,43 +285,34 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
     opts.complete
         .iter()
         .map(|name| {
-            let staged = state.map(|s| s.staged.contains(name)).unwrap_or(false);
+            let staged = sess.is_staged(owner, name);
             // What the file says about the option: Some(value) when it has an
             // entry, None when the option is new to it (or there is no file).
             let file_value = saved.and_then(|s| s.value(name));
             // What make.conf asks for, regardless of what the file says —
             // the *_FORCE knobs first, since they win over the file too.
-            let makeconf = match opts.forced_value(name) {
-                Some(value) => Some(MakeConfVerdict { value, scope: "force" }),
-                None if opts.port_set.contains(name) || opts.port_unset.contains(name) => {
-                    Some(MakeConfVerdict { value: opts.port_set.contains(name), scope: "port" })
-                }
-                None if opts.mc_set.contains(name) || opts.mc_unset.contains(name) => {
-                    Some(MakeConfVerdict { value: opts.mc_set.contains(name), scope: "global" })
-                }
-                None => None,
+            let scoped = |set: &BTreeSet<String>, unset: &BTreeSet<String>, scope| {
+                (set.contains(name) || unset.contains(name))
+                    .then(|| MakeConfVerdict { value: set.contains(name), scope })
             };
+            let makeconf = opts
+                .forced_value(name)
+                .map(|value| MakeConfVerdict { value, scope: "force" })
+                .or_else(|| scoped(&opts.port_set, &opts.port_unset, "port"))
+                .or_else(|| scoped(&opts.mc_set, &opts.mc_unset, "global"));
             let implier = sess.implied_by(owner, name).filter(|_| staged);
-            let (locked, locked_by) = match (opts.is_forced(name), implier) {
-                (true, _) => (true, Some("make.conf *_FORCE".to_string())),
-                (false, Some(by)) => (true, Some(format!("implied by {by}"))),
-                (false, None) => (false, None),
+            let locked_by = if opts.is_forced(name) {
+                Some("make.conf *_FORCE".to_string())
+            } else {
+                implier.map(|by| format!("implied by {by}"))
             };
             let def = opts.defs.get(name);
-            let group = opts
-                .groups
-                .iter()
-                .find(|g| g.members.iter().any(|m| m == name))
-                .map(|g| GroupReport {
+            let group = opts.group_of(name).map(|g| GroupReport {
                     name: g.name.clone(),
                     kind: group_kind(g.kind),
                     members: g.members.clone(),
                 });
-            let mut adds_deps: Vec<String> = def
-                .map(|d| d.deps.iter().flat_map(|(_, origins)| origins.clone()).collect())
-                .unwrap_or_default();
-            adds_deps.sort();
-            adds_deps.dedup();
+            let adds_deps = dep_origins(def);
             OptionReport {
                 name: name.clone(),
                 staged,
@@ -321,7 +320,7 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                 saved: file_value,
                 new: saved.is_some() && file_value.is_none(),
                 makeconf,
-                locked,
+                locked: locked_by.is_some(),
                 locked_by,
                 deviates_makeconf: sess.mc_deviates(owner, name),
                 group,
@@ -347,6 +346,15 @@ fn group_kind(kind: GroupKind) -> &'static str {
     }
 }
 
+/// The origins the options' dependencies name, sorted, each once.
+fn dep_origins<'a>(defs: impl IntoIterator<Item = &'a OptionDef>) -> Vec<String> {
+    let mut out: Vec<String> =
+        defs.into_iter().flat_map(|d| d.deps.iter().flat_map(|(_, o)| o.iter().cloned())).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// One pending write as JSON, with the dependencies its newly enabled
 /// options declare.
 pub fn write_entry(w: &PendingWrite, info: Option<&PortInfo>) -> WriteEntry {
@@ -358,28 +366,15 @@ pub fn write_entry(w: &PendingWrite, info: Option<&PortInfo>) -> WriteEntry {
         .iter()
         .chain(c.adopted.iter().filter(|(_, on)| *on).map(|(o, _)| o))
         .collect();
-    let mut new_deps: Vec<String> = Vec::new();
-    if let Some(info) = info {
-        for opt in newly_on {
-            if let Some(def) = info.options.defs.get(opt) {
-                for (_, origins) in &def.deps {
-                    new_deps.extend(origins.clone());
-                }
-            }
-        }
-    }
-    new_deps.sort();
-    new_deps.dedup();
+    let new_deps = match info {
+        Some(info) => dep_origins(newly_on.into_iter().filter_map(|o| info.options.defs.get(o))),
+        None => Vec::new(),
+    };
     let new_file = w.old.is_none();
     WriteEntry {
         port: w.key.to_string(),
         new_file,
-        options_name: w
-            .path
-            .parent()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        options_name: w.options_name.clone(),
         file: w.path.display().to_string(),
         diff,
         // A new file adopts every option the port has; listing them all

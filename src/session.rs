@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::apply;
-use crate::model::options::GroupKind;
+use crate::model::options::{GroupKind, PortOptions};
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
@@ -52,7 +52,7 @@ pub struct Session {
 }
 
 /// Is this port the default flavor of its origin (or unflavored)?
-fn is_preferred(info: &PortInfo) -> bool {
+pub(crate) fn is_preferred(info: &PortInfo) -> bool {
     match &info.canonical.flavor {
         None => true,
         Some(f) => info.flavors.first() == Some(f),
@@ -150,9 +150,7 @@ impl Session {
         if !self.states.contains_key(&info.options_name) {
             // The baseline follows the file OWNER's view (default flavor):
             // that's what apply will write.
-            let owner = self.owner_info(info);
-            let saved = files.saved(&owner.options_name);
-            let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
+            let (saved, baseline) = saved_baseline(self.owner_info(info), files);
             self.states.insert(
                 info.options_name.clone(),
                 OptState { saved, staged: baseline.clone(), baseline },
@@ -173,10 +171,7 @@ impl Session {
             }
         }
         self.rebuild_owners();
-        for key in &added_keys {
-            self.ensure_state(key, files);
-        }
-        // Existing ports may have gained state-worthy options in a refresh.
+        // Newcomers, and existing ports that gained options in a refresh.
         let keys: Vec<PortKey> = self.ports.keys().cloned().collect();
         for key in keys {
             self.ensure_state(&key, files);
@@ -189,13 +184,7 @@ impl Session {
                 continue;
             }
             if let Some(info) = self.ports.get(&key) {
-                for dep in &info.deps {
-                    if let Some(target) = self.resolve(&dep.target) {
-                        if !reachable.contains(&target) {
-                            stack.push(target);
-                        }
-                    }
-                }
+                stack.extend(self.resolved_deps(info));
             }
         }
         let before = self.ports.len();
@@ -211,33 +200,43 @@ impl Session {
         self.states.get(&info.options_name)
     }
 
-    /// Reload saved files after an apply so statuses reflect reality. Only
-    /// what `files` has forgotten (the files apply wrote or removed) is read
-    /// again from disk.
-    pub fn reload_saved(&mut self, files: &OptionsFiles) {
-        let mut updates: Vec<(String, Option<SavedOptionsFile>, BTreeSet<String>)> = Vec::new();
-        for info in self.ports.values() {
-            if !self.states.contains_key(&info.options_name)
-                || updates.iter().any(|(n, _, _)| *n == info.options_name)
-            {
+    /// Is the option staged on (false for a port without state)?
+    pub fn is_staged(&self, info: &PortInfo, opt: &str) -> bool {
+        self.state(info).is_some_and(|s| s.staged.contains(opt))
+    }
+
+    /// The port's dependencies, resolved to closure keys; unknown ones are
+    /// skipped.
+    fn resolved_deps<'a>(&'a self, info: &'a PortInfo) -> impl Iterator<Item = PortKey> + 'a {
+        info.deps.iter().filter_map(|d| self.resolve(&d.target))
+    }
+
+    /// Reload the files an apply wrote or removed (`touched`, by
+    /// OPTIONS_NAME) so statuses reflect reality. Only those change: every
+    /// other state keeps the baseline the scan gave it, since recomputing it
+    /// would read the port's `effective`, which a TUI refresh may have
+    /// queried with an edit staged since undone.
+    pub fn reload_saved<'a>(&mut self, files: &OptionsFiles, touched: impl IntoIterator<Item = &'a str>) {
+        for name in touched {
+            let owner = self.owners.get(name).and_then(|k| self.ports.get(k));
+            let (Some(state), Some(owner)) = (self.states.get_mut(name), owner) else {
                 continue;
-            }
-            let owner = self.owner_info(info);
-            let saved = files.saved(&owner.options_name);
-            let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
-            updates.push((info.options_name.clone(), saved, baseline));
-        }
-        for (name, saved, baseline) in updates {
-            if let Some(state) = self.states.get_mut(&name) {
-                state.saved = saved;
-                state.baseline = baseline;
-            }
+            };
+            let saved = files.saved(name);
+            state.baseline = match &saved {
+                // A file apply wrote has a line for every option.
+                Some(file) => close_implies(owner, apply::sync_enabled_set(owner, Some(file))),
+                // Removed under -m: what make reads with no file, which is
+                // what the removal was judged against.
+                None => nofile_effective(owner),
+            };
+            state.saved = saved;
         }
     }
 
     /// Toggle an option; returns a user-facing error when refused.
     pub fn toggle(&mut self, key: &PortKey, opt: &str) -> Result<(), String> {
-        let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?.clone();
+        let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
         let state = self
             .states
             .get_mut(&info.options_name)
@@ -250,12 +249,11 @@ impl Session {
 
         if state.staged.contains(opt) {
             // Turning off.
-            if let Some(by) = implier_of(&info, &state.staged, opt) {
+            if let Some(by) = implier_of(info, &state.staged, opt) {
                 return Err(format!("{opt} is implied by {by}; disable {by} first"));
             }
-            let group = opts.groups.iter().find(|g| g.members.iter().any(|m| m == opt));
-            if let Some(g) = group {
-                let on = g.members.iter().filter(|m| state.staged.contains(*m)).count();
+            if let Some(g) = opts.group_of(opt) {
+                let on = g.count_on(&state.staged);
                 match g.kind {
                     GroupKind::Single if on == 1 => {
                         return Err(format!(
@@ -272,11 +270,7 @@ impl Session {
             state.staged.remove(opt);
         } else {
             // Turning on: single/radio groups deselect siblings.
-            if let Some(g) = opts
-                .groups
-                .iter()
-                .find(|g| matches!(g.kind, GroupKind::Single | GroupKind::Radio) && g.members.iter().any(|m| m == opt))
-            {
+            if let Some(g) = opts.exclusive_group_of(opt) {
                 for m in &g.members {
                     if m != opt {
                         state.staged.remove(m);
@@ -284,7 +278,7 @@ impl Session {
                 }
             }
             state.staged.insert(opt.to_string());
-            state.staged = close_implies(&info, std::mem::take(&mut state.staged));
+            state.staged = close_implies(info, std::mem::take(&mut state.staged));
         }
         Ok(())
     }
@@ -326,20 +320,13 @@ impl Session {
     }
 
     pub fn reset_to_defaults(&mut self, key: &PortKey) {
-        if let Some(info) = self.ports.get(key) {
-            // The shared state follows the file OWNER's view, like the
-            // baseline: a flavor lacking some of its options must not drop them.
-            let owner = self.owner_info(info).clone();
-            if let Some(state) = self.states.get_mut(&owner.options_name) {
-                let defaults: BTreeSet<String> = owner
-                    .options
-                    .complete
-                    .iter()
-                    .filter(|o| owner.options.defaults.contains(*o))
-                    .cloned()
-                    .collect();
-                state.staged = close_implies(&owner, defaults);
-            }
+        let Some(info) = self.ports.get(key) else { return };
+        // The shared state follows the file OWNER's view, like the
+        // baseline: a flavor lacking some of its options must not drop them.
+        // (owner_info would borrow all of self, states included.)
+        let owner = self.owners.get(&info.options_name).and_then(|k| self.ports.get(k)).unwrap_or(info);
+        if let Some(state) = self.states.get_mut(&owner.options_name) {
+            state.staged = close_implies(owner, port_defaults(&owner.options));
         }
     }
 
@@ -370,7 +357,7 @@ impl Session {
             }
         }
         for g in &info.options.groups {
-            let on = g.members.iter().filter(|m| staged.contains(*m)).count();
+            let on = g.count_on(staged);
             match g.kind {
                 GroupKind::Single if on != 1 => {
                     out.push(format!("group {} needs exactly one member enabled ({on} enabled)", g.name));
@@ -401,19 +388,26 @@ impl Session {
         if state.staged != state.baseline {
             return UiStatus::Edited;
         }
-        match &state.saved {
+        match self.stale_delta(info) {
             None => UiStatus::Unconfigured,
-            Some(saved) => {
-                // Judge staleness against the file OWNER's option list: a
-                // non-default flavor excludes options on purpose and must not
-                // read the owner-written file as stale.
-                let owner = self.owner_info(info);
-                let cur: BTreeSet<&str> =
-                    owner.options.complete.iter().map(String::as_str).collect();
-                let was: BTreeSet<&str> = saved.complete.iter().map(String::as_str).collect();
-                if cur == was { UiStatus::Ok } else { UiStatus::Stale }
-            }
+            Some((added, removed)) if added.is_empty() && removed.is_empty() => UiStatus::Ok,
+            Some(_) => UiStatus::Stale,
         }
+    }
+
+    /// The options the port gained and lost since its saved file was
+    /// written; None when there is no file. Judged against the file OWNER's
+    /// option list: a non-default flavor excludes options on purpose and
+    /// must not read the owner-written file as stale.
+    pub fn stale_delta(&self, info: &PortInfo) -> Option<(Vec<String>, Vec<String>)> {
+        let saved = self.state(info)?.saved.as_ref()?;
+        let cur: BTreeSet<&str> =
+            self.owner_info(info).options.complete.iter().map(String::as_str).collect();
+        let was: BTreeSet<&str> = saved.complete.iter().map(String::as_str).collect();
+        Some((
+            cur.difference(&was).map(|o| o.to_string()).collect(),
+            was.difference(&cur).map(|o| o.to_string()).collect(),
+        ))
     }
 
     /// True when the port's Stale/Unconfigured status introduces no real
@@ -438,11 +432,7 @@ impl Session {
         if o.is_forced(opt) {
             return false;
         }
-        let mentioned = o.mc_set.contains(opt)
-            || o.mc_unset.contains(opt)
-            || o.port_set.contains(opt)
-            || o.port_unset.contains(opt);
-        if !mentioned {
+        if !o.mc_mentions(opt) {
             return false;
         }
         let nofile_on = nofile_effective(info).contains(opt);
@@ -487,8 +477,7 @@ impl Session {
         }
         while let Some(key) = queue.pop_front() {
             let Some(info) = self.ports.get(&key) else { continue };
-            for dep in &info.deps {
-                let Some(dep) = self.resolve(&dep.target) else { continue };
+            for dep in self.resolved_deps(info) {
                 // Never rewrite a settled predecessor: a dependency cycle
                 // would otherwise make the chain walk loop forever.
                 if pred.contains_key(&dep) {
@@ -510,11 +499,7 @@ impl Session {
         let Some(target) = self.resolve(target) else { return Vec::new() };
         self.ports
             .iter()
-            .filter(|(_, info)| {
-                info.deps
-                    .iter()
-                    .any(|d| self.resolve(&d.target).as_ref() == Some(&target))
-            })
+            .filter(|(_, info)| self.resolved_deps(info).any(|d| d == target))
             .map(|(key, _)| key.clone())
             .collect()
     }
@@ -564,6 +549,29 @@ pub fn staged_diff(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Strin
     added.chain(removed).collect::<Vec<String>>().join(" ")
 }
 
+/// `+OPT` or `-OPT` for every option of `complete`, in its order, by whether
+/// `on` holds it.
+pub fn signed_options(complete: &[String], on: &BTreeSet<String>) -> String {
+    complete
+        .iter()
+        .map(|o| if on.contains(o) { format!("+{o}") } else { format!("-{o}") })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The saved file of the port owning an options file, and the baseline it
+/// gives: the file read as make reads it, IMPLIES-closed.
+fn saved_baseline(owner: &PortInfo, files: &OptionsFiles) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
+    let saved = files.saved(&owner.options_name);
+    let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
+    (saved, baseline)
+}
+
+/// OPTIONS_DEFAULT restricted to the options the port has.
+fn port_defaults(o: &PortOptions) -> BTreeSet<String> {
+    o.defaults.iter().filter(|d| o.complete.contains(d)).cloned().collect()
+}
+
 /// Does the port refuse to build as queried (port-level BROKEN or IGNORE)?
 /// The two are one condition for attribution: either one blocks the build.
 pub fn is_blocked(info: &PortInfo) -> bool {
@@ -591,18 +599,10 @@ pub fn undecided_options(
     // Recorded means a SET or UNSET line, as `apply::sync_enabled_set` reads
     // the file: an option only in `_FILE_COMPLETE_OPTIONS_LIST` is left by
     // make at its default, which nobody decided.
-    let known: BTreeSet<&str> = match saved {
-        Some(saved) => saved.set.iter().chain(saved.unset.iter()).map(String::as_str).collect(),
-        None => BTreeSet::new(),
-    };
+    let known: BTreeSet<&str> =
+        saved.into_iter().flat_map(|s| s.recorded()).map(String::as_str).collect();
     let o = &info.options;
-    let mc_decided = |opt: &str| {
-        o.mc_set.contains(opt)
-            || o.mc_unset.contains(opt)
-            || o.port_set.contains(opt)
-            || o.port_unset.contains(opt)
-            || o.is_forced(opt)
-    };
+    let mc_decided = |opt: &str| o.mc_mentions(opt) || o.is_forced(opt);
     // Selected means make.conf ENDS UP enabling it, not merely that some layer
     // names it: a later layer can undo an earlier one, and then the member
     // actually in force was picked by the port default — nobody's decision.
@@ -629,24 +629,33 @@ pub fn undecided_options(
 /// bsd.options.mk application order (defaults, make.conf layers, FORCE,
 /// IMPLIES closure) minus the options-file layer.
 pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
+    effective_with(info, None)
+}
+
+/// Effective options as make computes them with `file` as the options file
+/// (None: no file), from what the scan knows — never from the port's
+/// queried `effective`, which in the TUI already holds staged edits once a
+/// refresh has run. `options.local`, WITH/WITHOUT and OPTIONS_OVERRIDE are
+/// not modelled.
+pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete: BTreeSet<&str> = o.complete.iter().map(String::as_str).collect();
-    let mut set: BTreeSet<String> = o
-        .defaults
-        .iter()
-        .filter(|d| complete.contains(d.as_str()))
-        .cloned()
-        .collect();
+    let mut set = port_defaults(o);
+    let empty = BTreeSet::new();
+    let (file_set, file_unset) = file.map_or((&empty, &empty), |f| (&f.set, &f.unset));
     // One pass per layer, in the framework's own order (bsd.options.mk:312,
-    // 320, 326, 334 then 370, 378, 384, 392): each scope's UNSET runs before
-    // the next scope's SET, which is what lets the per-port knob override the
-    // global one. Applying all the SETs and then all the UNSETs instead would
-    // let a global UNSET erase a per-port SET.
+    // 320, 326, 334, the file at 354 and 361, then 370, 378, 384, 392):
+    // each scope's UNSET runs before the next scope's SET, which is what lets
+    // the per-port knob override the global one. Applying all the SETs and
+    // then all the UNSETs instead would let a global UNSET erase a per-port
+    // SET. IMPLIES comes last (bsd.options.mk:411), after the file and FORCE.
     for (adds, list) in [
         (true, &o.mc_set),
         (false, &o.mc_unset),
         (true, &o.port_set),
         (false, &o.port_unset),
+        (true, file_set),
+        (false, file_unset),
         (true, &o.force_set),
         (false, &o.force_unset),
         (true, &o.port_force_set),
@@ -668,21 +677,18 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
 /// known options (mirrors bsd.options.mk, which force-adds implied options).
 pub(crate) fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> {
-    loop {
-        let mut added = false;
-        for opt in set.clone() {
-            if let Some(def) = info.options.defs.get(&opt) {
-                for imp in &def.implies {
-                    if info.options.complete.iter().any(|o| o == imp) && set.insert(imp.clone()) {
-                        added = true;
-                    }
-                }
+    let complete: BTreeSet<&str> = info.options.complete.iter().map(String::as_str).collect();
+    // Each option is expanded once: when it enters the set.
+    let mut todo: Vec<String> = set.iter().cloned().collect();
+    while let Some(opt) = todo.pop() {
+        let Some(def) = info.options.defs.get(&opt) else { continue };
+        for imp in &def.implies {
+            if complete.contains(imp.as_str()) && set.insert(imp.clone()) {
+                todo.push(imp.clone());
             }
         }
-        if !added {
-            return set;
-        }
     }
+    set
 }
 
 /// Rebuild a BFS path by following predecessors back to the root, then
@@ -737,10 +743,7 @@ mod tests {
             d.insert(name.to_string(), def);
         }
         let info = PortInfo {
-            key: key.clone(),
-            canonical: key.clone(),
             pkgname: "port-1.0".into(),
-            flavors: vec![],
             options_name: "cat_port".into(),
             options: PortOptions {
                 complete: complete.iter().map(|s| s.to_string()).collect(),
@@ -750,14 +753,7 @@ mod tests {
                 defs: d,
                 ..Default::default()
             },
-            deps: vec![],
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub(&key.to_string())
         };
         let mut ports = BTreeMap::new();
         ports.insert(key.clone(), info);
@@ -1140,13 +1136,7 @@ mod tests {
     }
 
     fn linked_info(origin: &str, deps: &[&str], complete: &[&str]) -> PortInfo {
-        let key = PortKey::parse(origin).unwrap();
         PortInfo {
-            key: key.clone(),
-            canonical: key,
-            pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
-            flavors: vec![],
-            options_name: origin.replace('/', "_"),
             options: PortOptions {
                 complete: complete.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
@@ -1159,13 +1149,7 @@ mod tests {
                     test_only: false,
                 })
                 .collect(),
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub(origin)
         }
     }
 
@@ -1219,8 +1203,6 @@ mod tests {
         let mk = |flavor: &str, complete: &[&str]| {
             let key = PortKey::parse(&format!("editors/emacs@{flavor}")).unwrap();
             PortInfo {
-                key: key.clone(),
-                canonical: key,
                 pkgname: format!("emacs-{flavor}-30"),
                 flavors: vec!["full".into(), "nox".into()],
                 options_name: "editors_emacs".into(),
@@ -1229,14 +1211,7 @@ mod tests {
                     effective: complete.iter().map(|s| s.to_string()).collect(),
                     ..Default::default()
                 },
-                deps: vec![],
-                broken: None,
-                ignore: None,
-                deprecated: None,
-                pkg_help: None,
-                about: Default::default(),
-                default_versions: vec![],
-                warnings: vec![],
+                ..PortInfo::stub(&key.to_string())
             }
         };
         let full = mk("full", &["A", "X11"]);
@@ -1266,25 +1241,13 @@ mod tests {
     fn siblings_lists_closure_flavors() {
         // devel/git declares three flavors but only two are in the closure.
         let mk = |origin: &str, flavors: &[&str]| {
-            let key = PortKey::parse(origin).unwrap();
             PortInfo {
-                pkgname: format!("{}-1.0", key.origin.split('/').next_back().unwrap()),
-                options_name: key.origin.replace('/', "_"),
-                key: key.clone(),
-                canonical: key,
                 flavors: flavors.iter().map(|s| s.to_string()).collect(),
                 options: PortOptions {
                     complete: vec!["A".into()],
                     ..Default::default()
                 },
-                deps: vec![],
-                broken: None,
-                ignore: None,
-                deprecated: None,
-                pkg_help: None,
-                about: Default::default(),
-                default_versions: vec![],
-                warnings: vec![],
+                ..PortInfo::stub(origin)
             }
         };
         let flavors = ["default", "lite", "tiny"];
@@ -1507,11 +1470,46 @@ mod tests {
             "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
         )
         .unwrap();
-        s.reload_saved(&OptionsFiles::new(tmp.path()));
+        s.reload_saved(&OptionsFiles::new(tmp.path()), ["cat_port"]);
         // Baseline now follows the file; staged still empty -> Edited.
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.baseline.contains("A"));
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+    }
+
+    /// A TUI refresh queries make with the staged edits in place, so a
+    /// port's `effective` can hold an edit since undone. Under -m an apply
+    /// writes no file for a port back at its defaults; the baseline it then
+    /// reloads must not come from that stale `effective`.
+    #[test]
+    fn reload_saved_ignores_a_refreshed_effective() {
+        let (ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = Session::new(ports, HashMap::new(), &roots, &files, true);
+        // B turned on, a refresh merged with it staged, B turned off again.
+        s.ports.get_mut(&key).unwrap().options.effective = set(&["A", "B"]);
+        s.toggle(&key, "B").unwrap();
+        s.toggle(&key, "B").unwrap();
+        assert!(!s.dirty());
+        // The apply writes nothing (A alone is the no-file outcome).
+        s.reload_saved(&files, []);
+        assert!(!s.dirty(), "{:?}", s.state(&s.ports[&key]));
+
+        // Same, with a file the apply removes.
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        let file = tmp.path().join("cat_port/options");
+        std::fs::write(&file, "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n")
+            .unwrap();
+        files.forget(["cat_port"]);
+        s.reload_saved(&files, ["cat_port"]);
+        s.toggle(&key, "B").unwrap();
+        s.toggle(&key, "B").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        files.forget(["cat_port"]);
+        s.reload_saved(&files, ["cat_port"]);
+        assert!(!s.dirty(), "{:?}", s.state(&s.ports[&key]));
     }
 
     /// After an apply only the files it touched are read again: the store
@@ -1545,7 +1543,7 @@ mod tests {
         write("cat_a", "SET");
         write("cat_b", "SET");
         files.forget(["cat_a"]);
-        s.reload_saved(&files);
+        s.reload_saved(&files, ["cat_a"]);
         assert_eq!(files.disk_reads(), 3, "only the forgotten file is read");
         let a = PortKey::parse("cat/a").unwrap();
         let b = PortKey::parse("cat/b").unwrap();
@@ -1556,10 +1554,7 @@ mod tests {
     #[test]
     fn bulk_set_applies_rules_and_dedups_shared_state() {
         let mk = |origin: &str, options_name: &str, complete: &[&str]| {
-            let key = PortKey::parse(origin).unwrap();
             PortInfo {
-                key: key.clone(),
-                canonical: key,
                 pkgname: format!("{}-1.0", origin.replace('/', "-")),
                 flavors: vec!["f1".into(), "f2".into()],
                 options_name: options_name.into(),
@@ -1567,14 +1562,7 @@ mod tests {
                     complete: complete.iter().map(|s| s.to_string()).collect(),
                     ..Default::default()
                 },
-                deps: vec![],
-                broken: None,
-                ignore: None,
-                deprecated: None,
-                pkg_help: None,
-                about: Default::default(),
-                default_versions: vec![],
-                warnings: vec![],
+                ..PortInfo::stub(origin)
             }
         };
         let mut ports = BTreeMap::new();

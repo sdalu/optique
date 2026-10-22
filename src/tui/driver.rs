@@ -12,7 +12,7 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
 
-use super::{build_app, dispatch_key, ui, App, Focus, KeyOutcome};
+use super::{build_app, dispatch_key, stop_background_makes, ui, App, Focus, KeyOutcome, OverlayKind};
 use crate::optfiles::OptionsFiles;
 use crate::query::refresher::Refresher;
 use crate::session::Session;
@@ -73,10 +73,7 @@ pub fn run_driver(
         }
     }
     // Same courtesy as the real TUI: no orphaned makes after the session.
-    let stopped = crate::query::makerunner::kill_active_makes();
-    if stopped > 0 {
-        eprintln!("optique: stopped {stopped} in-flight make process(es)");
-    }
+    stop_background_makes();
     Ok(())
 }
 
@@ -150,15 +147,9 @@ fn press(app: &mut App, key: KeyEvent, out: &mut impl Write) -> Result<bool> {
 fn dump(app: &mut App, terminal: &mut DriverTerminal, out: &mut impl Write) -> Result<()> {
     terminal.draw(|f| ui::draw(f, app))?;
     let buffer = terminal.backend().buffer();
-    let (width, height) = (buffer.area.width, buffer.area.height);
-    let cells = buffer.content();
-    writeln!(out, "screen {width}x{height}")?;
-    for y in 0..height {
-        let mut row = String::with_capacity(width as usize);
-        for x in 0..width {
-            row.push_str(cells[(y as usize) * (width as usize) + x as usize].symbol());
-        }
-        writeln!(out, "{}", row.trim_end())?;
+    writeln!(out, "screen {}x{}", buffer.area.width, buffer.area.height)?;
+    for row in ui::screen_rows(buffer) {
+        writeln!(out, "{row}")?;
     }
     writeln!(out, "end")?;
     Ok(())
@@ -172,24 +163,17 @@ fn state_json(app: &App) -> String {
         Focus::Editor => "editor",
         Focus::Filter => "filter",
     };
-    // Mirrors the if/else chain in ui::draw, so the reported overlay is the
-    // one actually on screen.
-    let overlay = if app.quit_confirm {
-        "quit_confirm"
-    } else if app.modal.is_some() {
-        "apply"
-    } else if app.bulk.is_some() {
-        "bulk"
-    } else if app.help_tab.is_some() {
-        "help"
-    } else if app.port_help.is_some() {
-        "port_help"
-    } else if app.why.is_some() {
-        "why"
-    } else if app.opt_info.is_some() {
-        "opt_info"
-    } else {
-        "none"
+    // The overlay ui::draw puts on screen, so the one reported is the one
+    // actually shown.
+    let overlay = match app.top_overlay() {
+        Some(OverlayKind::QuitConfirm) => "quit_confirm",
+        Some(OverlayKind::Apply) => "apply",
+        Some(OverlayKind::Bulk) => "bulk",
+        Some(OverlayKind::Help(_)) => "help",
+        Some(OverlayKind::PortHelp) => "port_help",
+        Some(OverlayKind::Why) => "why",
+        Some(OverlayKind::OptInfo) => "opt_info",
+        None => "none",
     };
     serde_json::json!({
         "focus": focus,

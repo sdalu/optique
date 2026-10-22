@@ -15,6 +15,11 @@ pub enum GroupKind {
     Radio,
 }
 
+/// "on" or "off".
+pub fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
 impl GroupKind {
     pub fn label(self) -> &'static str {
         match self {
@@ -32,6 +37,13 @@ pub struct OptionGroup {
     pub name: String,
     pub desc: String,
     pub members: Vec<String>,
+}
+
+impl OptionGroup {
+    /// How many members `set` holds.
+    pub fn count_on(&self, set: &BTreeSet<String>) -> usize {
+        self.members.iter().filter(|m| set.contains(*m)).count()
+    }
 }
 
 /// Per-option metadata gathered from the ports framework.
@@ -101,6 +113,28 @@ pub enum Provenance {
 impl PortOptions {
     pub fn has_options(&self) -> bool {
         !self.complete.is_empty()
+    }
+
+    /// The group `opt` belongs to, if any.
+    pub fn group_of(&self, opt: &str) -> Option<&OptionGroup> {
+        self.groups.iter().find(|g| g.members.iter().any(|m| m == opt))
+    }
+
+    /// The SINGLE or RADIO group `opt` belongs to, if any: the groups where
+    /// turning one member on turns the others off.
+    pub fn exclusive_group_of(&self, opt: &str) -> Option<&OptionGroup> {
+        self.groups.iter().find(|g| {
+            matches!(g.kind, GroupKind::Single | GroupKind::Radio) && g.members.iter().any(|m| m == opt)
+        })
+    }
+
+    /// Whether make.conf names the option, globally or for this port,
+    /// FORCE knobs aside.
+    pub fn mc_mentions(&self, opt: &str) -> bool {
+        self.mc_set.contains(opt)
+            || self.mc_unset.contains(opt)
+            || self.port_set.contains(opt)
+            || self.port_unset.contains(opt)
     }
 
     /// Whether toggling this option in the options file can have any effect.

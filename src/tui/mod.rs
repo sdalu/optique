@@ -131,6 +131,18 @@ pub struct PortHelp {
     pub scroll: u16,
 }
 
+/// The overlay drawn over the panes, when one is open.
+pub(crate) enum OverlayKind {
+    QuitConfirm,
+    Apply,
+    Bulk,
+    /// The help overlay, on this tab.
+    Help(usize),
+    PortHelp,
+    Why,
+    OptInfo,
+}
+
 pub struct App {
     pub session: Session,
     pub options_dir: PathBuf,
@@ -238,11 +250,17 @@ pub fn run(
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
     // Don't leave background queries churning after the UI is gone.
+    stop_background_makes();
+    result
+}
+
+/// Kill the make processes background refreshes still have running, saying
+/// so on stderr. Shared by the real TUI and the headless driver.
+fn stop_background_makes() {
     let stopped = crate::query::makerunner::kill_active_makes();
     if stopped > 0 {
         eprintln!("optique: stopped {stopped} in-flight make process(es)");
     }
-    result
 }
 
 /// Assemble the ready-to-draw App: initial state, adopted draft, first list
@@ -379,17 +397,12 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c as usize - '1' as usize;
                 if idx < n {
-                    app.help_tab = Some(idx);
-                    app.help_scroll = 0;
+                    app.open_help(idx);
                 }
             }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                app.help_tab = Some((tab + 1) % n);
-                app.help_scroll = 0;
-            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.open_help((tab + 1) % n),
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                app.help_tab = Some((tab + n - 1) % n);
-                app.help_scroll = 0;
+                app.open_help((tab + n - 1) % n)
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 app.help_scroll = app.help_scroll.saturating_add(1)
@@ -453,14 +466,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     // Ctrl-C always quits (with confirm if dirty) — checked before the
     // filter branch so it can't be swallowed as a literal 'c'.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if app.session.dirty() {
-            app.quit_confirm = true;
-            return KeyOutcome::Continue;
-        }
-        // Nothing staged: a draft restored and then reverted by hand has
-        // nothing left to keep and must not come back on the next launch.
-        draft::discard(&app.options_dir);
-        return KeyOutcome::Quit;
+        return request_quit(app);
     }
     // The bulk prompt takes text input, so it grabs the keys before the
     // filter branch and the plain command keys.
@@ -509,39 +515,19 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
 
     match key.code {
-        KeyCode::Char('q') => {
-            if app.session.dirty() {
-                app.quit_confirm = true;
-            } else {
-                // As for Ctrl-C: nothing staged leaves no draft behind.
-                draft::discard(&app.options_dir);
-                return KeyOutcome::Quit;
-            }
-        }
+        KeyCode::Char('q') => return request_quit(app),
         KeyCode::Char('/') => app.focus = Focus::Filter,
-        KeyCode::Char('?') | KeyCode::F(1) => {
-            app.help_tab = Some(0);
-            app.help_scroll = 0;
-        }
+        KeyCode::Char('?') | KeyCode::F(1) => app.open_help(0),
         KeyCode::Char('a') => app.open_apply_modal(),
         KeyCode::Char('B') => app.open_bulk(),
         // Shift-U undoes the last option change anywhere; lowercase 'u'
         // stays the per-port revert-to-saved in the editor.
         KeyCode::Char('U') => app.undo_last(),
-        KeyCode::Char('t') => {
-            app.hide_ok = !app.hide_ok;
-            let keep = app.selected_key();
-            app.rebuild_visible(keep);
-            app.rebuild_editor();
-            app.flash(
-                if app.hide_ok {
-                    "showing only ports needing attention (t to show all)"
-                } else {
-                    "showing all ports"
-                },
-                false,
-            );
-        }
+        KeyCode::Char('t') => app.toggle_view(
+            |a| &mut a.hide_ok,
+            "showing only ports needing attention (t to show all)",
+            "showing all ports",
+        ),
         KeyCode::Char('I') => {
             app.show_about = !app.show_about;
             app.flash(
@@ -553,20 +539,11 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 false,
             );
         }
-        KeyCode::Char('m') => {
-            app.mc_relax = !app.mc_relax;
-            let keep = app.selected_key();
-            app.rebuild_visible(keep);
-            app.rebuild_editor();
-            app.flash(
-                if app.mc_relax {
-                    "make.conf-decided staleness counts as ok (≈, m to undo)"
-                } else {
-                    "make.conf-decided staleness counts as stale again"
-                },
-                false,
-            );
-        }
+        KeyCode::Char('m') => app.toggle_view(
+            |a| &mut a.mc_relax,
+            "make.conf-decided staleness counts as ok (≈, m to undo)",
+            "make.conf-decided staleness counts as stale again",
+        ),
         KeyCode::Char('L') => {
             // Turning the view off must always work, even once the loop it
             // was showing is gone; turning it on with nothing to show would
@@ -575,9 +552,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 app.flash("no dependency loop in this closure", false);
             } else {
                 app.only_loops = !app.only_loops;
-                let keep = app.selected_key();
-                app.rebuild_visible(keep);
-                app.rebuild_editor();
+                app.refresh_view();
                 app.flash(
                     if app.only_loops {
                         "showing only ports caught in a dependency loop (L to show all)"
@@ -588,34 +563,16 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 );
             }
         }
-        KeyCode::Char('s') => {
-            app.sort_problems_first = !app.sort_problems_first;
-            let keep = app.selected_key();
-            app.rebuild_visible(keep);
-            app.rebuild_editor();
-            app.flash(
-                if app.sort_problems_first {
-                    "sorting problems first"
-                } else {
-                    "alphabetical order (stable while editing)"
-                },
-                false,
-            );
-        }
-        KeyCode::Char('w') => {
-            app.warn_mc = !app.warn_mc;
-            let keep = app.selected_key();
-            app.rebuild_visible(keep);
-            app.rebuild_editor();
-            app.flash(
-                if app.warn_mc {
-                    "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)"
-                } else {
-                    "make.conf contradictions no longer flagged"
-                },
-                false,
-            );
-        }
+        KeyCode::Char('s') => app.toggle_view(
+            |a| &mut a.sort_problems_first,
+            "sorting problems first",
+            "alphabetical order (stable while editing)",
+        ),
+        KeyCode::Char('w') => app.toggle_view(
+            |a| &mut a.warn_mc,
+            "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)",
+            "make.conf contradictions no longer flagged",
+        ),
         _ => match app.focus {
             Focus::List => handle_list_key(app, key.code),
             Focus::Editor => handle_editor_key(app, key.code),
@@ -623,6 +580,19 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         },
     }
     KeyOutcome::Continue
+}
+
+/// Quit, or ask first when there are staged edits to save as a draft or
+/// discard. Shared by Ctrl-C and 'q'.
+fn request_quit(app: &mut App) -> KeyOutcome {
+    if app.session.dirty() {
+        app.quit_confirm = true;
+        return KeyOutcome::Continue;
+    }
+    // Nothing staged: a draft restored and then reverted by hand has
+    // nothing left to keep and must not come back on the next launch.
+    draft::discard(&app.options_dir);
+    KeyOutcome::Quit
 }
 
 fn handle_list_key(app: &mut App, code: KeyCode) {
@@ -665,22 +635,8 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Char('i') => app.open_opt_info(),
-        KeyCode::Char('d') => {
-            if let Some(key) = app.selected_key() {
-                app.push_undo(&key);
-                app.session.reset_to_defaults(&key);
-                app.mark_pending(&key);
-                app.flash("reset to port defaults", false);
-            }
-        }
-        KeyCode::Char('u') => {
-            if let Some(key) = app.selected_key() {
-                app.push_undo(&key);
-                app.session.revert(&key);
-                app.mark_pending(&key);
-                app.flash("reverted to saved state", false);
-            }
-        }
+        KeyCode::Char('d') => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
+        KeyCode::Char('u') => app.reset_selected(Session::revert, "reverted to saved state"),
         _ => {}
     }
 }
@@ -693,9 +649,7 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
     if showing_result {
         app.modal = None;
         // Applied files changed statuses; refresh the list (matters with hide_ok).
-        let keep = app.selected_key();
-        app.rebuild_visible(keep);
-        app.rebuild_editor();
+        app.refresh_view();
         return;
     }
     match code {
@@ -703,50 +657,50 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
             // Recompute the plan at confirmation time: a background refresh
             // may have merged new ports since the modal was opened.
             let planned = app.compute_writes();
-            let writes = planned.writes;
-            let summary = apply::apply(&writes);
+            let done = apply::commit(&planned.writes, &planned.removals);
             // apply is all-or-nothing: after a failed write nothing is on
             // disk, so nothing is removed either, and the edits stay staged
             // (and in the draft) to be applied again.
-            if !summary.failed.is_empty() {
+            if !done.summary.failed.is_empty() {
                 let mut text = format!("nothing written to {}", app.options_dir.display());
-                for (key, msg) in &summary.failed {
+                for (key, msg) in &done.summary.failed {
                     text.push_str(&format!("\nFAILED {key}: {msg}"));
                 }
                 if let Some(modal) = app.modal.as_mut() {
-                    modal.writes = writes;
                     modal.done = Some(text);
                 }
                 return;
             }
-            let mut removed = 0usize;
             let mut text =
-                format!("{} file(s) written to {}", summary.written, app.options_dir.display());
-            for r in &planned.removals {
-                match crate::clean::remove_entry(r) {
-                    Ok(_) => removed += 1,
-                    Err(e) => text.push_str(&format!("\nFAILED rm {}: {e}", r.options_name)),
-                }
+                format!("{} file(s) written to {}", done.summary.written, app.options_dir.display());
+            for (name, e) in &done.removed.failed {
+                text.push_str(&format!("\nFAILED rm {name}: {e}"));
             }
-            if removed > 0 {
-                text.push_str(&format!("\n{removed} redundant file(s) removed (--minimal)"));
+            if done.removed.count > 0 {
+                text.push_str(&format!(
+                    "\n{} redundant file(s) removed (--minimal)",
+                    done.removed.count
+                ));
+            }
+            for note in &done.removed.notes {
+                text.push_str(&format!("\nnote: {note}"));
             }
             // Only the files apply touched are read again; the rest are as
             // the scan read them.
-            let touched: Vec<String> = writes
+            let touched: Vec<&str> = planned
+                .writes
                 .iter()
-                .filter_map(|w| w.path.parent()?.file_name()?.to_str().map(str::to_string))
-                .chain(planned.removals.iter().map(|r| r.options_name.clone()))
+                .map(|w| w.options_name.as_str())
+                .chain(planned.removals.iter().map(|r| r.options_name.as_str()))
                 .collect();
-            app.options_files.forget(touched.iter().map(String::as_str));
-            app.session.reload_saved(&app.options_files);
+            app.options_files.forget(touched.iter().copied());
+            app.session.reload_saved(&app.options_files, touched.iter().copied());
             // The files on disk changed: attributions built on the pre-apply
             // staged history would now point at the wrong changes.
             app.blame.clear();
             // The edits are on disk now; the draft has served its purpose.
             draft::discard(&app.options_dir);
             if let Some(modal) = app.modal.as_mut() {
-                modal.writes = writes;
                 modal.done = Some(text);
             }
         }
@@ -767,6 +721,64 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
 impl App {
     pub fn selected_key(&self) -> Option<PortKey> {
         self.list_state.selected().and_then(|i| self.visible.get(i)).cloned()
+    }
+
+    /// The overlay on screen: when several are open, the first in this order
+    /// is the one drawn. `ui::draw` and the driver's `state` both use it.
+    /// `dispatch_key` hands keys out in a different order on purpose (Ctrl-C
+    /// is checked before the bulk prompt), so it does not go through here.
+    pub(crate) fn top_overlay(&self) -> Option<OverlayKind> {
+        if self.quit_confirm {
+            Some(OverlayKind::QuitConfirm)
+        } else if self.modal.is_some() {
+            Some(OverlayKind::Apply)
+        } else if self.bulk.is_some() {
+            Some(OverlayKind::Bulk)
+        } else if let Some(tab) = self.help_tab {
+            Some(OverlayKind::Help(tab))
+        } else if self.port_help.is_some() {
+            Some(OverlayKind::PortHelp)
+        } else if self.why.is_some() {
+            Some(OverlayKind::Why)
+        } else if self.opt_info.is_some() {
+            Some(OverlayKind::OptInfo)
+        } else {
+            None
+        }
+    }
+
+    /// Rebuild the list and the editor after a change to what is listed or
+    /// how, keeping the selection on the same port when it is still there.
+    fn refresh_view(&mut self) {
+        let keep = self.selected_key();
+        self.rebuild_visible(keep);
+        self.rebuild_editor();
+    }
+
+    /// Flip one of the list's view flags, refresh, and say which way it went.
+    fn toggle_view(&mut self, flag: fn(&mut App) -> &mut bool, on: &str, off: &str) {
+        let flag = flag(self);
+        *flag = !*flag;
+        let now = *flag;
+        self.refresh_view();
+        self.flash(if now { on } else { off }, false);
+    }
+
+    /// Open the help overlay on tab `idx`, scrolled to its top.
+    fn open_help(&mut self, idx: usize) {
+        self.help_tab = Some(idx);
+        self.help_scroll = 0;
+    }
+
+    /// Run a whole-port reset ('d', 'u') on the selected port: undoable, and
+    /// re-queried like any other change.
+    fn reset_selected(&mut self, reset: fn(&mut Session, &PortKey), msg: &str) {
+        if let Some(key) = self.selected_key() {
+            self.push_undo(&key);
+            reset(&mut self.session, &key);
+            self.mark_pending(&key);
+            self.flash(msg, false);
+        }
     }
 
     /// Is this port blacklisted for the current jail/tree/set?
@@ -909,15 +921,13 @@ impl App {
                 self.editor_rows.push(EditorRow::Option(m.clone()));
             }
         }
-        let owner_complete: Vec<String> =
-            self.session.owner_info(info).options.complete.clone();
+        let owner_complete = &self.session.owner_info(info).options.complete;
         if let Some(state) = self.session.state(info) {
             if let Some(saved) = &state.saved {
                 let file_known: BTreeSet<String> = saved
                     .complete
                     .iter()
-                    .chain(saved.set.iter())
-                    .chain(saved.unset.iter())
+                    .chain(saved.recorded())
                     .filter(|o| !opts.complete.contains(*o))
                     .cloned()
                     .collect();
@@ -988,22 +998,13 @@ impl App {
         // Warn when enabling an option flagged broken/ignored.
         let warn = {
             let info = &self.session.ports[&key];
-            let state = self.session.state(info);
-            let turning_on = state.map(|s| !s.staged.contains(&opt)).unwrap_or(false);
-            if turning_on {
-                info.options.defs.get(&opt).and_then(|d| {
-                    d.broken
-                        .as_ref()
-                        .map(|m| format!("warning: {opt} marks this port BROKEN: {m}"))
-                        .or_else(|| {
-                            d.ignore
-                                .as_ref()
-                                .map(|m| format!("warning: {opt} marks this port IGNORED: {m}"))
-                        })
-                })
-            } else {
-                None
-            }
+            let turning_on = self.session.state(info).is_some_and(|s| !s.staged.contains(&opt));
+            let def = info.options.defs.get(&opt).filter(|_| turning_on);
+            def.and_then(|d| match (&d.broken, &d.ignore) {
+                (Some(m), _) => Some(format!("warning: {opt} marks this port BROKEN: {m}")),
+                (None, Some(m)) => Some(format!("warning: {opt} marks this port IGNORED: {m}")),
+                (None, None) => None,
+            })
         };
         self.push_undo(&key);
         match self.session.toggle(&key, &opt) {
@@ -1215,7 +1216,7 @@ impl App {
         }
         let mut msg = format!(
             "{opt}={}: {} port(s) changed, {} skipped",
-            if on { "on" } else { "off" },
+            crate::model::options::on_off(on),
             changed.len(),
             skipped.len()
         );
@@ -1223,9 +1224,7 @@ impl App {
             msg.push_str(&format!(" (first: {key}: {reason})"));
         }
         self.flash(&msg, changed.is_empty());
-        let keep = self.selected_key();
-        self.rebuild_visible(keep);
-        self.rebuild_editor();
+        self.refresh_view();
     }
 
     /// Adopt the draft saved by a previous session on this options dir, if
@@ -1315,9 +1314,7 @@ impl App {
             self.mark_pending(&key);
         }
         self.flash(&format!("undid change to {options_name}"), false);
-        let keep = self.selected_key();
-        self.rebuild_visible(keep);
-        self.rebuild_editor();
+        self.refresh_view();
     }
 
     /// Schedule the port for a debounced background re-query.
@@ -1418,16 +1415,19 @@ impl App {
                     if diff.is_empty() {
                         continue; // nothing recent to point at
                     }
-                    let (label, reason) = match (&info.broken, &info.ignore) {
-                        (Some(m), _) => ("BROKEN", m.as_str()),
-                        (None, Some(m)) => ("IGNORE", m.as_str()),
-                        (None, None) => continue,
-                    };
-                    flash = Some(format!(
-                        "{key}: now {label} ({}) — {diff}",
-                        trim_reason(reason)
-                    ));
-                    self.blame.insert(info.options_name.clone(), diff);
+                    // is_blocked: one of the two is set.
+                    let cause = info
+                        .broken
+                        .as_ref()
+                        .map(|m| ("BROKEN", m.as_str()))
+                        .or(info.ignore.as_ref().map(|m| ("IGNORE", m.as_str())));
+                    if let Some((label, reason)) = cause {
+                        flash = Some(format!(
+                            "{key}: now {label} ({}) — {diff}",
+                            trim_reason(reason)
+                        ));
+                        self.blame.insert(info.options_name.clone(), diff);
+                    }
                 }
                 _ => {}
             }
@@ -1488,9 +1488,7 @@ impl App {
             // rebuild: the L view lists the loops as they are now, and is
             // left when the last one went.
             self.refresh_loops(alerted);
-            let keep = self.selected_key();
-            self.rebuild_visible(keep);
-            self.rebuild_editor();
+            self.refresh_view();
         }
     }
 
@@ -1632,13 +1630,7 @@ mod tests {
         use crate::model::port::{DepEdge, PortInfo};
 
         let port = |origin: &str, deps: &[&str]| {
-            let key = PortKey::parse(origin).expect("test origin parses");
             PortInfo {
-                key: key.clone(),
-                canonical: key,
-                pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
-                flavors: vec![],
-                options_name: origin.replace('/', "_"),
                 options: PortOptions {
                     complete: vec!["DOCS".to_string()],
                     ..Default::default()
@@ -1651,13 +1643,7 @@ mod tests {
                         test_only: false,
                     })
                     .collect(),
-                broken: None,
-                ignore: None,
-                deprecated: None,
-                pkg_help: None,
-                about: Default::default(),
-                default_versions: vec![],
-                warnings: vec![],
+                ..PortInfo::stub(origin)
             }
         };
         let mut ports = std::collections::BTreeMap::new();
@@ -2568,15 +2554,7 @@ mod tests {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
         terminal.draw(|f| ui::draw(f, app)).unwrap();
-        let buffer = terminal.backend().buffer();
-        let (w, h) = (buffer.area.width as usize, buffer.area.height as usize);
-        let cells = buffer.content();
-        (0..h)
-            .map(|y| {
-                (0..w).map(|x| cells[y * w + x].symbol()).collect::<String>().trim_end().to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        ui::screen_rows(terminal.backend().buffer()).join("\n")
     }
 
     /// A loop is visible without asking: both ports wear the ∞ badge, and the

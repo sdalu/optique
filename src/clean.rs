@@ -67,17 +67,11 @@ pub fn classify_entries(
             continue;
         }
         let reason = match moved.resolve(&origin, exists) {
-            MovedResult::Removed { reason } if !reason.is_empty() => {
-                format!("port removed from tree ({reason})")
-            }
-            MovedResult::Removed { .. } => "port removed from tree".to_string(),
             MovedResult::MovedTo { origin: new, .. } => {
                 format!("port moved to {new} (its options live under another name)")
             }
             MovedResult::Unchanged => "port no longer exists in the tree".to_string(),
-            MovedResult::Cycle => {
-                "port no longer exists in the tree (its MOVED entries form a cycle)".to_string()
-            }
+            gone => gone.gone_reason().expect("removed and cycle both have a reason"),
         };
         removals.push(Removal { options_name: name, dir, reason });
     }
@@ -93,19 +87,16 @@ pub fn split_unused(
     live: Vec<LiveEntry>,
     used: &std::collections::HashSet<String>,
 ) -> (Vec<LiveEntry>, Vec<Removal>) {
-    let mut kept = Vec::new();
-    let mut removals = Vec::new();
-    for entry in live {
-        if used.contains(&entry.options_name) {
-            kept.push(entry);
-        } else {
-            removals.push(Removal {
-                options_name: entry.options_name,
-                dir: entry.dir,
-                reason: "not needed by the given list".to_string(),
-            });
-        }
-    }
+    let (mut kept, unused): (Vec<_>, Vec<_>) =
+        live.into_iter().partition(|e| used.contains(&e.options_name));
+    let mut removals: Vec<Removal> = unused
+        .into_iter()
+        .map(|e| Removal {
+            options_name: e.options_name,
+            dir: e.dir,
+            reason: "not needed by the given list".to_string(),
+        })
+        .collect();
     kept.sort_by(|a, b| a.options_name.cmp(&b.options_name));
     removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
     (kept, removals)
@@ -147,6 +138,31 @@ pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
     Ok(None)
 }
 
+/// What a removal pass did.
+#[derive(Debug, Default)]
+pub struct Removed {
+    pub count: usize,
+    /// Notes from removals that left something behind (an `options.local`).
+    pub notes: Vec<String>,
+    /// `(options_name, message)` for each entry that could not be removed.
+    pub failed: Vec<(String, String)>,
+}
+
+/// Remove every entry; a failure does not stop the rest.
+pub fn remove_all(removals: &[Removal]) -> Removed {
+    let mut out = Removed::default();
+    for r in removals {
+        match remove_entry(r) {
+            Ok(note) => {
+                out.count += 1;
+                out.notes.extend(note);
+            }
+            Err(e) => out.failed.push((r.options_name.clone(), e.to_string())),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,22 +184,11 @@ mod tests {
     }
 
     fn info_with(options: PortOptions) -> PortInfo {
-        let key = PortKey::parse("cat/port").unwrap();
         PortInfo {
-            key: key.clone(),
-            canonical: key,
             pkgname: "port-1.0".into(),
-            flavors: vec![],
             options_name: "cat_port".into(),
             options,
-            deps: vec![],
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub("cat/port")
         }
     }
 

@@ -107,11 +107,7 @@ fn run() -> Result<()> {
             // Real errors keep travelling up the anyhow path (nonzero, 1 from
             // clap's runner) — only the *clean* run may return 0.
             let attention = cmd_scan(&cli, &rs, args.json, args.options)?;
-            if attention > 0 {
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
-                std::process::exit(1);
-            }
+            exit_pending(attention > 0);
             Ok(())
         }
         Some(Command::Sync(args)) => {
@@ -121,11 +117,7 @@ fn run() -> Result<()> {
         Some(Command::Decide(args)) => {
             // Same gate contract as scan: 1 means "not done", not "broke".
             let code = cmd_decide(&cli, args)?;
-            if code != 0 {
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
-                std::process::exit(1);
-            }
+            exit_pending(code != 0);
             Ok(())
         }
         Some(Command::Clean(args)) => cmd_clean(&cli, args),
@@ -149,6 +141,16 @@ fn run() -> Result<()> {
             let rs = roots_or_installed(&cli, &[])?;
             cmd_tui(&cli, &rs, false)
         }
+    }
+}
+
+/// Exit 1 when something is left to do — the gate status scan and decide
+/// share — once both streams are flushed.
+fn exit_pending(pending: bool) {
+    if pending {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        std::process::exit(1);
     }
 }
 
@@ -231,8 +233,6 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
 }
 
 fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<()> {
-    use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
-
     let CleanCtx { settings, moved, jobs, cache: open_cache, used, _staging } = ctx;
     let paint = stderr_color(cli);
     eprintln!("{} options dir {}", tint(paint, ansi::BOLD, "optique clean:"), settings.options_dir.display());
@@ -267,94 +267,16 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 
     // Optionally find files that only repeat defaults + make.conf.
     if args.redundant {
-        let mut cache = open_cache.unwrap_or_else(|| new_cache(cli, &settings));
-        let ctx = QueryCtx {
-            portsdir: settings.portsdir.clone(),
-            make_conf: settings.make_conf.clone(),
-            port_dbdir: settings.options_dir.clone(),
-            overlays: settings.overlay_paths(),
-        };
-        let runner = MakeRunner::new(ctx.clone(), jobs);
-        let mut by_key: std::collections::HashMap<_, _> =
-            live.iter().map(|e| (e.key.clone(), e)).collect();
-        let mut in_flight = 0usize;
-        let mut done = 0usize;
-        let verbose = cli.verbose;
-        let mut kept: Vec<(String, String)> = Vec::new();
-        let handle = |info: model::port::PortInfo,
-                          removals: &mut Vec<clean::Removal>,
-                          kept: &mut Vec<(String, String)>,
-                          notes: &mut Vec<String>,
-                          by_key: &std::collections::HashMap<_, &clean::LiveEntry>| {
-            if let Some(entry) = by_key.get(&info.key) {
-                // The verdict below is only valid for the file this port
-                // actually reads; a custom/legacy OPTIONS_NAME means the
-                // entry belongs to some other port — leave it alone.
-                if info.options_name != entry.options_name {
-                    let note = format!(
-                        "{}: {} uses options name {} — not this entry, left alone",
-                        entry.options_name, info.key, info.options_name
-                    );
-                    eprintln!("warning: {note}");
-                    notes.push(note);
-                    return;
-                }
-                let diff = clean::redundancy_diff(&info);
-                if diff.is_empty() {
-                    removals.push(clean::Removal {
-                        options_name: entry.options_name.clone(),
-                        dir: entry.dir.clone(),
-                        reason: "redundant: repeats defaults + make.conf".to_string(),
-                    });
-                } else if verbose {
-                    kept.push((
-                        entry.options_name.clone(),
-                        format!("deviates from defaults + make.conf: {}", diff.join(" ")),
-                    ));
-                }
-            }
-        };
-        let files = optfiles::OptionsFiles::new(&settings.options_dir);
-        for entry in &live {
-            if let Some(info) = cache.lookup(&entry.key, &files) {
-                done += 1;
-                handle(info, &mut removals, &mut kept, &mut warnings, &by_key);
-            } else {
-                runner.submit(entry.key.clone());
-                in_flight += 1;
-            }
-        }
-        while in_flight > 0 {
-            match runner.events.recv() {
-                Ok(ScanEvent::PortDone(info)) => {
-                    in_flight -= 1;
-                    done += 1;
-                    cache.insert(&info, &files);
-                    handle(*info, &mut removals, &mut kept, &mut warnings, &by_key);
-                }
-                Ok(ScanEvent::PortError { key, msg }) => {
-                    in_flight -= 1;
-                    eprintln!("{} {key}: query failed, left alone ({msg})", tint(paint, ansi::YELLOW, "warning:"));
-                    warnings.push(format!("{key}: query failed, left alone ({msg})"));
-                    by_key.remove(&key);
-                }
-                Err(_) => break,
-            }
-            eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{} ports", live.len())));
-            let _ = std::io::stderr().flush();
-        }
-        if done > 0 {
-            eprintln!();
-        }
-        runner.shutdown();
-        if cli.verbose && !cli.quiet && !args.json {
-            kept.sort();
-            for (name, why) in &kept {
+        let cache = open_cache.unwrap_or_else(|| new_cache(cli, &settings));
+        let found = find_redundant(cli, &settings, jobs, cache, &live);
+        removals.extend(found.removals);
+        warnings.extend(found.warnings);
+        if cli.verbose && !args.json {
+            for (name, why) in &found.kept {
                 outln!("keep  {name:<38} {why}")?;
             }
         }
-        kept.sort();
-        kept_entries = kept;
+        kept_entries = found.kept;
     }
 
     // Obsolete, unused and redundant removals were collected separately.
@@ -370,23 +292,15 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     let mut errors: Vec<report::ErrorEntry> = Vec::new();
     let mut removed = 0usize;
     if !cli.dry_run {
-        for r in &removals {
-            match clean::remove_entry(r) {
-                Ok(note) => {
-                    removed += 1;
-                    if let Some(note) = note {
-                        eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
-                        warnings.push(note);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{} {}: {e}", tint(paint, ansi::RED, "error:"), r.options_name);
-                    errors.push(report::ErrorEntry {
-                        subject: r.options_name.clone(),
-                        message: e.to_string(),
-                    });
-                }
-            }
+        let done = clean::remove_all(&removals);
+        removed = done.count;
+        for note in done.notes {
+            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
+            warnings.push(note);
+        }
+        for (subject, message) in done.failed {
+            eprintln!("{} {subject}: {message}", tint(paint, ansi::RED, "error:"));
+            errors.push(report::ErrorEntry { subject, message });
         }
     }
 
@@ -394,13 +308,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         report::print(&report::CleanReport {
             options_dir: settings.options_dir.display().to_string(),
             dry_run: cli.dry_run,
-            removals: removals
-                .iter()
-                .map(|r| report::RemovalEntry {
-                    options_name: r.options_name.clone(),
-                    reason: r.reason.clone(),
-                })
-                .collect(),
+            removals: removals.iter().map(report::RemovalEntry::from).collect(),
             kept: kept_entries
                 .iter()
                 .map(|(options_name, reason)| report::KeptEntry {
@@ -432,40 +340,147 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     Ok(())
 }
 
+/// What the redundancy pass found among the live entries.
+#[derive(Default)]
+struct Redundancy {
+    removals: Vec<clean::Removal>,
+    /// Entries kept and why, sorted; only --verbose fills it in.
+    kept: Vec<(String, String)>,
+    warnings: Vec<String>,
+}
+
+/// Query the port of every live entry and mark the files that only repeat
+/// defaults + make.conf. An entry whose query fails is left alone.
+fn find_redundant(
+    cli: &Cli,
+    settings: &config::Settings,
+    jobs: usize,
+    mut cache: cache::Cache,
+    live: &[clean::LiveEntry],
+) -> Redundancy {
+    use crate::query::makerunner::{MakeRunner, ScanEvent};
+
+    let paint = stderr_color(cli);
+    let runner = MakeRunner::new(query_ctx(settings, settings.options_dir.clone()), jobs);
+    let by_key: std::collections::HashMap<_, _> = live.iter().map(|e| (e.key.clone(), e)).collect();
+    let files = optfiles::OptionsFiles::new(&settings.options_dir);
+    let mut found = Redundancy::default();
+    let judge = |info: model::port::PortInfo, found: &mut Redundancy| {
+        let Some(entry) = by_key.get(&info.key) else { return };
+        // The verdict below is only valid for the file this port actually
+        // reads; a custom/legacy OPTIONS_NAME means the entry belongs to some
+        // other port — leave it alone.
+        if info.options_name != entry.options_name {
+            let note = format!(
+                "{}: {} uses options name {} — not this entry, left alone",
+                entry.options_name, info.key, info.options_name
+            );
+            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+            found.warnings.push(note);
+            return;
+        }
+        let diff = clean::redundancy_diff(&info);
+        if diff.is_empty() {
+            found.removals.push(clean::Removal {
+                options_name: entry.options_name.clone(),
+                dir: entry.dir.clone(),
+                reason: "redundant: repeats defaults + make.conf".to_string(),
+            });
+        } else if cli.verbose {
+            found.kept.push((
+                entry.options_name.clone(),
+                format!("deviates from defaults + make.conf: {}", diff.join(" ")),
+            ));
+        }
+    };
+    let mut in_flight = 0usize;
+    let mut done = 0usize;
+    for entry in live {
+        if let Some(info) = cache.lookup(&entry.key, &files) {
+            done += 1;
+            judge(info, &mut found);
+        } else {
+            runner.submit(entry.key.clone());
+            in_flight += 1;
+        }
+    }
+    while in_flight > 0 {
+        match runner.events.recv() {
+            Ok(ScanEvent::PortDone(info)) => {
+                in_flight -= 1;
+                done += 1;
+                cache.insert(&info, &files);
+                judge(*info, &mut found);
+            }
+            Ok(ScanEvent::PortError { key, msg }) => {
+                in_flight -= 1;
+                let warning = format!("{key}: query failed, left alone ({msg})");
+                eprintln!("{} {warning}", tint(paint, ansi::YELLOW, "warning:"));
+                found.warnings.push(warning);
+            }
+            Err(_) => break,
+        }
+        eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{} ports", live.len())));
+        let _ = std::io::stderr().flush();
+    }
+    if done > 0 {
+        eprintln!();
+    }
+    runner.shutdown();
+    found.kept.sort();
+    found
+}
+
+/// What the make queries need from the settings; `port_dbdir` is where they
+/// read options files from.
+fn query_ctx(settings: &config::Settings, port_dbdir: std::path::PathBuf) -> QueryCtx {
+    QueryCtx {
+        portsdir: settings.portsdir.clone(),
+        make_conf: settings.make_conf.clone(),
+        port_dbdir,
+        overlays: settings.overlay_paths(),
+    }
+}
+
 /// Origins of everything installed, from pkg(8) — synth's natural root set
 /// when no list is given (synth builds what is installed). Flavors come from
 /// the pkg "flavor" annotation; `repo` restricts to packages installed from
 /// that pkg repository (%R).
 fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
-    let origins = std::process::Command::new("pkg")
-        .args(["query", "-a", "%n\t%o\t%R"])
-        .output()
-        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
-    if !origins.status.success() {
-        anyhow::bail!("pkg query failed: {}", String::from_utf8_lossy(&origins.stderr).trim());
-    }
+    let origins = pkg_query("%n\t%o\t%R")?;
     // One line per annotation; only the "flavor" ones matter.
-    let annots = std::process::Command::new("pkg")
-        .args(["query", "-a", "%n\t%At\t%Av"])
-        .output()
-        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
-    let roots = parse_installed(
-        &String::from_utf8_lossy(&origins.stdout),
-        &String::from_utf8_lossy(&annots.stdout),
-        repos,
-    );
+    let annots = pkg_query("%n\t%At\t%Av")?;
+    let roots = parse_installed(&origins, &annots, repos);
     if roots.is_empty() {
         if repos.is_empty() {
             anyhow::bail!("no installed packages with port origins found (pkg query -a %o)");
         }
         anyhow::bail!(
-            "no installed packages from {} '{}' \
+            "no installed packages from {} \
              (check the names with: pkg query -a %R | sort -u)",
-            if repos.len() == 1 { "repository" } else { "repositories" },
-            repos.join("', '")
+            repos_phrase(repos)
         );
     }
     Ok(roots)
+}
+
+/// `pkg query -a FORMAT`, its stdout; a failing query fails the run rather
+/// than reading as no packages (or no flavors).
+fn pkg_query(format: &str) -> Result<String> {
+    let out = std::process::Command::new("pkg")
+        .args(["query", "-a", format])
+        .output()
+        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
+    if !out.status.success() {
+        anyhow::bail!("pkg query failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// "repository 'a'" or "repositories 'a', 'b'".
+fn repos_phrase(repos: &[String]) -> String {
+    let noun = if repos.len() == 1 { "repository" } else { "repositories" };
+    format!("{noun} '{}'", repos.join("', '"))
 }
 
 /// Pure part of installed_roots: `origins` lines are
@@ -530,10 +545,9 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
             format!("no ports given; using {} installed package(s) as the list", roots.len())
         } else {
             format!(
-                "no ports given; using {} installed package(s) from {} '{}'",
+                "no ports given; using {} installed package(s) from {}",
                 roots.len(),
-                if cli.repo.len() == 1 { "repository" } else { "repositories" },
-                cli.repo.join("', '")
+                repos_phrase(&cli.repo)
             )
         };
         return Ok(RootSet { roots, notes: vec![note] });
@@ -591,12 +605,7 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         &scanned.files,
         session.states.keys(),
     )?;
-    let ctx = QueryCtx {
-        portsdir: scanned.settings.portsdir.clone(),
-        make_conf: scanned.settings.make_conf.clone(),
-        port_dbdir: db.path().to_path_buf(),
-        overlays: scanned.settings.overlay_paths(),
-    };
+    let ctx = query_ctx(&scanned.settings, db.path().to_path_buf());
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
     let overlays = scanned.settings.overlays;
@@ -696,12 +705,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let mut cache = new_cache(cli, &settings);
     let moved = load_moved(cli, &settings);
 
-    let ctx = QueryCtx {
-        portsdir: settings.portsdir.clone(),
-        make_conf: settings.make_conf.clone(),
-        port_dbdir: settings.options_dir.clone(),
-        overlays: settings.overlay_paths(),
-    };
+    let ctx = query_ctx(&settings, settings.options_dir.clone());
 
     let paint = stderr_color(cli);
     if !cli.quiet {
@@ -730,7 +734,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             tint(
                 paint,
                 ansi::YELLOW,
-                if settings.options_dir_is_new { " (new, created on apply)" } else { "" }
+                if !settings.options_dir.is_dir() { " (new, created on apply)" } else { "" }
             )
         );
         if settings.make_conf_sources.is_empty() {
@@ -770,6 +774,27 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     }
     for (key, msg) in &result.errors {
         eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
+    }
+
+    // A file missing lines reads as its defaults today and follows them
+    // tomorrow; said once per file, whatever the command (sync completes it).
+    let names: std::collections::BTreeSet<&str> = result
+        .ports
+        .values()
+        .filter(|i| i.options.has_options())
+        .map(|i| i.options_name.as_str())
+        .collect();
+    for name in names {
+        let Some(saved) = files.saved(name) else { continue };
+        let unlined = saved.unlined();
+        if !unlined.is_empty() {
+            eprintln!(
+                "{} {name}/options has no SET or UNSET line for {}: make reads them at \
+                 their defaults; sync writes them out",
+                tint(paint, ansi::YELLOW, "warning:"),
+                unlined.join(" ")
+            );
+        }
     }
 
     // A dependency loop is a property of the closure, not of one command:
@@ -812,11 +837,12 @@ mod ansi {
 /// stdout (--color / NO_COLOR), judged against stderr's tty-ness.
 fn stderr_color(cli: &Cli) -> bool {
     use std::io::IsTerminal as _;
-    cli::use_color(
-        cli.color,
-        std::io::stderr().is_terminal(),
-        std::env::var("NO_COLOR").ok().as_deref(),
-    )
+    color_for(cli, std::io::stderr().is_terminal())
+}
+
+/// Whether to paint a stream, given whether it is a terminal.
+fn color_for(cli: &Cli, is_terminal: bool) -> bool {
+    cli::use_color(cli.color, is_terminal, std::env::var("NO_COLOR").ok().as_deref())
 }
 
 /// Wrap `text` in a color when painting is enabled.
@@ -843,8 +869,7 @@ fn marker_color(marker: &str) -> Option<&'static str> {
 /// caller, so column alignment is unaffected either way.
 fn stdout_color(cli: &Cli) -> bool {
     use std::io::IsTerminal as _;
-    let no_color = std::env::var("NO_COLOR").ok();
-    cli::use_color(cli.color, std::io::stdout().is_terminal(), no_color.as_deref())
+    color_for(cli, std::io::stdout().is_terminal())
 }
 
 /// Scan and report. Returns how many things a human still has to look at —
@@ -869,7 +894,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         cli.minimal,
     );
 
-    struct Row {
+    struct Row<'a> {
         key: String,
         pkgname: String,
         status: UiStatus,
@@ -887,6 +912,8 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         in_loop: bool,
         /// OPTIONS_NAME, i.e. the options-dir entry this port reads.
         options_name: String,
+        /// The overlay answering for the port, when not the main tree.
+        overlay: Option<&'a config::Overlay>,
         /// Only under `--options`: what a caller needs to decide a value.
         detail: Option<PortDetail>,
     }
@@ -895,7 +922,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         violations: Vec<String>,
         options: Vec<report::OptionReport>,
     }
-    impl Row {
+    impl Row<'_> {
+        /// Listed as done: see `shown_ok`.
+        fn shown_ok(&self, minimal: bool) -> bool {
+            shown_ok(&self.status, minimal, self.mc_covered())
+        }
         /// make.conf already dictates every option this port still owes an
         /// answer for, so no human has to decide anything.
         fn mc_covered(&self) -> bool {
@@ -946,29 +977,13 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         let saved = sess.state(info).and_then(|s| s.saved.as_ref());
         let status = sess.status(info);
         let (added, removed) = if status == UiStatus::Stale {
-            let owner = sess.owner_info(info);
-            let cur: std::collections::BTreeSet<&str> =
-                owner.options.complete.iter().map(String::as_str).collect();
-            let was: std::collections::BTreeSet<&str> = saved
-                .map(|s| s.complete.iter().map(String::as_str).collect())
-                .unwrap_or_default();
-            (
-                cur.difference(&was).map(|o| o.to_string()).collect(),
-                was.difference(&cur).map(|o| o.to_string()).collect(),
-            )
+            sess.stale_delta(info).unwrap_or_default()
         } else {
             (Vec::new(), Vec::new())
         };
         let undecided = session::undecided_options(info, saved, cli.minimal);
         let state = if cli.verbose {
-            info.options
-                .complete
-                .iter()
-                .map(|o| {
-                    if info.options.effective.contains(o) { format!("+{o}") } else { format!("-{o}") }
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
+            session::signed_options(&info.options.complete, &info.options.effective)
         } else {
             String::new()
         };
@@ -984,13 +999,16 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             blacklisted: settings.blacklist.matches(&key.origin),
             in_loop: dep_loops.iter().any(|dl| dl.contains(key)),
             options_name: info.options_name.clone(),
+            overlay: settings.overlay_of(&key.origin),
             detail: with_options.then(|| PortDetail {
                 violations: sess.violations(info),
                 options: report::option_reports(&sess, info),
             }),
         });
     }
-    rows.sort_by_key(|r| (shown_ok(&r.status, cli.minimal, r.mc_covered()), r.key.clone()));
+    rows.sort_by(|a, b| {
+        (a.shown_ok(cli.minimal), &a.key).cmp(&(b.shown_ok(cli.minimal), &b.key))
+    });
 
     let unconfigured = rows.iter().filter(|r| r.status == UiStatus::Unconfigured).count();
     let stale = rows.iter().filter(|r| r.status == UiStatus::Stale).count();
@@ -1031,9 +1049,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                     blacklisted: r.blacklisted,
                     in_loop: r.in_loop,
                     options_file: format!("{}/options", r.options_name),
-                    overlay: settings
-                        .overlay_of(r.key.split('@').next().unwrap_or(""))
-                        .map(|o| o.path.display().to_string()),
+                    overlay: r.overlay.map(|o| o.path.display().to_string()),
                     violations: r.detail.as_ref().map(|d| d.violations.clone()),
                     options: r.detail.as_ref().map(|d| d.options.clone()),
                 })
@@ -1075,20 +1091,20 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             } else {
                 format!(" undecided: {}", row.undecided.join(" "))
             };
-            let (marker, text) = match &row.status {
+            let (marker, text) = match (&row.status, row.shown_ok(cli.minimal)) {
                 // Under -m the defaults are the decision: a port they settle
                 // is done, its file (or lack of one) left as sync will.
-                UiStatus::Unconfigured if shown_ok(&row.status, cli.minimal, row.mc_covered()) => {
+                (UiStatus::Unconfigured, true) => {
                     ("", "ok (no file: defaults + make.conf)".to_string())
                 }
-                UiStatus::Stale if shown_ok(&row.status, cli.minimal, row.mc_covered()) => {
+                (UiStatus::Stale, true) => {
                     ("", format!("ok (stale file{}: defaults + make.conf decide)", row.stale_detail()))
                 }
-                UiStatus::Unconfigured => ("?", format!("UNCONFIGURED{decision}")),
-                UiStatus::Stale => {
+                (UiStatus::Unconfigured, false) => ("?", format!("UNCONFIGURED{decision}")),
+                (UiStatus::Stale, false) => {
                     ("!", format!("STALE{}{decision}", row.stale_detail()))
                 }
-                UiStatus::Conflict => {
+                (UiStatus::Conflict, _) => {
                     ("✗", "CONFLICT (saved options violate constraints)".to_string())
                 }
                 _ => ("", "ok".to_string()),
@@ -1106,7 +1122,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 tail.push_str(" [dependency loop]");
             }
             // Only where an overlay, not the main tree, answers for it.
-            if let Some(o) = settings.overlay_of(row.key.split('@').next().unwrap_or("")) {
+            if let Some(o) = row.overlay {
                 tail.push_str(&format!(" [overlay {}]", o.label()));
             }
             // Pad first, tint after: the escapes must not count as width.
@@ -1205,27 +1221,13 @@ fn commit_writes(
     let mut notes: Vec<String> = Vec::new();
 
     if act {
-        let summary = apply::apply(&pass.writes);
-        written = summary.written;
-        for (key, message) in summary.failed {
-            errors.push(report::ErrorEntry { subject: key.to_string(), message });
-        }
-        // Removals run only once every write landed: a pass that failed to
-        // write leaves the options dir as it found it.
-        let removals = if errors.is_empty() { &pass.removals[..] } else { &[] };
-        for r in removals {
-            match clean::remove_entry(r) {
-                Ok(note) => {
-                    removed += 1;
-                    if let Some(note) = note {
-                        notes.push(note);
-                    }
-                }
-                Err(e) => errors.push(report::ErrorEntry {
-                    subject: r.options_name.clone(),
-                    message: e.to_string(),
-                }),
-            }
+        let done = apply::commit(&pass.writes, &pass.removals);
+        written = done.summary.written;
+        removed = done.removed.count;
+        notes = done.removed.notes;
+        let failed = done.summary.failed.into_iter().map(|(key, m)| (key.to_string(), m));
+        for (subject, message) in failed.chain(done.removed.failed) {
+            errors.push(report::ErrorEntry { subject, message });
         }
     }
 
@@ -1243,10 +1245,7 @@ fn commit_writes(
         removals: pass
             .removals
             .iter()
-            .map(|r| report::RemovalEntry {
-                options_name: r.options_name.clone(),
-                reason: r.reason.clone(),
-            })
+            .map(report::RemovalEntry::from)
             .collect(),
         rejected: pass.rejected.clone(),
         conflicts: pass.conflicts.clone(),
@@ -1276,6 +1275,7 @@ mod commit_writes_tests {
         std::fs::create_dir_all(tmp.path().join("cat_port/.options.optique.tmp")).unwrap();
         let write = crate::apply::PendingWrite {
             key: crate::model::origin::PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
             path: tmp.path().join("cat_port/options"),
             old: None,
             enabled: Default::default(),
@@ -1332,13 +1332,7 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
         for w in &pass.writes {
             outln!("{}  {}", w.key, w.describe())?;
             if cli.verbose {
-                let state = w
-                    .complete
-                    .iter()
-                    .map(|o| if w.enabled.contains(o) { format!("+{o}") } else { format!("-{o}") })
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                outln!("     final: {state}")?;
+                outln!("     final: {}", session::signed_options(&w.complete, &w.enabled))?;
             }
         }
     }
@@ -1350,27 +1344,31 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
     for e in &report.errors {
         eprintln!("{} {}: {}", tint(paint, ansi::RED, "error:"), e.subject, e.message);
     }
+    print_write_summary(&pass, &report, &settings.options_dir, dry_run);
+    Ok(())
+}
+
+/// The closing stderr line of a write pass, for sync and decide alike.
+fn print_write_summary(pass: &WritePass, report: &report::WriteReport, dir: &Path, dry_run: bool) {
     if dry_run {
         eprintln!(
             "dry run: {} file(s) would be written, {} removed in {}",
             pass.writes.len(),
             pass.removals.len(),
-            settings.options_dir.display()
+            dir.display()
         );
-        return Ok(());
+        return;
     }
+    let failed = match report.summary.failed {
+        0 => String::new(),
+        n => format!(", {n} failed"),
+    };
     eprintln!(
-        "{} file(s) written, {} removed in {}{}",
+        "{} file(s) written, {} removed in {}{failed}",
         report.summary.written,
         report.summary.removed,
-        settings.options_dir.display(),
-        if report.summary.failed == 0 {
-            String::new()
-        } else {
-            format!(", {} failed", report.summary.failed)
-        }
+        dir.display()
     );
-    Ok(())
 }
 
 /// Apply a JSON plan of option values read on stdin. Answers with one JSON
@@ -1399,7 +1397,6 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     let scanned = run_scan(cli, &rs)?;
     let settings = scanned.settings;
     let paint = stderr_color(cli);
-    let ports = scanned.result.ports.clone();
     let mut sess = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
@@ -1454,7 +1451,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         }
     }
 
-    let report = commit_writes(&pass, &ports, &settings.options_dir, cli.dry_run);
+    let report = commit_writes(&pass, &sess.ports, &settings.options_dir, cli.dry_run);
     report::print(&report)?;
     for w in &report.warnings {
         eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
@@ -1478,21 +1475,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         );
         return Ok(1);
     }
-    if cli.dry_run {
-        eprintln!(
-            "dry run: {} file(s) would be written, {} removed in {}",
-            pass.writes.len(),
-            pass.removals.len(),
-            settings.options_dir.display()
-        );
-    } else {
-        eprintln!(
-            "{} file(s) written, {} removed in {}",
-            report.summary.written,
-            report.summary.removed,
-            settings.options_dir.display()
-        );
-    }
+    print_write_summary(&pass, &report, &settings.options_dir, cli.dry_run);
     Ok(if report.summary.failed > 0 { 1 } else { 0 })
 }
 

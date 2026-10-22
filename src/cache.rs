@@ -288,7 +288,6 @@ fn short(s: &str) -> String {
     }
 }
 
-/// Keep the current generation plus the most recent other one.
 /// Cache format version: bumped whenever the wrapper emits new data or the
 /// entry layout changes, so a newer binary never reuses entries a previous
 /// one wrote with missing fields. Part of every generation file name
@@ -296,6 +295,7 @@ fn short(s: &str) -> String {
 /// by the prune pass since nothing can read them again.
 const SCHEMA: u32 = 9;
 
+/// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {
     let Ok(entries) = fs::read_dir(dir) else { return };
     let prefix = format!("v{SCHEMA}-");
@@ -309,10 +309,8 @@ fn prune_old_generations(dir: &Path, keep: &str) {
             let _ = fs::remove_file(e.path()); // other schema: unreadable now
             continue;
         }
-        if let (Ok(meta), path) = (e.metadata(), e.path()) {
-            if let Ok(t) = meta.modified() {
-                others.push((t, path));
-            }
+        if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+            others.push((t, e.path()));
         }
     }
     others.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
@@ -328,25 +326,11 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::options::PortOptions;
 
     fn info(origin: &str) -> PortInfo {
-        let key = PortKey::parse(origin).unwrap();
         PortInfo {
-            key: key.clone(),
-            canonical: key,
             pkgname: "x-1.0".into(),
-            flavors: vec![],
-            options_name: origin.replace('/', "_"),
-            options: PortOptions::default(),
-            deps: vec![],
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub(origin)
         }
     }
 

@@ -11,6 +11,7 @@
 //! dependencies are cyclic on a grand scale (hundreds of ports in one
 //! component), so an edge no other dependency list asks for is left out.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::model::origin::PortKey;
@@ -46,16 +47,12 @@ impl DepLoop {
     /// The walk as one line, start repeated so the loop closes visibly:
     /// `devel/a → devel/b → devel/a`.
     pub fn render(&self) -> String {
-        let mut out = String::new();
-        for key in &self.cycle {
-            out.push_str(&key.to_string());
-            out.push_str(" → ");
-        }
-        match self.cycle.first() {
-            Some(first) => out.push_str(&first.to_string()),
-            None => out.clear(),
-        }
-        out
+        self.cycle
+            .iter()
+            .chain(self.cycle.first())
+            .map(PortKey::to_string)
+            .collect::<Vec<_>>()
+            .join(" → ")
     }
 
     /// Is this port part of the loop?
@@ -81,7 +78,8 @@ impl DepLoop {
         let shown: Vec<String> =
             extra.iter().take(EXTRA_SHOWN).map(|k| k.to_string()).collect();
         let mut line = shown.join(" ");
-        if let Some(rest) = extra.len().checked_sub(EXTRA_SHOWN).filter(|r| *r > 0) {
+        if extra.len() > EXTRA_SHOWN {
+            let rest = extra.len() - EXTRA_SHOWN;
             line.push_str(&format!(" + {rest} more"));
         }
         Some(line)
@@ -122,6 +120,24 @@ pub fn detect(
 struct Graph {
     nodes: Vec<PortKey>,
     adj: Vec<Vec<usize>>,
+}
+
+/// Tarjan's "discover a node" step: give it the next index, seed its
+/// low-link from it, and put it on the stack both logically (`on_stack`)
+/// and physically. Shared by a root and by a neighbor met for the first time.
+fn visit(
+    node: usize,
+    next: &mut usize,
+    index: &mut [usize],
+    low: &mut [usize],
+    stack: &mut Vec<usize>,
+    on_stack: &mut [bool],
+) {
+    index[node] = *next;
+    low[node] = *next;
+    *next += 1;
+    stack.push(node);
+    on_stack[node] = true;
 }
 
 impl Graph {
@@ -171,22 +187,14 @@ impl Graph {
             if index[root] != UNVISITED {
                 continue;
             }
-            index[root] = next;
-            low[root] = next;
-            next += 1;
-            stack.push(root);
-            on_stack[root] = true;
+            visit(root, &mut next, &mut index, &mut low, &mut stack, &mut on_stack);
             // (node, how many of its neighbors have been walked)
             let mut call: Vec<(usize, usize)> = vec![(root, 0)];
             while let Some(&(v, cursor)) = call.last() {
                 if let Some(&w) = self.adj[v].get(cursor) {
                     call.last_mut().expect("just observed").1 = cursor + 1;
                     if index[w] == UNVISITED {
-                        index[w] = next;
-                        low[w] = next;
-                        next += 1;
-                        stack.push(w);
-                        on_stack[w] = true;
+                        visit(w, &mut next, &mut index, &mut low, &mut stack, &mut on_stack);
                         call.push((w, 0));
                     } else if on_stack[w] {
                         low[v] = low[v].min(index[w]);
@@ -229,10 +237,10 @@ impl Graph {
             }
             m
         };
+        // `pred` doubles as the seen set: a node gets an entry exactly when
+        // it is first met, `start` (which never gets one) aside.
         let mut pred: HashMap<usize, usize> = HashMap::new();
-        let mut seen = vec![false; self.nodes.len()];
         let mut queue: VecDeque<usize> = VecDeque::from([start]);
-        seen[start] = true;
         while let Some(v) = queue.pop_front() {
             for &w in &self.adj[v] {
                 if !inside[w] {
@@ -248,9 +256,8 @@ impl Graph {
                     walk.reverse();
                     return walk;
                 }
-                if !seen[w] {
-                    seen[w] = true;
-                    pred.insert(w, v);
+                if let Entry::Vacant(e) = pred.entry(w) {
+                    e.insert(v);
                     queue.push_back(w);
                 }
             }
@@ -263,20 +270,12 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::options::PortOptions;
     use crate::model::port::DepEdge;
 
     /// A port with the given dep edges and nothing else of interest. A dep
     /// written `test:cat/x` is an edge only `TEST_DEPENDS` asks for.
     fn linked(origin: &str, deps: &[&str]) -> PortInfo {
-        let key = PortKey::parse(origin).expect("test origin parses");
         PortInfo {
-            key: key.clone(),
-            canonical: key,
-            pkgname: format!("{}-1.0", origin.split('/').next_back().unwrap()),
-            flavors: vec![],
-            options_name: origin.replace('/', "_"),
-            options: PortOptions::default(),
             deps: deps
                 .iter()
                 .map(|d| match d.strip_prefix("test:") {
@@ -292,13 +291,7 @@ mod tests {
                     },
                 })
                 .collect(),
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub(origin)
         }
     }
 

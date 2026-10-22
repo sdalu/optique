@@ -166,7 +166,8 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     // tail would only show the dump.
     if !out.status.success() {
         let cause = text.lines().find(|l| l.contains("Could not find") || l.contains("Cannot open"));
-        let why = cause.map_or_else(|| last_lines(&text, 5), |l| l.trim().to_string());
+        let why =
+            cause.map_or_else(|| parse::last_lines(&text, 5, " | "), |l| l.trim().to_string());
         anyhow::bail!("make failed ({}): {why}", out.status);
     }
     parse::parse_dump(key, &text)
@@ -187,11 +188,6 @@ fn unreadable_options_file(make_output: &str, port_dbdir: &Path) -> Option<Strin
         Ok(_) => "it could not be opened when make read it".to_string(),
     };
     Some(format!("cannot read options file {path}: {why}"))
-}
-
-fn last_lines(text: &str, n: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(n)..].join(" | ")
 }
 
 /// PIDs of the make processes currently running, across every runner in the
@@ -320,11 +316,14 @@ fn descendants(roots: &[u32], table: &[(u32, u32)]) -> Vec<u32> {
     for &(pid, ppid) in table {
         children.entry(ppid).or_default().push(pid);
     }
+    // Seeded with the roots so neither a root nor a pid already queued is
+    // added again; `insert` reporting "new" is the membership check.
+    let mut seen: std::collections::HashSet<u32> = roots.iter().copied().collect();
     let mut out = Vec::new();
     let mut queue: std::collections::VecDeque<u32> = roots.iter().copied().collect();
     while let Some(pid) = queue.pop_front() {
         for &child in children.get(&pid).into_iter().flatten() {
-            if !out.contains(&child) && !roots.contains(&child) {
+            if seen.insert(child) {
                 out.push(child);
                 queue.push_back(child);
             }

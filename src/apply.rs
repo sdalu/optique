@@ -14,6 +14,7 @@ use crate::optionsfile::{self, SavedOptionsFile};
 #[derive(Debug)]
 pub struct PendingWrite {
     pub key: PortKey,
+    pub options_name: String,
     pub path: PathBuf,
     pub old: Option<SavedOptionsFile>,
     /// Final enabled set the file will record.
@@ -57,8 +58,7 @@ impl PendingWrite {
         };
         // Read as make reads it (SavedOptionsFile::value): a value only for an
         // option with a SET or UNSET line, UNSET winning.
-        let file_known: BTreeSet<&str> =
-            old.set.iter().chain(old.unset.iter()).map(String::as_str).collect();
+        let file_known: BTreeSet<&str> = old.recorded().map(String::as_str).collect();
         let was: BTreeSet<&str> =
             file_known.iter().copied().filter(|o| old.value(o) == Some(true)).collect();
         let mentioned: BTreeSet<&str> =
@@ -108,7 +108,7 @@ impl PendingWrite {
                 "new: {}",
                 c.adopted
                     .iter()
-                    .map(|(o, on)| format!("{o}({})", if *on { "on" } else { "off" }))
+                    .map(|(o, on)| format!("{o}({})", crate::model::options::on_off(*on)))
                     .collect::<Vec<_>>()
                     .join(" ")
             ));
@@ -174,22 +174,12 @@ pub fn plan_writes<'a>(
     files: &OptionsFiles,
     minimal: bool,
 ) -> PlannedWrites {
-    struct Candidate<'a> {
-        key: PortKey,
-        info: &'a PortInfo,
-        enabled: BTreeSet<String>,
-        /// Default flavor of its origin (or unflavored) — owns the file.
-        preferred: bool,
-    }
     let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
         if !info.options.has_options() {
             continue;
         }
-        let preferred = match &info.canonical.flavor {
-            None => true,
-            Some(f) => info.flavors.first() == Some(f),
-        };
+        let preferred = crate::session::is_preferred(info);
         groups.entry(info.options_name.clone()).or_default().push(Candidate {
             key: key.clone(),
             info,
@@ -212,7 +202,7 @@ pub fn plan_writes<'a>(
                 if files.bytes(options_name).is_some() {
                     removals.push(crate::clean::Removal {
                         options_name: options_name.clone(),
-                        dir: files.dir().join(options_name),
+                        dir: files.entry_dir(options_name),
                         reason: "defaults + make.conf produce this exact configuration"
                             .to_string(),
                     });
@@ -220,57 +210,20 @@ pub fn plan_writes<'a>(
                 continue;
             }
         }
-        let chosen_complete: BTreeSet<&str> =
-            chosen.info.options.complete.iter().map(String::as_str).collect();
         for other in cands.iter().filter(|c| !std::ptr::eq(*c, chosen)) {
-            if other.enabled == chosen.enabled {
-                continue;
-            }
-            // Differences confined to options one flavor doesn't even have
-            // (OPTIONS_EXCLUDE etc.) are structural and harmless: the file
-            // records the default flavor's view, the other flavor ignores
-            // options it excludes. Only disagreement on options BOTH
-            // flavors carry is a real decision worth surfacing.
-            let other_complete: BTreeSet<&str> =
-                other.info.options.complete.iter().map(String::as_str).collect();
-            let shared_diff: Vec<&str> = other
-                .enabled
-                .symmetric_difference(&chosen.enabled)
-                .map(String::as_str)
-                .filter(|o| chosen_complete.contains(o) && other_complete.contains(o))
-                .collect();
-            if shared_diff.is_empty() {
-                continue;
-            }
-            warnings.push(format!(
-                "{}: flavors disagree on shared options file {} — using {} (default flavor); \
-                 differing shared options: {}",
-                other.key,
-                options_name,
-                chosen.key,
-                shared_diff.join(" ")
-            ));
+            warnings.extend(divergence_warning(options_name, chosen, other));
         }
         let info = chosen.info;
         let enabled = &chosen.enabled;
-        let path = files.path(options_name);
         let old = files.saved(options_name);
-        if let Some(old) = &old {
-            let same_list = old.complete.iter().collect::<BTreeSet<_>>()
-                == info.options.complete.iter().collect::<BTreeSet<_>>();
-            // IMPLIES-closed on both sides: sync plans from the file as
-            // written, the session from its closed baseline, and make adds
-            // the implied options either way.
-            let close = |set: &BTreeSet<String>| crate::session::close_implies(info, set.clone());
-            let same_set = close(&old.set) == close(enabled);
-            if same_list && same_set {
-                continue;
-            }
+        if old.as_ref().is_some_and(|old| up_to_date(old, info, enabled)) {
+            continue;
         }
         let content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
         writes.push(PendingWrite {
             key: chosen.key.clone(),
-            path,
+            options_name: options_name.clone(),
+            path: files.path(options_name),
             old,
             enabled: enabled.clone(),
             complete: info.options.complete.clone(),
@@ -278,6 +231,72 @@ pub fn plan_writes<'a>(
         });
     }
     PlannedWrites { writes, removals, warnings }
+}
+
+/// A port wanting to write an options file, which the other flavors of its
+/// origin share.
+struct Candidate<'a> {
+    key: PortKey,
+    info: &'a PortInfo,
+    enabled: BTreeSet<String>,
+    /// Default flavor of its origin (or unflavored) — owns the file.
+    preferred: bool,
+}
+
+/// The warning for a flavor whose choices differ from the owner's on the
+/// shared file. Differences confined to options one flavor doesn't even have
+/// (OPTIONS_EXCLUDE etc.) are structural and harmless: the file records the
+/// default flavor's view, the other flavor ignores options it excludes. Only
+/// disagreement on options BOTH flavors carry is a real decision worth
+/// surfacing.
+fn divergence_warning(options_name: &str, chosen: &Candidate, other: &Candidate) -> Option<String> {
+    if other.enabled == chosen.enabled {
+        return None;
+    }
+    let has = |c: &Candidate, o: &str| c.info.options.complete.iter().any(|x| x == o);
+    let shared_diff: Vec<&str> = other
+        .enabled
+        .symmetric_difference(&chosen.enabled)
+        .map(String::as_str)
+        .filter(|o| has(chosen, o) && has(other, o))
+        .collect();
+    if shared_diff.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}: flavors disagree on shared options file {} — using {} (default flavor); \
+         differing shared options: {}",
+        other.key,
+        options_name,
+        chosen.key,
+        shared_diff.join(" ")
+    ))
+}
+
+/// Whether the saved file already says what writing `enabled` would: the same
+/// option list, a line for every option of it (a file missing one is
+/// completed, as `make config` would write it), and make ending up with the
+/// same options from either file
+/// (pkgname-only changes don't count, like `make config-conditional`). Both
+/// files are run through the framework's own layering (`effective_with`):
+/// UNSET wins over SET, an option with neither line is at its defaults +
+/// make.conf value, FORCE overrides the file, IMPLIES applies last. The raw
+/// SET lines miss the first two; the port's queried `effective` cannot stand
+/// in for the old file either, since in the TUI a background refresh queries
+/// make with the staged edits in place.
+fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String>) -> bool {
+    let same_list = old.complete.iter().collect::<BTreeSet<_>>()
+        == info.options.complete.iter().collect::<BTreeSet<_>>();
+    if !same_list || !old.unlined().is_empty() {
+        return false;
+    }
+    let would = SavedOptionsFile {
+        complete: info.options.complete.clone(),
+        set: enabled.clone(),
+        unset: info.options.complete.iter().filter(|o| !enabled.contains(*o)).cloned().collect(),
+        ..Default::default()
+    };
+    crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
 }
 
 /// Leftover options files owned by ports that no longer have ANY options.
@@ -293,24 +312,20 @@ pub fn plan_stale_removals(
         .filter(|i| i.options.has_options())
         .map(|i| i.options_name.as_str())
         .collect();
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    let mut out = Vec::new();
-    for info in ports.values() {
-        if info.options.has_options()
-            || with_options.contains(info.options_name.as_str())
-            || !seen.insert(info.options_name.as_str())
-        {
-            continue;
-        }
-        if files.bytes(&info.options_name).is_some() {
-            out.push(crate::clean::Removal {
-                options_name: info.options_name.clone(),
-                dir: files.dir().join(&info.options_name),
-                reason: "port has no options anymore".to_string(),
-            });
-        }
-    }
-    out
+    let optionless: BTreeSet<&str> = ports
+        .values()
+        .map(|i| i.options_name.as_str())
+        .filter(|name| !with_options.contains(name))
+        .collect();
+    optionless
+        .into_iter()
+        .filter(|name| files.bytes(name).is_some())
+        .map(|name| crate::clean::Removal {
+            options_name: name.to_string(),
+            dir: files.entry_dir(name),
+            reason: "port has no options anymore".to_string(),
+        })
+        .collect()
 }
 
 pub struct ApplySummary {
@@ -350,6 +365,25 @@ pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
         }
     }
     summary
+}
+
+/// What committing a plan did.
+pub struct Committed {
+    pub summary: ApplySummary,
+    pub removed: crate::clean::Removed,
+}
+
+/// Write every pending file (see `apply`), then remove the planned entries —
+/// only once every write landed: a pass that failed to write leaves the
+/// options dir as it found it. `sync`, `decide` and the TUI all commit here.
+pub fn commit(writes: &[PendingWrite], removals: &[crate::clean::Removal]) -> Committed {
+    let summary = apply(writes);
+    let removed = if summary.failed.is_empty() {
+        crate::clean::remove_all(removals)
+    } else {
+        crate::clean::Removed::default()
+    };
+    Committed { summary, removed }
 }
 
 /// A temporary file written and synced, waiting to be renamed into place.
@@ -399,26 +433,15 @@ mod tests {
     use crate::model::options::PortOptions;
 
     fn mk_info(complete: &[&str], effective: &[&str]) -> PortInfo {
-        let key = PortKey::parse("cat/port").unwrap();
         PortInfo {
-            key: key.clone(),
-            canonical: key,
             pkgname: "port-1.0".into(),
-            flavors: vec![],
             options_name: "cat_port".into(),
             options: PortOptions {
                 complete: complete.iter().map(|s| s.to_string()).collect(),
                 effective: effective.iter().map(|s| s.to_string()).collect(),
                 ..Default::default()
             },
-            deps: vec![],
-            broken: None,
-            ignore: None,
-            deprecated: None,
-            pkg_help: None,
-            about: Default::default(),
-            default_versions: vec![],
-            warnings: vec![],
+            ..PortInfo::stub("cat/port")
         }
     }
 
@@ -468,6 +491,7 @@ mod tests {
     fn pending(old: Option<&str>, complete: &[&str], enabled: &[&str]) -> PendingWrite {
         PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
             path: PathBuf::from("/nonexistent/cat_port/options"),
             old: old.map(SavedOptionsFile::parse),
             enabled: enabled.iter().map(|s| s.to_string()).collect(),
@@ -567,6 +591,82 @@ mod tests {
         assert!(planned.writes.is_empty(), "session: {:?}", planned.writes);
     }
 
+    /// The up-to-date check reads the file as make does. A hand-edited file
+    /// with A on both lines has A off (UNSET wins), so turning A on is a
+    /// change; comparing the raw SET lines missed it. A file missing a line
+    /// is completed even when make already reads it as wanted.
+    #[test]
+    fn plan_reads_the_file_as_make_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "B"], &["A"]);
+        info.options.defaults = ["A".to_string()].into();
+        let dir = tmp.path().join("cat_port");
+        fs::create_dir_all(&dir).unwrap();
+        let plan = |file: &str, enabled: &[&str]| {
+            fs::write(dir.join("options"), file).unwrap();
+            let enabled: BTreeSet<String> = enabled.iter().map(|s| s.to_string()).collect();
+            let files = OptionsFiles::new(tmp.path());
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false)
+        };
+        let both = "_FILE_COMPLETE_OPTIONS_LIST=A B\n\
+                    OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_UNSET+=B\n";
+        assert_eq!(plan(both, &["A"]).writes.len(), 1, "A was off, now on");
+        assert!(plan(both, &[]).writes.is_empty(), "A was off, stays off");
+        let no_line = "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_UNSET+=B\n";
+        assert_eq!(plan(no_line, &[]).writes.len(), 1, "A was on by default, now off");
+        let completed = plan(no_line, &["A"]);
+        assert_eq!(completed.writes.len(), 1, "A at its default, but the file has no line for it");
+        assert!(completed.writes[0].content.contains("OPTIONS_FILE_SET+=A\n"));
+    }
+
+    /// In the TUI a background refresh queries make with the staged edits in
+    /// place, so `effective` already holds them. An option the file has no
+    /// line for must still be judged at its no-file value (defaults +
+    /// make.conf), or turning it on looks like nothing to write.
+    #[test]
+    fn plan_ignores_a_refreshed_effective_for_unlined_options() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A default on, B default off; the refresh reports the staged A B.
+        let mut info = mk_info(&["A", "B"], &["A", "B"]);
+        info.options.defaults = ["A".to_string()].into();
+        let dir = tmp.path().join("cat_port");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\n")
+            .unwrap();
+        let enabled: BTreeSet<String> = ["A".to_string(), "B".to_string()].into();
+        let files = OptionsFiles::new(tmp.path());
+        let planned = plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false);
+        assert_eq!(planned.writes.len(), 1, "B was off by default, now on");
+    }
+
+    /// make applies IMPLIES after the file: X on by default and implying Y,
+    /// the file unsetting both, leaves Y off. Asking for Y must write; asking
+    /// for nothing must not.
+    #[test]
+    fn plan_writes_an_option_implied_only_by_an_unset_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["X", "Y"], &[]);
+        info.options.defaults = ["X".to_string()].into();
+        info.options.defs.insert(
+            "X".into(),
+            crate::model::options::OptionDef { implies: vec!["Y".into()], ..Default::default() },
+        );
+        let dir = tmp.path().join("cat_port");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=X Y\nOPTIONS_FILE_UNSET+=X\nOPTIONS_FILE_UNSET+=Y\n",
+        )
+        .unwrap();
+        let plan = |enabled: &[&str]| {
+            let enabled: BTreeSet<String> = enabled.iter().map(|s| s.to_string()).collect();
+            let files = OptionsFiles::new(tmp.path());
+            plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false)
+        };
+        assert_eq!(plan(&["Y"]).writes.len(), 1, "Y was off, now on");
+        assert!(plan(&[]).writes.is_empty(), "nothing changes");
+    }
+
     #[test]
     fn plan_skips_semantically_identical() {
         let tmp = tempfile::tempdir().unwrap();
@@ -649,6 +749,7 @@ mod tests {
         );
         let w = PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
             path: std::path::PathBuf::from("/nonexistent"),
             old: Some(old),
             // A turned off, B turned on, NEWOPT adopted on, GONE dropped.
@@ -785,6 +886,7 @@ mod tests {
     fn apply_reports_failures() {
         let w = PendingWrite {
             key: PortKey::parse("cat/port").unwrap(),
+            options_name: "cat_port".into(),
             // Parent is a file, not a dir -> create_dir_all fails.
             path: std::path::PathBuf::from("/dev/null/cat_port/options"),
             old: None,
@@ -804,6 +906,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let w = |name: &str| PendingWrite {
             key: PortKey::parse(&name.replace('_', "/")).unwrap(),
+            options_name: name.into(),
             path: tmp.path().join(name).join("options"),
             old: None,
             enabled: BTreeSet::new(),

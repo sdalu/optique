@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use anyhow::{bail, Result};
 
-use crate::model::options::{GroupKind, OptionDef, OptionGroup, PortOptions};
+use crate::model::options::{GroupKind, OptionGroup, PortOptions};
 use crate::model::origin::PortKey;
 use crate::model::port::{DepEdge, PortAbout, PortInfo};
 
@@ -39,28 +40,30 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "COMPLETE" => {
                 // preserve order, drop duplicates
                 let mut seen = BTreeSet::new();
-                opts.complete =
-                    words(value).into_iter().filter(|o| seen.insert(o.clone())).collect();
+                opts.complete = words::<Vec<String>>(value)
+                    .into_iter()
+                    .filter(|o| seen.insert(o.clone()))
+                    .collect();
             }
-            "DEFAULT" => opts.defaults = wordset(value),
-            "PORT_OPTIONS" => opts.effective = wordset(value),
+            "DEFAULT" => opts.defaults = words(value),
+            "PORT_OPTIONS" => opts.effective = words(value),
             "DEPENDS" => (deps, warnings) = parse_depends(value),
             "BUILDDEPS" => build_deps = value.to_string(),
-            "MC_SET" => opts.mc_set = wordset(value),
-            "MC_UNSET" => opts.mc_unset = wordset(value),
-            "PORT_SET" => opts.port_set = wordset(value),
-            "PORT_UNSET" => opts.port_unset = wordset(value),
-            "FORCE_SET" => opts.force_set = wordset(value),
-            "FORCE_UNSET" => opts.force_unset = wordset(value),
-            "PORT_FORCE_SET" => opts.port_force_set = wordset(value),
-            "PORT_FORCE_UNSET" => opts.port_force_unset = wordset(value),
+            "MC_SET" => opts.mc_set = words(value),
+            "MC_UNSET" => opts.mc_unset = words(value),
+            "PORT_SET" => opts.port_set = words(value),
+            "PORT_UNSET" => opts.port_unset = words(value),
+            "FORCE_SET" => opts.force_set = words(value),
+            "FORCE_UNSET" => opts.force_unset = words(value),
+            "PORT_FORCE_SET" => opts.port_force_set = words(value),
+            "PORT_FORCE_UNSET" => opts.port_force_unset = words(value),
             "DEFAULT_VERSIONS" => default_versions = words(value),
             "BROKEN" => broken = value.trim().to_string(),
             "IGNORE" => ignore = value.trim().to_string(),
             "DEPRECATED" => deprecated = value.trim().to_string(),
             "PKGHELP" => pkg_help = value.trim().to_string(),
             "COMMENT" => about.comment = value.trim().to_string(),
-            "WWW" => about.www = words(value).join(" "),
+            "WWW" => about.www = words::<Vec<String>>(value).join(" "),
             "DESCR" => descr = value.trim().to_string(),
             "GROUP" | "SINGLE" | "RADIO" | "MULTI" => {
                 let kind = match tag {
@@ -88,7 +91,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                         continue;
                     }
                 }
-                let def = opts.defs.entry(name.to_string()).or_insert_with(OptionDef::default);
+                let def = opts.defs.entry(name.to_string()).or_default();
                 match tag {
                     "DESC" => def.desc = v.to_string(),
                     "IMPLIES" => def.implies = words(v),
@@ -106,7 +109,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                 let Some((class, v)) = rest.split_once('|') else { continue };
                 let name = name.trim();
                 let class = class.trim();
-                let def = opts.defs.entry(name.to_string()).or_insert_with(OptionDef::default);
+                let def = opts.defs.entry(name.to_string()).or_default();
                 if class == "uses" {
                     def.uses = words(v);
                     continue;
@@ -132,10 +135,10 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     }
 
     if !saw_sentinel {
-        bail!("no OPTIQUE output found (make failed?):\n{}", tail(text, 6));
+        bail!("no OPTIQUE output found (make failed?):\n{}", last_lines(text, 6, "\n"));
     }
     if pkgname.is_empty() {
-        bail!("wrapper dump incomplete (no PKGNAME):\n{}", tail(text, 6));
+        bail!("wrapper dump incomplete (no PKGNAME):\n{}", last_lines(text, 6, "\n"));
     }
 
     // bsd.options.mk:288: "Some options are always enabled by default" —
@@ -161,7 +164,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
 
     let canonical = PortKey::new(
         requested.origin.clone(),
-        if flavors.is_empty() || flavor.is_empty() { None } else { Some(flavor.clone()) },
+        if flavors.is_empty() || flavor.is_empty() { None } else { Some(flavor) },
     );
 
     Ok(PortInfo {
@@ -177,11 +180,8 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         deprecated: non_empty(deprecated),
         // ${PKGHELP} is always defined; only the minority of ports that ship
         // the file get the marker, so the path is kept only when it is there.
-        pkg_help: non_empty(pkg_help).filter(|p| std::path::Path::new(p).is_file()),
-        about: PortAbout {
-            pkg_descr: non_empty(descr).filter(|p| std::path::Path::new(p).is_file()),
-            ..about
-        },
+        pkg_help: existing_file(pkg_help),
+        about: PortAbout { pkg_descr: existing_file(descr), ..about },
         default_versions,
         warnings,
     })
@@ -214,11 +214,9 @@ pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
     (edges, warnings)
 }
 
-fn words(s: &str) -> Vec<String> {
-    s.split_whitespace().map(str::to_string).collect()
-}
-
-fn wordset(s: &str) -> BTreeSet<String> {
+/// Whitespace-separated words of `s`, collected into whatever the call site
+/// needs — a `Vec<String>` keeping order, or a `BTreeSet<String>` deduping.
+fn words<C: FromIterator<String>>(s: &str) -> C {
     s.split_whitespace().map(str::to_string).collect()
 }
 
@@ -226,14 +224,22 @@ fn non_empty(s: String) -> Option<String> {
     if s.trim().is_empty() { None } else { Some(s) }
 }
 
-fn tail(text: &str, n: usize) -> String {
+/// `s`, when non-empty and naming a file that exists: the shared shape of
+/// `pkg_help` and `pkg_descr`, neither of which the framework guarantees.
+fn existing_file(s: String) -> Option<String> {
+    non_empty(s).filter(|p| Path::new(p).is_file())
+}
+
+/// The last `n` lines of `text`, joined with `sep`.
+pub(crate) fn last_lines(text: &str, n: usize, sep: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
-    lines[lines.len().saturating_sub(n)..].join("\n")
+    lines[lines.len().saturating_sub(n)..].join(sep)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::options::OptionDef;
 
     #[test]
     fn depends_forms() {

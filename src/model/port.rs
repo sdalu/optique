@@ -57,6 +57,32 @@ pub struct PortInfo {
     pub warnings: Vec<String>,
 }
 
+#[cfg(test)]
+impl PortInfo {
+    /// A port with nothing but its origin (`cat/port` or `cat/port@flavor`):
+    /// named as the framework would name it, `port-1.0` and `cat_port`, and
+    /// otherwise empty. Tests override what they need.
+    pub fn stub(origin: &str) -> Self {
+        let key = PortKey::parse(origin).expect("test origin parses");
+        PortInfo {
+            canonical: key.clone(),
+            pkgname: format!("{}-1.0", key.origin.rsplit('/').next().unwrap_or_default()),
+            options_name: key.origin.replace('/', "_"),
+            key,
+            flavors: vec![],
+            options: PortOptions::default(),
+            deps: vec![],
+            broken: None,
+            ignore: None,
+            deprecated: None,
+            pkg_help: None,
+            about: PortAbout::default(),
+            default_versions: vec![],
+            warnings: vec![],
+        }
+    }
+}
+
 // NOTE: per-port staleness deliberately has no direct API here — flavors
 // share options files owned by the default flavor, so status must be asked
 // of session::Session, which knows the owner.

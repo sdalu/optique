@@ -1012,6 +1012,15 @@ A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force
 a rewrite, matching
 .Nm make Cm config-conditional .
+A file that names an option with neither line, which
+.Nm make Cm config
+never writes, is warned about by every command that reads it and completed
+by
+.Cm sync :
+.Xr make 1
+reads such an option at its defaults, follows them if they change later, and
+.Nm make Cm config-conditional
+asks about it again.
 .Pp
 Options files belonging to ports that lost
 .Em all
