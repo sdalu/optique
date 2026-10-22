@@ -1,3 +1,13 @@
+/// `println!` for the stdout payload, handing back the write's error instead
+/// of panicking on it: a reader that went away (`optique scan | head`) must
+/// end the run with a documented status, not Rust's 101.
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        writeln!(std::io::stdout(), $($arg)*)
+    }};
+}
+
 mod apply;
 mod cache;
 mod clean;
@@ -35,8 +45,15 @@ const EXIT_ERROR: i32 = 3;
 
 fn main() {
     if let Err(e) = run() {
-        // As the standard library would print it, causes included.
-        eprintln!("Error: {e:?}");
+        // A closed stdout has no reader left to tell; it still fails the run.
+        let broken_pipe = e.chain().any(|c| {
+            c.downcast_ref::<std::io::Error>()
+                .is_some_and(|io| io.kind() == std::io::ErrorKind::BrokenPipe)
+        });
+        if !broken_pipe {
+            // As the standard library would print it, causes included.
+            eprintln!("Error: {e:?}");
+        }
         let _ = std::io::stdout().flush();
         std::process::exit(EXIT_ERROR);
     }
@@ -323,7 +340,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         if cli.verbose && !cli.quiet && !args.json {
             kept.sort();
             for (name, why) in &kept {
-                println!("keep  {name:<38} {why}");
+                outln!("keep  {name:<38} {why}")?;
             }
         }
         kept.sort();
@@ -336,7 +353,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     // stdout carries either the listing or the JSON object, never both.
     if !args.json && !cli.quiet {
         for r in &removals {
-            println!("{:<44} {}", r.options_name, r.reason);
+            outln!("{:<44} {}", r.options_name, r.reason)?;
         }
     }
 
@@ -1032,13 +1049,13 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 Some(c) => format!("{c}{marker:<2}{}", ansi::RESET),
                 None => format!("{marker:<2}"),
             };
-            println!("{cell} {key:<40} {pkgname:<32} {text}{tail}");
+            outln!("{cell} {key:<40} {pkgname:<32} {text}{tail}")?;
             if cli.verbose {
                 if !row.state.is_empty() {
-                    println!("     options: {}", row.state);
+                    outln!("     options: {}", row.state)?;
                 }
                 for w in &row.warnings {
-                    println!("     warning: {w}");
+                    outln!("     warning: {w}")?;
                 }
             }
         }
@@ -1209,10 +1226,10 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
     // stdout carries either the listing or the JSON object, never both.
     if !json && !cli.quiet {
         for r in &pass.removals {
-            println!("{}  removing options file ({})", r.options_name, r.reason);
+            outln!("{}  removing options file ({})", r.options_name, r.reason)?;
         }
         for w in &pass.writes {
-            println!("{}  {}", w.key, w.describe());
+            outln!("{}  {}", w.key, w.describe())?;
             if cli.verbose {
                 let state = w
                     .complete
@@ -1220,7 +1237,7 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
                     .map(|o| if w.enabled.contains(o) { format!("+{o}") } else { format!("-{o}") })
                     .collect::<Vec<_>>()
                     .join(" ");
-                println!("     final: {state}");
+                outln!("     final: {state}")?;
             }
         }
     }

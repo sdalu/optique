@@ -404,6 +404,6 @@ pub fn write_entry(w: &PendingWrite, info: Option<&PortInfo>) -> WriteEntry {
 
 /// Serialize a report as pretty JSON on stdout, the single machine payload.
 pub fn print(report: &impl Serialize) -> anyhow::Result<()> {
-    println!("{}", serde_json::to_string_pretty(report)?);
+    outln!("{}", serde_json::to_string_pretty(report)?)?;
     Ok(())
 }

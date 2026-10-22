@@ -1677,6 +1677,9 @@ leaves it in place.
 .It 3
 An error occurred, for example an unreadable package list or an unresolvable
 ports tree.
+A standard output closed by its reader
+.Pq Ql optique scan | head
+ends the run the same way, without a message.
 It is never 1, so that a failed run cannot pass for a pending decision.
 .El
 .Pp

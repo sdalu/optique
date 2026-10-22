@@ -411,3 +411,39 @@ fn errors_exit_3_not_the_gates_1() {
     let out = optique().args(["scan", "--no-such-flag"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
+
+/// A reader that goes away (`optique clean -n | head -0`) ends the run with
+/// the documented error status, quietly, never with a panic and Rust's 101.
+/// The pipe's read end is closed before the child starts, so the first
+/// write to stdout fails every time. clean -n over a scratch options dir
+/// holding one vanished port is a hermetic path that prints: the listing,
+/// and the JSON report.
+#[test]
+fn closed_stdout_exits_documented_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let options = tmp.path().join("options");
+    let ports = tmp.path().join("ports");
+    std::fs::create_dir_all(options.join("www_gone")).unwrap();
+    std::fs::write(options.join("www_gone/options"), "").unwrap();
+    std::fs::create_dir_all(ports.join("Mk")).unwrap();
+    std::fs::write(ports.join("Mk/bsd.port.mk"), "").unwrap();
+    for json in [false, true] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut cmd = optique();
+        cmd.env("XDG_CACHE_HOME", tmp.path())
+            .args(["-l", "-n", "-o"])
+            .arg(&options)
+            .arg("-P")
+            .arg(&ports)
+            .arg("clean");
+        if json {
+            cmd.arg("--json");
+        }
+        let out = cmd.stdout(writer).stderr(std::process::Stdio::piped()).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(3), "json={json}: {err}");
+        assert!(!err.contains("panicked"), "json={json}: {err}");
+        assert!(!err.contains("Error:"), "a closed stdout is not worth a message: {err}");
+    }
+}
