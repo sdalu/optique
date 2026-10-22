@@ -1,527 +1,145 @@
 # optique
 
-Fast FreeBSD ports options / dependency configurator for poudriere.
+Configure the options of a whole poudriere build at once, in one screen.
 
-`poudriere options -C <list>` walks the dependency tree serially and pops an
-interactive dialog per port. optique replaces that workflow: it scans the whole
-dependency closure **in parallel** (~1000 ports in under a minute cold, well
-under a second warm thanks to a persistent cache), shows one TUI over all
-ports, and writes every options file in a single atomic pass at the end.
+`poudriere options -C <list>` walks the dependency tree one port at a time,
+with a dialog for each, in dependency order, with no overview and no way
+back. optique resolves the whole dependency closure of a package list **in
+parallel** (about a thousand ports in under a minute cold, well under a
+second once cached), shows every port in one interface with the ones that
+need a decision first, and writes every options file in a single atomic
+pass when you apply. It reads exactly what poudriere would — the options
+directory, the make.conf layers, the blacklist — for the jail, tree and set
+you name, and it works for synth too.
 
-## Usage
-
-```sh
-# Interactive TUI over the closure of the given ports, for poudriere set
-# "workstation" — the options dir is resolved exactly like poudriere(8)
-# resolves it before a build (see "Poudriere layout" below)
-optique -z workstation www/nginx mail/dovecot
-
-# From poudriere pkglist file(s) — one origin[@flavor] per line, '#' comments;
-# -f is repeatable and duplicates across files/arguments are dropped
-optique -z server -f /usr/local/etc/poudriere.d/pkglist
-optique -z server -f base-list -f extra-list www/nginx
-
-# Non-interactive check: which ports are unconfigured or stale? Each flagged
-# port lists the options make.conf does NOT decide ("undecided: …"), or
-# "[mc-covered ≈]" when make.conf decides everything.
-# Exit code is the gate: 0 = nothing pending, 1 = a human decision is pending
-# (unconfigured/stale with undecided options, a conflict, a dependency loop,
-# or a port whose query failed, e.g. an options file it cannot read),
-# anything else = error. Ports that are fully mc-covered do NOT trip
-# the gate. With --json one
-# JSON object goes to stdout instead of the table; -q drops the per-port rows
-# and the banner, keeping the summary and warnings on stderr
-optique -z workstation scan -f pkglist
-optique -z workstation scan --json -f pkglist
-optique -z ws -q scan -f list || mail-me   # cron: only speak up when it matters
-
-# Headless refresh (the fast `poudriere options -C` replacement):
-# keep saved choices, adopt defaults for newly-added options, drop removed
-optique -z workstation sync --dry-run -f pkglist
-optique -z workstation sync -f pkglist
-
-# Set option values from a JSON plan on stdin — for scripts and agents.
-# Same group/IMPLIES/FORCE rules as the TUI; reports JSON on stdout; -n
-# previews; nothing is written unless the whole plan is honoured (see
-# "Machine interface" below)
-echo '{"www/nginx": {"LUA": true}}' | optique -z ws decide -n
-echo '{"www/nginx": {"LUA": true}}' | optique -z ws decide
-
-# Garbage-collect the options dir: drop entries whose port vanished from the
-# tree (MOVED-aware: renames and removals are explained); with --redundant,
-# also drop files that only repeat what defaults + make.conf dictate anyway;
-# with --unused, also drop entries for ports outside the dependency closure
-# of a package list (origins and/or -f pkglist — the list is required, and
-# giving one without --unused is an error since plain clean ignores it)
-optique -z workstation clean --dry-run
-optique -z workstation clean --redundant
-optique -z workstation clean --unused -f pkglist
-optique -z workstation clean --unused --redundant --dry-run -f pkglist
-
-# Full hygiene pass for one package list (refresh, then garbage-collect)
-optique -z ws sync -f list && optique -z ws clean --unused --redundant -f list
-
-# -m/--minimal: persist only deviations, and treat bare defaults as decided
-# (scan/TUI m-view only flag deviations and conflicts). A port whose configuration equals
-# what defaults + make.conf already produce gets no options file at all —
-# sync/apply skip writing it and remove an existing identical one
-optique -z ws -m sync -f list
+<!-- screen main -->
+```text
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_3,3 ─────────────┐
+│* www/nginx                    ││  [ ] DEBUG                     off        │
+│? devel/gmake                  ││  [x] DEBUGLOG                  off        │
+│! ports-mgmt/pkg               ││  [x] DSO                       on         │
+│✓ converters/libiconv          ││  [x] FILE_AIO                  on         │
+│✓ devel/cmake-core             ││  [x] IPV6                      on         │
+│✓ devel/gettext-runtime        ││  [ ] NJS                       off        │
+│✓ devel/gettext-tools          ││  [ ] NJS_QJS                   off        │
+│✓ devel/libtextstyle           ││  [ ] NJS_XML                   off        │
+│✓ devel/libunistring           ││  [ ] OTEL                      off        │
+│✓ devel/ninja                  ││  [x] THREADS                   on         │
+│✓ devel/p5-Locale-libintl      ││  [x] WWW                       on         │
+│✓ devel/pcre2                  ││── HTTPGRP — group: Modules that require HT│
+│✓ devel/pkgconf                ││  [ ] GOOGLE_PERFTOOLS          off        │
+│✓ devel/readline               ││  [x] HTTP                      on      imp│
+│✓ lang/perl5.42                ││  [x] HTTP_ADDITION             on         │
+│✓ lang/python312               ││  [x] HTTP_AUTH_REQ             on         │
+│✓ misc/help2man                ││  [x] HTTP_CACHE                on         │
+│✓ print/texinfo                ││  [x] HTTP_DAV                  on         │
+│✓ security/rhash               ││  [ ] HTTP_DEGRADATION          off        │
+│✓ textproc/expat2              │┌ DEBUGLOG ─────────────────────────────────┐
+│✓ textproc/libxml2             ││  Enable debug log (--with-debug)          │
+└───────────────────────────────┘└───────────────────────────────────────────┘
+ 0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
 ```
+<!-- /screen -->
 
-Key flags (global): `-z set`, `-j jail` (make.conf layering), `-p tree`
-(poudriere ports tree, default `default`), `-o dir` (explicit options dir,
-bypasses poudriere resolution; default `/var/db/ports`), `-s [profile]`
-(use synth(1)'s layout instead of poudriere's, see "Synth"), `-f pkglist`
-(repeatable), `-J jobs`, `--no-cache`, `-v` (verbose: scan adds each port's
-full `+ON`/`-OFF` option state and query warnings, sync adds the final state
-per written file, clean explains kept entries — e.g. which options deviate
-from defaults + make.conf), `-q` (quiet: no banner and no per-port/per-file
-stdout listing; summary and warnings still go to stderr).
+The same scan drives four other commands, for scripts and cron: a report
+with an exit-status gate, an unattended refresh, a JSON interface for
+setting values from a plan, and a cleaner for the options directory.
 
-## Workflow
+## Install
 
-The typical cycle, replacing `poudriere options -C` before a bulk build:
-
-1. **Update the ports tree** (`poudriere ports -u` / `git -C /usr/ports pull`).
-   Tree updates add or remove options on some ports and pull new dependencies
-   in — every affected port needs a configuration decision before building.
-
-2. **Scan.** `optique -z <set> -f <pkglist>` resolves the full dependency
-   closure of your package list in parallel — for each port: its options,
-   groups, flavors, dependencies, and how the poudriere make.conf layers
-   affect it. The first run on a fresh tree takes about a minute per
-   thousand ports; afterwards the cache brings it down to well under a
-   second, so re-opening optique is free.
-
-3. **Triage.** The TUI opens with problems sorted to the top: `?` ports
-   never configured, `!` ports whose option list changed since their file
-   was written (with the added/removed options named), `✗` conflicts.
-   `n`/`p` jumps between them; everything already consistent sits dimmed
-   at the bottom. Ports without any options are handled automatically and
-   never shown.
-
-4. **Decide.** For each flagged port, either accept what's proposed (the
-   saved choices plus defaults for the `N`-marked new options — that is what
-   Apply will write if you touch nothing) or edit: `Space` toggles with
-   group rules enforced, `IMPLIES` chains auto-enable, `FORCED` and implied
-   options are locked with an explanation, `⚠` warns when a choice marks
-   the port BROKEN. When a toggle changes the dependency set, the closure
-   refreshes in the background within a second or two — newly appeared
-   dependencies show up flagged `?`/`!` and join the triage, dropped ones
-   vanish (keeping their edits in case you flip back).
-
-5. **Apply.** `a` previews every file that would change as a diff
-   (`+OPT`, `-OPT`, `new: OPT(on)`, `dropped: OPT`), warns if conflicts
-   remain, then writes all options files atomically in one pass to the
-   set's options dir. Nothing on disk changes before this point, so
-   quitting without applying is always safe.
-
-6. **Build.** Run `poudriere bulk` as usual — it finds every port already
-   configured and starts building immediately instead of stopping at
-   dialog after dialog.
-
-For unattended use (cron, CI), step 3–5 collapse into
-`optique -z <set> sync -f <pkglist>`: it keeps all saved choices, adopts
-defaults for new options, drops removed ones, and prints what it changed —
-add `--dry-run` to only report. A later interactive session can then revisit
-anything sync decided.
-
-## What the TUI shows
-
-Left pane: every port in the dependency closure **that has options**
-(optionless ports stay in the graph but are hidden), problems first:
-
-- `✗` conflict — staged options violate `PREVENTS` or group constraints
-- `*` edited — staged changes not yet applied
-- `?` unconfigured — no saved options file
-- `!` stale — the port's option list changed since the file was written
-- `✓` ok, `⚠` port is BROKEN/IGNORE with the current options
-- `∞` caught in a dependency loop (see [Dependency loops](#dependency-loops))
-
-Right pane: options in framework order with group headers (SINGLE = exactly
-one, RADIO = at most one, MULTI = at least one — enforced on toggle). Each row
-starts with `N` when the option was added to the port since its options file
-was written (first column, so they are findable down the pane's left edge),
-then shows the staged value, the port default (`on`/`off`), then a second
-`on`/`off` giving the value
-**make.conf** dictates, coloured by which knob decided it: green = global
-`OPTIONS_SET`/`OPTIONS_UNSET`, bright green = the per-port
-`${OPTIONS_NAME}_SET`/`_UNSET`, red bold = a `*_FORCE` knob the options file
-cannot override (toggle locked). That column stays empty when only the port
-default or your own options file decides. Then `implied by X` locks from
-`IMPLIES` chains, and `⚠broken/ignored` for options carrying `<OPT>_BROKEN` /
-`<OPT>_IGNORE`. Name colors: yellow = deviates from the port's default,
-magenta = contradicts your make.conf — the option is
-mentioned there but the staged value differs from what defaults + make.conf
-alone would produce. Obsolete options (removed from the port) appear struck
-through and are dropped on apply; options excluded by the current flavor but
-managed via the default flavor are listed separately. A panel at the bottom of
-that pane follows the cursor: titled with the option's name, it gives its
-description in full, wrapped — the part the rows themselves rarely have room
-for (options the framework describes nowhere say `(no description)`). A row
-that has fewer than ~16 columns left for its description drops it rather than
-showing a word fragment, since the panel below carries it whole. `i`
-opens a detail popup
-for the selected option: description, group, IMPLIES/PREVENTS, and the
-dependencies enabling it would add.
-
-A `[h] help` marker on the right of that pane's title means the port ships a
-`pkg-help` file — the free-form notes `make config` offers behind its Help
-button (`${PKGDIR}/pkg-help`; ~30 ports in a tree have one, e.g. `www/apache24`
-or `security/gnupg`). `h` opens it in a scrollable popup (`j/k` `↑/↓`,
-`PgUp/PgDn`, `g/G`; any other key closes), read from disk each time. Note that
-`F1` in `make config` is portconfig's *own* Ports Collection help, not the
-port's.
-
-When a background refresh turns a port
-BROKEN/IGNORE, the banner adds a `likely cause:` line naming the recent option
-changes (`+OPT`/`-OPT`) that most likely caused it.
-
-Toggling an option re-queries the port in the background against a **staging
-PORT_DBDIR** — dependencies added/removed by the option appear/disappear in
-the list within a second or two (`⟳` in the status bar). Nothing touches the
-real options dir until you hit `a` (apply), which previews every file diff
-and then writes atomically (tmp + fsync + rename).
-
-Each options file is read once, when the TUI starts, and judged as it was
-then: a file edited outside optique while the TUI is open is left alone by
-apply unless you edit its port in the TUI too (restart optique to see such
-an edit). After an apply, the files it wrote are read again.
-
-Quitting stops any in-flight background make processes and the commands they
-are running (the quit dialog shows how many, and the count is reported on
-stderr), so nothing keeps churning after the UI is gone.
-Quitting with staged changes offers to keep them: `s` saves them as a **draft**
-(under `~/.cache/optique/drafts`, keyed by the options dir), `d` throws them
-away. The next TUI launch on the same options dir restores the draft's staged
-edits — options that vanished from a port meanwhile are dropped, and the
-restored ports are re-queried so their dependencies show up again. The draft is
-cleared as soon as you apply (the edits are on disk then) or discard-quit; `u`
-reverts an individual port as usual.
-
-Keys: `j/k` move · `Enter/l` edit port · `Space` toggle · `d` defaults ·
-`u` revert · `U` undo the last option change (any port, up to 100 back) ·
-`n/p` next/prev problem · `t` show only ports needing attention
-(hide `✓` ok) · `m` treat stale/unconfigured ports as ok when every added option (stale) or
-every option at all (unconfigured) is already decided by make.conf
-(marker `≈`) · `w` flag ports whose options contradict
-the global `OPTIONS_SET/UNSET` policy (marker `≠`; the option itself is named
-in magenta) · `L` list only the ports caught in a dependency loop (marker `∞`) ·
-`s` toggle problems-first vs stable alphabetical sort (alphabetical
-keeps neighbors put while you work down the list; `n`/`p` still jump between
-problems in either order) · `/` filter · `a` apply ·
-`r` why-is-this-here (dependency chain, the dependency loop when there is one,
-and dependents — every port listed is selectable, `Enter` jumps there and `r`
-walks on) · `B` bulk-set an option across
-visible ports · `f` next flavor of the same origin · `h` the port's pkg-help
-notes · `i` on the list: what the port is (comment, WWW, pkg-descr) · `I`
-shows or hides that description at the top of the option pane, as much of it
-as the rows leave room for (off at start) · `?`/F1 color-coded in-TUI help (markers, badges, keys) · `q` quit.
-
-### Debugging the TUI
-
-`optique tui --drive` runs the interface headless: same keymap, same app, same
-drawing code, but it renders into an in-memory screen and reads one command per
-line from stdin. Useful to reproduce a rendering bug or to test the TUI in CI,
-where there is no terminal.
-
-```sh
-printf 'dump\nkey /\nkeys nginx\nkey enter\nstate\nquit\n' |
-    optique tui --drive -o /tmp/opt www/nginx
-```
-
-Every command is acknowledged with an `ok …`/`err …` line except `dump` and
-`state`, which print their payload; output is flushed per command so the driver
-can be held open on a pipe, and a bad command is reported without ending the
-session:
-
-- `key <spec>` — one key press: an optional `ctrl-`/`alt-` prefix, then a
-  single character (case matters: `B` is the bulk key) or a name
-  (`enter esc tab backtab space backspace up down left right pgup pgdn home
-  end f1`…`f12 question slash`)
-- `keys <text>` — press each character of `<text>`, for typing into the filter
-  or bulk prompts
-- `dump` — draw a frame and print it: `screen <W>x<H>`, one line per row, `end`
-- `state` — one-line JSON: `focus`, `selected`, `visible`, `listable`,
-  `refreshing`, `pending`, `message`, `overlay`, `filter`, `dirty`, `loops`
-- `settle [timeout_ms]` — wait for background re-queries to land (default 5000);
-  this is also what lets the 300 ms edit debounce expire before a `dump`
-- `resize <W>x<H>` — new in-memory screen size (default 100x35, clamped 20–500)
-- `quit` — end the session; so do EOF and any key the TUI treats as quitting
-
-## Dependency loops
-
-Scanning the closure also looks for **dependency loops** — ports that are,
-directly or through other ports, their own dependency. poudriere cannot build
-any of them (none can go first), so every loop is reported on stderr, whatever
-the subcommand, as a shortest closed walk through it:
-
-```
-loop: devel/a → devel/b → devel/a
-      also tangled: devel/c devel/d
-```
-
-The `also tangled:` line appears when the tangle is bigger than that walk
-(several loops sharing a port): those ports still reach each other, so none of
-them can go first either. It names up to a dozen and counts the rest; `--json`
-always carries the whole list.
-
-Only the dependencies poudriere actually builds are followed. `TEST_DEPENDS`
-belong to the closure and their ports are configured like any other, but
-`poudriere bulk` builds them only under `-t` — and the tree's test dependencies
-are cyclic on a grand scale (hundreds of ports in one tangle). An edge no other
-dependency list (`PKG`, `EXTRACT`, `PATCH`, `FETCH`, `BUILD`, `LIB`, `RUN`) asks
-for is therefore left out, which is why a healthy tree reports no loop at all.
-
-Loops are usually option-dependent, which is why seeing them here beats
-discovering them mid-build: turning off the option that pulls the dependency in
-breaks the loop. In the TUI the ports of a loop are marked `∞`, the status bar
-counts them, `L` narrows the list to them, and `r` lists the loop
-— the cycle one port per row, rotated to start at the port you asked about, then
-the rest of the tangle, every one selectable so `Enter` jumps there and `r`
-walks the cycle port by port. All of it is recomputed after every background
-re-query, so a loop a toggle just created (or just broke) is announced on the
-status line — and breaking the last one drops the `L` view rather than leaving
-an empty list. In `scan`
-the port's row gains `[dependency loop]`, the summary counts the loops, and
-`--json` reports them under `loops` (each with `ports`, `cycle` and
-`blacklisted`) with `summary.pending` driving the exit code. A loop trips the
-gate unless *every* one of its members is blacklisted.
-
-## Machine interface
-
-Everything but the TUI runs without a terminal, and every subcommand can answer
-in JSON, so nothing has to read a screen or parse a table. **One object per
-invocation goes to stdout and nothing else does** — progress, banner, warnings
-and the summary all stay on stderr, so stdout is safe to pipe without `-q`.
-
-Two commands carry the work: `scan --json --options` says what the closure is
-and what each option *means*, and `decide` sets values from a plan.
-
-```sh
-# 1. what needs deciding, and what are the choices?
-optique -z ws scan --json --options -f pkglist > state.json
-
-# 2. decide (this is where the caller's judgement goes)
-jq ... < state.json > plan.json
-
-# 3. check the plan, then carry it out
-optique -z ws decide -n < plan.json
-optique -z ws decide    < plan.json
-```
-
-`--options` adds, per port, `violations` (why the status is `conflict`) and an
-`options` array in framework order. Each option carries everything a decision
-needs without re-running make:
-
-| key | meaning |
-|---|---|
-| `staged` | the value that would be written now |
-| `default` | the port's own default |
-| `saved` | what the options file records — `null` when it has no entry, which is exactly what `undecided` reports |
-| `new` | added to the port since the file was written |
-| `makeconf` | `{value, scope}` with scope `global`, `port` or `force`; absent when no layer mentions it |
-| `locked`, `locked_by` | a `*_FORCE` knob or the option that implies it |
-| `deviates_makeconf` | the staged value contradicts make.conf |
-| `group` | `{name, kind, members}`, kind `group`/`multi`/`single`/`radio` |
-| `implies`, `prevents`, `prevents_msg` | the framework's constraints |
-| `desc`, `broken`, `ignore` | what it is for, and what enabling it breaks |
-| `adds_deps` | port origins the option declares as dependencies |
-| `uses` | `USES` frameworks it activates |
-
-`decide` reads a plan of ports and option values on stdin:
-
-```json
-{ "www/nginx": { "LUA": true, "DOCS": false },
-  "devel/git@lite": { "CONTRIB": false } }
-```
-
-The contract is meant to be safe to drive blind:
-
-- **Same rules as the TUI.** Group kinds, the `IMPLIES` closure, `PREVENTS`,
-  and the `*_FORCE`/implied locks all apply, so a plan can never record a state
-  the interface would refuse. Options are applied in name order within a port,
-  which fixes the outcome when one implies another or they share a group.
-- **All-or-nothing.** A plan that can't be carried out in full changes nothing,
-  so you are never left working out which half landed.
-- **Everything refused is named.** A value the rules turn down, a value another
-  value in the plan *undoes*, an option the port doesn't have, a port outside
-  the closure, a resulting conflict — each lands in `rejected`, `unknown` or
-  `conflicts` with a reason, and the exit status is 1.
-- **Replayable.** Asking for a value a port already has is not a change and not
-  an error; run the same plan twice and the second run writes nothing.
-- **`-n` previews** the whole report, per-file diff included, touching nothing.
-
-The port list is optional: with none, the plan's own ports are the closure
-roots, so a plan is self-contained. Only the named ports' files are written
-(`sync` refreshes the rest) — and writing a file necessarily adopts that port's
-current option list, exactly as `sync` would.
-
-`decide` and `sync --json` answer in the same shape: `options_dir`, `dry_run`,
-`applied`, `writes`, `removals`, `rejected`, `conflicts`, `unknown`,
-`warnings`, `errors`, `summary`. Each `writes` entry has `port`,
-`options_name`, `file`, `new_file`, `diff` (`+OPT`/`-OPT`), `adopted`,
-`dropped`, `enabled` and `new_deps`. `clean --json` reports `removals`, `kept`
-(under `-v`), `warnings`, `errors` and `summary`.
-
-Exit status is the answer to "is there anything left to do": `scan` exits 1
-while a decision is pending, `decide` exits 1 when it did not honour the plan.
-
-One example — turn `DOCS` off on every port in a list that actually has it
-(asking for an option a port lacks is a plan error, not a no-op, so the filter
-reads the `--options` detail):
-
-```sh
-optique -z ws scan --json --options -f list |
-    jq '[.ports[]
-         | select(any(.options[]; .name == "DOCS"))
-         | {(.port): {DOCS: false}}] | add' |
-    optique -z ws decide -f list
-```
-
-`tui --drive` (below) is a keystroke-level protocol over the real keymap and
-drawing code: a debugging tool, not the way to configure ports from a script.
-
-## Poudriere layout
-
-Given `-j jail`, `-p tree` (default `default`), `-z set`, optique resolves
-the options directory exactly as poudriere(8) does before null-mounting one
-over the jail's /var/db/ports — first existing wins:
-
-    <jail>-<tree>-<set>-options   <jail>-<set>-options   <jail>-<tree>-options
-    <tree>-<set>-options          <set>-options          <tree>-options
-    <jail>-options                options
-
-If none exists, apply creates the one `poudriere options` would have used
-for the same flags (`[<jail>-][<tree>-][<set>-]options`, the tree component
-only when `-p` was explicit). `-o dir` bypasses all of this; without any
-poudriere.d, plain `/var/db/ports` is used.
-
-make.conf is layered in poudriere(8)'s inclusion order, all existing files
-concatenated: `make.conf`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
-`<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-make.conf` — so
-queries see exactly what poudriere builds, including `DEFAULT_VERSIONS` and
-`OPTIONS_SET/UNSET` knobs.
-
-Queries also see a poudriere jail's environment rather than the host's:
-the layers come after the lines poudriere puts at the top of every jail's
-make.conf (`PACKAGE_BUILDING`, `PACKAGE_BUILDING_FLAVORS`, `BATCH`,
-`USE_PACKAGE_DEPENDS`) and are followed by `LOCALBASE=/nonexistent`, since a
-jail has nothing installed when poudriere reads a port. Otherwise the host's
-packages answer the Makefiles' `exists()` probes: `www/apache24` IGNOREs
-LDAP when the host's apr-util lacks it, and `USES=iconv` ports gain a
-libiconv dependency when the host has libiconv. The banner's `environment:`
-line says when this applies; without a poudriere.d (plain `/var/db/ports`)
-queries see the host, which is then the machine that builds. When
-poudriere.conf sets `NO_PACKAGE_BUILDING` (read from `poudriere.conf`,
-poudriere.d's, and its `<set>-`, `<tree>-`, `<jail>-`... `-poudriere.conf`
-files, in poudriere's order), the two `PACKAGE_BUILDING` lines are left out,
-as poudriere leaves them out, and the banner says so.
-
-The `blacklist` chain is read with the same jail/tree/set expansion
-(`blacklist`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,
-`<jail>-<tree>-`, `<jail>-<set>-`, `<jail>-<tree>-<set>-blacklist`); like
-poudriere, every existing file contributes entries — one port origin per
-line, `#` comments, `*` globs allowed (`www/nginx*`). Blacklisted ports are
-marked `⊘` in `scan` and in the TUI and never demand attention: poudriere
-won't build them here, so their options can't hold a build up, and they
-never trip `scan`'s exit-code gate whatever their status.
-
-### Synth
-
-`-s [profile]` (default: synth.ini's `profile_selected`, else `LiveSystem`) swaps the poudriere layout for
-[ports-mgmt/synth](https://man.freebsd.org/synth)'s, so the same commands work
-on a synth host: `optique -s scan -f list`, `optique -s sync www/nginx`,
-`optique -s clean -r`. The ports tree comes from `Directory_portsdir` and the
-options dir from `Directory_options` in the profile's section of
-`/usr/local/etc/synth/synth.ini` (falling back to that file's
-`[Global Configuration]` section, then to `/usr/ports` and `/var/db/ports`),
-and make.conf is the single file `/usr/local/etc/synth/<profile>-make.conf` —
-the one synth appends to each builder's make.conf; there is no layering and no
-blacklist. `-o dir` still overrides the options dir; `-p` is a poudriere tree
-name and is ignored (with a note) under `-s`, and `-s` cannot be combined with
-`-z`/`-j`.
-
-When no ports are given at all (no origins, no `-f`), synth mode uses the
-**installed packages** as the list — synth builds what is installed, so
-`optique -s`, `optique -s scan` or `optique -s clean --unused` operate on the
-`pkg query` origin set (flavors taken from the pkg `flavor` annotation).
-`--repo NAME` (repeatable) restricts that implicit list to packages
-installed from the given pkg repositories — e.g. `optique -s --repo Synth`
-to consider only synth-built packages (`pkg query -a %R | sort -u` lists
-the names).
-
-One caveat the banner also points out: when `Directory_options` is the live
-`/var/db/ports`, minimal/redundant cleanups affect plain `make config`
-workflows too.
-
-## How it works
-
-One `make` invocation per port (~0.2–0.6 s, up to 16 in parallel) pipes a
-wrapper makefile to `make -f /dev/stdin optique-config`: it includes the
-port's Makefile and dumps options, groups, descriptions, IMPLIES/PREVENTS,
-BROKEN/IGNORE, make.conf layers and `_UNIFIED_DEPENDS` as parse-time `.info`
-lines, evaluated under the layered `__MAKE_CONF`. The dependency list is dumped
-twice, once with `TEST_DEPENDS` and once without, so test-only edges can be
-told apart (see [Dependency loops](#dependency-loops)).
-
-Results are cached in `~/.cache/optique/` keyed on (ports tree git HEAD,
-make.conf hash, options file content), so re-scans and background refreshes
-only invoke make for ports whose inputs actually changed. Renamed ports are
-resolved through `MOVED`; removed ones surface as per-edge errors.
-
-## Building / testing
-
-The `Makefile` is a thin wrapper around cargo that runs under BSD make and GNU
-make alike; `make` alone lists its targets and the variables in force.
-
-```sh
-make check                   # preflight: man page lint, one release everywhere,
-                             # the port's crate list matches Cargo.lock
-make build                   # cargo build --release (needs lang/rust)
-make tests                   # unit and hermetic CLI tests, host-independent
-make tests-live              # live tests against /usr/ports on a FreeBSD host
-```
-
-`check` runs none of optique's code. Its release and crate checks evaluate
-the port skeleton against `PORTSDIR` (default `/usr/ports`) and say
-`unchecked` where there is no ports tree.
-
-The release is `Cargo.toml`'s `version`. `make version` prints it and
-`make tag` tags `v<version>` once `check` and `tests` pass. It never pushes.
-
-## Installing
+optique needs FreeBSD and a ports tree; building it needs `lang/rust`.
 
 ```sh
 make build
-make install                 # as root
+make install                 # as root: /usr/local/bin and the man page
 ```
 
-It installs `optique` into `${PREFIX}/bin` and the man page into
-`${PREFIX}/share/man/man8/optique.8.gz`, with `PREFIX` defaulting to
-`/usr/local`. Both `PREFIX` and `DESTDIR` are honoured, so staging into a
-package works as usual:
-
-```sh
-make install PREFIX=/opt DESTDIR=/tmp/stage
-```
-
-A FreeBSD port skeleton is also kept in-tree at
-[`ports/sysutils/optique`](ports/sysutils/optique) — see
-[`ports/README.md`](ports/README.md) for how to drop it into a ports tree or
+`PREFIX` and `DESTDIR` are honoured. A port skeleton is kept in-tree at
+[`ports/sysutils/optique`](ports/sysutils/optique); see
+[`ports/README.md`](ports/README.md) to drop it into a ports tree or a
 poudriere overlay.
 
-`make uninstall` removes both files again. The same install by hand:
+## Quick start
 
 ```sh
-install -s -m 555 target/release/optique /usr/local/bin/optique
-gzip -cn man/optique.8 > /usr/local/share/man/man8/optique.8.gz
+# Review and set the options of a package list's whole closure, for the
+# poudriere set "server"
+optique -z server -f /usr/local/etc/poudriere.d/pkglist/server.lst
+
+# What is left to decide? Exit status 1 while anything is pending, 3 on
+# an error
+optique -z server scan -f server.lst
+
+# The unattended refresh after a ports tree update: keep saved choices,
+# take defaults for new options, drop removed ones
+optique -z server sync -f server.lst
 ```
 
-Full documentation lives in the man page — every flag, the poudriere options-dir
-and make.conf resolution chains, the TUI key bindings, the `scan --json` schema
-and `scan`'s exit-code contract:
+## The workflow
+
+```text
+┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐   ┌───────────┐
+│   update  │──▸│  scan the │──▸│  triage,  │──▸│   apply   │──▸│ poudriere │
+│  the tree │   │  closure  │   │   decide  │   │   atomic  │   │    bulk   │
+└───────────┘   └───────────┘   └───────────┘   └───────────┘   └───────────┘
+                └───────────────── optique ─────────────────┘
+                     or, unattended: optique sync -f list
+```
+
+After a ports tree update, some ports gain or lose options and new
+dependencies appear. optique scans the closure, sorts the ports that need a
+decision to the top (`?` never configured, `!` options changed since the
+file was written, `✗` conflicting), lets you accept or edit each one with
+the framework's own rules enforced, and writes everything when you apply.
+`poudriere bulk` then finds every port configured and starts building at
+once. For cron or CI, `sync` does the middle three steps without asking.
+
+## Commands
+
+| Command         | What it does                                             |
+| :-------------- | :------------------------------------------------------- |
+| `tui` (default) | one screen over the closure; nothing written until apply |
+| `scan`          | report what needs a decision; exit 1 while anything does |
+| `sync`          | refresh every options file without asking                |
+| `decide`        | set values from a JSON plan, all or nothing              |
+| `clean`         | remove options files of gone, unused or redundant ports  |
+
+Every command takes the same global options (`-z set`, `-j jail`,
+`-p tree`, `-o dir`, `-s profile`, `-f pkglist`, ...) and every one but the
+TUI can answer in JSON.
+
+## Documentation
+
+- [The TUI](docs/tui.md): the screen, markers, keys, applying, drafts
+- [Commands](docs/commands.md): each subcommand, the global options, exit
+  status
+- [Machine interface](docs/machine-interface.md): JSON reports and
+  `decide` plans, for scripts and agents
+- [Configuration](docs/configuration.md): what optique reads, in which
+  order, for poudriere and for synth
+- [Dependency loops](docs/dependency-loops.md): how they are found and
+  broken
+- [How it works](docs/how-it-works.md): the query pipeline and the cache
+- `optique(8)`, the man page: every flag, key, JSON key and exit status
+  (`man optique`, or `mandoc man/optique.8` from the tree)
+- [DESIGN.md](DESIGN.md): why optique is shaped the way it is
+
+## Building and testing
+
+The `Makefile` wraps cargo and runs under BSD and GNU make alike; `make`
+alone lists its targets.
 
 ```sh
-man optique                  # or: mandoc man/optique.8
+make check          # preflight: man page lint, one release everywhere
+make build          # cargo build --release
+make tests          # unit and hermetic CLI tests
+make tests-live     # end to end against /usr/ports, on a FreeBSD host
+make screens        # redraw the text screenshots in README.md and docs/
 ```
+
+[CHECKLIST.md](CHECKLIST.md) lists what a change has to pass before it
+lands.
+
+## License
+
+BSD-2-Clause.

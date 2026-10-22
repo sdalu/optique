@@ -1,7 +1,7 @@
 # optique
 
-- What it does and how to drive it: `README.md`; every flag, key, JSON key
-  and exit status: `man/optique.8`.
+- What it does: `README.md`; how to drive it, page by page: `docs/`; every
+  flag, key, JSON key and exit status: `man/optique.8`.
 - Why it is shaped so, and what it rejected: `DESIGN.md`.
 - Closing a round: `CHECKLIST.md`. `make` alone lists the targets.
 
@@ -16,4 +16,4 @@ Traps:
   hundreds of places); do not run `cargo fmt` over it, format only what
   you write.
 - There is no terminal here for the TUI; drive it with `optique tui
-  --drive` (README, "Debugging the TUI").
+  --drive` (`docs/tui.md`, "Driving the TUI headless").

@@ -19,8 +19,9 @@ Run in order; a red gate is answered before anything else.
 
 ## Documents
 
-- [ ] `README.md` -- does every flag, key, path and command it names still
-      exist, and does it describe what this round changed?
+- [ ] `README.md` and `docs/` -- does every flag, key, path and command they
+      name still exist, and do they describe what this round changed? A
+      changed screen or a ports tree update: `make screens`.
 - [ ] `man/optique.8` -- does a changed flag, key, JSON key or exit status read
       the same here as in the README?
 - [ ] `src/tui/ui.rs` help overlay -- does a changed key or marker appear in

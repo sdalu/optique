@@ -95,6 +95,11 @@ tests:						## build and run the unit and hermetic CLI tests (cargo test)
 tests-live:					## the live tests against /usr/ports on a FreeBSD host; tests does not run them
 	${CARGO} test --no-fail-fast -- --ignored
 
+# The captures come from the real TUI over the host's /usr/ports, so they
+# follow the ports tree: regenerate them when the screen or the tree moved.
+screens: build					## redraw the text screenshots in README.md and docs/ (needs /usr/ports)
+	sh scripts/screens.sh ${RELEASE}
+
 # --- installing ------------------------------------------------------------
 
 # -s strips the binary, 555 for the executable and 444 for the man page are the
@@ -143,4 +148,4 @@ clean:						## remove target/ (cargo clean)
 	${CARGO} clean
 
 .PHONY: help check check-man check-version check-crates build tests \
-	tests-live install uninstall version tag clean
+	tests-live screens install uninstall version tag clean
