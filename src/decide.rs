@@ -98,6 +98,9 @@ impl Plan {
 /// the same plan always produces the same state.
 pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
     let mut outcome = Outcome::default();
+    // (port, values asked, options its own toggles refused) per entry, for
+    // the final-state check once the whole plan has run.
+    let mut asked: Vec<(PortKey, &BTreeMap<String, bool>, Vec<String>)> = Vec::new();
     for (requested, wanted) in &plan.ports {
         let Some(key) = sess.resolve(requested) else {
             outcome.unknown.push(requested.clone());
@@ -116,6 +119,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
             continue;
         }
         let mut changed = false;
+        let mut refused = Vec::new();
         for (opt, on) in wanted {
             if !info.options.complete.iter().any(|o| o == opt) {
                 outcome.rejected.push((
@@ -123,6 +127,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
                     opt.clone(),
                     format!("{} has no option {opt}", info.canonical),
                 ));
+                refused.push(opt.clone());
                 continue;
             }
             // Already the wanted value: not a change, and not an error even
@@ -136,35 +141,33 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
             }
             match sess.toggle(&key, opt) {
                 Ok(()) => changed = true,
-                Err(reason) => outcome.rejected.push((key.clone(), opt.clone(), reason)),
+                Err(reason) => {
+                    outcome.rejected.push((key.clone(), opt.clone(), reason));
+                    refused.push(opt.clone());
+                }
             }
-        }
-        // Order must not hide a broken promise. A value can be undone after
-        // it was set — an IMPLIES chain dragging an option back on, a
-        // single-choice group deselecting a sibling — without any single
-        // toggle refusing anything. Check what the port actually ended up
-        // with, so `complete()` means every asked value is the final value.
-        let refused: Vec<&String> = outcome
-            .rejected
-            .iter()
-            .filter(|(k, _, _)| *k == key)
-            .map(|(_, opt, _)| opt)
-            .collect();
-        let mut missed = Vec::new();
-        for (opt, on) in wanted {
-            if refused.contains(&opt) {
-                continue;
-            }
-            let ended = sess.state(&info).map(|s| s.staged.contains(opt)).unwrap_or(false);
-            if ended != *on {
-                missed.push((opt.clone(), why_not(sess, &key, opt, *on)));
-            }
-        }
-        for (opt, reason) in missed {
-            outcome.rejected.push((key.clone(), opt, reason));
         }
         if changed {
-            outcome.touched.push(key);
+            outcome.touched.push(key.clone());
+        }
+        asked.push((key, wanted, refused));
+    }
+    // Order must not hide a broken promise. A value can be undone after it
+    // was set — an IMPLIES chain dragging an option back on, a single-choice
+    // group deselecting a sibling, a later entry on the same options state
+    // (another flavor sharing the file) — without any single toggle refusing
+    // anything. Check what each port ended up with once the whole plan ran,
+    // so `complete()` means every asked value is the final value.
+    for (key, wanted, refused) in asked {
+        let Some(info) = sess.ports.get(&key) else { continue };
+        for (opt, on) in wanted {
+            if refused.contains(opt) {
+                continue;
+            }
+            let ended = sess.state(info).map(|s| s.staged.contains(opt)).unwrap_or(false);
+            if ended != *on {
+                outcome.rejected.push((key.clone(), opt.clone(), why_not(sess, &key, opt, *on)));
+            }
         }
     }
     outcome.rejected.sort();
@@ -364,6 +367,30 @@ mod tests {
         assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
         assert_eq!(out.rejected[0].1, "AAA");
         assert!(out.rejected[0].2.contains("group IMPL"), "{:?}", out.rejected[0]);
+    }
+
+    /// Two flavors share one options state: a later entry asking the other
+    /// value of the same option undoes the earlier entry, and the earlier
+    /// one is reported rather than checked before the later one ran.
+    #[test]
+    fn a_later_entry_undoing_an_earlier_one_is_reported() {
+        let flavor = |f: &str| {
+            let mut info = port(&format!("devel/git@{f}"), &["NLS"], &[], &[]);
+            info.flavors = vec!["default".into(), "lite".into()];
+            info.options_name = "devel_git".into();
+            info
+        };
+        let (mut sess, _tmp) = session(vec![flavor("default"), flavor("lite")]);
+        let plan =
+            Plan::parse(r#"{"devel/git@default": {"NLS": true}, "devel/git@lite": {"NLS": false}}"#)
+                .unwrap();
+        let out = apply_plan(&mut sess, &plan);
+        assert!(staged(&sess, "devel/git@default").is_empty());
+        assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
+        assert_eq!(out.rejected[0].0, PortKey::parse("devel/git@default").unwrap());
+        assert_eq!(out.rejected[0].1, "NLS");
+        assert!(out.rejected[0].2.contains("turned it off again"), "{:?}", out.rejected[0]);
+        assert!(!out.complete(), "a plan contradicting itself is not honoured");
     }
 
     /// A `*_FORCE` knob is named as such rather than as a mystery.
