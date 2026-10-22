@@ -1447,9 +1447,6 @@ impl App {
             self.refresh_progress = None;
         }
         if let Some((added, removed)) = merged {
-            let keep = self.selected_key();
-            self.rebuild_visible(keep);
-            self.rebuild_editor();
             if added > 0 || removed > 0 {
                 self.flash(
                     &format!("dependencies refreshed: +{added} −{removed} port(s)"),
@@ -1458,8 +1455,13 @@ impl App {
             }
             // Dep edges may have changed without any port appearing or
             // vanishing, so the loops are recomputed on every merge — and a
-            // loop that just appeared outranks the refresh line.
+            // loop that just appeared outranks the refresh line. Before the
+            // rebuild: the L view lists the loops as they are now, and is
+            // left when the last one went.
             self.refresh_loops();
+            let keep = self.selected_key();
+            self.rebuild_visible(keep);
+            self.rebuild_editor();
         }
     }
 
@@ -2509,6 +2511,58 @@ mod tests {
         let keep = app.selected_key();
         app.rebuild_visible(keep);
         assert_eq!(app.visible.len(), 2, "both ports are listed again");
+    }
+
+    /// Through a real merge: a re-scan that breaks the last loop under L
+    /// lists every port again, and one that makes a new loop under L lists
+    /// its ports — the list is built from the loops the merge left.
+    #[test]
+    fn a_rescan_that_breaks_the_last_loop_lists_every_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(
+            tmp.path(),
+            &[
+                ("cat/alpha", &["cat/beta"]),
+                ("cat/beta", &["cat/alpha"]),
+                ("cat/gamma", &[]),
+                ("cat/delta", &[]),
+            ],
+        );
+        let (ev, _req) = fake_refresher(&mut app);
+        press(&mut app, 'L');
+        assert_eq!(visible(&app), ["cat/alpha", "cat/beta"]);
+
+        // gamma and delta start needing each other: a second loop, shown.
+        let mut gamma = info_of(&app, "cat/gamma");
+        let mut delta = info_of(&app, "cat/delta");
+        gamma.deps = info_of(&app, "cat/beta").deps;
+        gamma.deps[0].target = delta.key.clone();
+        delta.deps = info_of(&app, "cat/beta").deps;
+        delta.deps[0].target = gamma.key.clone();
+        ev.send(done(vec![gamma, delta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.only_loops);
+        assert_eq!(visible(&app).len(), 4, "{:?}", visible(&app));
+
+        // That loop broken again: its ports leave the view.
+        let mut delta = info_of(&app, "cat/delta");
+        delta.deps.clear();
+        ev.send(done(vec![delta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.only_loops);
+        assert_eq!(visible(&app), ["cat/alpha", "cat/beta"]);
+
+        // The last loop broken: the view lets go, and the list says so too.
+        let mut beta = info_of(&app, "cat/beta");
+        beta.deps.clear();
+        ev.send(done(vec![beta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.loops.is_empty() && !app.only_loops);
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("dependency loop gone; showing all ports again")
+        );
+        assert_eq!(visible(&app).len(), 4, "{:?}", visible(&app));
     }
 
     /// `r` explains the loop, not just the chain and the dependents, and
