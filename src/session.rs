@@ -588,14 +588,11 @@ pub fn undecided_options(
     if minimal {
         return Vec::new();
     }
+    // Recorded means a SET or UNSET line, as `apply::sync_enabled_set` reads
+    // the file: an option only in `_FILE_COMPLETE_OPTIONS_LIST` is left by
+    // make at its default, which nobody decided.
     let known: BTreeSet<&str> = match saved {
-        Some(saved) => saved
-            .complete
-            .iter()
-            .chain(saved.set.iter())
-            .chain(saved.unset.iter())
-            .map(String::as_str)
-            .collect(),
+        Some(saved) => saved.set.iter().chain(saved.unset.iter()).map(String::as_str).collect(),
         None => BTreeSet::new(),
     };
     let o = &info.options;

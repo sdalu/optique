@@ -126,14 +126,16 @@ impl PendingWrite {
 /// keep the saved file's choices for options that still exist, take the
 /// effective state (defaults + make.conf) for options the file doesn't know,
 /// and drop options that no longer exist.
+///
+/// The file is read the way bsd.options.mk reads it: OPTIONS_FILE_UNSET runs
+/// after OPTIONS_FILE_SET, so an option on both lines is off, and an option
+/// on neither (listed only in `_FILE_COMPLETE_OPTIONS_LIST`) keeps its
+/// default/make.conf value.
 pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let mut enabled = BTreeSet::new();
     for opt in &info.options.complete {
-        let known_to_file = saved.map(|s| {
-            s.complete.contains(opt) || s.set.contains(opt) || s.unset.contains(opt)
-        });
-        let on = match (saved, known_to_file) {
-            (Some(s), Some(true)) => s.set.contains(opt),
+        let on = match saved {
+            Some(s) if s.set.contains(opt) || s.unset.contains(opt) => !s.unset.contains(opt),
             _ => info.options.effective.contains(opt),
         };
         if on {
@@ -388,6 +390,26 @@ mod tests {
         let saved = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
         let enabled = sync_enabled_set(&info, Some(&saved));
         assert_eq!(enabled, ["A"].iter().map(|s| s.to_string()).collect());
+    }
+
+    /// bsd.options.mk applies OPTIONS_FILE_SET then OPTIONS_FILE_UNSET, so
+    /// an option on both lines is off; an option the file only lists in
+    /// `_FILE_COMPLETE_OPTIONS_LIST` is left at its default/make.conf value.
+    /// Sync must read a hand-edited file the way make does, or its rewrite
+    /// flips options the reported diff never mentions.
+    #[test]
+    fn sync_lets_unset_win_and_leaves_complete_only_options_to_make() {
+        // What make computes with this file in place: A off (UNSET wins), B
+        // on, C at its default (on), D at its default (off).
+        let info = mk_info(&["A", "B", "C", "D"], &["B", "C"]);
+        let saved = SavedOptionsFile::parse(
+            "_FILE_COMPLETE_OPTIONS_LIST=A B C D\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n",
+        );
+        let enabled = sync_enabled_set(&info, Some(&saved));
+        assert_eq!(enabled, ["B", "C"].iter().map(|s| s.to_string()).collect());
+        // Nobody decided C or D: the file says nothing about them.
+        assert_eq!(crate::session::undecided_options(&info, Some(&saved), false), ["C", "D"]);
     }
 
     fn pending(old: Option<&str>, complete: &[&str], enabled: &[&str]) -> PendingWrite {

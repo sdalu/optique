@@ -934,6 +934,15 @@ adopts the effective value
 .Pq defaults plus Pa make.conf
 for options the file does not know about, and drops options that no longer
 exist.
+The file is read the way
+.Pa bsd.options.mk
+reads it: an option on both an
+.Va OPTIONS_FILE_SET
+and an
+.Va OPTIONS_FILE_UNSET
+line is off, and an option on neither, named only in
+.Va _FILE_COMPLETE_OPTIONS_LIST ,
+keeps its effective value.
 It then reports every file it changed.
 A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force
