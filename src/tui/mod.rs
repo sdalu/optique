@@ -1639,6 +1639,32 @@ mod tests {
         build_app(session, files, db, refresher, Default::default(), false)
     }
 
+    /// However many options a port has, turning the panel on never changes
+    /// which of them the pane shows: it is sized from the rows they need.
+    #[test]
+    fn description_panel_never_hides_an_option() {
+        let visible = |shown: &str, n: usize| -> Vec<usize> {
+            (1..=n).filter(|i| shown.contains(&format!("OPT{i:02}"))).collect()
+        };
+        let mut panel_seen = false;
+        for n in 16..=32 {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+            let key = PortKey::parse("cat/alpha").unwrap();
+            let info = app.session.ports.get_mut(&key).unwrap();
+            info.options.complete = (1..=n).map(|i| format!("OPT{i:02}")).collect();
+            info.about.comment = "The alpha port".to_string();
+            app.about_text.insert(key.clone(), "word ".repeat(400));
+            app.rebuild_editor();
+            let without = visible(&screen(&mut app), n);
+            dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+            let shown = screen(&mut app);
+            assert_eq!(visible(&shown, n), without, "{n} options:\n{shown}");
+            panel_seen |= shown.contains("The alpha port");
+        }
+        assert!(panel_seen, "the panel had room at least once");
+    }
+
     /// The panel reads a port's pkg-descr once, not at every redraw: the loop
     /// redraws every 150 ms, and the ports tree may be on NFS.
     #[test]
@@ -1675,6 +1701,35 @@ mod tests {
         app.flush_due_refreshes();
         assert!(staged.is_file());
         assert!(app.pending.is_empty());
+    }
+
+    /// Through the real refresher: a sent batch counts as outstanding until
+    /// its scan reports done, and a port due meanwhile waits for that.
+    #[test]
+    fn a_sent_batch_holds_staging_until_its_scan_is_done() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        let due = Instant::now() - REFRESH_DEBOUNCE * 2;
+        let staged = |name: &str| tmp.path().join("db").join(name).join("options");
+
+        app.pending.insert(PortKey::parse("cat/alpha").unwrap(), due);
+        app.flush_due_refreshes();
+        assert!(staged("cat_alpha").is_file());
+        assert_eq!(app.refreshing, 1, "the sent batch is outstanding");
+
+        app.pending.insert(PortKey::parse("cat/beta").unwrap(), due);
+        app.flush_due_refreshes();
+        assert!(!staged("cat_beta").exists(), "written under a running re-scan");
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while app.refreshing > 0 {
+            assert!(Instant::now() < deadline, "the re-scan never reported done");
+            app.drain_refresh_events();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        app.flush_due_refreshes();
+        assert!(staged("cat_beta").is_file());
+        assert_eq!(app.refreshing, 1);
     }
 
     /// Opening the apply preview, confirming it and reloading afterwards read

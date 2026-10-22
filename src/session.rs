@@ -835,6 +835,77 @@ mod tests {
         assert!(s.violations(info).is_empty());
     }
 
+    /// Every group rule has a staged state that breaks it, and one that does
+    /// not: SINGLE wants exactly one member, MULTI at least one, RADIO at
+    /// most one.
+    #[test]
+    fn group_rules_flag_each_violation() {
+        let cases: [(GroupKind, &[&str], bool); 9] = [
+            (GroupKind::Single, &[], true),
+            (GroupKind::Single, &["A"], false),
+            (GroupKind::Single, &["A", "B"], true),
+            (GroupKind::Multi, &[], true),
+            (GroupKind::Multi, &["A"], false),
+            (GroupKind::Multi, &["A", "B"], false),
+            (GroupKind::Radio, &[], false),
+            (GroupKind::Radio, &["A"], false),
+            (GroupKind::Radio, &["A", "B"], true),
+        ];
+        for (kind, on, broken) in cases {
+            let g = OptionGroup {
+                kind,
+                name: "G".into(),
+                desc: String::new(),
+                members: vec!["A".into(), "B".into()],
+            };
+            let (ports, key) = mk_port(&["A", "B"], &[], vec![g], vec![]);
+            let mut s = session_for(ports);
+            let name = s.ports[&key].options_name.clone();
+            s.states.get_mut(&name).unwrap().staged = on.iter().map(|o| o.to_string()).collect();
+            let v = s.violations(&s.ports[&key]);
+            assert_eq!(!v.is_empty(), broken, "{kind:?} with {on:?} on: {v:?}");
+        }
+    }
+
+    /// A SINGLE group with two members on (a hand-edited file, say) can be
+    /// fixed by turning one off: only the last member is held.
+    #[test]
+    fn an_overfull_single_group_lets_a_member_go() {
+        let g = OptionGroup {
+            kind: GroupKind::Single,
+            name: "G".into(),
+            desc: String::new(),
+            members: vec!["A".into(), "B".into()],
+        };
+        let (ports, key) = mk_port(&["A", "B"], &[], vec![g], vec![]);
+        let mut s = session_for(ports);
+        let name = s.ports[&key].options_name.clone();
+        s.states.get_mut(&name).unwrap().staged = ["A".to_string(), "B".to_string()].into();
+        s.toggle(&key, "B").unwrap();
+        assert!(s.violations(&s.ports[&key]).is_empty());
+        assert!(s.toggle(&key, "A").is_err(), "the last one stays");
+    }
+
+    /// An option outside a group is toggled freely beside it: turning it
+    /// off is no group's last member, turning it on deselects nobody.
+    #[test]
+    fn options_outside_a_group_ignore_its_rules() {
+        for kind in [GroupKind::Single, GroupKind::Multi, GroupKind::Radio] {
+            let g = OptionGroup {
+                kind,
+                name: "G".into(),
+                desc: String::new(),
+                members: vec!["A".into(), "B".into()],
+            };
+            let (ports, key) = mk_port(&["A", "B", "X"], &["A", "X"], vec![g], vec![]);
+            let mut s = session_for(ports);
+            s.toggle(&key, "X").unwrap_or_else(|e| panic!("{kind:?}: X off refused: {e}"));
+            s.toggle(&key, "X").unwrap();
+            let st = s.state(&s.ports[&key]).unwrap();
+            assert!(st.staged.contains("A") && st.staged.contains("X"), "{kind:?}: {st:?}");
+        }
+    }
+
     #[test]
     fn implies_are_closed_and_locked() {
         let defs = vec![(
@@ -1094,6 +1165,40 @@ mod tests {
             default_versions: vec![],
             warnings: vec![],
         }
+    }
+
+    /// The owner is the first flavor in FLAVORS, whatever order the keys
+    /// sort in: here the default `@nox` sorts after `@full`, so the sorted
+    /// ports map cannot pick it by accident.
+    #[test]
+    fn owner_is_the_default_flavor_not_the_first_key() {
+        let mk = |flavor: &str| {
+            let key = PortKey::parse(&format!("editors/emacs@{flavor}")).unwrap();
+            let (mut p, k) = mk_port(&["A"], &[], vec![], vec![]);
+            let mut info = p.remove(&k).unwrap();
+            info.key = key.clone();
+            info.canonical = key;
+            info.flavors = vec!["nox".into(), "full".into()];
+            info.options_name = "editors_emacs".into();
+            info
+        };
+        let mut ports = BTreeMap::new();
+        for info in [mk("full"), mk("nox")] {
+            ports.insert(info.key.clone(), info);
+        }
+        assert_eq!(ports.keys().next().unwrap().to_string(), "editors/emacs@full");
+        let s = session_for(ports.clone());
+        assert_eq!(s.owners["editors_emacs"].to_string(), "editors/emacs@nox");
+
+        // No default flavor in the closure: the first key keeps the file,
+        // a later non-default flavor does not take it over.
+        ports.retain(|k, _| k.to_string() != "editors/emacs@nox");
+        let mut lite = mk("full");
+        lite.key = PortKey::parse("editors/emacs@lite").unwrap();
+        lite.canonical = lite.key.clone();
+        ports.insert(lite.key.clone(), lite);
+        let s = session_for(ports);
+        assert_eq!(s.owners["editors_emacs"].to_string(), "editors/emacs@full");
     }
 
     #[test]

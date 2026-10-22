@@ -635,6 +635,22 @@ mod tests {
         assert!(!text.contains("PACKAGE_BUILDING") && !text.contains("LOCALBASE"), "{text}");
     }
 
+    /// A layer without a final newline does not run into the next one.
+    #[test]
+    fn layers_without_a_final_newline_stay_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("make.conf"), "A=1").unwrap();
+        fs::write(pd.join("s1-make.conf"), "B=2\n").unwrap();
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), false, &stage).unwrap();
+        let text = fs::read_to_string(path.unwrap()).unwrap();
+        assert!(text.lines().any(|l| l == "A=1"), "{text}");
+        assert!(text.lines().any(|l| l == "B=2"), "{text}");
+    }
+
     #[test]
     fn jail_env_wraps_the_layers() {
         let tmp = tempfile::tempdir().unwrap();

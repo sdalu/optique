@@ -1429,6 +1429,7 @@ mod tests {
         assert_eq!(shown.len(), 8, "all eight lines fit under the cap");
         assert_eq!(area.height, 10);
         assert_eq!(rows.y, area.y + area.height - 1, "the border is shared");
+        assert_eq!(rows.y + rows.height, pane.y + pane.height, "the rows end with the pane");
         assert!(rows.height as usize >= 10 + 2, "the rows still fit whole");
 
         // 24 rows leave 30 + 1 - 26 = 5: three lines, the last one marked.
@@ -1436,6 +1437,7 @@ mod tests {
         let (_, shown) = about.expect("room for a shrunk panel");
         assert_eq!(shown.len(), 3);
         assert!(shown[2].to_string().ends_with('…'));
+        assert_eq!(rows.y + rows.height, pane.y + pane.height);
         assert!(rows.height as usize >= 24 + 2);
 
         // 27 rows leave 2: not even a line with its borders.

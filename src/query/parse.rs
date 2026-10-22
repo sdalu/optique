@@ -319,6 +319,65 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         assert_eq!(info.about.pkg_descr, None);
     }
 
+    /// Every tag of the dump lands in its own field: a tag the parser drops
+    /// silently loses a make.conf layer or a group, so each is checked.
+    #[test]
+    fn every_dump_tag_lands_in_its_field() {
+        let text = "\
+OPTIQUE|PKGNAME|foo-1.0
+OPTIQUE|COMPLETE|A B C D E F G H I J K
+OPTIQUE|DEFAULT|A
+OPTIQUE|PORT_OPTIONS|A B
+OPTIQUE|MC_SET|C
+OPTIQUE|MC_UNSET|D
+OPTIQUE|PORT_SET|E
+OPTIQUE|PORT_UNSET|F
+OPTIQUE|FORCE_SET|G
+OPTIQUE|FORCE_UNSET|H
+OPTIQUE|PORT_FORCE_SET|I
+OPTIQUE|PORT_FORCE_UNSET|J
+OPTIQUE|DEFAULT_VERSIONS|ssl=base python=3.12
+OPTIQUE|GROUP|FREE|A B
+OPTIQUE|SINGLE|ONE|C D
+OPTIQUE|RADIO|MAYBE|E F
+OPTIQUE|MULTI|SOME|G H
+";
+        let set = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, text).unwrap();
+        let o = &info.options;
+        assert_eq!(o.defaults, set(&["A"]));
+        assert_eq!(o.effective, set(&["A", "B"]));
+        assert_eq!(o.mc_set, set(&["C"]));
+        assert_eq!(o.mc_unset, set(&["D"]));
+        assert_eq!(o.port_set, set(&["E"]));
+        assert_eq!(o.port_unset, set(&["F"]));
+        assert_eq!(o.force_set, set(&["G"]));
+        assert_eq!(o.force_unset, set(&["H"]));
+        assert_eq!(o.port_force_set, set(&["I"]));
+        assert_eq!(o.port_force_unset, set(&["J"]));
+        assert_eq!(info.default_versions, ["ssl=base", "python=3.12"]);
+        let groups: Vec<(GroupKind, &str, Vec<String>)> =
+            o.groups.iter().map(|g| (g.kind, g.name.as_str(), g.members.clone())).collect();
+        assert_eq!(
+            groups,
+            [
+                (GroupKind::Group, "FREE", vec!["A".to_string(), "B".to_string()]),
+                (GroupKind::Single, "ONE", vec!["C".to_string(), "D".to_string()]),
+                (GroupKind::Radio, "MAYBE", vec!["E".to_string(), "F".to_string()]),
+                (GroupKind::Multi, "SOME", vec!["G".to_string(), "H".to_string()]),
+            ]
+        );
+    }
+
+    /// A FLAVOR on a port with no FLAVORS is no flavor of it.
+    #[test]
+    fn a_flavor_without_flavors_is_dropped() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\nOPTIQUE|FLAVOR|x\n").unwrap();
+        assert_eq!(info.canonical, key);
+    }
+
     #[test]
     fn failures_are_errors_not_panics() {
         let key = PortKey::parse("cat/foo").unwrap();
