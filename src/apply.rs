@@ -158,7 +158,7 @@ pub struct PlannedWrites {
 /// Build the list of files that actually need (re)writing.
 ///
 /// A file is skipped when it is semantically identical: same complete option
-/// list and same enabled set (pkgname-only changes don't force a rewrite,
+/// list and same IMPLIES-closed enabled set (pkgname-only changes don't force a rewrite,
 /// matching `make config-conditional` behavior).
 ///
 /// Flavors of one origin share a single options file, and their computed
@@ -258,7 +258,11 @@ pub fn plan_writes<'a>(
         if let Some(old) = &old {
             let same_list = old.complete.iter().collect::<BTreeSet<_>>()
                 == info.options.complete.iter().collect::<BTreeSet<_>>();
-            let same_set = old.set == *enabled;
+            // IMPLIES-closed on both sides: sync plans from the file as
+            // written, the session from its closed baseline, and make adds
+            // the implied options either way.
+            let close = |set: &BTreeSet<String>| crate::session::close_implies(info, set.clone());
+            let same_set = close(&old.set) == close(enabled);
             if same_list && same_set {
                 continue;
             }
@@ -514,6 +518,40 @@ mod tests {
             false,
         );
         assert_eq!(planned.writes.len(), 1);
+    }
+
+    /// A file `make config` wrote with LDAPS on and LDAP unset, LDAPS
+    /// implying LDAP, is up to date: make turns LDAP on either way. Sync
+    /// plans from the file as written, the session from its IMPLIES-closed
+    /// baseline; both must find nothing to rewrite.
+    #[test]
+    fn sync_and_session_baseline_agree_under_implies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["LDAP", "LDAPS"], &["LDAP", "LDAPS"]);
+        info.options.defs.insert(
+            "LDAPS".into(),
+            crate::model::options::OptionDef { implies: vec!["LDAP".into()], ..Default::default() },
+        );
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=LDAP LDAPS\n\
+             OPTIONS_FILE_UNSET+=LDAP\nOPTIONS_FILE_SET+=LDAPS\n",
+        )
+        .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+
+        let synced = sync_enabled_set(&info, files.saved("cat_port").as_ref());
+        let planned = plan_writes(std::iter::once((&info.key.clone(), &info, synced)), &files, false);
+        assert!(planned.writes.is_empty(), "sync: {:?}", planned.writes);
+
+        let mut ports = std::collections::BTreeMap::new();
+        ports.insert(info.key.clone(), info.clone());
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let sess = crate::session::Session::new(ports, Default::default(), &roots, &files, false);
+        let staged = sess.state(&info).unwrap().staged.clone();
+        let planned = plan_writes(std::iter::once((&info.key.clone(), &info, staged)), &files, false);
+        assert!(planned.writes.is_empty(), "session: {:?}", planned.writes);
     }
 
     #[test]
