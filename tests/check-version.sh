@@ -4,7 +4,7 @@
 set -eu
 
 # Cargo.toml's [package] version is the release; nothing generates it and
-# everything else reads it. Four other places hold the same number, and each
+# everything else reads it. Three other places hold the same number, and each
 # is asked in its own language rather than re-parsed here:
 #
 #   cargo          what `optique --version` reports (clap reads
@@ -12,10 +12,10 @@ set -eu
 #   Cargo.lock     the package entry a --locked or --frozen build checks;
 #                  cargo rewrites it on the next build, so a bump committed
 #                  without one leaves it behind
-#   the port       ports/ports-mgmt/optique's DISTVERSION, which cannot read
-#                  Cargo.toml: the port is copied into a ports tree, away
-#                  from this checkout, and is evaluated before any extract
 #   the tags       scripts/checktag.sh
+#
+# The FreeBSD port is not one of them: it lives in the ports tree and is
+# updated there after a release (`make check-port`, docs/port.md).
 #
 # A reader whose tool is missing is reported as unchecked, never passed.
 #
@@ -47,21 +47,6 @@ if [ "$got" != "$want" ]; then
     say "Cargo.toml says $want, Cargo.lock ${got:-has no optique entry}"
     say '         (run cargo build and commit Cargo.lock)'
     bad=1
-fi
-
-portsdir=${PORTSDIR:-/usr/ports}
-bsdmake=${BSDMAKE:-make}
-if [ ! -f "$portsdir/Mk/bsd.port.mk" ]; then
-    say "port: unchecked (no ports tree at $portsdir)"
-else
-    got=$($bsdmake -C "$top/ports/ports-mgmt/optique" PORTSDIR="$portsdir" \
-        -V DISTVERSION 2>/dev/null) || got=''
-    if [ -z "$got" ]; then
-        say "port: unchecked ($bsdmake -V DISTVERSION answered nothing)"
-    elif [ "$got" != "$want" ]; then
-        say "Cargo.toml says $want, the port's DISTVERSION $got"
-        bad=1
-    fi
 fi
 
 sh "$top/scripts/checktag.sh" "$want" || bad=1

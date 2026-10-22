@@ -280,8 +280,8 @@ directory.
 
 Rejected: `OVERLAYS=` on make's command line (it replaces the make.conf's
 `+=` list, so a layer's overlay would vanish); requiring `Mk/` in an
-overlay (neither poudriere nor the framework does, and optique's own
-`ports/` has none); `-O` taking a path (the argument against `-p` taking
+overlay (neither poudriere nor the framework does, and an overlay of a
+single port has none); `-O` taking a path (the argument against `-p` taking
 one, above); following `poudriere options`, which has no overlays at all.
 
 ## Machine interface: one JSON object, all-or-nothing, replayable

@@ -56,10 +56,9 @@ make build
 make install                 # as root: /usr/local/bin and the man page
 ```
 
-`PREFIX` and `DESTDIR` are honoured. A port skeleton is kept in-tree at
-[`ports/ports-mgmt/optique`](ports/ports-mgmt/optique); see
-[`ports/README.md`](ports/README.md) to drop it into a ports tree or a
-poudriere overlay.
+`PREFIX` and `DESTDIR` are honoured. optique is also in the FreeBSD ports
+tree as `ports-mgmt/optique` (`pkg install optique`); see
+[docs/port.md](docs/port.md) for keeping the port up to date.
 
 ## Quick start
 
@@ -137,6 +136,8 @@ Every command takes the same global options after its name (`-z set`,
 - [Dependency loops](docs/dependency-loops.md): how they are found and
   broken
 - [How it works](docs/how-it-works.md): the query pipeline and the cache
+- [The FreeBSD port](docs/port.md): updating `ports-mgmt/optique` for a
+  release, and test-building it
 - `optique(8)`, the man page: every flag, key, JSON key and exit status
   (`man optique`, or `mandoc man/optique.8` from the tree)
 - [DESIGN.md](DESIGN.md): why optique is shaped the way it is
@@ -152,6 +153,7 @@ make build          # cargo build --release
 make tests          # unit and hermetic CLI tests
 make tests-live     # end to end against /usr/ports, on a FreeBSD host
 make screens        # redraw the text screenshots in README.md and docs/
+make check-port     # is the FreeBSD port (ports-mgmt/optique) up to date?
 ```
 
 [CHECKLIST.md](CHECKLIST.md) lists what a change has to pass before it

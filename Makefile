@@ -4,15 +4,15 @@
 # functions; ?=, != and ${} are common syntax. `make` alone prints the help.
 
 # Build where the sources are. bmake otherwise runs the recipes from
-# /usr/obj${.CURDIR} as soon as that directory exists — and it does here, left
-# behind by a ports build under ports/ — where cargo finds no Cargo.toml.
+# /usr/obj${.CURDIR} as soon as that directory exists — a ports build run
+# from the checkout leaves one behind — where cargo finds no Cargo.toml.
 # GNU make ignores this: it defines no .CURDIR and never asks for .OBJDIR.
 .OBJDIR: ${.CURDIR}
 
 NAME=		optique
 
 # The release lives in Cargo.toml and nowhere else that is not checked
-# against it: check-version asks cargo, Cargo.lock, the port and the tags.
+# against it: check-version asks cargo, Cargo.lock and the tags.
 VERSION!=	sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1
 
 PREFIX?=	/usr/local
@@ -29,13 +29,14 @@ MANDOC?=	mandoc
 # providing poudriere(8), synth(1) or portconfig(1) are not installed here.
 # `make check-man MANDOCFLAGS="-T lint"` shows them anyway.
 MANDOCFLAGS?=	-T lint -W warning
-# The ports tree the port skeleton is evaluated against by check-version and
-# check-crates; without one they report themselves unchecked.
+# The ports tree holding the FreeBSD port, ports-mgmt/optique, that
+# check-port reads; without one it reports itself unchecked.
 PORTSDIR?=	/usr/ports
 # The port is a ports-framework Makefile and needs BSD make, whichever make
 # runs this one.
 BSDMAKE?=	make
 YES?=
+STRICT?=
 
 MAN8=		optique.8
 MANSRC=		man/${MAN8}
@@ -63,24 +64,27 @@ help:						## show this help (the default)
 	    CARGO       '${CARGO}' \
 	    MANDOC      '${MANDOC}' \
 	    MANDOCFLAGS '${MANDOCFLAGS}' \
-	    PORTSDIR    '${PORTSDIR}  (ports tree check-version and check-crates use)' \
-	    BSDMAKE     '${BSDMAKE}  (BSD make, for the port skeleton)' \
+	    PORTSDIR    '${PORTSDIR}  (ports tree check-port reads)' \
+	    BSDMAKE     '${BSDMAKE}  (BSD make, for the port)' \
+	    STRICT      '${STRICT}  (1 makes check-port fail when the port lags)' \
 	    YES         '${YES}  (1 answers yes to `make tag`)'
 	@echo ''
 	@echo 'This Makefile works with both GNU make and BSD make.'
 
 # --- preflight: runs none of optique's code --------------------------------
 
-check: check-man check-version check-crates	## preflight: this tree is fit to build and release
+check: check-man check-version			## preflight: this tree is fit to build and release
 
 check-man:					## the man page lints clean (mandoc, warnings and above)
 	${MANDOC} ${MANDOCFLAGS} ${MANSRC}
 
-check-version:					## Cargo.toml, cargo, Cargo.lock, the port and the tags name one release
-	@PORTSDIR='${PORTSDIR}' BSDMAKE='${BSDMAKE}' sh tests/check-version.sh '${VERSION}'
+check-version:					## Cargo.toml, cargo, Cargo.lock and the tags name one release
+	@sh tests/check-version.sh '${VERSION}'
 
-check-crates:					## the port's CARGO_CRATES and distinfo match Cargo.lock
-	@PORTSDIR='${PORTSDIR}' BSDMAKE='${BSDMAKE}' sh tests/check-crates.sh
+# Not part of check: the port is updated in the ports tree after a release,
+# so it lags one by design (docs/port.md).
+check-port:					## report whether the FreeBSD port (ports-mgmt/optique) is up to date
+	@PORTSDIR='${PORTSDIR}' BSDMAKE='${BSDMAKE}' STRICT='${STRICT}' sh scripts/check-port.sh
 
 # --- building and the suite ------------------------------------------------
 
@@ -147,5 +151,5 @@ tag:						## tag v<release> from Cargo.toml, after check and tests; pushes nothi
 clean:						## remove target/ (cargo clean)
 	${CARGO} clean
 
-.PHONY: help check check-man check-version check-crates build tests \
+.PHONY: help check check-man check-version check-port build tests \
 	tests-live screens install uninstall version tag clean
