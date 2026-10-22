@@ -324,16 +324,19 @@ impl Session {
     }
 
     pub fn reset_to_defaults(&mut self, key: &PortKey) {
-        if let Some(info) = self.ports.get(key).cloned() {
-            if let Some(state) = self.states.get_mut(&info.options_name) {
-                let defaults: BTreeSet<String> = info
+        if let Some(info) = self.ports.get(key) {
+            // The shared state follows the file OWNER's view, like the
+            // baseline: a flavor lacking some of its options must not drop them.
+            let owner = self.owner_info(info).clone();
+            if let Some(state) = self.states.get_mut(&owner.options_name) {
+                let defaults: BTreeSet<String> = owner
                     .options
                     .complete
                     .iter()
-                    .filter(|o| info.options.defaults.contains(*o))
+                    .filter(|o| owner.options.defaults.contains(*o))
                     .cloned()
                     .collect();
-                state.staged = close_implies(&info, defaults);
+                state.staged = close_implies(&owner, defaults);
             }
         }
     }
@@ -1431,6 +1434,33 @@ mod tests {
         s.reset_to_defaults(&key);
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.staged.contains("A") && !st.staged.contains("B"));
+    }
+
+    /// Flavors share one options state, built from the owner's view: a reset
+    /// asked from a flavor that lacks some of the owner's options must not
+    /// drop them, or apply writes them out as unset.
+    #[test]
+    fn reset_on_a_non_default_flavor_keeps_the_owners_defaults() {
+        let mk = |flavor: &str, complete: &[&str]| {
+            let (mut p, k) = mk_port(complete, complete, vec![], vec![]);
+            let mut info = p.remove(&k).unwrap();
+            info.key = PortKey::parse(&format!("editors/emacs@{flavor}")).unwrap();
+            info.canonical = info.key.clone();
+            info.flavors = vec!["full".into(), "nox".into()];
+            info.options_name = "editors_emacs".into();
+            info
+        };
+        let mut ports = BTreeMap::new();
+        for info in [mk("full", &["A", "X11"]), mk("nox", &["A"])] {
+            ports.insert(info.key.clone(), info);
+        }
+        let nox = PortKey::parse("editors/emacs@nox").unwrap();
+        let mut s = session_for(ports);
+        s.toggle(&nox, "A").unwrap();
+        s.reset_to_defaults(&nox);
+        let st = s.state(&s.ports[&nox]).unwrap();
+        assert_eq!(st.staged, set(&["A", "X11"]), "the owner's defaults, X11 included");
+        assert!(!s.dirty(), "a reset to the defaults of an unconfigured port is no edit");
     }
 
     #[test]
