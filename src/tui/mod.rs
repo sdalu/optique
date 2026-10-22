@@ -2649,6 +2649,45 @@ mod tests {
         assert_eq!((msg.as_str(), err), ("jumped to cat/gamma (loop view left)", false));
     }
 
+    /// On an 80x30 terminal the why box wraps the loop's note line; the
+    /// cursor on the last dependent must still be scrolled into view.
+    #[test]
+    fn the_why_cursor_stays_in_view_on_a_small_terminal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS).map(|i| format!("cat/d{i:02}")).collect();
+        let mut graph: Vec<(&str, &[&str])> =
+            vec![("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])];
+        for name in &names {
+            graph.push((name, &["cat/alpha"]));
+        }
+        let mut app = app_for(tmp.path(), &graph);
+        assert_eq!(selected(&app), "cat/alpha");
+        press(&mut app, 'r');
+        let entries = app.why.as_ref().unwrap().entries().len();
+        for _ in 0..entries {
+            hit(&mut app, KeyCode::Down);
+        }
+        let last = app.why.as_ref().unwrap().entries().last().unwrap().to_string();
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let highlighted: Vec<String> = (0..30u16)
+            .map(|y| {
+                (0..80u16)
+                    .map(|x| &buffer[(x, y)])
+                    .filter(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
+                    .map(|c| c.symbol())
+                    .collect()
+            })
+            .collect();
+        assert!(
+            highlighted.iter().any(|row| row.contains(&last)),
+            "{last} not highlighted in view: {highlighted:?}"
+        );
+    }
+
     /// A port that depends on itself is a loop of one, and says so instead of
     /// pointing back at itself twice.
     #[test]

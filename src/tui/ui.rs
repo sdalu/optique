@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget as _, Wrap};
 use ratatui::Frame;
 
 use crate::model::options::{GroupKind, Provenance};
@@ -845,6 +845,35 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
 /// Help overlay tab titles; indices match `App.help_tab`.
 pub const HELP_TABS: [&str; 4] = ["Markers", "Option row", "Navigate/Edit", "Views/Actions"];
 
+/// Rows `lines` take in a `width`-wide Paragraph wrapped with
+/// `Wrap { trim: false }`. Measured by laying each long line out the way the
+/// Paragraph will: ratatui keeps its own count (`line_count`) behind an
+/// unstable feature.
+fn wrapped_height(lines: &[Line], width: u16) -> usize {
+    if width == 0 {
+        return lines.len();
+    }
+    lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w <= width as usize {
+                return 1;
+            }
+            // Greedy wrapping: two rows in a row hold more than `width`
+            // columns, so this many rows always hold the whole line.
+            let bound = (2 * w.div_ceil(width as usize) + 1).min(u16::MAX as usize) as u16;
+            let area = Rect::new(0, 0, width, bound);
+            let mut buf = ratatui::buffer::Buffer::empty(area);
+            Paragraph::new(line.clone()).wrap(Wrap { trim: false }).render(area, &mut buf);
+            (0..bound)
+                .rev()
+                .find(|&y| (0..width).any(|x| buf[(x, y)].symbol() != " "))
+                .map_or(1, |y| y as usize + 1)
+        })
+        .sum()
+}
+
 fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
     let area = centered_rect(78, 72, f.area());
     f.render_widget(Clear, area);
@@ -1038,9 +1067,11 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
         ]),
     }
 
-    // Clamp the scroll to what actually overflows the inner area.
+    // Clamp the scroll to what actually overflows the inner area, counted in
+    // the rows the lines wrap to: a narrow terminal wraps many of them.
     let inner_height = area.height.saturating_sub(2) as usize;
-    let max_scroll = lines.len().saturating_sub(inner_height) as u16;
+    let rows = wrapped_height(&lines, area.width.saturating_sub(2));
+    let max_scroll = rows.saturating_sub(inner_height) as u16;
     *scroll = (*scroll).min(max_scroll);
     let title = if max_scroll > 0 {
         " help — 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes "
@@ -1195,9 +1226,11 @@ fn draw_why(f: &mut Frame, app: &App) {
         dim,
     )));
 
-    // A loop's tangle can outrun the box; keep the cursor's row in view.
+    // A loop's tangle can outrun the box; keep the cursor's row in view,
+    // counting the rows the lines above it wrap to.
     let inner_height = area.height.saturating_sub(2) as usize;
-    let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
+    let cursor_row = wrapped_height(&lines[..selected_line], area.width.saturating_sub(2));
+    let scroll = cursor_row.saturating_sub(inner_height.saturating_sub(1)) as u16;
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1490,6 +1523,44 @@ mod tests {
             help_line("  alpha beta gamma", 12),
             ["  alpha beta", "    gamma"]
         );
+    }
+
+    /// The rows `draw` leaves on a `width` x `height` screen, trimmed.
+    fn rendered(width: u16, height: u16, draw: impl FnOnce(&mut Frame)) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal.draw(draw).unwrap();
+        let buffer = terminal.backend().buffer();
+        let cells = buffer.content();
+        (0..height as usize)
+            .map(|y| {
+                let row = &cells[y * width as usize..(y + 1) * width as usize];
+                row.iter().map(|c| c.symbol()).collect::<String>().trim_end().to_string()
+            })
+            .collect()
+    }
+
+    /// The last row of text inside the box, borders stripped.
+    fn last_text_row(rows: &[String]) -> String {
+        rows.iter()
+            .map(|r| r.trim().trim_matches('│').trim().to_string())
+            .filter(|r| !r.is_empty() && !r.starts_with('└') && !r.starts_with('┌'))
+            .last()
+            .unwrap_or_default()
+    }
+
+    /// Scrolled to its end, every help tab shows its last line on an 80x30
+    /// terminal, where the box wraps lines the scroll limit must count.
+    #[test]
+    fn every_help_tab_scrolls_to_its_last_line_on_a_small_terminal() {
+        for tab in 0..HELP_TABS.len() {
+            // As tall as it takes to show it all, at the same width.
+            let whole = rendered(80, 200, |f| draw_help(f, tab, &mut 0));
+            let last = last_text_row(&whole);
+            let mut scroll = u16::MAX;
+            let small = rendered(80, 30, |f| draw_help(f, tab, &mut scroll));
+            assert_eq!(last_text_row(&small), last, "tab {tab}:\n{}", small.join("\n"));
+        }
     }
 
     /// Cutting the panel is announced, and the marker must be visible: a full
