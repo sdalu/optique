@@ -49,11 +49,14 @@ leaks into dependencies and defaults; running `make` inside poudriere's
 reference jail, which needs root and mounts and only exists during a build;
 hiding `/usr/local` with a preload library, fragile for a whole `make` tree.
 Copying four lines of poudriere's prelude can drift if poudriere changes
-them, and `NO_PACKAGE_BUILDING` in poudriere.conf is not read. Probes that
+them. `NO_PACKAGE_BUILDING`, which drops two of them, is read from the
+poudriere.conf files in poudriere's own order (`include_poudriere_confs`):
+plain assignment lines only, since sourcing them as shell would run
+whatever they hold, so a value set by shell logic is missed. Probes that
 spell `/usr/local` literally still see the host (one in the tree,
 `math/primecount`, affecting only a CMake flag). synth keeps the host's
-view: it builds in a clean chroot, but its dependency scan appears to run
-`make` on the host, so a jail's view is not known to be its own.
+view on purpose: it builds on the host it configures, so what that host has
+installed is part of the truth, as it is for a plain `/var/db/ports`.
 
 ## Persistent cache, keyed on what actually changed
 
@@ -108,6 +111,29 @@ read it through a fresh store per scan.
 Rejected: seeding staging alone from the session's reads, which left the
 scan's pass, the largest, as it was; and copying the files in parallel,
 which still read everything twice.
+
+## An unreadable options file is an error, never a missing one
+
+An options file that is there but cannot be read (permissions, an NFS
+fault) was taken for a missing one, and so was its port for an
+unconfigured one: `sync` or an apply then replaced the saved choices with
+defaults, since replacing a file needs only the directory's permission.
+make does not save it: bsd.options.mk includes the file once it exists, and
+make reports `Cannot open`, carries on as if there were no file, prints a
+complete dump and exits 1, which the query used to accept. Now
+(`src/query/makerunner.rs`) a `Cannot open` for a file in the options dir
+fails the port with the file and the reason; the store hashes such a file
+as `UNREADABLE`, never `ABSENT`, so no cache entry made while it was missing
+answers for it (`src/optfiles.rs`); `clean` leaves a file it cannot read in
+place (`src/clean.rs`); and a failed query counts in scan's exit gate,
+since neither the port nor what it depends on was checked. A file that is
+not UTF-8 is not unreadable: make reads it, so its choices are parsed
+around the stray bytes rather than dropped.
+
+Rejected: a status of its own in the session, write-protected everywhere,
+which would have needed every writer guarded; with the port failing its
+query it never reaches one. Also rejected, aborting the whole run on such a
+file, which a single bad permission would turn into no report at all.
 
 ## Flavors sharing one options file: the default flavor owns it
 

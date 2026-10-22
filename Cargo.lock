@@ -464,6 +464,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crossbeam-channel",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",

@@ -390,6 +390,23 @@ mod tests {
         assert_eq!(names, vec!["draft.json".to_string(), format!("v{SCHEMA}-current-gen.jsonl")]);
     }
 
+    /// An entry made while the options file was missing is not reused once
+    /// the file is there but unreadable: make fails on such a file, it does
+    /// not read it as missing.
+    #[test]
+    fn an_absent_entry_does_not_answer_for_an_unreadable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbdir = tmp.path().join("db");
+        std::fs::create_dir_all(&dbdir).unwrap();
+        let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
+        let i = info("cat/port");
+        c.insert(&i, &OptionsFiles::new(&dbdir));
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
+        // A directory where the file should be: there, and unreadable.
+        std::fs::create_dir_all(dbdir.join("cat_port/options")).unwrap();
+        assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
+    }
+
     /// `clear` removes every generation, counts files and bytes, and leaves
     /// whatever is not one.
     #[test]

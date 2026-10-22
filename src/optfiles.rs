@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -18,10 +19,26 @@ use crate::optionsfile::SavedOptionsFile;
 /// Hash recorded for an options file that is not there.
 pub const ABSENT: &str = "ABSENT";
 
+/// Hash recorded for an options file that is there but cannot be read. It
+/// differs from `ABSENT` so that a cache entry made while the file was
+/// missing is never taken for one: make fails on such a file ("Cannot
+/// open"), it does not read it as missing.
+pub const UNREADABLE: &str = "UNREADABLE";
+
+/// What one read of an options file found.
+#[derive(Clone)]
+enum Read {
+    Present(Rc<[u8]>),
+    /// Not there (NotFound).
+    Absent,
+    /// There, but any other read error: permissions, an NFS fault, a
+    /// directory in its place.
+    Unreadable,
+}
+
 pub struct OptionsFiles {
     dir: PathBuf,
-    /// OPTIONS_NAME -> the file's bytes, None when it is absent.
-    memo: RefCell<HashMap<String, Option<Rc<[u8]>>>>,
+    memo: RefCell<HashMap<String, Read>>,
     /// Reads that went to disk (for tests and the curious).
     disk_reads: Cell<usize>,
 }
@@ -44,34 +61,44 @@ impl OptionsFiles {
         self.dir.join(options_name).join("options")
     }
 
-    /// The file's bytes, None when absent. Any read error counts as absent,
-    /// as it always has for every reader: a file optique cannot read is one
-    /// make cannot read either.
-    pub fn bytes(&self, options_name: &str) -> Option<Rc<[u8]>> {
+    fn read(&self, options_name: &str) -> Read {
         if let Some(hit) = self.memo.borrow().get(options_name) {
             return hit.clone();
         }
         self.disk_reads.set(self.disk_reads.get() + 1);
-        let read: Option<Rc<[u8]>> = fs::read(self.path(options_name)).ok().map(Rc::from);
+        let read = match fs::read(self.path(options_name)) {
+            Ok(bytes) => Read::Present(Rc::from(bytes)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Read::Absent,
+            Err(_) => Read::Unreadable,
+        };
         self.memo.borrow_mut().insert(options_name.to_string(), read.clone());
         read
     }
 
-    /// SHA-256 of the file's bytes, or `ABSENT`: what the cache records an
-    /// entry against.
-    pub fn hash(&self, options_name: &str) -> String {
-        match self.bytes(options_name) {
-            Some(bytes) => crate::cache::sha256_hex(&bytes),
-            None => ABSENT.to_string(),
+    /// The file's bytes, None when it is absent or cannot be read.
+    pub fn bytes(&self, options_name: &str) -> Option<Rc<[u8]>> {
+        match self.read(options_name) {
+            Read::Present(bytes) => Some(bytes),
+            Read::Absent | Read::Unreadable => None,
         }
     }
 
-    /// The saved choices the file records. A file that is not UTF-8 is no
-    /// saved choice (it was never one `make config` wrote), but its bytes are
-    /// still what make sees and what staging copies.
+    /// SHA-256 of the file's bytes, `ABSENT` or `UNREADABLE`: what the cache
+    /// records an entry against.
+    pub fn hash(&self, options_name: &str) -> String {
+        match self.read(options_name) {
+            Read::Present(bytes) => crate::cache::sha256_hex(&bytes),
+            Read::Absent => ABSENT.to_string(),
+            Read::Unreadable => UNREADABLE.to_string(),
+        }
+    }
+
+    /// The saved choices the file records. A stray byte that is not UTF-8
+    /// (in a comment, say) does not void them: the lines that matter are
+    /// plain ASCII, and make reads the file all the same.
     pub fn saved(&self, options_name: &str) -> Option<SavedOptionsFile> {
         let bytes = self.bytes(options_name)?;
-        std::str::from_utf8(&bytes).ok().map(SavedOptionsFile::parse)
+        Some(SavedOptionsFile::parse(&String::from_utf8_lossy(&bytes)))
     }
 
     /// Drop what is known of these files, so the next read sees the disk:
@@ -158,27 +185,30 @@ mod tests {
         assert_eq!(h, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     }
 
-    /// A file that is not UTF-8 records no saved choice, but its bytes are
-    /// still what make reads, so staging and the cache keep them.
+    /// A stray byte that is not UTF-8 does not void the saved choices: make
+    /// reads the file all the same, so optique keeps its bytes and its sets.
     #[test]
-    fn a_non_utf8_file_has_bytes_but_no_saved_choice() {
+    fn a_non_utf8_file_keeps_its_bytes_and_its_choices() {
         let tmp = tempfile::tempdir().unwrap();
-        put(tmp.path(), "cat_port", b"OPTIONS_FILE_SET+=A\n\xff\xfe\n");
+        put(tmp.path(), "cat_port", b"# by hand \xff\xfe\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
         let files = OptionsFiles::new(tmp.path());
-        assert!(files.saved("cat_port").is_none());
-        assert_eq!(files.bytes("cat_port").unwrap().len(), 23);
+        let saved = files.saved("cat_port").expect("the choices survive");
+        assert!(saved.set.contains("A") && saved.unset.contains("B"));
+        assert_eq!(files.bytes("cat_port").unwrap().len(), 55);
         assert_ne!(files.hash("cat_port"), ABSENT);
     }
 
-    /// Whatever cannot be read counts as absent, as it always did: an
-    /// `options` that is a directory, or one without read permission.
+    /// A file that is there but cannot be read is not absent: make fails on
+    /// it rather than reading it as missing, so a cache entry made while it
+    /// was missing must not be reused. Its bytes and choices are unknown.
     #[test]
-    fn an_unreadable_file_counts_as_absent() {
+    fn an_unreadable_file_is_not_absent() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("cat_dir/options")).unwrap();
         let files = OptionsFiles::new(tmp.path());
-        assert!(files.bytes("cat_dir").is_none());
-        assert_eq!(files.hash("cat_dir"), ABSENT);
+        assert!(files.bytes("cat_dir").is_none() && files.saved("cat_dir").is_none());
+        assert_eq!(files.hash("cat_dir"), UNREADABLE, "a directory in its place");
+        assert_eq!(files.hash("cat_none"), ABSENT, "really missing");
 
         use std::os::unix::fs::PermissionsExt;
         put(tmp.path(), "cat_locked", b"x\n");
@@ -187,6 +217,7 @@ mod tests {
         // root reads it anyway; the case only exists for everyone else.
         if fs::read(&path).is_err() {
             assert!(files.bytes("cat_locked").is_none());
+            assert_eq!(files.hash("cat_locked"), UNREADABLE);
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
     }

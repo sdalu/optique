@@ -179,6 +179,7 @@ mod tests {
     /// The counts the summary line reports: queried cold, cached warm.
     #[test]
     fn scan_counts_queried_and_cached_ports() {
+        let _lock = crate::query::makerunner::make_test_lock();
         let tmp = fake_tree(&[("cat/a", "PKGNAME=a-1.0\n"), ("cat/b", "PKGNAME=b-1.0\n")]);
         let ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
@@ -202,10 +203,55 @@ mod tests {
         assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
     }
 
+    /// An options file that is there but cannot be read: make fails on it,
+    /// and the port is reported with the file and the reason, never taken
+    /// from a cache entry made while the file was missing. That entry, read
+    /// as "unconfigured", would have let sync or apply overwrite the file.
+    #[test]
+    fn an_unreadable_options_file_fails_the_port_even_when_cached() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = crate::query::makerunner::make_test_lock();
+        // What bsd.options.mk does: include the options file, unconditionally
+        // once it exists.
+        let tmp = fake_tree(&[(
+            "cat/a",
+            "PKGNAME=a-1.0\nOPTIONS_NAME=cat_a\n\
+             .if exists(${PORT_DBDIR}/cat_a/options)\n.include \"${PORT_DBDIR}/cat_a/options\"\n.endif\n",
+        )]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+        };
+        let roots = vec![PortKey::parse("cat/a").unwrap()];
+        let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
+        let moved = Moved::parse("");
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let first = scan(&roots, &ctx, &files, 1, &mut cache, &moved, |_| {});
+        assert_eq!((first.queried, first.ports.len()), (1, 1), "{:?}", first.errors);
+
+        let file = ctx.port_dbdir.join("cat_a/options");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "OPTIONS_FILE_SET+=DOCS\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&file).is_ok() {
+            return; // root reads it anyway: the case only exists for others
+        }
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let second = scan(&roots, &ctx, &files, 1, &mut cache, &moved, |_| {});
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(second.from_cache, 0, "the entry made while it was missing is not reused");
+        assert!(second.ports.is_empty());
+        let (key, msg) = &second.errors[0];
+        assert_eq!(key.to_string(), "cat/a");
+        assert_eq!(msg, &format!("cannot read options file {}: Permission denied (os error 13)", file.display()));
+    }
+
     /// A Makefile make cannot read is that port's error, with make's own last
     /// words; a port with no Makefile says so.
     #[test]
     fn a_failing_or_missing_makefile_is_the_ports_error() {
+        let _lock = crate::query::makerunner::make_test_lock();
         let tmp = fake_tree(&[("cat/bad", ".error the port is broken here\n")]);
         let ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
@@ -229,6 +275,7 @@ mod tests {
     #[test]
     #[ignore = "needs /usr/ports on a FreeBSD host"]
     fn live_startup_reads_each_options_file_once() {
+        let _lock = crate::query::makerunner::make_test_lock();
         use std::collections::BTreeSet;
 
         let tmp = tempfile::tempdir().unwrap();

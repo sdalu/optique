@@ -719,9 +719,17 @@ The object has the keys
 .Va options_dir ,
 .Va ports_tree ,
 .Va ports ,
-.Va loops
+.Va loops ,
+.Va summary
 and
-.Va summary .
+.Va errors ,
+the ports whose query failed, each with
+.Va subject
+and
+.Va message ;
+such a port is missing from
+.Va ports ,
+and so is whatever it depends on.
 Each element of
 .Va ports
 has
@@ -765,13 +773,17 @@ holds the counts
 .Pq ports owing a decision ,
 .Va loops ,
 .Va loops_blocking
-.Pq loops with a member that is not blacklisted
+.Pq loops with a member that is not blacklisted ,
+.Va errors
+.Pq ports whose query failed
 and
 .Va pending ,
 which is
 .Va attention
 plus
 .Va loops_blocking
+plus
+.Va errors
 and drives the exit status.
 .It Fl -options
 With
@@ -1245,6 +1257,21 @@ the host, as
 .Pa www/apache24
 does when it marks LDAP IGNORE because the host's apr-util was built
 without it.
+When
+.Va NO_PACKAGE_BUILDING
+is set in
+.Pa poudriere.conf
+.Po
+or in the
+.Pa poudriere.d
+files
+.Xr poudriere 8
+reads after it, for the jail, tree and set given
+.Pc ,
+.Va PACKAGE_BUILDING
+and
+.Va PACKAGE_BUILDING_FLAVORS
+are left out, as poudriere leaves them out.
 Without a
 .Pa poudriere.d
 .Pq plain Pa /var/db/ports
@@ -1412,7 +1439,17 @@ or is blacklisted, and no dependency loop is left to untangle.
 .It 1
 A human decision is pending: at least one port is unconfigured or stale with
 undecided options, or has a conflict, or the closure holds a dependency loop
-not all of whose members are blacklisted.
+not all of whose members are blacklisted, or a port could not be checked
+because its query failed (it, and what it depends on, are missing from the
+report).
+An options file that exists but cannot be read is such a failure:
+.Nm
+reports
+.Dq cannot read options file Ar path : Ar reason
+for its port rather than take it for an unconfigured one, so no command
+writes over it, and
+.Cm clean
+leaves it in place.
 .It other
 An error occurred, for example an unreadable package list or an unresolvable
 ports tree.

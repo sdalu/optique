@@ -2041,6 +2041,239 @@ mod tests {
         assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("hidden by the current view")));
     }
 
+    /// Replace the app's refresher with channels the test drives: what a
+    /// background scan would send arrives exactly when the test says.
+    fn fake_refresher(app: &mut App) -> (crossbeam_channel::Sender<RefreshEvent>, crossbeam_channel::Receiver<Vec<PortKey>>) {
+        let (req_tx, req_rx) = crossbeam_channel::unbounded();
+        let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
+        app.refresher = Refresher { tx: req_tx, rx: ev_rx };
+        (ev_tx, req_rx)
+    }
+
+    fn done(ports: Vec<crate::model::port::PortInfo>, errors: Vec<(PortKey, String)>) -> RefreshEvent {
+        let ports = ports.into_iter().map(|i| (i.canonical.clone(), i)).collect();
+        RefreshEvent::Done {
+            result: Box::new(crate::query::scanner::ScanResult { ports, errors, ..Default::default() }),
+            batches: 1,
+        }
+    }
+
+    fn info_of(app: &App, origin: &str) -> crate::model::port::PortInfo {
+        app.session.ports[&PortKey::parse(origin).unwrap()].clone()
+    }
+
+    /// A re-scan's ports merge into the closure: a new dependency joins,
+    /// one no longer reached from the roots leaves, and the line says so.
+    #[test]
+    fn a_rescan_adds_and_drops_dependencies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])]);
+        app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
+        let (ev, _req) = fake_refresher(&mut app);
+        let mut alpha = info_of(&app, "cat/alpha");
+        let mut gamma = info_of(&app, "cat/beta");
+        gamma.key = PortKey::parse("cat/gamma").unwrap();
+        gamma.canonical = gamma.key.clone();
+        gamma.options_name = "cat_gamma".into();
+        alpha.deps[0].target = gamma.key.clone();
+        app.refreshing = 1;
+        ev.send(done(vec![alpha, gamma], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.refreshing, 0);
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"]);
+        assert!(app.session.state(&info_of(&app, "cat/gamma")).is_some(), "the newcomer got a state");
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!((msg.as_str(), err), ("dependencies refreshed: +1 −1 port(s)", false));
+
+        // A merge that only drops is reported too; one that changes nothing
+        // says nothing.
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.deps.clear();
+        ev.send(done(vec![alpha.clone()], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +0 −1 port(s)");
+        // And one that only adds.
+        let mut beta = info_of(&app, "cat/alpha");
+        beta.key = PortKey::parse("cat/beta").unwrap();
+        beta.canonical = beta.key.clone();
+        beta.options_name = "cat_beta".into();
+        let mut with_beta = alpha.clone();
+        with_beta.deps = vec![crate::model::port::DepEdge {
+            target: beta.key.clone(),
+            spec: "dep:cat/beta".into(),
+            test_only: false,
+        }];
+        ev.send(done(vec![with_beta, beta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +1 −0 port(s)");
+        alpha = info_of(&app, "cat/alpha");
+        app.message = None;
+        ev.send(done(vec![alpha], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.message.is_none(), "nothing changed: {:?}", app.message);
+    }
+
+    /// Progress shows while a scan runs and goes with it; a dependency that
+    /// failed to query is reported with the first error.
+    #[test]
+    fn a_rescan_reports_progress_and_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let (ev, _req) = fake_refresher(&mut app);
+        app.refreshing = 1;
+        ev.send(RefreshEvent::Progress { done: 3, discovered: 5 }).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.refresh_progress, Some((3, 5)));
+        assert!(app.message.is_none(), "nothing merged yet");
+        let failed = PortKey::parse("cat/broken").unwrap();
+        ev.send(done(vec![info_of(&app, "cat/alpha")], vec![(failed, "no such port".into())]))
+            .unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.refresh_progress, None);
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!(msg, "refresh: 1 dep error(s), e.g. cat/broken: no such port");
+        assert!(err);
+    }
+
+    /// A port that turns IGNORE/BROKEN after an option change is blamed on
+    /// that change; one with no recent change is not; recovering clears it.
+    #[test]
+    fn a_port_that_breaks_is_blamed_on_the_last_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        let (ev, _req) = fake_refresher(&mut app);
+        app.refresh_snapshots
+            .insert("cat_alpha".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.ignore = Some(format!("needs   {}", "x".repeat(100)));
+        let mut beta = info_of(&app, "cat/beta");
+        beta.broken = Some("fails anyway".into());
+        ev.send(done(vec![beta.clone(), alpha.clone()], vec![])).unwrap();
+        app.drain_refresh_events();
+        let (msg, err) = app.message.clone().unwrap();
+        assert!(err);
+        assert!(msg.starts_with("cat/alpha: now IGNORE (needs x"), "{msg}");
+        assert!(msg.ends_with("…) — +DOCS"), "reason cut at 80 characters: {msg}");
+        assert_eq!(app.blame.get("cat_alpha").map(String::as_str), Some("+DOCS"));
+        assert!(!app.blame.contains_key("cat_beta"), "no recent change to blame");
+
+        // BROKEN names itself first when both are set.
+        alpha.broken = Some("short".into());
+        app.blame.clear();
+        app.session.ports.get_mut(&alpha.key).unwrap().ignore = None;
+        ev.send(done(vec![alpha.clone()], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.message.clone().unwrap().0.starts_with("cat/alpha: now BROKEN (short)"));
+
+        alpha.broken = None;
+        alpha.ignore = None;
+        ev.send(done(vec![alpha], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(!app.blame.contains_key("cat_alpha"), "a port that recovers is cleared");
+    }
+
+    /// The m and w views and the blacklist change what counts as a problem.
+    #[test]
+    fn views_change_what_counts_as_a_problem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::write(pd.join("blacklist"), "cat/gamma\n").unwrap();
+        let mut app = three_ports(tmp.path());
+        for p in ["cat/alpha", "cat/beta"] {
+            let info = app.session.ports.get_mut(&PortKey::parse(p).unwrap()).unwrap();
+            info.options.mc_set = ["DOCS".to_string()].into();
+        }
+        let status = |app: &App, p: &str| app.effective_status(&info_of(app, p));
+        // alpha: unconfigured, but make.conf decides DOCS.
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Unconfigured);
+        press(&mut app, 'm');
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
+        // beta: its file turns DOCS off, make.conf turns it on.
+        assert_eq!(status(&app, "cat/beta"), UiStatus::Ok);
+        press(&mut app, 'w');
+        assert_eq!(status(&app, "cat/beta"), UiStatus::McDeviation);
+        // alpha's staged set predates make.conf's stance too: also ≠.
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::McDeviation);
+        press(&mut app, 't');
+        assert_eq!(visible(&app), ["cat/gamma", "cat/alpha", "cat/beta"]);
+        press(&mut app, 'w');
+        assert_eq!(visible(&app), ["cat/gamma"], "without ≠, only gamma owes a decision");
+        // A blacklisted port never needs attention.
+        app.blacklist = crate::config::Blacklist::load(&pd, None, "default", None);
+        assert_eq!(status(&app, "cat/gamma"), UiStatus::Ok);
+    }
+
+    /// The apply preview scrolls, closes without writing, and once applied
+    /// any key closes the result.
+    #[test]
+    fn the_apply_preview_scrolls_and_closes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'a');
+        press(&mut app, 'j');
+        press(&mut app, 'j');
+        press(&mut app, 'k');
+        assert_eq!(app.modal.as_ref().unwrap().scroll, 1);
+        press(&mut app, 'k');
+        press(&mut app, 'k');
+        assert_eq!(app.modal.as_ref().unwrap().scroll, 0);
+        hit(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "closing writes nothing");
+        press(&mut app, 't');
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        assert!(app.modal.as_ref().unwrap().done.is_some());
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"], "not yet rebuilt");
+        press(&mut app, 'x');
+        assert!(app.modal.is_none());
+        assert!(visible(&app).is_empty(), "applied: nothing needs attention");
+    }
+
+    /// In minimal mode apply removes a file that only repeats the defaults
+    /// and says so.
+    #[test]
+    fn minimal_apply_reports_the_files_it_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.minimal = true;
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.contains("\n1 redundant file(s) removed (--minimal)"), "{done}");
+        assert!(!tmp.path().join("options/cat_beta").exists());
+    }
+
+    /// A draft left by a quit is adopted at start, one undo step per port;
+    /// a draft that no longer changes anything is dropped.
+    #[test]
+    fn a_saved_draft_is_restored_at_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        press(&mut app, 'q');
+        press(&mut app, 's');
+        drop(app);
+
+        let mut app = three_ports(tmp.path());
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
+        assert!(app.pending.contains_key(&PortKey::parse("cat/alpha").unwrap()));
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m.starts_with("restored draft with 1 staged port(s)")));
+        press(&mut app, 'U');
+        assert!(staged(&app, "cat/alpha").is_empty(), "the restore is undoable");
+        drop(app);
+
+        // Applied since: the draft changes nothing any more and is dropped.
+        let opts = tmp.path().join("options/cat_alpha");
+        std::fs::create_dir_all(&opts).unwrap();
+        std::fs::write(opts.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
+        let app = three_ports(tmp.path());
+        assert!(draft::load(&app.options_dir).is_none());
+        assert!(app.message.is_none());
+    }
+
     /// Opening the apply preview, confirming it and reloading afterwards read
     /// only the files apply wrote: everything else is as the scan read it.
     #[test]
@@ -2067,6 +2300,7 @@ mod tests {
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
         assert!(done.starts_with("1 file(s) written"), "{done}");
+        assert!(!done.contains("redundant"), "nothing removed, nothing said: {done}");
         assert!(tmp.path().join("options/cat_alpha/options").is_file());
         assert_eq!(std::fs::read(beta.join("options")).unwrap(), b"OPTIONS_FILE_SET+=DOCS\n");
         assert_eq!(app.options_files.disk_reads(), at_start + 1, "only cat_alpha re-read");

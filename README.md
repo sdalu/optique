@@ -25,8 +25,9 @@ optique -z server -f base-list -f extra-list www/nginx
 # port lists the options make.conf does NOT decide ("undecided: …"), or
 # "[mc-covered ≈]" when make.conf decides everything.
 # Exit code is the gate: 0 = nothing pending, 1 = a human decision is pending
-# (unconfigured/stale with undecided options, a conflict, or a dependency
-# loop), anything else = error. Ports that are fully mc-covered do NOT trip
+# (unconfigured/stale with undecided options, a conflict, a dependency loop,
+# or a port whose query failed, e.g. an options file it cannot read),
+# anything else = error. Ports that are fully mc-covered do NOT trip
 # the gate. With --json one
 # JSON object goes to stdout instead of the table; -q drops the per-port rows
 # and the banner, keeping the summary and warnings on stderr
@@ -187,9 +188,9 @@ then: a file edited outside optique while the TUI is open is left alone by
 apply unless you edit its port in the TUI too (restart optique to see such
 an edit). After an apply, the files it wrote are read again.
 
-Quitting stops any in-flight background make processes (the quit dialog shows
-how many, and the count is reported on stderr), so nothing keeps churning
-after the UI is gone.
+Quitting stops any in-flight background make processes and the commands they
+are running (the quit dialog shows how many, and the count is reported on
+stderr), so nothing keeps churning after the UI is gone.
 Quitting with staged changes offers to keep them: `s` saves them as a **draft**
 (under `~/.cache/optique/drafts`, keyed by the options dir), `d` throws them
 away. The next TUI launch on the same options dir restores the draft's staged
@@ -411,7 +412,11 @@ packages answer the Makefiles' `exists()` probes: `www/apache24` IGNOREs
 LDAP when the host's apr-util lacks it, and `USES=iconv` ports gain a
 libiconv dependency when the host has libiconv. The banner's `environment:`
 line says when this applies; without a poudriere.d (plain `/var/db/ports`)
-queries see the host, which is then the machine that builds.
+queries see the host, which is then the machine that builds. When
+poudriere.conf sets `NO_PACKAGE_BUILDING` (read from `poudriere.conf`,
+poudriere.d's, and its `<set>-`, `<tree>-`, `<jail>-`... `-poudriere.conf`
+files, in poudriere's order), the two `PACKAGE_BUILDING` lines are left out,
+as poudriere leaves them out, and the banner says so.
 
 The `blacklist` chain is read with the same jail/tree/set expansion
 (`blacklist`, `<set>-`, `<tree>-`, `<jail>-`, `<tree>-<set>-`,

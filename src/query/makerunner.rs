@@ -1,5 +1,5 @@
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 
@@ -115,10 +115,33 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stdout));
 
+    // Checked before the dump: make reports the options file it cannot
+    // open, then goes on and prints a full dump as if there were no file,
+    // which would read as an unconfigured port whose file apply may replace.
+    if let Some(why) = unreadable_options_file(&text, &ctx.port_dbdir) {
+        anyhow::bail!("{why}");
+    }
     if !out.status.success() && !text.contains("OPTIQUE|") {
         anyhow::bail!("make failed ({}): {}", out.status, last_lines(&text, 5));
     }
     parse::parse_dump(key, &text)
+}
+
+/// An options file make could not open: bsd.options.mk includes it once it
+/// exists, and make says only "Cannot open <path>" before carrying on as if
+/// it were missing (exit status 1, dump complete). When that path is in the
+/// options dir, name the file and the real reason: it is the file that needs
+/// fixing, and the port must not be taken for an unconfigured one.
+fn unreadable_options_file(make_output: &str, port_dbdir: &Path) -> Option<String> {
+    let path = make_output.lines().find_map(|line| {
+        let path = line.split_once("Cannot open ")?.1.trim();
+        Path::new(path).starts_with(port_dbdir).then_some(path)
+    })?;
+    let why = match std::fs::File::open(path) {
+        Err(e) => e.to_string(),
+        Ok(_) => "it could not be opened when make read it".to_string(),
+    };
+    Some(format!("cannot read options file {path}: {why}"))
 }
 
 fn last_lines(text: &str, n: usize) -> String {
@@ -155,15 +178,122 @@ pub fn active_make_count() -> usize {
 
 /// Terminate every registered make process (the quit path). Returns how many
 /// were signalled; their workers see the death as a failed query and drain.
+///
+/// Everything they run goes with them: a shell command make runs while
+/// parsing (`!=`, `:sh`) inherits the query's output pipe, so it, or anything
+/// it started in turn, would hold the query open and outlive optique after
+/// make itself was gone. The whole tree is listed while it is still a tree
+/// (an orphan is re-parented and lost to the walk), then signalled in one
+/// `kill`: a child killed first would only let make go on and finish.
 pub fn kill_active_makes() -> usize {
     let pids: Vec<u32> = ACTIVE_MAKES.lock().unwrap().iter().copied().collect();
     if pids.is_empty() {
         return 0;
     }
-    let _ = std::process::Command::new("kill")
-        .args(pids.iter().map(u32::to_string))
-        .status();
+    let targets: Vec<u32> = descendants(&pids, &process_table()).into_iter().chain(pids.iter().copied()).collect();
+    for pid in targets {
+        if let Ok(pid) = libc::pid_t::try_from(pid) {
+            // SAFETY: kill(2) takes plain integers; a pid gone meanwhile is
+            // only an ESRCH, ignored like the rest.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+    }
     pids.len()
+}
+
+/// Every process as a (pid, parent pid) pair, from the kernel's process
+/// table (the `kern.proc.proc` sysctl ps(1) reads too). Each record is
+/// stepped over by the size the kernel gives it, not by libc's `kinfo_proc`,
+/// which is one FreeBSD version's layout; only the pid and parent pid are
+/// read, which sit at the same place in all of them. Empty on failure.
+#[cfg(target_os = "freebsd")]
+fn process_table() -> Vec<(u32, u32)> {
+    use std::mem::{offset_of, size_of};
+    let mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PROC];
+    // The table can grow between asking its size and reading it: room for
+    // growth, and another try when that was not enough.
+    for _ in 0..4 {
+        let mut len: libc::size_t = 0;
+        // SAFETY: a size query, no buffer.
+        let sized = unsafe {
+            libc::sysctl(mib.as_ptr(), 3, std::ptr::null_mut(), &mut len, std::ptr::null(), 0)
+        };
+        if sized != 0 {
+            return Vec::new();
+        }
+        len += len / 4;
+        let mut buf = vec![0u8; len];
+        // SAFETY: `buf` holds `len` bytes, and sysctl writes at most that.
+        let read = unsafe {
+            libc::sysctl(mib.as_ptr(), 3, buf.as_mut_ptr().cast(), &mut len, std::ptr::null(), 0)
+        };
+        if read != 0 {
+            if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOMEM) {
+                continue;
+            }
+            return Vec::new();
+        }
+        buf.truncate(len);
+        let field = |record: &[u8], at: usize| -> Option<i32> {
+            let bytes = record.get(at..at + size_of::<i32>())?;
+            Some(i32::from_ne_bytes(bytes.try_into().ok()?))
+        };
+        let (size_at, pid_at, ppid_at) = (
+            offset_of!(libc::kinfo_proc, ki_structsize),
+            offset_of!(libc::kinfo_proc, ki_pid),
+            offset_of!(libc::kinfo_proc, ki_ppid),
+        );
+        let mut out = Vec::new();
+        let mut rest = &buf[..];
+        while let Some(size) = field(rest, size_at) {
+            let Ok(size) = usize::try_from(size) else { break };
+            if size == 0 || size > rest.len() {
+                break;
+            }
+            let record = &rest[..size];
+            if let (Some(pid), Some(ppid)) = (field(record, pid_at), field(record, ppid_at)) {
+                if let (Ok(pid), Ok(ppid)) = (u32::try_from(pid), u32::try_from(ppid)) {
+                    out.push((pid, ppid));
+                }
+            }
+            rest = &rest[size..];
+        }
+        return out;
+    }
+    Vec::new()
+}
+
+/// Elsewhere only make itself is signalled.
+#[cfg(not(target_os = "freebsd"))]
+fn process_table() -> Vec<(u32, u32)> {
+    Vec::new()
+}
+
+/// Every descendant of `roots` in a (pid, parent pid) table, nearest first.
+fn descendants(roots: &[u32], table: &[(u32, u32)]) -> Vec<u32> {
+    let mut children: std::collections::HashMap<u32, Vec<u32>> = Default::default();
+    for &(pid, ppid) in table {
+        children.entry(ppid).or_default().push(pid);
+    }
+    let mut out = Vec::new();
+    let mut queue: std::collections::VecDeque<u32> = roots.iter().copied().collect();
+    while let Some(pid) = queue.pop_front() {
+        for &child in children.get(&pid).into_iter().flatten() {
+            if !out.contains(&child) && !roots.contains(&child) {
+                out.push(child);
+                queue.push_back(child);
+            }
+        }
+    }
+    out
+}
+
+/// Tests that run make hold this: the registry of running makes is
+/// process-wide, and one test kills whatever it finds there.
+#[cfg(test)]
+pub(crate) fn make_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]
@@ -171,12 +301,119 @@ mod tests {
     use super::*;
     use crate::model::origin::PortKey;
 
+    /// A port whose Makefile takes `secs` to parse, in a tree of its own.
+    fn slow_port(secs: u32) -> (tempfile::TempDir, QueryCtx) {
+        slow_port_running(&format!("sleep {secs}"))
+    }
+
+    /// A port whose Makefile runs `command` while it is parsed.
+    fn slow_port_running(command: &str) -> (tempfile::TempDir, QueryCtx) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ports/cat/slow");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Makefile"), format!("PKGNAME=slow-1.0\nX!= {command}\n")).unwrap();
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().to_path_buf(),
+        };
+        (tmp, ctx)
+    }
+
+    #[test]
+    fn descendants_walks_the_whole_tree_only() {
+        // 10 is make; 11 and 12 its children; 13 a grandchild; 20 unrelated.
+        let table = [(10, 1), (11, 10), (12, 10), (13, 11), (20, 1), (21, 20)];
+        assert_eq!(descendants(&[10], &table), [11, 12, 13]);
+        assert!(descendants(&[99], &table).is_empty());
+        assert_eq!(descendants(&[11, 20], &table), [13, 21]);
+    }
+
+    /// The table read from the kernel knows this very process and its
+    /// parent: the record walk and the field offsets are right.
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    fn process_table_finds_this_process_and_its_parent() {
+        let table = process_table();
+        let me = std::process::id();
+        // SAFETY: getppid(2) cannot fail.
+        let parent = u32::try_from(unsafe { libc::getppid() }).unwrap();
+        assert!(table.contains(&(me, parent)), "{me}/{parent} not in {} records", table.len());
+        assert!(table.len() > 10, "a real table: {} records", table.len());
+        let child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        let mine = descendants(&[me], &process_table());
+        let mut child = child;
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(mine.contains(&child.id()), "the child is found as a descendant");
+    }
+
+    /// What make runs can run more: a shell with two commands forks the first
+    /// rather than becoming it, so `sleep` is make's grandchild here. The
+    /// whole tree goes, or the grandchild would hold the query open and
+    /// outlive optique.
+    #[test]
+    fn kill_active_makes_reaches_grandchildren() {
+        let _lock = make_test_lock();
+        let (_tmp, ctx) = slow_port_running("sh -c 'sleep 37; true'");
+        let runner = MakeRunner::new(ctx, 1);
+        runner.submit(PortKey::parse("cat/slow").unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let sleeping = || {
+            std::process::Command::new("pgrep")
+                .args(["-f", "^sleep 37$"])
+                .output()
+                .map(|o| !o.stdout.is_empty())
+                .unwrap_or(false)
+        };
+        while !sleeping() {
+            assert!(std::time::Instant::now() < deadline, "the grandchild never started");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(kill_active_makes(), 1);
+        let ev = runner.events.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
+        assert!(matches!(ev, ScanEvent::PortError { .. }));
+        runner.shutdown();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!sleeping(), "the grandchild outlived the kill");
+    }
+
+    /// Quitting kills the makes still running: the query ends at once, as a
+    /// failure, and the registry empties. A query that ends by itself leaves
+    /// the registry as it found it.
+    #[test]
+    fn kill_active_makes_stops_running_queries() {
+        let _lock = make_test_lock();
+        let (_tmp, ctx) = slow_port(0);
+        run_query(&ctx, &PortKey::parse("cat/slow").unwrap()).unwrap();
+        assert_eq!(active_make_count(), 0, "a finished query unregisters");
+        assert_eq!(kill_active_makes(), 0);
+
+        let (_tmp, ctx) = slow_port(30);
+        let runner = MakeRunner::new(ctx, 1);
+        runner.submit(PortKey::parse("cat/slow").unwrap());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while active_make_count() == 0 {
+            assert!(std::time::Instant::now() < deadline, "make never started");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(active_make_count(), 1);
+        let started = std::time::Instant::now();
+        assert_eq!(kill_active_makes(), 1);
+        let ev = runner.events.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
+        assert!(matches!(ev, ScanEvent::PortError { .. }), "a killed query fails");
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "not the 30 s sleep");
+        runner.shutdown();
+        assert_eq!(active_make_count(), 0);
+    }
+
     /// Live test against /usr/ports: staging an options file that enables
     /// HTTP_PERL for www/nginx must change the queried dependency set.
     /// Run with: cargo test -- --ignored
     #[test]
     #[ignore = "needs /usr/ports on a FreeBSD host"]
     fn live_staged_option_changes_deps() {
+        let _lock = make_test_lock();
         let staging = tempfile::tempdir().unwrap();
         let ctx = QueryCtx {
             portsdir: "/usr/ports".into(),
@@ -224,6 +461,7 @@ mod tests {
     #[test]
     #[ignore = "needs /usr/ports on a FreeBSD host"]
     fn live_jail_env_hides_host_packages() {
+        let _lock = make_test_lock();
         let staging = tempfile::tempdir().unwrap();
         let make_conf = crate::config::stage_jail_make_conf(staging.path()).unwrap();
         let db = crate::staging::StagingDb::create(

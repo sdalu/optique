@@ -637,10 +637,11 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
-        if settings.jail_env {
+        if let config::QueryEnv::Jail { package_building } = settings.env {
             eprintln!(
-                "  {} poudriere jail (host packages under /usr/local not seen)",
-                tint(paint, ansi::CYAN, "environment:")
+                "  {} poudriere jail (host packages under /usr/local not seen{})",
+                tint(paint, ansi::CYAN, "environment:"),
+                if package_building { "" } else { "; NO_PACKAGE_BUILDING set" }
             );
         }
         if !settings.blacklist.is_empty() {
@@ -742,9 +743,10 @@ fn stdout_color(cli: &Cli) -> bool {
     cli::use_color(cli.color, std::io::stdout().is_terminal(), no_color.as_deref())
 }
 
-/// Scan and report. Returns how many *human* decisions are pending — ports
-/// needing one (see `Row::needs_attention`) plus dependency loops that are
-/// not entirely blacklisted — which main turns into exit code 1.
+/// Scan and report. Returns how many things a human still has to look at —
+/// ports needing a decision (see `Row::needs_attention`), dependency loops
+/// that are not entirely blacklisted, and ports whose query failed — which
+/// main turns into exit code 1.
 fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<usize> {
     use crate::session::UiStatus;
 
@@ -898,8 +900,13 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     };
     let blocking_loops = dep_loops.iter().filter(|dl| !loop_blacklisted(dl)).count();
     let attention = rows.iter().filter(|r| r.needs_attention()).count();
-    // The gate: ports owing a decision, plus loops a human has to untangle.
-    let pending = attention + blocking_loops;
+    // A port whose query failed is missing from the closure, with whatever
+    // it depends on: neither it nor they were checked, so the gate stays
+    // shut until it can be (run_scan already named each one on stderr).
+    let query_errors = &scanned.result.errors;
+    // The gate: ports owing a decision, loops a human has to untangle, and
+    // ports that could not be checked at all.
+    let pending = attention + blocking_loops + query_errors.len();
 
     if json {
         // stdout must stay pure JSON: one object, no table, quiet ignored.
@@ -942,8 +949,13 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 attention,
                 loops: dep_loops.len(),
                 loops_blocking: blocking_loops,
+                errors: query_errors.len(),
                 pending,
             },
+            errors: query_errors
+                .iter()
+                .map(|(key, msg)| report::ErrorEntry { subject: key.to_string(), message: msg.clone() })
+                .collect(),
         };
         report::print(&report)?;
     } else if !cli.quiet {
@@ -995,10 +1007,14 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     }
 
     // Loops are counted, not re-listed: run_scan already named every one.
-    let loop_note = match dep_loops.len() {
+    let mut loop_note = match dep_loops.len() {
         0 => String::new(),
         n => format!(" · {n} dependency loop{}", if n == 1 { "" } else { "s" }),
     };
+    match query_errors.len() {
+        0 => {}
+        n => loop_note.push_str(&format!(" · {n} port{} not checked (query failed)", if n == 1 { "" } else { "s" })),
+    }
     eprintln!(
         "{} ports with options ({} unconfigured, {} stale, {} conflict; \
          {} awaiting a decision) · {} without options{} · \

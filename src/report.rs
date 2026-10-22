@@ -23,6 +23,9 @@ pub struct ScanReport {
     pub ports: Vec<PortReport>,
     pub loops: Vec<LoopReport>,
     pub summary: ScanSummary,
+    /// Ports whose query failed: missing from `ports`, and so is whatever
+    /// they depend on.
+    pub errors: Vec<ErrorEntry>,
 }
 
 #[derive(Serialize)]
@@ -139,7 +142,10 @@ pub struct ScanSummary {
     pub loops: usize,
     /// Loops with at least one member that is not blacklisted.
     pub loops_blocking: usize,
-    /// What the exit status reports: `attention` + `loops_blocking`.
+    /// Ports whose query failed (`errors`).
+    pub errors: usize,
+    /// What the exit status reports: `attention` + `loops_blocking` +
+    /// `errors`.
     pub pending: usize,
 }
 

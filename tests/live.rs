@@ -205,6 +205,61 @@ fn scan_gate_counts_each_status() {
     assert_eq!(out.status.code(), Some(i32::from(pending > 0)), "{}", report["summary"]);
 }
 
+/// An options file optique cannot read is never taken for a missing one:
+/// make reports it and carries on as if it were missing, and sync would
+/// then replace the saved choices with defaults. The port fails instead,
+/// the file is left as it was, and scan says what to fix.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn an_unreadable_options_file_is_reported_not_overwritten() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    let file = optdir.join("ports-mgmt_pkg/options");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let saved = "_OPTIONS_READ=pkg-1.0\nOPTIONS_FILE_UNSET+=DOCS\n";
+    fs::write(&file, saved).unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&file).is_ok() {
+        return; // root reads it anyway: the case only exists for others
+    }
+    let sync = optique(tmp.path()).args(["sync", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
+    let scan = optique(tmp.path()).args(["scan", "--json", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert_eq!(fs::read_to_string(&file).unwrap(), saved, "sync must not rewrite it");
+    let stderr = String::from_utf8_lossy(&sync.stderr);
+    assert!(stderr.contains("cannot read options file"), "{stderr}");
+    assert_eq!(scan.status.code(), Some(1));
+    let report = parse_json(&scan);
+    assert_eq!(report["summary"]["errors"], 1, "{report}");
+    let message = report["errors"][0]["message"].as_str().unwrap();
+    assert!(message.starts_with("cannot read options file") && message.contains("Permission denied"), "{message}");
+}
+
+/// A port whose query fails was not checked, and neither was what it
+/// depends on: scan does not call that done.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn scan_gate_counts_ports_it_could_not_check() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let out = optique(tmp.path())
+        .args(["scan", "--json", "-o"])
+        .arg(&optdir)
+        .arg("misc/optique-no-such-port")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = parse_json(&out);
+    assert_eq!(report["summary"]["errors"], 1, "{report}");
+    assert!(report["summary"]["pending"].as_u64().unwrap() >= 1);
+    assert_eq!(report["errors"][0]["subject"], "misc/optique-no-such-port", "{report}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("1 port not checked (query failed)"), "{stderr}");
+}
+
 /// `clean --redundant` removes the files that only repeat defaults and
 /// make.conf, keeps a file that decides something, and counts what it did.
 #[test]

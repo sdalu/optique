@@ -118,8 +118,18 @@ pub fn redundancy_diff(info: &PortInfo) -> Vec<String> {
 
 /// Delete the options file and (when empty) its directory.
 /// A sibling `options.local` is never touched and keeps the directory.
+///
+/// A file that cannot be read is left in place, with the reason as the
+/// error: deleting needs only the directory's write permission, so nothing
+/// else would stop the removal of a file whose content nobody has seen.
 pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
-    fs::remove_file(removal.dir.join("options"))?;
+    let file = removal.dir.join("options");
+    if let Err(e) = fs::File::open(&file) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(std::io::Error::new(e.kind(), format!("cannot read {}, left in place: {e}", file.display())));
+        }
+    }
+    fs::remove_file(&file)?;
     if removal.dir.join("options.local").is_file() {
         return Ok(Some(format!(
             "{}: kept options.local (user-managed)",
@@ -251,6 +261,29 @@ mod tests {
         // file deviates: B enabled although default+mc say off.
         o.effective = ["A".to_string(), "B".to_string()].into();
         assert!(!redundancy_diff(&info_with(o)).is_empty());
+    }
+
+    /// A file nobody could read is not deleted: removing it needs only the
+    /// directory's permission, so nothing else would stop it.
+    #[test]
+    fn removal_leaves_an_unreadable_file_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("cat_port");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("options");
+        std::fs::write(&file, "OPTIONS_FILE_SET+=A\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = std::fs::read(&file).is_err(); // root reads anyway
+        let removal =
+            Removal { options_name: "cat_port".into(), dir: dir.clone(), reason: "test".into() };
+        let result = remove_entry(&removal);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).ok();
+        if unreadable {
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("left in place"), "{err}");
+            assert!(file.is_file(), "still there");
+        }
     }
 
     #[test]
