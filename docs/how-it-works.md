@@ -42,8 +42,9 @@ Each port is resolved by piping a small wrapper makefile to
 includes the port's own `Makefile` and prints, as parse-time `.info` lines,
 everything optique needs: the options, groups and descriptions,
 `IMPLIES`/`PREVENTS`, `BROKEN`/`IGNORE`, the make.conf layers' verdicts, and
-the dependency list (twice, with and without `TEST_DEPENDS`, so that
-test-only edges can be told apart; see
+the dependency list (twice: the framework's own `_UNIFIED_DEPENDS`, and the
+lists poudriere builds without `-t`, so that test-only edges can be told
+apart on a tree old enough to still fold `TEST_DEPENDS` in; see
 [dependency loops](dependency-loops.md)). A query takes about 0.2–0.6 s, and
 up to 16 run in parallel (`-J` changes that).
 

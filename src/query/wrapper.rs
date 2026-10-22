@@ -5,9 +5,10 @@
 /// including dynamically-named variables (group members, descriptions) that a
 /// plain `make -V` cannot reach generically.
 ///
-/// `DEPENDS` is `_UNIFIED_DEPENDS`, which folds `TEST_DEPENDS` in; `BUILDDEPS`
-/// repeats it without them, so an edge poudriere only builds under `bulk -t`
-/// can be told apart (see `DepEdge::test_only`).
+/// `DEPENDS` is `_UNIFIED_DEPENDS`; `BUILDDEPS` is the lists poudriere builds
+/// without `bulk -t`. On a tree before ports e7679b71cf89 (2026-09-25) the
+/// unified list still folds `TEST_DEPENDS` in, and the second one tells
+/// those edges apart (see `DepEdge::test_only`); since then the two agree.
 ///
 /// Two hard constraints, both verified against /usr/ports/Mk:
 /// - The phony target name must match `*config*`: bsd.port.mk only includes

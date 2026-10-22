@@ -148,10 +148,11 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         }
     }
 
-    // _UNIFIED_DEPENDS folds TEST_DEPENDS in, so mark the edges no other
-    // dependency list asks for: they are in the closure, but poudriere builds
-    // them only under `bulk -t`. Warnings from this pass are dropped — the
-    // unified list already reported every unparsable entry.
+    // On a tree before ports e7679b71cf89 _UNIFIED_DEPENDS folds
+    // TEST_DEPENDS in, so mark the edges no other dependency list asks for:
+    // they are in the closure, but poudriere builds them only under
+    // `bulk -t` (on a current tree none is). Warnings from this pass are
+    // dropped — the unified list already reported every unparsable entry.
     let built: BTreeSet<PortKey> =
         parse_depends(&build_deps).0.into_iter().map(|e| e.target).collect();
     for edge in &mut deps {

@@ -212,6 +212,16 @@ edge is rejected: the tree's test dependencies tangle on a grand scale, and
 components of 500, 57 and 17 ports on the `www/nginx` closure, and no gate
 would ever have passed.
 
+The closure itself is `_UNIFIED_DEPENDS`, whatever the tree puts in it.
+Since ports commit e7679b71cf89 (2026-09-25) that leaves `TEST_DEPENDS` out
+("It pollutes all the convenience -recursive targets including poudriere
+options"), so test-only ports are no longer configured, and the
+`test_only` marking only matters on older trees. Dumping `TEST_DEPENDS`
+explicitly to keep them is rejected: it would ask for options of ports an
+ordinary build never installs (chromium, through py-great-table's test
+suite, was the framework's own motivation), against both the framework and
+`poudriere options`.
+
 ## Machine interface: one JSON object, all-or-nothing, replayable
 
 Every subcommand can answer on stdout with one JSON object per invocation;

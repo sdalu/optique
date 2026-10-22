@@ -131,17 +131,28 @@ line \(em up to a dozen of them by name, the rest counted: each of them still
 reaches every other, so none of those can be built first either.
 .Pp
 Only the dependencies poudriere actually builds are followed.
+The closure is the framework's own dependency list,
+.Va _UNIFIED_DEPENDS ,
+which since ports commit e7679b71cf89 (2026-09-25) leaves
 .Va TEST_DEPENDS
-belong to the closure, and their ports are configured like any other, but
-.Nm poudriere Cm bulk
-builds them only under
-.Fl t ,
-and the tree's test dependencies are cyclic on a grand scale \(em hundreds of
-ports in one tangle.
-An edge that no other dependency list
+out: the ports only
+.Ql make test
+or
+.Nm poudriere Cm bulk Fl t
+installs are not configured, as
+.Nm poudriere Cm options
+does not configure them either; poudriere builds them with their defaults.
+A port's
+.Ql TEST
+option is unaffected: what it adds to the build
+.Pq Va TEST_BUILD_DEPENDS No and the like
+is an ordinary dependency and stays in the closure.
+On an older tree the test dependencies are still in the list and configured,
+but an edge that no other dependency list
 .Pq Va PKG , EXTRACT , PATCH , FETCH , BUILD , LIB No or Va RUN
-asks for is therefore left out of the search, which is why a healthy tree
-reports no loop at all.
+asks for is left out of the loop search: the tree's test dependencies are
+cyclic on a grand scale, hundreds of ports in one tangle.
+That is why a healthy tree reports no loop at all.
 .Pp
 A loop is usually option-dependent, which is why it is worth seeing before a
 build rather than during one: turning off the option that pulls the dependency

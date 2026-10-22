@@ -54,12 +54,20 @@ Only the dependency edges `poudriere bulk` actually builds are followed:
 `PKG`, `EXTRACT`, `PATCH`, `FETCH`, `BUILD`, `LIB` and `RUN` depends. An
 edge that none of those lists asks for is left out of the search.
 
-`TEST_DEPENDS` edges are the one kind excluded. They are part of the
-dependency closure — their ports are configured like any other — but
-`poudriere bulk` builds them only under `-t`, and the ports tree's test
-dependencies are cyclic on a grand scale. Counting them would report
-hundreds of ports as one loop on an ordinary build, which is why a healthy
-tree reports no loop at all.
+`TEST_DEPENDS` are not in the closure on a current tree. optique follows
+the framework's own dependency list, `_UNIFIED_DEPENDS`, which since ports
+commit e7679b71cf89 (2026-09-25) leaves them out: the ports that only
+`make test` or `poudriere bulk -t` installs are not configured, as
+`poudriere options` does not configure them either, and poudriere builds
+them with their defaults. A port's `TEST` option is a different thing: what
+it adds to the build (`TEST_BUILD_DEPENDS` and the like) is an ordinary
+dependency and stays in the closure.
+
+On an older tree the test dependencies are still in that list, and their
+ports are configured like any other, but their edges are left out of the
+loop search: the tree's test dependencies are cyclic on a grand scale, and
+counting them would report hundreds of ports as one loop on an ordinary
+build, which is why a healthy tree reports no loop at all.
 
 ## Breaking a loop
 
