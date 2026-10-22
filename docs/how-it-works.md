@@ -60,7 +60,10 @@ HEAD, the hash of the layered make.conf, and the content of the port's
 options file. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
 only ports whose inputs changed are queried again. Renamed ports are
-followed through the tree's `MOVED` file; a port that is gone, or whose
+followed through the tree's `MOVED` file, for origins no longer in the
+tree only: a name moved away can be reused (math/mumps moved to
+math/mumps-edf, then math/mumps4 to math/mumps), so a chain of moves
+stops at the first origin that exists. A port that is gone, or whose
 query fails, is reported as an error, and `scan` counts it in its exit
 status.
 

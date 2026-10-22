@@ -45,11 +45,14 @@ impl Moved {
     }
 
     /// Chase MOVED chains (with a cycle guard) for a bare origin (no flavor).
-    pub fn resolve(&self, origin: &str) -> MovedResult {
+    /// MOVED is history and an origin moved away can be reused later, so the
+    /// chase stops at the first origin `exists` says is in the tree, the one
+    /// asked for included.
+    pub fn resolve(&self, origin: &str, exists: impl Fn(&str) -> bool) -> MovedResult {
         let mut current = origin.to_string();
         let mut reason = String::new();
         let mut hops = 0;
-        while let Some((next, why)) = self.map.get(&current) {
+        while let Some((next, why)) = self.map.get(&current).filter(|_| !exists(&current)) {
             hops += 1;
             if hops > 32 {
                 break; // cycle or absurd chain; treat as unresolvable
@@ -80,18 +83,36 @@ mod tests {
              b/two|c/three|2024-02-01|renamed again\n\
              d/gone||2024-03-01|abandoned\n",
         );
-        assert_eq!(m.resolve("x/untouched"), MovedResult::Unchanged);
+        let none = |_: &str| false;
+        assert_eq!(m.resolve("x/untouched", none), MovedResult::Unchanged);
         assert_eq!(
-            m.resolve("a/one"),
+            m.resolve("a/one", none),
             MovedResult::MovedTo { origin: "c/three".into(), reason: "renamed again".into() }
         );
-        assert_eq!(m.resolve("d/gone"), MovedResult::Removed { reason: "abandoned".into() });
+        assert_eq!(m.resolve("d/gone", none), MovedResult::Removed { reason: "abandoned".into() });
+    }
+
+    /// An origin in the tree is that port: the chase never leaves it, and a
+    /// chain stops at the first one that exists (math/mumps4 moved to
+    /// math/mumps, a name math/mumps had left for math/mumps-edf).
+    #[test]
+    fn chain_stops_at_an_existing_origin() {
+        let m = Moved::parse(
+            "math/mumps|math/mumps-edf|2026-10-07|Repomove to math/mumps-edf\n\
+             math/mumps4|math/mumps|2026-10-07|Repomove to math/mumps\n",
+        );
+        let exists = |o: &str| o == "math/mumps" || o == "math/mumps-edf";
+        assert_eq!(m.resolve("math/mumps", exists), MovedResult::Unchanged);
+        assert_eq!(
+            m.resolve("math/mumps4", exists),
+            MovedResult::MovedTo { origin: "math/mumps".into(), reason: "Repomove to math/mumps".into() }
+        );
     }
 
     #[test]
     fn cycle_guard() {
         let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|r\n");
         // must terminate; result is one of the two origins
-        let _ = m.resolve("a/a");
+        let _ = m.resolve("a/a", |_| false);
     }
 }

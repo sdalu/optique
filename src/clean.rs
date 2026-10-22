@@ -62,7 +62,8 @@ pub fn classify_entries(
             });
             continue;
         }
-        let reason = match moved.resolve(&origin) {
+        let exists = |o: &str| portsdir.join(o).join("Makefile").is_file();
+        let reason = match moved.resolve(&origin, exists) {
             MovedResult::Removed { reason } if !reason.is_empty() => {
                 format!("port removed from tree ({reason})")
             }

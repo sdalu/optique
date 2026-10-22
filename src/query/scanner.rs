@@ -58,7 +58,8 @@ pub fn scan(
                 continue;
             }
             // Resolve renames/removals before anything else.
-            let key = match moved.resolve(&key.origin) {
+            let exists = |o: &str| ctx.portsdir.join(o).join("Makefile").is_file();
+            let key = match moved.resolve(&key.origin, exists) {
                 MovedResult::Unchanged => key,
                 MovedResult::MovedTo { origin, reason } => {
                     result
@@ -161,6 +162,34 @@ mod tests {
         assert!(result.moved_notes[0].contains("cat/new"));
         assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/new"));
         assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/absent"));
+    }
+
+    /// MOVED is history: an origin moved away can be reused later (math/mumps
+    /// moved to math/mumps-edf, then math/mumps4 moved to math/mumps). A port
+    /// present in the tree is that port, whatever MOVED once said, and a
+    /// chain stops at the first origin that exists.
+    #[test]
+    fn a_port_present_in_the_tree_ignores_moved() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let tmp = fake_tree(&[("cat/old", "PKGNAME=old-2.0\n"), ("cat/new", "PKGNAME=new-1.0\n")]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+        };
+        let moved = Moved::parse(
+            "cat/old|cat/new|2026-01-01|renamed\n\
+             cat/older|cat/old|2026-02-01|reused the old name\n",
+        );
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let mut cache = Cache::disabled();
+        for (root, want) in [("cat/old", "cat/old"), ("cat/older", "cat/old")] {
+            let roots = vec![PortKey::parse(root).unwrap()];
+            let result = scan(&roots, &ctx, &files, 1, &mut cache, &moved, |_| {});
+            let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+            assert_eq!(got, [want], "{root}: {:?}", result.moved_notes);
+            assert!(result.errors.is_empty(), "{root}: {:?}", result.errors);
+        }
     }
 
     /// A ports tree of one-line Makefiles: make runs for real, but nothing
