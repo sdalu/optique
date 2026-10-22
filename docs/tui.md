@@ -15,7 +15,7 @@ tty — unless `--drive` is given (see
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_3,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │
@@ -84,7 +84,7 @@ Three further markers may trail the status one:
 
 <!-- screen options -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_3,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
 │? devel/gmake                  ││  [ ] DEBUG                     off        │
 │! ports-mgmt/pkg               ││  [ ] DEBUGLOG                  off        │
 │✓ converters/libiconv          ││  [x] DSO                       on         │
@@ -275,7 +275,7 @@ walked port by port.
 
 <!-- screen apply -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_3,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │

@@ -16,7 +16,7 @@ when there is no poudriere at all.
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_3,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │
