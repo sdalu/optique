@@ -88,8 +88,9 @@ fn exec(
     out: &mut impl Write,
 ) -> Result<bool> {
     // `keys` needs the argument verbatim (spaces are keystrokes too), the
-    // others want it tidy.
-    let (verb, raw) = match cmd.find(char::is_whitespace) {
+    // others want it tidy. Only ASCII whitespace separates the verb: it is
+    // one byte, so the argument starts on a char boundary.
+    let (verb, raw) = match cmd.find(|c: char| c.is_ascii_whitespace()) {
         Some(i) => (&cmd[..i], cmd[i + 1..].trim_end()),
         None => (cmd, ""),
     };
@@ -344,6 +345,26 @@ mod tests {
         assert_eq!(spec("question"), (KeyCode::Char('?'), KeyModifiers::NONE));
         assert_eq!(spec("F1"), (KeyCode::F(1), KeyModifiers::NONE));
         assert_eq!(spec("f12"), (KeyCode::F(12), KeyModifiers::NONE));
+    }
+
+    /// Run protocol lines against a real App, returning what they printed.
+    fn run(app: &mut App, lines: &[&str]) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(DEFAULT_COLS, DEFAULT_ROWS)).unwrap();
+        let mut out = Vec::new();
+        for line in lines {
+            exec(app, &mut terminal, line, &mut out).unwrap();
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    /// A separator outside ASCII is no separator: the line is a malformed
+    /// command, reported like any other instead of crashing the driver.
+    #[test]
+    fn a_non_ascii_space_after_the_verb_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = super::super::tests::app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let out = run(&mut app, &["key\u{a0}x", "keys\u{2003}ab"]);
+        assert_eq!(out, "err unknown command: key\u{a0}x\nerr unknown command: keys\u{2003}ab\n");
     }
 
     #[test]

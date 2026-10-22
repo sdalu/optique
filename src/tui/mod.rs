@@ -1603,7 +1603,7 @@ mod tests {
     /// same drawing code as a live TUI, only the terminal is in memory. Each
     /// entry is a port and the ports it depends on; every port carries one
     /// option, so none of them is hidden as optionless.
-    fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
+    pub(super) fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
         use crate::model::options::PortOptions;
         use crate::model::port::{DepEdge, PortInfo};
 
