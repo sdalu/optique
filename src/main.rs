@@ -47,6 +47,25 @@ fn run() -> Result<()> {
     if let Err(e) = cli.check_globals() {
         e.exit();
     }
+    // --repo only filters the implicit installed-package list: refuse it on
+    // every path that cannot use that list, not just where the list is built.
+    if !cli.repo.is_empty() {
+        let explicit = !cli.files.is_empty()
+            || match &cli.command {
+                Some(Command::Tui(a)) => !a.roots.origins.is_empty(),
+                Some(Command::Scan(a)) => !a.roots.origins.is_empty(),
+                Some(Command::Sync(a)) => !a.roots.origins.is_empty(),
+                Some(Command::Clean(a)) => !a.unused || !a.origins.is_empty(),
+                Some(Command::Decide(_)) | Some(Command::Origins(_)) => true,
+                None => false,
+            };
+        if explicit {
+            anyhow::bail!(
+                "--repo filters the installed-package list, which is only used when \
+                 no ports are given"
+            );
+        }
+    }
     if cli.clear_cache {
         let dir = cache::default_cache_dir();
         let (files, bytes) = cache::clear(&dir);
@@ -491,12 +510,6 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
             )
         };
         return Ok(RootSet { roots, notes: vec![note] });
-    }
-    if !cli.repo.is_empty() {
-        anyhow::bail!(
-            "--repo filters the installed-package list, which is only used when \
-             no ports are given"
-        );
     }
     Ok(RootSet { roots: cli::collect_roots(origins, &cli.files)?, notes: Vec::new() })
 }

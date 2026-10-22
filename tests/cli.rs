@@ -189,6 +189,42 @@ fn repo_requires_synth_on_either_side_of_the_subcommand() {
     assert!(err.contains("'--repo' requires '--synth'"), "{err}");
 }
 
+/// --repo only filters the implicit installed-package list, so every path
+/// that cannot use that list refuses it before doing anything: bare
+/// origins, -f, decide (its plan names the ports) and clean without
+/// --unused (which consults no list). -n and the scratch directories keep
+/// a run that gets past the check from touching the host.
+#[test]
+fn repo_with_explicit_ports_is_refused_everywhere() {
+    let tmp = tempfile::tempdir().unwrap();
+    let options = tmp.path().join("options");
+    let ports = tmp.path().join("ports");
+    for sub in [
+        vec!["foo/bar"],
+        vec!["-f", "/nonexistent/optique-list"],
+        vec!["scan", "foo/bar"],
+        vec!["sync", "-f", "/nonexistent/optique-list"],
+        vec!["decide"],
+        vec!["clean"],
+        vec!["clean", "--redundant"],
+        vec!["clean", "--unused", "foo/bar"],
+    ] {
+        let out = optique()
+            .env("XDG_CACHE_HOME", tmp.path())
+            .args(["-s", "--repo", "Synth", "-n", "-o"])
+            .arg(&options)
+            .arg("-P")
+            .arg(&ports)
+            .args(&sub)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(3), "{sub:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("only used when no ports are given"), "{sub:?}: {err}");
+    }
+}
+
 /// `-s` alone must not swallow the subcommand as its profile name: this has to
 /// reach `scan` and fail on the origin, not open the TUI.
 #[test]

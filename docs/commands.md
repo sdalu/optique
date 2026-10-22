@@ -27,8 +27,9 @@ back to the packages currently installed on the host, matching synth's own
 %o`, with the flavor from that package's `flavor` annotation, so flavors
 installed side by side are each a root). `--repo NAME` (repeatable)
 narrows that implicit list to packages installed from the named pkg
-repositories, and is rejected when any ports *are* given, since it only
-means something for the implicit list.
+repositories, and is rejected when any ports *are* given, and with
+`decide` and plain `clean`, since it only means something for the
+implicit list.
 
 ## `tui` (the default)
 

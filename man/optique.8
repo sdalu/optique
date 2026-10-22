@@ -1451,6 +1451,15 @@ the named pkg repositories, e.g.
 .Ql --repo Synth
 to consider only synth-built packages; the names are listed by
 .Ql pkg query -a \&%R .
+It is an error wherever that list is not used: with ports given as
+arguments or with
+.Fl f ,
+with
+.Cm decide ,
+and with
+.Cm clean
+without
+.Fl -unused .
 .Pp
 Note that when
 .Va Directory_options
