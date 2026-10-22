@@ -1541,6 +1541,15 @@ Moves the query cache; see
 .It Pa ~/.cache/optique/
 Persistent query cache, one JSON Lines file per generation, named
 .Pa v<schema>-<tree revision>-<make.conf hash>.jsonl .
+The tree revision is the git commit the tree's
+.Pa .git
+names, or, on a tree without one,
+.Ql mtime-
+followed by the modification times of
+.Pa Mk/bsd.port.mk ,
+.Pa MOVED
+and
+.Pa UPDATING .
 Overridden by
 .Ev XDG_CACHE_HOME ,
 in which case

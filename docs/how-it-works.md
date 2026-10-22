@@ -57,8 +57,9 @@ the packages installed on the host do not answer the Makefiles' probes. See
 ## The cache
 
 Answers are cached under `~/.cache/optique/`, keyed on the ports tree's git
-HEAD, the hash of the layered make.conf, and the content of the port's
-options file. Files a make.conf `.include`s are not part of that hash:
+HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
+`UPDATING`), the hash of the layered make.conf, and the content of the
+port's options file. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
 only ports whose inputs changed are queried again. Renamed ports are
 followed through the tree's `MOVED` file, for origins no longer in the

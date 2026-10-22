@@ -93,8 +93,11 @@ Results are cached under `~/.cache/optique/`, keyed on the ports tree's git
 HEAD, the make.conf hash, and the options-file content (`src/cache.rs`), with
 a schema number bumped whenever the parsed shape changes. `tree_key` reads
 `.git` directly — the loose ref, packed-refs, or a `gitdir` file — rather
-than spawning `git`, falling back to directory mtimes when `.git` is anything
-it does not recognise.
+than spawning `git`. When `.git` is missing or anything it does not
+recognise, the key is the mtimes of `Mk/bsd.port.mk`, `MOVED` and
+`UPDATING`, kept whole: most updates leave the framework alone but touch
+`MOVED` or `UPDATING`, and an mtime cut to a prefix would let updates hours
+apart share a generation.
 
 A cache generation corresponds to one tree commit, so whatever the tree
 alone decides is cached with the query: whether a port ships a `pkg-help`

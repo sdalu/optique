@@ -89,8 +89,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// Identity of the ports tree: the git HEAD commit, falling back to the
-/// mtime of Mk/bsd.port.mk for non-git trees.
+/// Identity of the ports tree: the git HEAD commit, falling back for non-git
+/// trees to the mtimes of the files an update rewrites (`mtime-<a>-<b>-<c>`).
 pub fn tree_key(portsdir: &Path) -> String {
     // HEAD only: a `git status` dirty-check would stat the whole tree
     // (~10s cold on /usr/ports). Uncommitted local edits to the tree are
@@ -98,13 +98,20 @@ pub fn tree_key(portsdir: &Path) -> String {
     if let Some(head) = git_head(portsdir) {
         return head;
     }
-    let mtime = fs::metadata(portsdir.join("Mk/bsd.port.mk"))
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("mtime-{mtime}")
+    // An update touches MOVED or UPDATING far more often than the framework,
+    // so the framework alone would keep a generation across most updates.
+    let mtimes: Vec<String> = ["Mk/bsd.port.mk", "MOVED", "UPDATING"]
+        .iter()
+        .map(|file| {
+            fs::metadata(portsdir.join(file))
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_secs())
+                .to_string()
+        })
+        .collect();
+    format!("mtime-{}", mtimes.join("-"))
 }
 
 /// The commit HEAD points at, read straight from the .git directory — no
@@ -215,8 +222,14 @@ pub fn default_cache_dir() -> PathBuf {
     PathBuf::from(home).join(".cache/optique")
 }
 
+/// A hex id (commit, hash) cut to 12 digits for the file name; anything
+/// else, an mtime key, whole: cut, mtimes hours apart would share a name.
 fn short(s: &str) -> String {
-    s.chars().take(12).collect()
+    if s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        s.chars().take(12).collect()
+    } else {
+        s.to_string()
+    }
 }
 
 /// Keep the current generation plus the most recent other one.
@@ -553,6 +566,40 @@ mod tests {
         std::fs::write(tmp.path().join("Mk/bsd.port.mk"), "# fake\n").unwrap();
         let key = tree_key(tmp.path());
         assert!(key.starts_with("mtime-"), "got {key}");
+    }
+
+    /// Without git, a tree key is mtimes: two of them an hour apart are two
+    /// trees, never one generation.
+    #[test]
+    fn mtime_keys_one_hour_apart_are_distinct_generations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dbdir = tmp.path().join("db");
+        std::fs::create_dir_all(&dbdir).unwrap();
+        let cache_dir = tmp.path().join("cache");
+        let mut c = Cache::open(&cache_dir, "mtime-1792652400", "conf");
+        c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
+        drop(c);
+        let later = Cache::open(&cache_dir, "mtime-1792656000", "conf");
+        assert!(later.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_none());
+    }
+
+    /// Without git, an update that touches MOVED (or UPDATING) but not
+    /// Mk/bsd.port.mk is still a new tree.
+    #[test]
+    fn a_moved_only_change_is_a_new_tree_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path();
+        std::fs::create_dir_all(ports.join("Mk")).unwrap();
+        std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        std::fs::write(ports.join("MOVED"), "").unwrap();
+        let set_mtime = |secs: u64| {
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+            File::options().write(true).open(ports.join("MOVED")).unwrap().set_modified(t).unwrap();
+        };
+        set_mtime(1_792_652_400);
+        let before = tree_key(ports);
+        set_mtime(1_792_656_000);
+        assert_ne!(tree_key(ports), before);
     }
 
     #[test]
