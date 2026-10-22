@@ -133,9 +133,12 @@ fn synth_conflicts_with_poudriere_flags() {
         vec!["-s", "-z", "ws", "scan", "foo/bar"],
         vec!["--synth", "LiveSystem", "-j", "141amd64", "scan", "foo/bar"],
         vec!["-s", "-p", "default", "scan", "foo/bar"],
+        // Straddling the subcommand, which clap's own checks let through.
+        vec!["-s", "scan", "-z", "ws", "foo/bar"],
+        vec!["scan", "-j", "141amd64", "--synth=LiveSystem", "foo/bar"],
     ] {
         let out = optique().args(&args).output().unwrap();
-        assert!(!out.status.success(), "{args:?} must be rejected");
+        assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("--synth"), "{args:?}: {err}");
         assert!(err.contains("cannot be used with"), "{args:?}: {err}");
@@ -152,13 +155,38 @@ fn local_and_portsdir_conflicts() {
         (vec!["-l", "-p", "default", "scan", "foo/bar"], "--local"),
         (vec!["-l", "-s", "scan", "foo/bar"], "--local"),
         (vec!["-p", "default", "-P", "/usr/ports", "scan", "foo/bar"], "--portsdir"),
+        // Straddling the subcommand, which clap's own checks let through.
+        (vec!["-l", "scan", "-s", "foo/bar"], "--local"),
+        (vec!["-l", "scan", "-z", "ws", "foo/bar"], "--local"),
+        (vec!["scan", "-p", "default", "--local", "foo/bar"], "--local"),
+        (vec!["-p", "default", "scan", "-P", "/usr/ports", "foo/bar"], "--portsdir"),
+        (vec!["-v", "scan", "-q", "foo/bar"], "--quiet"),
     ] {
         let out = optique().args(&args).output().unwrap();
-        assert!(!out.status.success(), "{args:?} must be rejected");
+        assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains(flag), "{args:?}: {err}");
         assert!(err.contains("cannot be used with"), "{args:?}: {err}");
     }
+}
+
+/// --repo needs -s wherever each one sits, and is refused without it.
+#[test]
+fn repo_requires_synth_on_either_side_of_the_subcommand() {
+    // Accepted: the run goes on to refuse --repo with ports given, a
+    // check made after the options were parsed, and nothing is scanned.
+    for args in [
+        vec!["-s", "scan", "--repo", "Synth", "foo/bar"],
+        vec!["--repo", "Synth", "scan", "-s", "foo/bar"],
+    ] {
+        let out = optique().args(&args).output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("only used when no ports are given"), "{args:?}: {err}");
+    }
+    let out = optique().args(["scan", "--repo", "Synth", "foo/bar"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("'--repo' requires '--synth'"), "{err}");
 }
 
 /// `-s` alone must not swallow the subcommand as its profile name: this has to

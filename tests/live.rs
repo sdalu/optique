@@ -692,3 +692,30 @@ fn local_make_conf_is_the_environments_and_read_in_place() {
     assert_eq!(docs["makeconf"]["value"], true, "the included file's stance: {docs}");
     assert_ne!(docs["makeconf"]["scope"], "global", "{docs}");
 }
+
+/// A synth profile without a make.conf of its own reads none: not the
+/// host's /etc/make.conf, nor the environment's __MAKE_CONF, neither of
+/// which a synth builder sees.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn synth_without_a_profile_make_conf_reads_none() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let trap = tmp.path().join("host-make.conf");
+    fs::write(&trap, ".error the host's make.conf was read\n").unwrap();
+
+    // No profile of that name: synth.ini's defaults, and no make.conf.
+    let out = Command::new(env!("CARGO_BIN_EXE_optique"))
+        .env("XDG_CACHE_HOME", tmp.path())
+        .env("__MAKE_CONF", &trap)
+        .args(["--synth=optique-live-tests-no-such-profile", "-P", "/usr/ports"])
+        .args(["scan", "--json", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    scan_exit_code(&out);
+    let report = parse_json(&out);
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+}

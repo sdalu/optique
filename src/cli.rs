@@ -58,7 +58,7 @@ pub struct Cli {
 
     /// Poudriere ports tree name, located through
     /// poudriere.d/ports/<TREE>/mnt [default: default]
-    #[arg(short = 'p', long = "ports-tree", global = true, conflicts_with = "portsdir")]
+    #[arg(short = 'p', long = "ports-tree", global = true)]
     pub tree: Option<String>,
 
     /// Explicit ports tree, overriding the poudriere, synth or local
@@ -70,12 +70,7 @@ pub struct Cli {
     /// when it exists: ports tree from PORTSDIR, options dir from
     /// PORT_DBDIR (environment or /etc/make.conf, else /usr/ports and
     /// /var/db/ports), /etc/make.conf, the installed packages
-    #[arg(
-        short = 'l',
-        long = "local",
-        global = true,
-        conflicts_with_all = ["set", "jail", "tree", "synth"]
-    )]
+    #[arg(short = 'l', long = "local", global = true)]
     pub local: bool,
 
     /// Use the synth(1) layout instead of poudriere's: options dir and ports
@@ -88,8 +83,7 @@ pub struct Cli {
         global = true,
         value_name = "PROFILE",
         num_args = 0..=1,
-        default_missing_value = SYNTH_DEFAULT_PROFILE,
-        conflicts_with_all = ["set", "jail", "tree"]
+        default_missing_value = SYNTH_DEFAULT_PROFILE
     )]
     pub synth: Option<String>,
 
@@ -97,7 +91,7 @@ pub struct Cli {
     /// from these pkg(8) repositories (e.g. Synth) when building the
     /// implicit list; repeatable, a package matching any given name is
     /// kept. See `pkg query %R` for the names
-    #[arg(long = "repo", global = true, value_name = "NAME", requires = "synth")]
+    #[arg(long = "repo", global = true, value_name = "NAME")]
     pub repo: Vec<String>,
 
     /// Explicit options dir, overriding the poudriere, synth or local
@@ -140,7 +134,7 @@ pub struct Cli {
     /// More detail: scan shows each port's effective options and query
     /// warnings, sync shows the full final state per written file, clean
     /// explains why kept entries are kept
-    #[arg(short = 'v', long = "verbose", global = true, conflicts_with = "quiet")]
+    #[arg(short = 'v', long = "verbose", global = true)]
     pub verbose: bool,
 
     /// Quiet: drop the startup banner and the per-port/per-file listings on
@@ -158,6 +152,61 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+impl Cli {
+    /// The constraints between global options. clap checks `conflicts_with`
+    /// and `requires` at each command level before the globals are merged,
+    /// so a pair straddling the subcommand (`-l scan -s`) slipped through and
+    /// `-s scan --repo X` was refused; they are checked here instead, on the
+    /// merged values, and fail as clap's own usage errors do.
+    pub fn check_globals(&self) -> Result<(), clap::Error> {
+        let given = |name: &str| match name {
+            "local" => self.local,
+            "synth" => self.synth.is_some(),
+            "set" => self.set.is_some(),
+            "jail" => self.jail.is_some(),
+            "ports-tree" => self.tree.is_some(),
+            "portsdir" => self.portsdir.is_some(),
+            "repo" => !self.repo.is_empty(),
+            "verbose" => self.verbose,
+            "quiet" => self.quiet,
+            _ => unreachable!("unknown option {name}"),
+        };
+        const CONFLICTS: &[(&str, &str)] = &[
+            ("local", "synth"),
+            ("local", "set"),
+            ("local", "jail"),
+            ("local", "ports-tree"),
+            ("synth", "set"),
+            ("synth", "jail"),
+            ("synth", "ports-tree"),
+            ("ports-tree", "portsdir"),
+            ("verbose", "quiet"),
+        ];
+        const REQUIRES: &[(&str, &str)] = &[("repo", "synth")];
+        let error = |kind, msg: String| {
+            use clap::CommandFactory as _;
+            Err(Cli::command().error(kind, msg))
+        };
+        for &(a, b) in CONFLICTS {
+            if given(a) && given(b) {
+                return error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    format!("the argument '--{a}' cannot be used with '--{b}'"),
+                );
+            }
+        }
+        for &(a, b) in REQUIRES {
+            if given(a) && !given(b) {
+                return error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    format!("the argument '--{a}' requires '--{b}'"),
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(ValueEnum, Copy, Clone, Debug, Default, PartialEq, Eq)]

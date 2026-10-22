@@ -145,8 +145,9 @@ section of `/usr/local/etc/synth/synth.ini`, falling back to that
 file's `[Global Configuration]` section and then to `/usr/ports` and
 `/var/db/ports`. make.conf is the single file
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
-each builder's make.conf — so there is no layering and no blacklist
-under `-s`. There is no jail environment either: synth builds on the host
+each builder's make.conf — or none at all when the profile has none (the
+host's `/etc/make.conf` is never read), so there is no layering and no
+blacklist under `-s`. There is no jail environment either: synth builds on the host
 it configures, so the host's installed packages are part of what it
 builds against.
 

@@ -188,8 +188,8 @@ pub struct Request<'a> {
     pub options_dir: Option<&'a Path>,
 }
 
-/// clap rejects the flag combinations that make no sense (-s or -l with
-/// -z/-j/-p, -p with -P), so `req` is consistent here.
+/// `Cli::check_globals` rejects the flag combinations that make no sense
+/// (-s or -l with -z/-j/-p, -p with -P), so `req` is consistent here.
 pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     if let Some(profile) = req.synth {
         return resolve_synth(
@@ -484,6 +484,10 @@ fn resolve_synth(
         QueryEnv::Host,
         staging_dir,
     )?;
+    // A profile without a make.conf still names one: left unset, make would
+    // read the host's (/etc/make.conf or the environment's __MAKE_CONF),
+    // which a synth builder never sees and the empty hash does not key.
+    let make_conf = make_conf.or_else(|| Some(PathBuf::from("/dev/null")));
 
     Ok(Settings {
         portsdir,
@@ -1348,7 +1352,10 @@ not a key value line
         // Nonexistent Directory_options is still the target, flagged as new.
         assert_eq!(s.options_dir, opts);
         assert!(s.options_dir_is_new);
-        assert!(s.make_conf.is_none());
+        // No make.conf is still one: left unset, make would read the host's
+        // (/etc/make.conf or the environment's __MAKE_CONF), which a synth
+        // builder never does, and which the empty hash would not key.
+        assert_eq!(s.make_conf.as_deref(), Some(Path::new("/dev/null")));
         assert!(s.make_conf_sources.is_empty());
         assert!(!stage.join("make.conf").exists(), "nothing to stage");
 

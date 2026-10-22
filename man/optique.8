@@ -1400,8 +1400,11 @@ and
 is the single file
 .Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,
 the one synth appends to each builder's
-.Pa make.conf :
-there is no layering, and synth has no blacklist.
+.Pa make.conf ,
+or none at all when the profile has none: the host's
+.Pa /etc/make.conf
+is never read.
+There is no layering, and synth has no blacklist.
 .Fl o
 and
 .Fl P

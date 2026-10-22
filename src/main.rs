@@ -44,6 +44,9 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse_from(cli::disambiguate_synth(std::env::args_os()));
+    if let Err(e) = cli.check_globals() {
+        e.exit();
+    }
     if cli.clear_cache {
         let dir = cache::default_cache_dir();
         let (files, bytes) = cache::clear(&dir);
