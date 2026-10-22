@@ -890,6 +890,11 @@ not a key value line
         assert!(glob_match("*/nginx", "www/nginx"));
         assert!(glob_match("www/*devel", "www/nginx-devel"));
         assert!(!glob_match("www/*devel", "www/nginx"));
+        // A middle literal consumes what it matched: two of them need two.
+        assert!(glob_match("*ab*ab", "abab"));
+        assert!(!glob_match("*ab*ab", "ab"));
+        assert!(glob_match("x*-*y", "xa-by"));
+        assert!(!glob_match("x*-*y", "xy"));
     }
 
     #[test]

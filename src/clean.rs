@@ -178,23 +178,26 @@ mod tests {
         // Live port: cat/alive.
         std::fs::create_dir_all(portsdir.join("cat/alive")).unwrap();
         std::fs::write(portsdir.join("cat/alive/Makefile"), "# port\n").unwrap();
-        for name in ["cat_alive", "cat_gone", "cat_renamed", "weird"] {
+        for name in ["cat_alive", "cat_gone", "cat_plain", "cat_renamed", "weird"] {
             std::fs::create_dir_all(optdir.join(name)).unwrap();
             std::fs::write(optdir.join(name).join("options"), "x\n").unwrap();
         }
         // A dir without an options file must be ignored entirely.
         std::fs::create_dir_all(optdir.join("cat_emptydir")).unwrap();
 
-        let moved =
-            Moved::parse("cat/gone||2026-01-01|expired\ncat/renamed|cat/alive|2026-01-01|renamed\n");
+        let moved = Moved::parse(
+            "cat/gone||2026-01-01|expired\ncat/plain||2026-01-01|\n\
+             cat/renamed|cat/alive|2026-01-01|renamed\n",
+        );
         let (removals, live, warnings) = classify_entries(&optdir, &portsdir, &moved);
 
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].key.to_string(), "cat/alive");
         let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
-        assert_eq!(names, vec!["cat_gone", "cat_renamed"]);
+        assert_eq!(names, vec!["cat_gone", "cat_plain", "cat_renamed"]);
         assert!(removals[0].reason.contains("expired"));
-        assert!(removals[1].reason.contains("cat/alive"), "rename target named");
+        assert_eq!(removals[1].reason, "port removed from tree", "no empty reason");
+        assert!(removals[2].reason.contains("cat/alive"), "rename target named");
         // "weird" has no '_' -> unmappable, warned about, untouched.
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("weird"));

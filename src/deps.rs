@@ -460,6 +460,18 @@ mod tests {
         assert_eq!(line.split_whitespace().filter(|w| w.starts_with("cat/")).count(), EXTRA_SHOWN);
         assert!(line.ends_with("+ 4 more"), "{line}");
 
+        // Exactly as many extras as are shown: nothing left to count.
+        let n = EXTRA_SHOWN + 1;
+        let spokes: Vec<String> = (0..n).map(|i| format!("cat/s{i:03}")).collect();
+        let hub_deps: Vec<&str> = spokes.iter().map(String::as_str).collect();
+        let mut ports = closure(&[("cat/hub", &hub_deps)]);
+        for spoke in &spokes {
+            let info = linked(spoke, &["cat/hub"]);
+            ports.insert(info.canonical.clone(), info);
+        }
+        let line = detect(&ports, &HashMap::new())[0].extra_line().unwrap();
+        assert!(!line.contains("more"), "{line}");
+
         // A tangle the walk covers entirely has no such line at all.
         let two = loops(&[("cat/a", &["cat/b"]), ("cat/b", &["cat/a"])]);
         assert_eq!(two[0].extra_line(), None);

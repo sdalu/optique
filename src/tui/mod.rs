@@ -1732,6 +1732,315 @@ mod tests {
         assert_eq!(app.refreshing, 1);
     }
 
+    fn press(app: &mut App, c: char) -> KeyOutcome {
+        let mods = if c.is_ascii_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
+        dispatch_key(app, KeyEvent::new(KeyCode::Char(c), mods))
+    }
+
+    fn hit(app: &mut App, code: KeyCode) -> KeyOutcome {
+        dispatch_key(app, KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn ctrl(app: &mut App, c: char) -> KeyOutcome {
+        dispatch_key(app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+    }
+
+    fn selected(app: &App) -> String {
+        app.selected_key().map(|k| k.to_string()).unwrap_or_default()
+    }
+
+    fn visible(app: &App) -> Vec<String> {
+        app.visible.iter().map(|k| k.to_string()).collect()
+    }
+
+    fn staged(app: &App, origin: &str) -> Vec<String> {
+        let info = &app.session.ports[&PortKey::parse(origin).unwrap()];
+        app.session.state(info).unwrap().staged.iter().cloned().collect()
+    }
+
+    /// Three unconfigured-or-not ports: alpha and gamma owe a decision,
+    /// beta's file already records its one option.
+    fn three_ports(tmp: &std::path::Path) -> App {
+        let beta = tmp.join("options/cat_beta");
+        std::fs::create_dir_all(&beta).unwrap();
+        std::fs::write(
+            beta.join("options"),
+            "_OPTIONS_READ=beta-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n",
+        )
+        .unwrap();
+        app_for(tmp, &[("cat/alpha", &[]), ("cat/beta", &[]), ("cat/gamma", &[])])
+    }
+
+    #[test]
+    fn quitting_asks_only_when_there_is_something_to_lose() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        assert!(matches!(ctrl(&mut app, 'l'), KeyOutcome::Repaint));
+        assert!(matches!(press(&mut app, 'q'), KeyOutcome::Quit), "nothing staged");
+        assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit));
+
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        assert!(app.session.dirty());
+        assert!(matches!(press(&mut app, 'q'), KeyOutcome::Continue));
+        assert!(app.quit_confirm);
+        press(&mut app, 'x');
+        assert!(!app.quit_confirm, "any other key goes back");
+        ctrl(&mut app, 'c');
+        assert!(app.quit_confirm, "Ctrl-C asks too");
+        assert!(matches!(press(&mut app, 's'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_some(), "s saved a draft");
+
+        // That session ended there; the same one, asked again.
+        app.quit_confirm = false;
+        press(&mut app, 'q');
+        assert!(matches!(press(&mut app, 'd'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_none(), "d discards it");
+    }
+
+    #[test]
+    fn help_tabs_cycle_scroll_and_close() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let n = ui::HELP_TABS.len();
+        hit(&mut app, KeyCode::F(1));
+        assert_eq!(app.help_tab, Some(0));
+        hit(&mut app, KeyCode::Tab);
+        assert_eq!(app.help_tab, Some(1));
+        hit(&mut app, KeyCode::BackTab);
+        hit(&mut app, KeyCode::BackTab);
+        assert_eq!(app.help_tab, Some(n - 1), "wraps backwards");
+        press(&mut app, 'l');
+        assert_eq!(app.help_tab, Some(0), "and forwards");
+        press(&mut app, '2');
+        assert_eq!(app.help_tab, Some(1));
+        press(&mut app, '9');
+        assert_eq!(app.help_tab, Some(1), "no ninth tab");
+        press(&mut app, 'j');
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.help_scroll, 11);
+        press(&mut app, 'k');
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(app.help_scroll, 0);
+        press(&mut app, 'j');
+        press(&mut app, 'x');
+        assert_eq!((app.help_tab, app.help_scroll), (None, 0));
+        press(&mut app, '?');
+        assert_eq!(app.help_tab, Some(0));
+        for tab in 0..n {
+            app.help_tab = Some(tab);
+            assert!(!screen(&mut app).is_empty());
+        }
+    }
+
+    #[test]
+    fn pkg_help_opens_scrolls_and_closes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'h');
+        assert!(app.port_help.is_none());
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("no pkg-help")));
+
+        let help = tmp.path().join("pkg-help");
+        std::fs::write(&help, "first line\nsecond line\n").unwrap();
+        let key = app.selected_key().unwrap();
+        app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
+        press(&mut app, 'h');
+        let h = app.port_help.as_ref().expect("opened");
+        assert_eq!((h.title, h.lines.len()), ("pkg-help", 2));
+        assert!(screen(&mut app).contains("second line"));
+        press(&mut app, 'j');
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, 11);
+        press(&mut app, 'k');
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, 0);
+        press(&mut app, 'G');
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, u16::MAX);
+        press(&mut app, 'g');
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, 0);
+        press(&mut app, 'x');
+        assert!(app.port_help.is_none());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'h');
+        assert!(app.port_help.is_some(), "h works from the option pane too");
+    }
+
+    #[test]
+    fn the_bulk_prompt_edits_and_applies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'B');
+        assert_eq!(app.bulk.as_deref(), Some(""));
+        hit(&mut app, KeyCode::Esc);
+        assert!(app.bulk.is_none());
+        press(&mut app, 'B');
+        for c in "DOCS=onx".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Backspace);
+        ctrl(&mut app, 'u');
+        assert_eq!(app.bulk.as_deref(), Some("DOCS=on"), "no control characters");
+        hit(&mut app, KeyCode::Enter);
+        assert!(app.bulk.is_none());
+        for p in ["cat/alpha", "cat/beta", "cat/gamma"] {
+            assert_eq!(staged(&app, p), ["DOCS"], "{p}");
+        }
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'B');
+        assert_eq!(app.bulk.as_deref(), Some("DOCS="), "pre-filled from the option pane");
+    }
+
+    #[test]
+    fn the_filter_narrows_the_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, '/');
+        assert!(app.focus == Focus::Filter);
+        for c in "bet".chars() {
+            press(&mut app, c);
+        }
+        assert_eq!(visible(&app), ["cat/beta"]);
+        hit(&mut app, KeyCode::Backspace);
+        hit(&mut app, KeyCode::Backspace);
+        assert_eq!(app.filter, "b");
+        hit(&mut app, KeyCode::Enter);
+        assert!(app.focus == Focus::List);
+        assert_eq!(app.filter, "b", "Enter keeps the filter");
+        press(&mut app, '/');
+        hit(&mut app, KeyCode::Esc);
+        assert!(app.focus == Focus::List && app.filter.is_empty());
+        assert_eq!(visible(&app).len(), 3);
+    }
+
+    #[test]
+    fn list_keys_move_and_jump_between_problems() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        // Problems first: alpha and gamma owe a decision, beta is ok.
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma", "cat/beta"]);
+        press(&mut app, 'j');
+        assert_eq!(selected(&app), "cat/gamma");
+        press(&mut app, 'k');
+        press(&mut app, 'k');
+        assert_eq!(selected(&app), "cat/alpha", "stays at the top");
+        press(&mut app, 'G');
+        assert_eq!(selected(&app), "cat/beta");
+        press(&mut app, 'g');
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(selected(&app), "cat/beta", "clamped");
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(selected(&app), "cat/alpha");
+        press(&mut app, 'n');
+        assert_eq!(selected(&app), "cat/gamma");
+        press(&mut app, 'n');
+        assert_eq!(selected(&app), "cat/alpha", "wraps past the ok port");
+        press(&mut app, 'p');
+        assert_eq!(selected(&app), "cat/gamma");
+
+        // When nothing needs attention, n says so and stays put.
+        let tmp = tempfile::tempdir().unwrap();
+        let beta = tmp.path().join("options/cat_beta");
+        std::fs::create_dir_all(&beta).unwrap();
+        std::fs::write(beta.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n")
+            .unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/beta", &[])]);
+        press(&mut app, 'n');
+        assert_eq!(selected(&app), "cat/beta");
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m == "no ports need attention"));
+    }
+
+    #[test]
+    fn editor_keys_toggle_undo_reset_and_revert() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["DOCS".into(), "NLS".into()];
+        info.options.defaults = ["NLS".to_string()].into();
+        app.rebuild_editor();
+
+        press(&mut app, 'l');
+        assert!(app.focus == Focus::Editor);
+        press(&mut app, ' ');
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
+        press(&mut app, 'j');
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS", "NLS"]);
+        press(&mut app, 'j');
+        press(&mut app, ' ');
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "j stops at the last option");
+        press(&mut app, 'k');
+        press(&mut app, 'k');
+        press(&mut app, ' ');
+        assert!(staged(&app, "cat/alpha").is_empty(), "k stops at the first");
+        press(&mut app, 'U');
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
+        press(&mut app, 'd');
+        assert_eq!(staged(&app, "cat/alpha"), ["NLS"], "d: the port's defaults");
+        press(&mut app, 'u');
+        assert!(staged(&app, "cat/alpha").is_empty(), "u: the saved state (none)");
+        press(&mut app, 'i');
+        assert!(app.opt_info.is_some());
+        press(&mut app, 'x');
+        assert!(app.opt_info.is_none(), "any key closes the details");
+        hit(&mut app, KeyCode::Esc);
+        assert!(app.focus == Focus::List);
+        hit(&mut app, KeyCode::Tab);
+        hit(&mut app, KeyCode::Left);
+        assert!(app.focus == Focus::List);
+        while app.undo.pop().is_some() {}
+        press(&mut app, 'U');
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m == "nothing to undo"));
+    }
+
+    #[test]
+    fn view_keys_filter_and_reorder_the_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 't');
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"]);
+        press(&mut app, 't');
+        assert_eq!(visible(&app).len(), 3);
+        press(&mut app, 's');
+        assert_eq!(visible(&app), ["cat/alpha", "cat/beta", "cat/gamma"], "alphabetical");
+        press(&mut app, 's');
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma", "cat/beta"]);
+        press(&mut app, 'm');
+        assert!(app.mc_relax);
+        press(&mut app, 'm');
+        press(&mut app, 'w');
+        assert!(!app.mc_relax && app.warn_mc);
+        press(&mut app, 'w');
+        assert!(!app.warn_mc);
+    }
+
+    #[test]
+    fn f_steps_through_the_flavors_of_an_origin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[]), ("cat/beta", &[])]);
+        for k in ["cat/alpha@a", "cat/alpha@b"] {
+            app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap().flavors =
+                vec!["a".into(), "b".into()];
+        }
+        app.select_index(0);
+        assert_eq!(selected(&app), "cat/alpha@a");
+        press(&mut app, 'f');
+        assert_eq!(selected(&app), "cat/alpha@b");
+        press(&mut app, 'f');
+        assert_eq!(selected(&app), "cat/alpha@a", "wraps");
+        press(&mut app, 'G');
+        press(&mut app, 'f');
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("no other flavors")));
+        press(&mut app, '/');
+        for c in "@a".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'f');
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("hidden by the current view")));
+    }
+
     /// Opening the apply preview, confirming it and reloading afterwards read
     /// only the files apply wrote: everything else is as the scan read it.
     #[test]

@@ -163,6 +163,66 @@ mod tests {
         assert!(result.errors.iter().any(|(k, _)| k.origin == "cat/absent"));
     }
 
+    /// A ports tree of one-line Makefiles: make runs for real, but nothing
+    /// outside the tempdir is read. `PKGNAME` is all a dump needs.
+    fn fake_tree(ports: &[(&str, &str)]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for (origin, makefile) in ports {
+            let dir = tmp.path().join("ports").join(origin);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("Makefile"), makefile).unwrap();
+        }
+        std::fs::create_dir_all(tmp.path().join("options")).unwrap();
+        tmp
+    }
+
+    /// The counts the summary line reports: queried cold, cached warm.
+    #[test]
+    fn scan_counts_queried_and_cached_ports() {
+        let tmp = fake_tree(&[("cat/a", "PKGNAME=a-1.0\n"), ("cat/b", "PKGNAME=b-1.0\n")]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+        };
+        let roots = vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()];
+        let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
+        let moved = Moved::parse("");
+        let mut last = None;
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let cold = scan(&roots, &ctx, &files, 2, &mut cache, &moved, |p| {
+            last = Some((p.done, p.discovered, p.from_cache))
+        });
+        assert!(cold.errors.is_empty(), "{:?}", cold.errors);
+        assert_eq!((cold.queried, cold.from_cache, cold.ports.len()), (2, 0, 2));
+        assert_eq!(last, Some((2, 2, 0)), "progress ends at every port done");
+
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let warm = scan(&roots, &ctx, &files, 2, &mut cache, &moved, |_| {});
+        assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
+    }
+
+    /// A Makefile make cannot read is that port's error, with make's own last
+    /// words; a port with no Makefile says so.
+    #[test]
+    fn a_failing_or_missing_makefile_is_the_ports_error() {
+        let tmp = fake_tree(&[("cat/bad", ".error the port is broken here\n")]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+        };
+        let bad = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/bad").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(bad.starts_with("make failed"), "{bad}");
+        assert!(bad.contains("the port is broken here"), "{bad}");
+        let none = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/none").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(none.starts_with("no such port: cat/none"), "{none}");
+    }
+
     /// Startup on a real closure reads each options file once, cold or warm:
     /// the scan's cache checks, the session and the staging copy share the
     /// reads. Run with: cargo test -- --ignored

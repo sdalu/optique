@@ -373,6 +373,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cache_dir = tmp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
+        // Not a cache generation at all (a draft, say): never touched.
+        std::fs::write(cache_dir.join("draft.json"), "{}").unwrap();
         // Pre-versioning and other-schema files are unreadable: always removed.
         std::fs::write(cache_dir.join("aaaa-bbbb.jsonl"), "\n").unwrap();
         std::fs::write(cache_dir.join("v1-cccc-dddd.jsonl"), "\n").unwrap();
@@ -383,7 +385,34 @@ mod tests {
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec![format!("v{SCHEMA}-current-gen.jsonl")], "{names:?}");
+        let mut names = names;
+        names.sort();
+        assert_eq!(names, vec!["draft.json".to_string(), format!("v{SCHEMA}-current-gen.jsonl")]);
+    }
+
+    /// `clear` removes every generation, counts files and bytes, and leaves
+    /// whatever is not one.
+    #[test]
+    fn clear_counts_what_it_removes() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("v7-a-b.jsonl"), "12345").unwrap();
+        std::fs::write(tmp.path().join("v6-c-d.jsonl"), "123").unwrap();
+        std::fs::write(tmp.path().join("draft.json"), "{}").unwrap();
+        assert_eq!(clear(tmp.path()), (2, 8));
+        assert!(tmp.path().join("draft.json").is_file());
+        assert_eq!(clear(tmp.path()), (0, 0));
+    }
+
+    /// Only a sha1 or sha256 hex id names a tree: anything else would make a
+    /// stray file a cache generation.
+    #[test]
+    fn object_id_wants_hex_of_a_hash_length() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(object_id(&format!("  {sha1}\n")).as_deref(), Some(sha1));
+        assert!(object_id(&"a".repeat(64)).is_some());
+        assert!(object_id(&"z".repeat(40)).is_none(), "not hex");
+        assert!(object_id("abc123").is_none(), "hex, wrong length");
+        assert!(object_id(&"a".repeat(41)).is_none());
     }
 
     /// A ports tree whose .git is a plain directory, with the given files

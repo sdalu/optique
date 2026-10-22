@@ -98,6 +98,153 @@ fn scan_json_and_exit_code() {
     );
 }
 
+/// The gate itself: each status counts as it should, the exit status
+/// follows, and the table says what the JSON says. Built from states that
+/// are definite whatever this host's make.conf decides: a conflict, a stale
+/// file, and the same port once synced.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn scan_gate_counts_each_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    // nginx: both members of its GSSAPI radio group on.
+    fs::create_dir_all(optdir.join("www_nginx")).unwrap();
+    fs::write(
+        optdir.join("www_nginx/options"),
+        "OPTIONS_FILE_SET+=GSSAPI_HEIMDAL\nOPTIONS_FILE_SET+=GSSAPI_MIT\n",
+    )
+    .unwrap();
+    // pkg: the file knows an option the port lost and misses one it has.
+    fs::create_dir_all(optdir.join("ports-mgmt_pkg")).unwrap();
+    fs::write(
+        optdir.join("ports-mgmt_pkg/options"),
+        "_OPTIONS_READ=pkg-1.0\n_FILE_COMPLETE_OPTIONS_LIST=OBSOLETE\nOPTIONS_FILE_SET+=OBSOLETE\n",
+    )
+    .unwrap();
+    let scan = |json: bool| {
+        let mut c = optique(tmp.path());
+        c.arg("scan");
+        if json {
+            c.arg("--json");
+        }
+        c.arg("-o").arg(&optdir).args(["www/nginx", "ports-mgmt/pkg"]).output().unwrap()
+    };
+    let row = |report: &serde_json::Value, port: &str| {
+        report["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["port"] == port)
+            .unwrap_or_else(|| panic!("{port} missing from {report}"))
+            .clone()
+    };
+    // The gate recomputed from the rows: a conflict always counts, missing
+    // or outdated configuration only when something is undecided.
+    let attention = |report: &serde_json::Value| {
+        report["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| !p["blacklisted"].as_bool().unwrap())
+            .filter(|p| match p["status"].as_str().unwrap() {
+                "conflict" => true,
+                "unconfigured" | "stale" => !p["undecided"].as_array().unwrap().is_empty(),
+                _ => false,
+            })
+            .count() as u64
+    };
+
+    let out = scan(true);
+    let report = parse_json(&out);
+    assert_eq!(row(&report, "www/nginx")["status"], "conflict");
+    let pkg = row(&report, "ports-mgmt/pkg");
+    assert_eq!(pkg["status"], "stale", "{pkg}");
+    assert_eq!(pkg["added"], serde_json::json!(["DOCS"]), "{pkg}");
+    assert_eq!(pkg["removed"], serde_json::json!(["OBSOLETE"]), "{pkg}");
+    let summary = &report["summary"];
+    assert_eq!(summary["attention"].as_u64().unwrap(), attention(&report), "{summary}");
+    assert!(summary["conflict"].as_u64().unwrap() >= 1, "{summary}");
+    assert!(summary["stale"].as_u64().unwrap() >= 1, "{summary}");
+    assert_eq!(out.status.code(), Some(1), "a conflict always holds the gate");
+
+    // The table carries the same verdicts, markers included.
+    let out = scan(false);
+    assert_eq!(out.status.code(), Some(1));
+    let table = String::from_utf8_lossy(&out.stdout);
+    let line = |port: &str| {
+        table.lines().find(|l| l.contains(port)).unwrap_or_else(|| panic!("{port}:\n{table}")).to_string()
+    };
+    assert!(line("www/nginx ").contains("CONFLICT"), "{table}");
+    assert!(line("ports-mgmt/pkg ").contains("STALE +DOCS -OBSOLETE"), "{table}");
+
+    // Synced, pkg is ok and counts for nothing; nginx's conflict remains.
+    let synced = optique(tmp.path())
+        .args(["sync", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    assert!(synced.status.success(), "{}", String::from_utf8_lossy(&synced.stderr));
+    let report = parse_json(&scan(true));
+    assert_eq!(row(&report, "ports-mgmt/pkg")["status"], "ok");
+    assert_eq!(report["summary"]["attention"].as_u64().unwrap(), attention(&report));
+
+    // With nginx's conflict resolved too, the gate opens if make.conf leaves
+    // nothing undecided, and says why otherwise.
+    fs::remove_dir_all(optdir.join("www_nginx")).unwrap();
+    let synced = optique(tmp.path())
+        .args(["sync", "-o"])
+        .arg(&optdir)
+        .args(["www/nginx", "ports-mgmt/pkg"])
+        .output()
+        .unwrap();
+    assert!(synced.status.success());
+    let out = scan(true);
+    let report = parse_json(&out);
+    let pending = report["summary"]["pending"].as_u64().unwrap();
+    assert_eq!(out.status.code(), Some(i32::from(pending > 0)), "{}", report["summary"]);
+}
+
+/// `clean --redundant` removes the files that only repeat defaults and
+/// make.conf, keeps a file that decides something, and counts what it did.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn clean_redundant_keeps_only_files_that_decide_something() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    let out = optique(tmp.path())
+        .args(["sync", "-o"])
+        .arg(&optdir)
+        .args(["ports-mgmt/pkg", "www/nginx"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    // nginx now deviates: IPV6 is on by default, the file turns it off.
+    let nginx = optdir.join("www_nginx/options");
+    let text = fs::read_to_string(&nginx).unwrap();
+    assert!(text.contains("OPTIONS_FILE_SET+=IPV6\n"), "{text}");
+    fs::write(&nginx, text.replace("OPTIONS_FILE_SET+=IPV6\n", "OPTIONS_FILE_UNSET+=IPV6\n")).unwrap();
+
+    let out = optique(tmp.path())
+        .args(["clean", "--redundant", "--json", "-o"])
+        .arg(&optdir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let report = parse_json(&out);
+    let removed: Vec<&str> = report["removals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["options_name"].as_str().unwrap())
+        .collect();
+    assert!(removed.contains(&"ports-mgmt_pkg"), "{report}");
+    assert!(!removed.contains(&"www_nginx"), "{report}");
+    assert_eq!(report["summary"]["removed"].as_u64().unwrap(), removed.len() as u64, "{report}");
+    assert!(!optdir.join("ports-mgmt_pkg").exists());
+    assert!(nginx.is_file());
+}
+
 /// Feed a plan to a command on stdin and collect everything it said.
 fn with_stdin(mut cmd: Command, input: &str) -> std::process::Output {
     use std::io::Write as _;

@@ -380,11 +380,69 @@ mod tests {
         assert_eq!(enabled, ["A", "C"].iter().map(|s| s.to_string()).collect());
     }
 
+    /// A file written before `_FILE_COMPLETE_OPTIONS_LIST` existed knows
+    /// its options only from the SET/UNSET lines: those choices still hold.
+    #[test]
+    fn sync_keeps_choices_a_file_knows_only_from_its_set_lines() {
+        let info = mk_info(&["A", "B"], &["B"]);
+        let saved = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
+        let enabled = sync_enabled_set(&info, Some(&saved));
+        assert_eq!(enabled, ["A"].iter().map(|s| s.to_string()).collect());
+    }
+
+    fn pending(old: Option<&str>, complete: &[&str], enabled: &[&str]) -> PendingWrite {
+        PendingWrite {
+            key: PortKey::parse("cat/port").unwrap(),
+            path: PathBuf::from("/nonexistent/cat_port/options"),
+            old: old.map(SavedOptionsFile::parse),
+            enabled: enabled.iter().map(|s| s.to_string()).collect(),
+            complete: complete.iter().map(|s| s.to_string()).collect(),
+            content: String::new(),
+        }
+    }
+
+    /// A brand-new file adopts every option, at the value it is written with.
+    #[test]
+    fn a_new_file_adopts_every_option() {
+        let c = pending(None, &["A", "B"], &["B"]).changes();
+        assert_eq!(c.adopted, [("A".to_string(), false), ("B".to_string(), true)]);
+        assert!(c.turned_on.is_empty() && c.turned_off.is_empty() && c.dropped.is_empty());
+    }
+
+    /// An option the port no longer has is dropped, not turned off.
+    #[test]
+    fn a_dropped_option_is_not_turned_off() {
+        let old = "_FILE_COMPLETE_OPTIONS_LIST=A Z\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=Z\n";
+        let c = pending(Some(old), &["A"], &[]).changes();
+        assert_eq!(c.turned_off, ["A"]);
+        assert_eq!(c.dropped, ["Z"]);
+    }
+
     #[test]
     fn unconfigured_takes_effective() {
         let info = mk_info(&["A", "B"], &["B"]);
         let enabled = sync_enabled_set(&info, None);
         assert_eq!(enabled, ["B"].iter().map(|s| s.to_string()).collect());
+    }
+
+    /// Same option list, different choices: the file is rewritten.
+    #[test]
+    fn plan_writes_a_changed_choice_on_an_unchanged_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let info = mk_info(&["A", "B"], &["A"]);
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n",
+        )
+        .unwrap();
+        let enabled: BTreeSet<String> = ["B".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled)),
+            &OptionsFiles::new(tmp.path()),
+            false,
+        );
+        assert_eq!(planned.writes.len(), 1);
     }
 
     #[test]
