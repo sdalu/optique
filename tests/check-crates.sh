@@ -12,7 +12,7 @@ set -eu
 # Exit status: 0 they agree, or there is no ports tree to ask; 1 they differ.
 
 top=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
-port=$top/ports/sysutils/optique
+port=$top/ports/ports-mgmt/optique
 portsdir=${PORTSDIR:-/usr/ports}
 bsdmake=${BSDMAKE:-make}
 awkf=$portsdir/Mk/Scripts/cargo-crates.awk

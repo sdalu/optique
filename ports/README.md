@@ -1,6 +1,6 @@
 # FreeBSD port skeleton for optique
 
-`sysutils/optique` is a ready-to-use cargo port for this repository. It is
+`ports-mgmt/optique` is a ready-to-use cargo port for this repository. It is
 kept in-tree so the packaging metadata stays in sync with `Cargo.toml` and
 `Cargo.lock`. It builds the release tagged on
 <https://github.com/sdalu/optique> (`v${DISTVERSION}`), and `distinfo` holds
@@ -15,7 +15,7 @@ when `DISTVERSION`, `CARGO_CRATES` or `distinfo` drift from `Cargo.toml` and
 Either copy the directory into a ports tree:
 
 ```sh
-cp -R ports/sysutils/optique /usr/ports/sysutils/optique
+cp -R ports/ports-mgmt/optique /usr/ports/ports-mgmt/optique
 ```
 
 ...or, better, expose `ports/` as a poudriere/ports overlay so the checkout
@@ -23,17 +23,17 @@ stays authoritative:
 
 ```sh
 # one-off, from a ports-tree-shaped overlay
-make -C /path/to/optique/ports/sysutils/optique PORTSDIR=/usr/ports <target>
+make -C /path/to/optique/ports/ports-mgmt/optique PORTSDIR=/usr/ports <target>
 
 # poudriere overlay (13.0+)
 poudriere ports -c -m null -M /path/to/optique/ports -p optique-overlay
-poudriere bulk -j <jail> -p default -O optique-overlay sysutils/optique
+poudriere bulk -j <jail> -p default -O optique-overlay ports-mgmt/optique
 ```
 
 Read-only sanity checks work straight from the checkout and need no network:
 
 ```sh
-cd ports/sysutils/optique
+cd ports/ports-mgmt/optique
 make PORTSDIR=/usr/ports -V PKGNAME        # optique-0.1.0
 make PORTSDIR=/usr/ports -V PLIST_FILES
 make PORTSDIR=/usr/ports -V _DISTFILES | tr ' ' '\n' | wc -l
@@ -44,7 +44,7 @@ make PORTSDIR=/usr/ports -V _DISTFILES | tr ' ' '\n' | wc -l
 The port's copies of the release and the crate list are refreshed **before**
 `make tag`, which refuses while `make check-version` or `make check-crates`
 fails, and `distinfo` is finished **after** the tag is pushed, since only then
-does GitHub serve the tarball. In `ports/sysutils/optique`:
+does GitHub serve the tarball. In `ports/ports-mgmt/optique`:
 
 1. Bump `DISTVERSION` to `Cargo.toml`'s `version`.
 2. If `Cargo.lock` changed, regenerate the crate list with the framework's own
@@ -76,7 +76,7 @@ Commit, `make tag` at the top of the checkout, push the tag, then:
 ## Test build
 
 ```sh
-poudriere testport -j <jail> -p default -O optique-overlay sysutils/optique
+poudriere testport -j <jail> -p default -O optique-overlay ports-mgmt/optique
 ```
 
 `testport` covers stage-qa, the plist (`PLIST_FILES` must match exactly what
@@ -109,5 +109,5 @@ uses the installed rust toolchain instead of building the tree's.
 - The port deliberately defines no `OPTIONS_DEFINE`. The man page is the only
   extra artefact, installed by `post-install` with `INSTALL_MAN`; the
   framework compresses it, hence the `.gz` suffix in `PLIST_FILES`.
-- `CATEGORIES=sysutils ports-mgmt` means the canonical location is
-  `sysutils/optique`, with `ports-mgmt` as a secondary category only.
+- `CATEGORIES=ports-mgmt`: the port lives in `ports-mgmt/optique`, beside
+  poudriere and synth.

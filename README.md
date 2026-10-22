@@ -55,7 +55,7 @@ make install                 # as root: /usr/local/bin and the man page
 ```
 
 `PREFIX` and `DESTDIR` are honoured. A port skeleton is kept in-tree at
-[`ports/sysutils/optique`](ports/sysutils/optique); see
+[`ports/ports-mgmt/optique`](ports/ports-mgmt/optique); see
 [`ports/README.md`](ports/README.md) to drop it into a ports tree or a
 poudriere overlay.
 

@@ -1,7 +1,7 @@
 PORTNAME=	optique
 DISTVERSIONPREFIX=	v
 DISTVERSION=	0.2.0
-CATEGORIES=	sysutils ports-mgmt
+CATEGORIES=	ports-mgmt
 
 MAINTAINER=	sdalu@sdalu.com
 COMMENT=	Fast ports options configurator for poudriere and synth

@@ -13,7 +13,7 @@ Run in order; a red gate is answered before anything else.
       at hand; it also drives the TUI, so a changed key or help line can
       break it. Where it cannot run, say it was skipped.
 - [ ] The host-side port validation (ports/README.md, "Test build") --
-      when the round touched `ports/sysutils/optique/` or a path the port
+      when the round touched `ports/ports-mgmt/optique/` or a path the port
       installs from (`man/optique.8`, the binary's name). No test reaches the
       port's Makefile.
 
@@ -28,7 +28,7 @@ Run in order; a red gate is answered before anything else.
       the `?` help as well as in the README and the man page?
 - [ ] `DESIGN.md` -- did this round change a decision it records, or make
       one it should?
-- [ ] `ports/README.md` and `ports/sysutils/optique/` -- after a
+- [ ] `ports/README.md` and `ports/ports-mgmt/optique/` -- after a
       dependency change, are `CARGO_CRATES` and `distinfo` refreshed?
       (`make check-crates` fails until they are.)
 

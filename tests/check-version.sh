@@ -12,7 +12,7 @@ set -eu
 #   Cargo.lock     the package entry a --locked or --frozen build checks;
 #                  cargo rewrites it on the next build, so a bump committed
 #                  without one leaves it behind
-#   the port       ports/sysutils/optique's DISTVERSION, which cannot read
+#   the port       ports/ports-mgmt/optique's DISTVERSION, which cannot read
 #                  Cargo.toml: the port is copied into a ports tree, away
 #                  from this checkout, and is evaluated before any extract
 #   the tags       scripts/checktag.sh
@@ -54,7 +54,7 @@ bsdmake=${BSDMAKE:-make}
 if [ ! -f "$portsdir/Mk/bsd.port.mk" ]; then
     say "port: unchecked (no ports tree at $portsdir)"
 else
-    got=$($bsdmake -C "$top/ports/sysutils/optique" PORTSDIR="$portsdir" \
+    got=$($bsdmake -C "$top/ports/ports-mgmt/optique" PORTSDIR="$portsdir" \
         -V DISTVERSION 2>/dev/null) || got=''
     if [ -z "$got" ]; then
         say "port: unchecked ($bsdmake -V DISTVERSION answered nothing)"
