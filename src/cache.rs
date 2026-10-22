@@ -114,6 +114,53 @@ pub fn tree_key(portsdir: &Path) -> String {
     format!("mtime-{}", mtimes.join("-"))
 }
 
+/// Identity of the ports tree and the overlays laid over it, in order: the
+/// main tree's `tree_key` alone without overlays (generation names stay as
+/// they were), else a digest of it and each overlay's path and identity.
+pub fn trees_key(portsdir: &Path, overlays: &[PathBuf]) -> String {
+    if overlays.is_empty() {
+        return tree_key(portsdir);
+    }
+    let mut text = tree_key(portsdir);
+    for o in overlays {
+        text.push_str(&format!("\n{} {}", o.display(), overlay_key(o)));
+    }
+    sha256_hex(text.as_bytes())
+}
+
+/// An overlay's identity: its HEAD when it is a checkout of its own (a
+/// whole tree, too big to walk), else the count and newest mtime of what it
+/// holds down to `category/port/file` (and `Mk/Uses/*.mk`, `MOVED`): an
+/// overlay is a handful of ports, often edited before any commit, and an
+/// edit to a port's Makefile touches the file, not its directory.
+fn overlay_key(overlay: &Path) -> String {
+    if let Some(head) = git_head(overlay) {
+        return head;
+    }
+    fn walk(dir: &Path, depth: usize, count: &mut u64, newest: &mut u128) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue };
+            *count += 1;
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            *newest = (*newest).max(mtime);
+            if meta.is_dir() && depth > 1 {
+                walk(&entry.path(), depth - 1, count, newest);
+            }
+        }
+    }
+    let (mut count, mut newest) = (0, 0);
+    walk(overlay, 3, &mut count, &mut newest);
+    format!("walk-{count}-{newest}")
+}
+
 /// The commit HEAD points at, read straight from the .git directory — no
 /// `git` subprocess (a fork+exec per invocation, and git may not even be
 /// installed on a host that only ever fetched a portsnap/distfile tree).
@@ -471,6 +518,26 @@ mod tests {
 
     const ID: &str = "f377481e728bedfe7005118ec50f9f145ebfffac";
     const OTHER: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// Without overlays the key is the tree's own, generation names as they
+    /// were; with one it follows the overlay, whose port edits — usually
+    /// uncommitted — must reach it.
+    #[test]
+    fn trees_key_follows_every_overlay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, over) = (tmp.path().join("main"), tmp.path().join("over"));
+        std::fs::create_dir_all(main.join("Mk")).unwrap();
+        std::fs::write(main.join("Mk/bsd.port.mk"), "").unwrap();
+        std::fs::create_dir_all(over.join("cat/port")).unwrap();
+        let makefile = over.join("cat/port/Makefile");
+        std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+        assert_eq!(trees_key(&main, &[]), tree_key(&main));
+        let before = trees_key(&main, &[over.clone()]);
+        assert_ne!(before, tree_key(&main));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
+        assert_ne!(trees_key(&main, &[over.clone()]), before, "an edited port is a new generation");
+    }
 
     #[test]
     fn tree_key_reads_a_loose_ref() {

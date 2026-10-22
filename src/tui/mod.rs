@@ -1667,6 +1667,8 @@ mod tests {
                 portsdir: tmp.to_path_buf(),
                 make_conf: None,
                 port_dbdir: db.path().to_path_buf(),
+                overlays: Vec::new(),
+                inherit_env_overlays: false,
             },
             1,
             crate::cache::Cache::disabled(),

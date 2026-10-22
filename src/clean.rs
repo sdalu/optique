@@ -35,8 +35,12 @@ pub fn origin_from_options_name(name: &str) -> Option<String> {
 pub fn classify_entries(
     options_dir: &Path,
     portsdir: &Path,
+    overlays: &[std::path::PathBuf],
     moved: &Moved,
 ) -> (Vec<Removal>, Vec<LiveEntry>, Vec<String>) {
+    // A port lives in the main tree or any overlay; only absent from all of
+    // them has it vanished.
+    let exists = |o: &str| crate::query::makerunner::locate(portsdir, overlays, o).is_some();
     let mut removals = Vec::new();
     let mut live = Vec::new();
     let mut warnings = Vec::new();
@@ -54,7 +58,7 @@ pub fn classify_entries(
             warnings.push(format!("{name}: cannot map back to a port origin, left alone"));
             continue;
         };
-        if portsdir.join(&origin).join("Makefile").is_file() {
+        if exists(&origin) {
             live.push(LiveEntry {
                 options_name: name,
                 dir,
@@ -62,7 +66,6 @@ pub fn classify_entries(
             });
             continue;
         }
-        let exists = |o: &str| portsdir.join(o).join("Makefile").is_file();
         let reason = match moved.resolve(&origin, exists) {
             MovedResult::Removed { reason } if !reason.is_empty() => {
                 format!("port removed from tree ({reason})")
@@ -203,7 +206,7 @@ mod tests {
             "cat/gone||2026-01-01|expired\ncat/plain||2026-01-01|\n\
              cat/renamed|cat/alive|2026-01-01|renamed\n",
         );
-        let (removals, live, warnings) = classify_entries(&optdir, &portsdir, &moved);
+        let (removals, live, warnings) = classify_entries(&optdir, &portsdir, &[], &moved);
 
         assert_eq!(live.len(), 1);
         assert_eq!(live[0].key.to_string(), "cat/alive");
@@ -215,6 +218,15 @@ mod tests {
         // "weird" has no '_' -> unmappable, warned about, untouched.
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("weird"));
+
+        // cat/plain lives in an overlay: not vanished.
+        let overlay = tmp.path().join("overlay");
+        std::fs::create_dir_all(overlay.join("cat/plain")).unwrap();
+        std::fs::write(overlay.join("cat/plain/Makefile"), "# port\n").unwrap();
+        let (removals, live, _) = classify_entries(&optdir, &portsdir, &[overlay], &moved);
+        let live: Vec<String> = live.iter().map(|l| l.key.to_string()).collect();
+        assert_eq!(live, ["cat/alive", "cat/plain"]);
+        assert!(!removals.iter().any(|r| r.options_name == "cat_plain"));
     }
 
     #[test]

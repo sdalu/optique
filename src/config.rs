@@ -98,6 +98,11 @@ pub enum OverlaySpec {
 }
 
 impl Settings {
+    /// The overlays' paths, in lookup order.
+    pub fn overlay_paths(&self) -> Vec<PathBuf> {
+        self.overlays.iter().map(|o| o.path.clone()).collect()
+    }
+
     /// Every path made absolute against optique's own directory. make runs
     /// with -C in the port's directory, so a relative PORT_DBDIR, PORTSDIR
     /// or __MAKE_CONF would be read from there while optique reads the

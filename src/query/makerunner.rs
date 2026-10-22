@@ -17,6 +17,30 @@ pub struct QueryCtx {
     pub make_conf: Option<PathBuf>,
     /// PORT_DBDIR the query should see (real options dir, or staging).
     pub port_dbdir: PathBuf,
+    /// Trees laid over `portsdir`, in lookup order (`config::Settings`).
+    pub overlays: Vec<PathBuf>,
+    /// Whether the environment's `OVERLAYS` reaches make (a local build).
+    pub inherit_env_overlays: bool,
+}
+
+impl QueryCtx {
+    /// Where a port lives: the first overlay holding `<origin>/Makefile`,
+    /// else the main tree — the ports framework's own lookup (do-depends.sh,
+    /// depends-list.sh) and poudriere's (`_lookup_portdir`). None when no
+    /// tree has it.
+    pub fn locate(&self, origin: &str) -> Option<PathBuf> {
+        locate(&self.portsdir, &self.overlays, origin)
+    }
+}
+
+/// `QueryCtx::locate` for callers holding the trees but no context.
+pub fn locate(portsdir: &Path, overlays: &[PathBuf], origin: &str) -> Option<PathBuf> {
+    overlays
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(std::iter::once(portsdir))
+        .map(|tree| tree.join(origin))
+        .find(|dir| dir.join("Makefile").is_file())
 }
 
 #[derive(Debug)]
@@ -72,10 +96,17 @@ impl MakeRunner {
 
 /// Run the wrapper makefile for one port@flavor and parse the dump.
 pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
-    let portdir = ctx.portsdir.join(&key.origin);
-    if !portdir.join("Makefile").is_file() {
-        anyhow::bail!("no such port: {} ({} missing)", key.origin, portdir.display());
-    }
+    let Some(portdir) = ctx.locate(&key.origin) else {
+        let missing = ctx.portsdir.join(&key.origin).join("Makefile");
+        match ctx.overlays.len() {
+            0 => anyhow::bail!("no such port: {} ({} missing)", key.origin, missing.display()),
+            n => anyhow::bail!(
+                "no such port: {} (not in {}, nor in {n} overlay(s))",
+                key.origin,
+                ctx.portsdir.display()
+            ),
+        }
+    };
 
     // Given rather than left to make, which would take a PORTSDIR from the
     // environment or /etc/make.conf over this tree; resolved as make's own
@@ -96,6 +127,12 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // The overlays reach make through the make.conf, never on the command
+    // line, where OVERLAYS= would replace make.conf's `+=` list; and the
+    // environment's only for a local build, whose make reads it anyway.
+    if !ctx.inherit_env_overlays {
+        cmd.env_remove("OVERLAYS");
+    }
     if let Some(conf) = &ctx.make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
@@ -327,6 +364,8 @@ mod tests {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         (tmp, ctx)
     }
@@ -430,6 +469,8 @@ mod tests {
             portsdir: "/usr/ports".into(),
             make_conf: None,
             port_dbdir: staging.path().to_path_buf(),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let key = PortKey::parse("www/nginx").unwrap();
 
@@ -485,6 +526,8 @@ mod tests {
             portsdir: "/usr/ports".into(),
             make_conf: Some(make_conf),
             port_dbdir: db.path().to_path_buf(),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
 
         // Mk/Uses/iconv.mk adds libiconv when ${LOCALBASE}/include/iconv.h

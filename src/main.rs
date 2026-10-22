@@ -192,7 +192,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     if !args.unused {
         let staging = tempfile::tempdir()?;
         let settings = resolve_settings(cli, staging.path())?;
-        let moved = Moved::load(&settings.portsdir);
+        let moved = load_moved(cli, &settings);
         let ctx = CleanCtx {
             settings,
             moved,
@@ -241,7 +241,12 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     }
 
     let (mut removals, live, mut warnings) =
-        clean::classify_entries(&settings.options_dir, &settings.portsdir, &moved);
+        clean::classify_entries(
+            &settings.options_dir,
+            &settings.portsdir,
+            &settings.overlay_paths(),
+            &moved,
+        );
     let total_entries = removals.len() + live.len();
     for w in &warnings {
         eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
@@ -267,6 +272,8 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             portsdir: settings.portsdir.clone(),
             make_conf: settings.make_conf.clone(),
             port_dbdir: settings.options_dir.clone(),
+            overlays: settings.overlay_paths(),
+            inherit_env_overlays: settings.inherit_env_overlays,
         };
         let runner = MakeRunner::new(ctx.clone(), jobs);
         let mut by_key: std::collections::HashMap<_, _> =
@@ -589,6 +596,8 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         portsdir: scanned.settings.portsdir.clone(),
         make_conf: scanned.settings.make_conf.clone(),
         port_dbdir: db.path().to_path_buf(),
+        overlays: scanned.settings.overlay_paths(),
+        inherit_env_overlays: scanned.settings.inherit_env_overlays,
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
@@ -632,9 +641,22 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
     if cli.no_cache {
         cache::Cache::disabled()
     } else {
-        let tree_key = cache::tree_key(&settings.portsdir);
+        let tree_key = cache::trees_key(&settings.portsdir, &settings.overlay_paths());
         cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
     }
+}
+
+/// MOVED of the main tree and every overlay, its warnings said once.
+fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
+    let overlays = settings.overlay_paths();
+    let trees: Vec<&Path> =
+        std::iter::once(settings.portsdir.as_path()).chain(overlays.iter().map(|p| p.as_path())).collect();
+    let (moved, warnings) = Moved::load_all(&trees);
+    let paint = stderr_color(cli);
+    for w in warnings {
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+    }
+    moved
 }
 
 /// The resolution the command line asks for.
@@ -660,12 +682,14 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let jobs = default_jobs(cli);
     let mut cache = new_cache(cli, &settings);
-    let moved = Moved::load(&settings.portsdir);
+    let moved = load_moved(cli, &settings);
 
     let ctx = QueryCtx {
         portsdir: settings.portsdir.clone(),
         make_conf: settings.make_conf.clone(),
         port_dbdir: settings.options_dir.clone(),
+        overlays: settings.overlay_paths(),
+        inherit_env_overlays: settings.inherit_env_overlays,
     };
 
     let paint = stderr_color(cli);

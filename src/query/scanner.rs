@@ -61,7 +61,7 @@ pub fn scan(
                 continue;
             }
             // Resolve renames/removals before anything else.
-            let exists = |o: &str| ctx.portsdir.join(o).join("Makefile").is_file();
+            let exists = |o: &str| ctx.locate(o).is_some();
             let key = match moved.resolve(&key.origin, exists) {
                 MovedResult::Unchanged => key,
                 MovedResult::MovedTo { origin, reason } => {
@@ -153,6 +153,8 @@ mod tests {
             portsdir: tmp.path().to_path_buf(),
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let moved = Moved::parse("cat/gone||2026-01-01|expired\ncat/old|cat/new|2026-01-01|renamed\n");
         let mut cache = Cache::disabled();
@@ -195,6 +197,8 @@ mod tests {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let moved = Moved::parse(
             "cat/old|cat/new|2026-01-01|renamed\n\
@@ -224,6 +228,55 @@ mod tests {
         tmp
     }
 
+    /// An overlay's port answers for its origin over the main tree's, the
+    /// first overlay over the next; a port only an overlay holds is found,
+    /// as a root and as a dependency, and MOVED's existence check sees it.
+    #[test]
+    fn overlays_answer_first_and_add_ports() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let deps = "_UNIFIED_DEPENDS=only:cat/only\nRUN_DEPENDS_ALL=only:cat/only\n";
+        let tmp = fake_tree(&[
+            ("cat/a", "PKGNAME=a-main\n"),
+            ("cat/root", &format!("PKGNAME=root-1.0\n{deps}")),
+        ]);
+        let make = |tree: &str, port: &str, pkgname: &str| {
+            let dir = tmp.path().join(tree).join(port);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("Makefile"), format!("PKGNAME={pkgname}\n")).unwrap();
+        };
+        make("first", "cat/a", "a-first");
+        make("second", "cat/a", "a-second");
+        make("second", "cat/only", "only-1.0");
+        let mut ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: vec![tmp.path().join("first"), tmp.path().join("second")],
+            inherit_env_overlays: false,
+        };
+        let a = PortKey::parse("cat/a").unwrap();
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let pkg = |ctx: &QueryCtx| crate::query::makerunner::run_query(ctx, &a).unwrap().pkgname;
+        assert_eq!(pkg(&ctx), "a-first", "the first overlay shadows the next and the tree");
+
+        ctx.overlays.remove(0);
+        assert_eq!(pkg(&ctx), "a-second");
+
+        // The main tree's cat/root pulls in a port only the overlay holds;
+        // MOVED leaves an origin an overlay holds where it is.
+        let moved = Moved::parse("cat/only|cat/gone|2026-01-01|moved away\n");
+        let root = PortKey::parse("cat/root").unwrap();
+        let result = scan(&[root], &ctx, &files, 1, &mut Cache::disabled(), &moved, |_| {});
+        let got: Vec<String> = result.ports.values().map(|i| i.pkgname.clone()).collect();
+        assert_eq!(got, ["only-1.0", "root-1.0"], "{:?}", result.errors);
+
+        ctx.overlays.clear();
+        let err = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/only").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("no such port: cat/only"), "{err}");
+    }
+
     /// The counts the summary line reports: queried cold, cached warm.
     #[test]
     fn scan_counts_queried_and_cached_ports() {
@@ -233,6 +286,8 @@ mod tests {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -270,6 +325,8 @@ mod tests {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("cat/a").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -305,6 +362,8 @@ mod tests {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let bad = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/bad").unwrap())
             .unwrap_err()
@@ -348,6 +407,8 @@ mod tests {
             portsdir: "/usr/ports".into(),
             make_conf: None,
             port_dbdir: options_dir.clone(),
+            overlays: Vec::new(),
+            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("audio/lame").unwrap()];
         let moved = Moved::parse("");
