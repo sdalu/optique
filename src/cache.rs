@@ -141,7 +141,10 @@ fn overlay_key(overlay: &Path) -> String {
             if entry.file_name() == ".git" {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue };
+            // Through a symlink, as the lookup goes: a symlinked port is
+            // queried from its target, so its target's files are its key.
+            // The depth limit stops a symlink loop.
+            let Ok(meta) = fs::metadata(entry.path()) else { continue };
             *count += 1;
             let mtime = meta
                 .modified()
@@ -550,6 +553,24 @@ mod tests {
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
         assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "same HEAD, edited port");
+    }
+
+    /// An overlay assembled from symlinked ports: the port is looked up
+    /// through the link, so an edit behind it must reach the key too.
+    #[test]
+    fn trees_key_follows_an_edit_behind_a_symlinked_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, over, real) = (tmp.path().join("main"), tmp.path().join("over"), tmp.path().join("real"));
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(over.join("cat")).unwrap();
+        std::fs::create_dir_all(&real).unwrap();
+        let makefile = real.join("Makefile");
+        std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+        std::os::unix::fs::symlink(&real, over.join("cat/port")).unwrap();
+        let before = trees_key(&main, std::slice::from_ref(&over));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
+        assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "edited behind the link");
     }
 
     #[test]
