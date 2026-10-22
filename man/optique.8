@@ -21,33 +21,37 @@
 .Op Fl -no-cache
 .Op Fl -clear-cache
 .Op Fl -color Ar when
-.Op Cm tui
+.Op Fl f Ar pkglist
+.Op Ar origin ...
+.Nm
+.Cm tui
+.Op Ar global options
 .Op Fl -drive
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
-.Op Ar global options
 .Cm scan
+.Op Ar global options
 .Op Fl -json
 .Op Fl -options
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
-.Op Ar global options
 .Cm sync
+.Op Ar global options
 .Op Fl n
 .Op Fl -json
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
-.Op Ar global options
 .Cm decide
+.Op Ar global options
 .Op Fl n
 .Op Fl f Ar pkglist
 .Op Ar origin ...
 .Nm
-.Op Ar global options
 .Cm clean
+.Op Ar global options
 .Op Fl n
 .Op Fl r
 .Op Fl u
@@ -181,7 +185,16 @@ each such port's row ends with
 and the loop counts towards the exit gate unless every one of its members is
 blacklisted.
 .Ss Global options
-These options are accepted before and after the subcommand name.
+These options follow the action
+.Pq Ql optique scan -z ws -f list ;
+with no action they open the TUI
+.Pq Ql optique -z ws www/nginx .
+An option before an action is a usage error, which shows the command as it
+should read: the action comes first, as for
+.Xr poudriere 8
+and
+.Xr pkg 8 ,
+so that every option of a run is read at one level.
 .Bl -tag -width Ds
 .It Fl z Ar set , Fl -set Ar set
 Poudriere set name, used both to resolve the options directory and to layer
@@ -1112,14 +1125,14 @@ stdout is safe to pipe into a parser without
 The loop is:
 .Bd -literal -offset indent
 # 1. what needs deciding, and what are the choices?
-optique -z ws scan --json --options -f pkglist > state.json
+optique scan -z ws --json --options -f pkglist > state.json
 
 # 2. decide (this is where the caller's judgement goes)
 jq ... < state.json > plan.json
 
 # 3. check the plan, then carry it out
-optique -z ws decide -n < plan.json
-optique -z ws decide    < plan.json
+optique decide -z ws -n < plan.json
+optique decide -z ws    < plan.json
 .Ed
 .Pp
 The contract is meant to be safe to drive blind:
@@ -1408,7 +1421,7 @@ exit status gate, whatever their status.
 reads the
 .Xr synth 1
 layout instead, so the same commands serve a synth host:
-.Dl optique -s scan -f list
+.Dl optique scan -s -f list
 The profile defaults to synth.ini's
 .Va profile_selected ,
 then
@@ -1539,7 +1552,7 @@ there is no blacklist.
 .Pp
 .Fl l
 is the way to configure a local build on a host that also runs poudriere:
-.Dl optique -l scan -f list
+.Dl optique scan -l -f list
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev PORTSDIR , Ev PORT_DBDIR
@@ -1742,38 +1755,38 @@ optique -z server -f base-list -f extra-list www/nginx
 .Pp
 Report which ports are unconfigured or stale, as a table or as JSON:
 .Bd -literal -offset indent
-optique -z workstation scan -f pkglist
-optique -z workstation scan --json -f pkglist
+optique scan -z workstation -f pkglist
+optique scan -z workstation --json -f pkglist
 .Ed
 .Pp
 Use the exit status as a
 .Xr cron 8
 gate that only speaks up when a decision is actually pending:
 .Bd -literal -offset indent
-optique -z ws -q scan -f list || mail-me
+optique scan -z ws -q -f list || mail-me
 .Ed
 .Pp
 Refresh every options file without interaction, first reporting, then writing:
 .Bd -literal -offset indent
-optique -z workstation sync --dry-run -f pkglist
-optique -z workstation sync -f pkglist
+optique sync -z workstation --dry-run -f pkglist
+optique sync -z workstation -f pkglist
 .Ed
 .Pp
 Garbage-collect the options directory, progressively more aggressively:
 .Bd -literal -offset indent
-optique -z workstation clean --dry-run
-optique -z workstation clean --redundant
-optique -z workstation clean --unused -f pkglist
+optique clean -z workstation --dry-run
+optique clean -z workstation --redundant
+optique clean -z workstation --unused -f pkglist
 .Ed
 .Pp
 Drive it from a script or an agent: read the state with every option explained,
 write a plan, check it, then carry it out
 .Pq see Sx MACHINE INTERFACE :
 .Bd -literal -offset indent
-optique -z ws scan --json --options -f list > state.json
+optique scan -z ws --json --options -f list > state.json
 echo '{"www/nginx": {"LUA": true}}' > plan.json
-optique -z ws decide -n < plan.json
-optique -z ws decide    < plan.json
+optique decide -z ws -n < plan.json
+optique decide -z ws    < plan.json
 .Ed
 .Pp
 Turn one option off across a whole package list, without a terminal.
@@ -1782,18 +1795,18 @@ option a port does not have is a plan error, not a no-op, so the
 .Fl -options
 detail is what the filter reads:
 .Bd -literal -offset indent
-optique -z ws scan --json --options -f list |
+optique scan -z ws --json --options -f list |
     jq '[.ports[]
          | select(any(.options[]; .name == "DOCS"))
          | {(.port): {DOCS: false}}] | add' |
-    optique -z ws decide -f list
+    optique decide -z ws -f list
 .Ed
 .Pp
 A full hygiene pass for one package list, refreshing and then
 garbage-collecting, suitable for running before a bulk build:
 .Bd -literal -offset indent
-optique -z ws sync -f list && \e
-    optique -z ws clean --unused --redundant -f list
+optique sync -z ws -f list && \e
+    optique clean -z ws --unused --redundant -f list
 .Ed
 .Sh SEE ALSO
 .Xr make 1 ,

@@ -191,7 +191,7 @@ not, optique configures ports for a build on this host, the way
 poudriere:
 
 ```sh
-optique -l scan -f list
+optique scan -l -f list
 ```
 
 `-l` is mutually exclusive with `-z`, `-j`, `-p` and `-s`. Poudriere and

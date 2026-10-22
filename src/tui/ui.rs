@@ -1537,8 +1537,7 @@ mod tests {
     fn last_text_row(rows: &[String]) -> String {
         rows.iter()
             .map(|r| r.trim().trim_matches('│').trim().to_string())
-            .filter(|r| !r.is_empty() && !r.starts_with('└') && !r.starts_with('┌'))
-            .next_back()
+            .rfind(|r| !r.is_empty() && !r.starts_with('└') && !r.starts_with('┌'))
             .unwrap_or_default()
     }
 

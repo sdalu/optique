@@ -130,12 +130,12 @@ fn scan_help_advertises_json() {
 #[test]
 fn synth_conflicts_with_poudriere_flags() {
     for args in [
-        vec!["-s", "-z", "ws", "scan", "foo/bar"],
-        vec!["--synth", "LiveSystem", "-j", "141amd64", "scan", "foo/bar"],
-        vec!["-s", "-p", "default", "scan", "foo/bar"],
-        // Straddling the subcommand, which clap's own checks let through.
-        vec!["-s", "scan", "-z", "ws", "foo/bar"],
+        vec!["scan", "-s", "-z", "ws", "foo/bar"],
+        vec!["scan", "--synth", "LiveSystem", "-j", "141amd64", "foo/bar"],
         vec!["scan", "-j", "141amd64", "--synth=LiveSystem", "foo/bar"],
+        vec!["scan", "-s", "-p", "default", "foo/bar"],
+        // No action: the TUI's options, checked the same way.
+        vec!["-s", "-z", "ws", "foo/bar"],
     ] {
         let out = optique().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
@@ -150,17 +150,14 @@ fn synth_conflicts_with_poudriere_flags() {
 #[test]
 fn local_and_portsdir_conflicts() {
     for (args, flag) in [
-        (vec!["-l", "-z", "ws", "scan", "foo/bar"], "--local"),
-        (vec!["--local", "-j", "141amd64", "scan", "foo/bar"], "--local"),
-        (vec!["-l", "-p", "default", "scan", "foo/bar"], "--local"),
-        (vec!["-l", "-s", "scan", "foo/bar"], "--local"),
-        (vec!["-p", "default", "-P", "/usr/ports", "scan", "foo/bar"], "--portsdir"),
-        // Straddling the subcommand, which clap's own checks let through.
-        (vec!["-l", "scan", "-s", "foo/bar"], "--local"),
-        (vec!["-l", "scan", "-z", "ws", "foo/bar"], "--local"),
+        (vec!["scan", "-l", "-z", "ws", "foo/bar"], "--local"),
+        (vec!["scan", "--local", "-j", "141amd64", "foo/bar"], "--local"),
         (vec!["scan", "-p", "default", "--local", "foo/bar"], "--local"),
-        (vec!["-p", "default", "scan", "-P", "/usr/ports", "foo/bar"], "--portsdir"),
-        (vec!["-v", "scan", "-q", "foo/bar"], "--quiet"),
+        (vec!["scan", "-l", "-s", "foo/bar"], "--local"),
+        (vec!["scan", "-p", "default", "-P", "/usr/ports", "foo/bar"], "--portsdir"),
+        (vec!["scan", "-v", "-q", "foo/bar"], "--quiet"),
+        // No action: the TUI's options, checked the same way.
+        (vec!["-l", "-z", "ws", "foo/bar"], "--local"),
     ] {
         let out = optique().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
@@ -170,14 +167,35 @@ fn local_and_portsdir_conflicts() {
     }
 }
 
-/// --repo needs -s wherever each one sits, and is refused without it.
+/// The action comes first: an option before it is a usage error that shows
+/// the command as it should read. With no action, options open the TUI.
 #[test]
-fn repo_requires_synth_on_either_side_of_the_subcommand() {
+fn options_before_the_action_are_refused() {
+    for (args, fixed) in [
+        (vec!["-z", "ws", "scan", "-f", "list"], "optique scan -z ws -f list"),
+        (vec!["-l", "scan", "-s", "foo/bar"], "optique scan -l -s foo/bar"),
+        (vec!["-s", "sync"], "optique sync -s"),
+        (vec!["-v", "scan", "-q", "foo/bar"], "optique scan -v -q foo/bar"),
+    ] {
+        let out = optique().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(&format!("options go after the action: {fixed}")), "{args:?}: {err}");
+    }
+    // -o's value is a directory, whatever it is called.
+    let out = optique().args(["-o", "scan", "-l", "-P", "/nonexistent"]).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("options go after"), "{err}");
+}
+
+/// --repo needs -s, in either order, and is refused without it.
+#[test]
+fn repo_requires_synth() {
     // Accepted: the run goes on to refuse --repo with ports given, a
     // check made after the options were parsed, and nothing is scanned.
     for args in [
-        vec!["-s", "scan", "--repo", "Synth", "foo/bar"],
-        vec!["--repo", "Synth", "scan", "-s", "foo/bar"],
+        vec!["scan", "-s", "--repo", "Synth", "foo/bar"],
+        vec!["scan", "--repo", "Synth", "-s", "foo/bar"],
     ] {
         let out = optique().args(&args).output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
@@ -209,13 +227,19 @@ fn repo_with_explicit_ports_is_refused_everywhere() {
         vec!["clean", "--redundant"],
         vec!["clean", "--unused", "foo/bar"],
     ] {
+        // The action, when there is one, comes first.
+        let (action, rest) = match sub[0] {
+            "scan" | "sync" | "decide" | "clean" => (&sub[..1], &sub[1..]),
+            _ => (&sub[..0], &sub[..]),
+        };
         let out = optique()
             .env("XDG_CACHE_HOME", tmp.path())
+            .args(action)
             .args(["-s", "--repo", "Synth", "-n", "-o"])
             .arg(&options)
             .arg("-P")
             .arg(&ports)
-            .args(&sub)
+            .args(rest)
             .stdin(std::process::Stdio::null())
             .output()
             .unwrap();
@@ -432,11 +456,10 @@ fn closed_stdout_exits_documented_status() {
         drop(reader);
         let mut cmd = optique();
         cmd.env("XDG_CACHE_HOME", tmp.path())
-            .args(["-l", "-n", "-o"])
+            .args(["clean", "-l", "-n", "-o"])
             .arg(&options)
             .arg("-P")
-            .arg(&ports)
-            .arg("clean");
+            .arg(&ports);
         if json {
             cmd.arg("--json");
         }

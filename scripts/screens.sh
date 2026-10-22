@@ -20,23 +20,29 @@ rows=24
 [ -x "$bin" ] || { echo "screens: no $bin; run make build first" >&2; exit 1; }
 [ -f /usr/ports/Mk/bsd.port.mk ] || { echo "screens: needs /usr/ports" >&2; exit 1; }
 
-work=$(mktemp -d)
+# A fixed directory, not mktemp's: optique shows the options dir absolute,
+# and the captures must not change with a random name.
+work=/tmp/optique-screens
+rm -rf "$work"
+mkdir -p "$work"
 trap 'rm -rf "$work"' EXIT
 export XDG_CACHE_HOME="$work/cache"
-# Relative, so the screens show a stable, plausible path rather than the
-# throwaway one (the captures run from $work).
+# Relative to $work, where the captures run; shown as $work/poudriere.d/...
 opt=poudriere.d/server-options
 here=$(pwd)
 
 optique() {
-	# /usr/ports, whatever the host's own poudriere trees point at.
-	"$bin" -P /usr/ports "$@"
+	# The action first, then /usr/ports, whatever the host's own poudriere
+	# trees point at.
+	action=$1
+	shift
+	"$bin" "$action" -P /usr/ports "$@"
 }
 
 # The fixture: the closure configured, then one file left behind by a tree
 # update (stale), one never written (unconfigured).
 cd "$work"
-optique -q sync -o "$opt" www/nginx >/dev/null 2>&1
+optique sync -q -o "$opt" www/nginx >/dev/null 2>&1
 sed -i '' -e 's/^_FILE_COMPLETE_OPTIONS_LIST=.*/_FILE_COMPLETE_OPTIONS_LIST=DOCS OLDOPT/' \
 	-e '$a\
 OPTIONS_FILE_SET+=OLDOPT' "$opt/ports-mgmt_pkg/options"

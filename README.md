@@ -16,7 +16,7 @@ when there is no poudriere at all or `-l` asks for a local build.
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │
@@ -84,12 +84,12 @@ The same flags select the build for every command:
 ```sh
 # What is left to decide? Exit status 1 while anything is pending, 3 on
 # an error
-optique -z server scan -f server.lst
+optique scan -z server -f server.lst
 
 # The unattended refresh after a ports tree update: keep saved choices,
 # take defaults for new options, drop removed ones
-optique -z server sync -f server.lst
-optique -s sync            # synth: everything installed, before upgrade-system
+optique sync -z server -f server.lst
+optique sync -s            # synth: everything installed, before upgrade-system
 ```
 
 ## The workflow
@@ -121,9 +121,9 @@ once. For cron or CI, `sync` does the middle three steps without asking.
 | `decide`        | set values from a JSON plan, all or nothing              |
 | `clean`         | remove options files of gone, unused or redundant ports  |
 
-Every command takes the same global options (`-z set`, `-j jail`,
-`-p tree`, `-P dir`, `-o dir`, `-s profile`, `-l`, `-f pkglist`, ...) and every one but the
-TUI can answer in JSON.
+Every command takes the same global options after its name (`-z set`,
+`-j jail`, `-p tree`, `-P dir`, `-o dir`, `-s profile`, `-l`,
+`-f pkglist`, ...), and every one but the TUI can answer in JSON.
 
 ## Documentation
 

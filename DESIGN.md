@@ -229,6 +229,28 @@ ordinary build never installs (chromium, through py-great-table's test
 suite, was the framework's own motivation), against both the framework and
 `poudriere options`.
 
+## The action comes first
+
+`optique scan -z ws -f list`: the action, then its options, as `poudriere
+bulk -j …` and `pkg install -y` read. With no action the options open the
+TUI (`optique -z ws www/nginx`). An option before an action is a usage
+error that prints the command reordered (`src/cli.rs`,
+`check_action_first`, run after the `-s` rewrite so it knows which words
+are option values).
+
+Options used to be accepted on both sides. clap checks `conflicts_with`
+and `requires` per command level before global options are merged, so a
+pair straddling the action slipped through (`-l scan -s` ran as synth,
+`-p x scan -P dir` mixed two trees) while `-s scan --repo X` was refused;
+and `-s scan` read the action as a synth profile. Accepting both sides and
+re-checking every pair by hand (`Cli::check_globals`, kept as the one list
+of constraints) treated the symptom; one side removes the class.
+
+Rejected: options before the action only, the git style, which reads
+worse for long option lists and would break `scan -f list`, the form every
+document used; and accepting both sides with a warning, which keeps two
+places to look for one setting.
+
 ## Machine interface: one JSON object, all-or-nothing, replayable
 
 Every subcommand can answer on stdout with one JSON object per invocation;

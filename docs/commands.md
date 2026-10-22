@@ -35,7 +35,7 @@ implicit list.
 
 ```sh
 optique -z workstation www/nginx mail/dovecot
-optique -z workstation tui -f pkglist
+optique tui -z workstation -f pkglist
 ```
 
 Opens the full-screen interface over the closure; see [tui.md](tui.md) for
@@ -50,8 +50,8 @@ apply dialog already previews every change before writing
 ## `scan`
 
 ```sh
-optique -z workstation scan -f pkglist
-optique -z workstation scan --json --options -f pkglist
+optique scan -z workstation -f pkglist
+optique scan -z workstation --json --options -f pkglist
 ```
 
 Non-interactive status report over the closure, meant as a build gate: each
@@ -68,8 +68,8 @@ both shapes.
 ## `sync`
 
 ```sh
-optique -z workstation sync --dry-run -f pkglist
-optique -z workstation sync -f pkglist
+optique sync -z workstation --dry-run -f pkglist
+optique sync -z workstation -f pkglist
 ```
 
 Headless refresh of the options files — the fast replacement for
@@ -86,8 +86,8 @@ instead of the per-file listing.
 ## `decide`
 
 ```sh
-echo '{"www/nginx": {"LUA": true}}' | optique -z ws decide -n
-echo '{"www/nginx": {"LUA": true}}' | optique -z ws decide
+echo '{"www/nginx": {"LUA": true}}' | optique decide -z ws -n
+echo '{"www/nginx": {"LUA": true}}' | optique decide -z ws
 ```
 
 Sets option values from a JSON plan read on stdin — ports to booleans per
@@ -102,10 +102,10 @@ report shape.
 ## `clean`
 
 ```sh
-optique -z workstation clean --dry-run
-optique -z workstation clean --redundant
-optique -z workstation clean --unused -f pkglist
-optique -z workstation clean --unused --redundant --dry-run -f pkglist
+optique clean -z workstation --dry-run
+optique clean -z workstation --redundant
+optique clean -z workstation --unused -f pkglist
+optique clean -z workstation --unused --redundant --dry-run -f pkglist
 ```
 
 Garbage-collects the resolved options directory. By default it walks every
@@ -132,8 +132,11 @@ without `--redundant` — see
 
 ## Global options
 
-These flags are accepted before or after the subcommand name
-.
+These flags follow the action (`optique scan -z ws -f list`); with no
+action they open the TUI (`optique -z ws www/nginx`). An option before an
+action is a usage error that shows the command as it should read: the
+action comes first, as for `poudriere` and `pkg`, so that every option of
+a run is read at one level.
 
 | Flag                  | Argument    | Meaning                                |
 | :-------------------- | :---------- | :------------------------------------- |
@@ -189,7 +192,7 @@ written aside first and renamed into place only once all of them were.
 
 For `scan` and `decide`, the exit status answers "is there anything left
 to do" rather than plain success or failure, which is what makes `scan` a
-cron gate: `optique -z ws -q scan -f list || mail-me`.
+cron gate: `optique scan -z ws -q -f list || mail-me`.
 
 ## Minimal mode
 

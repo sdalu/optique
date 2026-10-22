@@ -17,8 +17,9 @@ const SUBCOMMANDS: [&str; 6] = ["tui", "scan", "sync", "clean", "decide", "help"
 /// any other (`-zs`) the `s` is that flag's value.
 const BOOLEAN_SHORTS: [char; 7] = ['l', 'n', 'm', 'v', 'q', 'r', 'u'];
 
-/// `-s` takes an *optional* profile name, so `optique -s scan -f list` is
-/// ambiguous: clap would greedily read `scan` as the profile. Rewrite a bare
+/// `-s` takes an *optional* profile name, so `optique scan -s www/nginx` or
+/// `optique -s scan` is ambiguous: clap would greedily read the next word as
+/// the profile. Rewrite a bare
 /// `-s`/`--synth` into the attached `--synth=<default>` form whenever the
 /// following word cannot be a profile name — it is missing, another option, a
 /// subcommand name, or contains `/` (a port origin or a path). A profile that
@@ -59,8 +60,77 @@ pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsSt
     out
 }
 
+/// Short options that take a value; in a cluster (`-nz ws`) the value is the
+/// rest of the word, or the next word when the option ends it.
+const VALUE_SHORTS: [char; 7] = ['z', 'j', 'p', 'P', 'o', 'f', 'J'];
+
+/// Long options that take a value, given as the next word unless attached
+/// with `=`.
+const VALUE_LONGS: [&str; 9] = [
+    "--set", "--jail", "--ports-tree", "--portsdir", "--options-dir", "--file", "--jobs",
+    "--repo", "--color",
+];
+
+/// The action comes first: `optique scan -z ws -f list`. With no action the
+/// options open the TUI (`optique -z ws www/nginx`), but an option before an
+/// action would read as two places to look for one setting, and clap checks
+/// the two levels apart; so it is refused, with the command as it should
+/// read. Run on the arguments after `disambiguate_synth`, where a bare `-s`
+/// left alone (or a cluster ending in it) is followed by its profile.
+pub fn check_action_first(args: &[OsString]) -> Result<(), String> {
+    let word = |a: &OsString| a.to_string_lossy().into_owned();
+    if args.iter().skip(1).any(|a| ["-h", "--help", "-V", "--version"].contains(&a.to_str().unwrap_or(""))) {
+        return Ok(());
+    }
+    let mut i = 1;
+    let mut options_at = None;
+    while i < args.len() {
+        let a = word(&args[i]);
+        if a == "--" {
+            return Ok(());
+        }
+        if SUBCOMMANDS.contains(&a.as_str()) {
+            let Some(first) = options_at else { return Ok(()) };
+            // The bare -s disambiguate_synth rewrote reads as typed.
+            let typed = |a: &OsString| match word(a) {
+                w if w == format!("--synth={SYNTH_DEFAULT_PROFILE}") => "-s".to_string(),
+                w => w,
+            };
+            let mut fixed = vec!["optique".to_string(), a];
+            fixed.extend(args[first..i].iter().map(typed));
+            fixed.extend(args[i + 1..].iter().map(typed));
+            return Err(format!("options go after the action: {}", fixed.join(" ")));
+        }
+        if !a.starts_with('-') || a == "-" {
+            // A port origin: the TUI's list starts here, no action follows.
+            return Ok(());
+        }
+        options_at.get_or_insert(i);
+        let takes_next = if let Some(long) = a.strip_prefix("--") {
+            !long.contains('=') && (VALUE_LONGS.contains(&a.as_str()) || a == "--synth")
+        } else {
+            // The first value option of a cluster takes the rest of the word,
+            // or the next word when it ends the cluster; a trailing `s` left
+            // by disambiguate_synth takes its profile.
+            let flags: Vec<char> = a[1..].chars().collect();
+            match flags.iter().position(|c| VALUE_SHORTS.contains(c)) {
+                Some(p) => p == flags.len() - 1,
+                None => flags.last() == Some(&'s'),
+            }
+        };
+        i += if takes_next { 2 } else { 1 };
+    }
+    Ok(())
+}
+
 #[derive(Parser, Debug)]
-#[command(name = "optique", version, about = "Fast FreeBSD ports options configurator for poudriere, synth and local builds", max_term_width = 80)]
+#[command(
+    name = "optique",
+    version,
+    about = "Fast FreeBSD ports options configurator for poudriere, synth and local builds",
+    override_usage = "optique [OPTIONS] [PORT]...\n       optique <COMMAND> [OPTIONS] [PORT]...",
+    max_term_width = 80
+)]
 pub struct Cli {
     /// Poudriere set (options land in poudriere.d/<SET>-options)
     #[arg(short = 'z', long = "set", global = true)]
@@ -169,11 +239,12 @@ pub struct Cli {
 }
 
 impl Cli {
-    /// The constraints between global options. clap checks `conflicts_with`
-    /// and `requires` at each command level before the globals are merged,
-    /// so a pair straddling the subcommand (`-l scan -s`) slipped through and
-    /// `-s scan --repo X` was refused; they are checked here instead, on the
-    /// merged values, and fail as clap's own usage errors do.
+    /// The constraints between global options, checked on the parsed values
+    /// in one list rather than as clap attributes: clap checks those at each
+    /// command level before globals are merged, which let a pair straddling
+    /// the subcommand through when options could sit on both sides of it.
+    /// `check_action_first` now keeps them on one side; this stays the one
+    /// place a new constraint goes, failing as clap's own usage errors do.
     pub fn check_globals(&self) -> Result<(), clap::Error> {
         let given = |name: &str| match name {
             "local" => self.local,
@@ -430,6 +501,39 @@ mod tests {
     #[test]
     fn empty_is_an_error() {
         assert!(collect_roots(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn the_action_comes_first() {
+        let check = |args: &[&str]| -> Result<(), String> {
+            let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+            check_action_first(&disambiguate_synth(args))
+        };
+        // Accepted: the action first, or no action at all.
+        for ok in [
+            &["optique", "scan", "-z", "ws", "-f", "l"][..],
+            &["optique", "-z", "ws", "-f", "l"],
+            &["optique", "-z", "ws", "www/nginx"],
+            &["optique", "-o", "scan", "www/nginx"],
+            &["optique", "-nz", "scan"],
+            &["optique", "--options-dir", "sync"],
+            &["optique", "-s", "Release", "www/nginx"],
+            &["optique", "-z", "ws", "--help", "scan"],
+            &["optique", "--", "-z", "scan"],
+        ] {
+            assert_eq!(check(ok), Ok(()), "{ok:?}");
+        }
+        // Refused, with the command as it should read.
+        for (bad, fixed) in [
+            (&["optique", "-z", "ws", "scan", "-f", "l"][..], "optique scan -z ws -f l"),
+            (&["optique", "-l", "sync"], "optique sync -l"),
+            (&["optique", "-s", "scan"], "optique scan -s"),
+            (&["optique", "-s", "Release", "scan"], "optique scan -s Release"),
+            (&["optique", "--set=ws", "-n", "clean", "-r"], "optique clean --set=ws -n -r"),
+            (&["optique", "-nzws", "decide"], "optique decide -nzws"),
+        ] {
+            assert_eq!(check(bad), Err(format!("options go after the action: {fixed}")), "{bad:?}");
+        }
     }
 
     #[test]

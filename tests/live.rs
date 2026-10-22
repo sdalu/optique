@@ -9,10 +9,11 @@
 use std::fs;
 use std::process::Command;
 
-fn optique(cache: &std::path::Path) -> Command {
+fn optique(cache: &std::path::Path, action: &str) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_optique"));
     c.env("XDG_CACHE_HOME", cache);
-    c.args(["-P", "/usr/ports"]);
+    // The action first, its options after it.
+    c.args([action, "-P", "/usr/ports"]);
     c
 }
 
@@ -37,8 +38,8 @@ fn scan_smoke_and_cache_warmup() {
     fs::create_dir_all(&optdir).unwrap();
 
     let run = || {
-        let out = optique(tmp.path())
-            .args(["scan", "-o"])
+        let out = optique(tmp.path(), "scan")
+            .arg("-o")
             .arg(&optdir)
             .arg("ports-mgmt/pkg")
             .output()
@@ -64,8 +65,8 @@ fn scan_json_and_exit_code() {
     let optdir = tmp.path().join("options");
     fs::create_dir_all(&optdir).unwrap();
 
-    let out = optique(tmp.path())
-        .args(["scan", "--json", "-o"])
+    let out = optique(tmp.path(), "scan")
+        .args(["--json", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -122,8 +123,7 @@ fn scan_gate_counts_each_status() {
     )
     .unwrap();
     let scan = |json: bool| {
-        let mut c = optique(tmp.path());
-        c.arg("scan");
+        let mut c = optique(tmp.path(), "scan");
         if json {
             c.arg("--json");
         }
@@ -178,8 +178,8 @@ fn scan_gate_counts_each_status() {
     assert!(line("ports-mgmt/pkg ").contains("STALE +DOCS -OBSOLETE"), "{table}");
 
     // Synced, pkg is ok and counts for nothing; nginx's conflict remains.
-    let synced = optique(tmp.path())
-        .args(["sync", "-o"])
+    let synced = optique(tmp.path(), "sync")
+        .arg("-o")
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -192,8 +192,8 @@ fn scan_gate_counts_each_status() {
     // With nginx's conflict resolved too, the gate opens if make.conf leaves
     // nothing undecided, and says why otherwise.
     fs::remove_dir_all(optdir.join("www_nginx")).unwrap();
-    let synced = optique(tmp.path())
-        .args(["sync", "-o"])
+    let synced = optique(tmp.path(), "sync")
+        .arg("-o")
         .arg(&optdir)
         .args(["www/nginx", "ports-mgmt/pkg"])
         .output()
@@ -223,8 +223,8 @@ fn an_unreadable_options_file_is_reported_not_overwritten() {
     if fs::read(&file).is_ok() {
         return; // root reads it anyway: the case only exists for others
     }
-    let sync = optique(tmp.path()).args(["sync", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
-    let scan = optique(tmp.path()).args(["scan", "--json", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
+    let sync = optique(tmp.path(), "sync").arg("-o").arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
+    let scan = optique(tmp.path(), "scan").args(["--json", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
 
     assert_eq!(fs::read_to_string(&file).unwrap(), saved, "sync must not rewrite it");
@@ -245,8 +245,8 @@ fn scan_gate_counts_ports_it_could_not_check() {
     let tmp = tempfile::tempdir().unwrap();
     let optdir = tmp.path().join("options");
     fs::create_dir_all(&optdir).unwrap();
-    let out = optique(tmp.path())
-        .args(["scan", "--json", "-o"])
+    let out = optique(tmp.path(), "scan")
+        .args(["--json", "-o"])
         .arg(&optdir)
         .arg("misc/optique-no-such-port")
         .output()
@@ -267,8 +267,8 @@ fn scan_gate_counts_ports_it_could_not_check() {
 fn clean_redundant_keeps_only_files_that_decide_something() {
     let tmp = tempfile::tempdir().unwrap();
     let optdir = tmp.path().join("options");
-    let out = optique(tmp.path())
-        .args(["sync", "-o"])
+    let out = optique(tmp.path(), "sync")
+        .arg("-o")
         .arg(&optdir)
         .args(["ports-mgmt/pkg", "www/nginx"])
         .output()
@@ -280,8 +280,8 @@ fn clean_redundant_keeps_only_files_that_decide_something() {
     assert!(text.contains("OPTIONS_FILE_SET+=IPV6\n"), "{text}");
     fs::write(&nginx, text.replace("OPTIONS_FILE_SET+=IPV6\n", "OPTIONS_FILE_UNSET+=IPV6\n")).unwrap();
 
-    let out = optique(tmp.path())
-        .args(["clean", "--redundant", "--json", "-o"])
+    let out = optique(tmp.path(), "clean")
+        .args(["--redundant", "--json", "-o"])
         .arg(&optdir)
         .output()
         .unwrap();
@@ -329,16 +329,16 @@ fn decide_writes_a_plan_and_is_replayable() {
     fs::create_dir_all(&optdir).unwrap();
     let file = optdir.join("ports-mgmt_pkg").join("options");
     let decide = || {
-        let mut c = optique(tmp.path());
-        c.args(["decide", "-o"]).arg(&optdir).arg("ports-mgmt/pkg");
+        let mut c = optique(tmp.path(), "decide");
+        c.arg("-o").arg(&optdir).arg("ports-mgmt/pkg");
         c
     };
 
     // Which option to flip comes from the port itself: the tree is free to
     // rename them, and only an unlocked one outside a group is certain to be
     // the file's to decide.
-    let out = optique(tmp.path())
-        .args(["scan", "--json", "--options", "-o"])
+    let out = optique(tmp.path(), "scan")
+        .args(["--json", "--options", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -408,8 +408,8 @@ fn decide_refuses_a_plan_it_cannot_honour() {
     let optdir = tmp.path().join("options");
     fs::create_dir_all(&optdir).unwrap();
 
-    let mut cmd = optique(tmp.path());
-    cmd.args(["decide", "-o"]).arg(&optdir).arg("ports-mgmt/pkg");
+    let mut cmd = optique(tmp.path(), "decide");
+    cmd.arg("-o").arg(&optdir).arg("ports-mgmt/pkg");
     let out = with_stdin(
         cmd,
         r#"{"ports-mgmt/pkg": {"NO_SUCH_OPTION_HERE": true}}"#,
@@ -451,8 +451,8 @@ fn sync_drops_obsolete_options_and_optionless_files() {
     )
     .unwrap();
 
-    let out = optique(tmp.path())
-        .args(["sync", "-o"])
+    let out = optique(tmp.path(), "sync")
+        .arg("-o")
         .arg(&optdir)
         .args(["ports-mgmt/pkg", "print/indexinfo"])
         .output()
@@ -468,8 +468,8 @@ fn sync_drops_obsolete_options_and_optionless_files() {
     );
 
     // Second sync over the same state is a no-op.
-    let out = optique(tmp.path())
-        .args(["sync", "-o"])
+    let out = optique(tmp.path(), "sync")
+        .arg("-o")
         .arg(&optdir)
         .args(["ports-mgmt/pkg", "print/indexinfo"])
         .output()
@@ -494,7 +494,7 @@ fn clean_removes_gone_ports_only() {
     fs::create_dir_all(optdir.join("astro_no-such-port-xyz")).unwrap();
     fs::write(optdir.join("astro_no-such-port-xyz/options"), "x\n").unwrap();
 
-    let out = optique(tmp.path()).args(["clean", "-o"]).arg(&optdir).output().unwrap();
+    let out = optique(tmp.path(), "clean").arg("-o").arg(&optdir).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("astro_no-such-port-xyz"), "{stdout}");
@@ -524,8 +524,8 @@ fn clean_unused_prunes_outside_closure() {
     )
     .unwrap();
 
-    let out = optique(tmp.path())
-        .args(["clean", "--unused", "-o"])
+    let out = optique(tmp.path(), "clean")
+        .args(["--unused", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -566,8 +566,8 @@ key esc
 quit
 ";
 
-    let mut child = optique(tmp.path())
-        .args(["tui", "--drive", "-o"])
+    let mut child = optique(tmp.path(), "tui")
+        .args(["--drive", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .stdin(Stdio::piped())
@@ -632,8 +632,8 @@ fn wrapper_metadata_matches_known_nginx_facts() {
     let optdir = tmp.path().join("options");
     fs::create_dir_all(&optdir).unwrap();
 
-    let out = optique(tmp.path())
-        .args(["scan", "-v", "-o"])
+    let out = optique(tmp.path(), "scan")
+        .args(["-v", "-o"])
         .arg(&optdir)
         .arg("www/nginx")
         .output()
@@ -665,9 +665,9 @@ fn local_make_conf_is_the_environments_and_read_in_place() {
     fs::write(conf_dir.join("make.conf"), ".include \"make.conf.local\"\n").unwrap();
     fs::write(conf_dir.join("make.conf.local"), "ports-mgmt_pkg_SET+=DOCS\n").unwrap();
 
-    let out = optique(tmp.path())
+    let out = optique(tmp.path(), "scan")
         .env("__MAKE_CONF", conf_dir.join("make.conf"))
-        .args(["-l", "scan", "--json", "--options", "-o"])
+        .args(["-l", "--json", "--options", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -709,8 +709,8 @@ fn synth_without_a_profile_make_conf_reads_none() {
     let out = Command::new(env!("CARGO_BIN_EXE_optique"))
         .env("XDG_CACHE_HOME", tmp.path())
         .env("__MAKE_CONF", &trap)
-        .args(["--synth=optique-live-tests-no-such-profile", "-P", "/usr/ports"])
-        .args(["scan", "--json", "-o"])
+        .args(["scan", "--synth=optique-live-tests-no-such-profile", "-P", "/usr/ports"])
+        .args(["--json", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
         .output()
@@ -733,9 +733,9 @@ fn a_relative_options_dir_is_the_one_make_reads() {
     // NLS is on by default: turning it off is a real choice.
     fs::write(&file, "_FILE_COMPLETE_OPTIONS_LIST=NLS\nOPTIONS_FILE_UNSET+=NLS\n").unwrap();
 
-    let out = optique(tmp.path())
+    let out = optique(tmp.path(), "clean")
         .current_dir(tmp.path())
-        .args(["--no-cache", "-n", "clean", "--redundant", "-o", "opts"])
+        .args(["--no-cache", "-n", "--redundant", "-o", "opts"])
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);

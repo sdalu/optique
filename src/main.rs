@@ -60,7 +60,12 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse_from(cli::disambiguate_synth(std::env::args_os()));
+    let args = cli::disambiguate_synth(std::env::args_os());
+    if let Err(msg) = cli::check_action_first(&args) {
+        use clap::CommandFactory as _;
+        Cli::command().error(clap::error::ErrorKind::ArgumentConflict, msg).exit();
+    }
+    let cli = Cli::parse_from(args);
     if let Err(e) = cli.check_globals() {
         e.exit();
     }

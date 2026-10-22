@@ -11,16 +11,16 @@ parser without `-q`. Two commands carry the actual work: `scan --json
 
 ## The loop: scan, decide, check, apply
 
-1. **Scan.** `optique -z ws scan --json --options -f pkglist >
+1. **Scan.** `optique scan -z ws --json --options -f pkglist >
    state.json` resolves the closure and reports what needs deciding
    and what the choices are (see
    [What `scan --json --options` says](#what-scan---json---options-says)).
 2. **Decide.** Something outside optique turns that state into a
    plan — the caller's own judgement, for example a `jq` filter —
    written as `plan.json` (see [Plans for `decide`](#plans-for-decide)).
-3. **Check.** `optique -z ws decide -n < plan.json` builds the whole
+3. **Check.** `optique decide -z ws -n < plan.json` builds the whole
    report, per-file diff included, and writes nothing (`-n`/`--dry-run`).
-4. **Apply.** `optique -z ws decide < plan.json` carries the plan out:
+4. **Apply.** `optique decide -z ws < plan.json` carries the plan out:
    every named port's options file is written in one pass, or none of
    them are (see [The contract](#the-contract)).
 
@@ -183,10 +183,10 @@ option a port lacks is a plan error, not a no-op, so the `--options` detail is
 what the filter reads:
 
 ```sh
-optique -z ws scan --json --options -f list |
+optique scan -z ws --json --options -f list |
     jq '[.ports[]
          | select(any(.options[]; .name == "DOCS"))
          | {(.port): {DOCS: false}}] | add' |
-    optique -z ws decide -f list
+    optique decide -z ws -f list
 ```
 

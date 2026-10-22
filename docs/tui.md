@@ -15,7 +15,7 @@ tty — unless `--drive` is given (see
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │
@@ -84,7 +84,7 @@ Three further markers may trail the status one:
 
 <!-- screen options -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │? devel/gmake                  ││  [ ] DEBUG                     off        │
 │! ports-mgmt/pkg               ││  [ ] DEBUGLOG                  off        │
 │✓ converters/libiconv          ││  [x] DSO                       on         │
@@ -275,13 +275,13 @@ walked port by port.
 
 <!-- screen apply -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_4,3 ─────────────┐
+┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││  [ ] DEBUG                     off        │
 │? devel/gmake                  ││  [x] DEBUGLOG                  off        │
 │! ports-mgmt/pkg               ││  [x] DSO                       on         │
 │✓ conve┌ apply? y/n (j/k scroll) ───────────────────────────────────┐       │
 │✓ devel│3 options file(s) will be written to                        │       │
-│✓ devel│poudriere.d/server-options:                                 │       │
+│✓ devel│/tmp/optique-screens/poudriere.d/server-options:            │       │
 │✓ devel│                                                            │       │
 │✓ devel│devel/gmake                             new file (1 of 1 on)│       │
 │✓ devel│ports-mgmt/pkg                          dropped: OLDOPT     │       │
