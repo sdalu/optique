@@ -744,3 +744,66 @@ fn a_relative_options_dir_is_the_one_make_reads() {
     assert!(!stdout.contains("redundant"), "a real choice taken for a redundant one:\n{stdout}{err}");
     assert!(file.exists());
 }
+
+/// An overlay's port answers for its origin over the ports tree's, and the
+/// scan says so: a copy of sysutils/tmux with PORTREVISION 99, laid over
+/// /usr/ports with --overlay-dir, is the one queried.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn an_overlay_port_shadows_the_trees() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let port = tmp.path().join("overlay/sysutils/tmux");
+    fs::create_dir_all(&port).unwrap();
+    for entry in fs::read_dir("/usr/ports/sysutils/tmux").unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), port.join(entry.file_name())).unwrap();
+        }
+    }
+    let makefile = fs::read_to_string(port.join("Makefile")).unwrap();
+    let makefile: String = makefile
+        .lines()
+        .filter(|l| !l.starts_with("PORTREVISION="))
+        .map(|l| if l.starts_with("PORTVERSION=") || l.starts_with("DISTVERSION=") {
+            format!("{l}\nPORTREVISION=\t99\n")
+        } else {
+            format!("{l}\n")
+        })
+        .collect();
+    fs::write(port.join("Makefile"), makefile).unwrap();
+    let overlay = tmp.path().join("overlay");
+
+    let out = optique(tmp.path(), "scan")
+        .args(["-l", "--json", "--overlay-dir"])
+        .arg(&overlay)
+        .arg("-o")
+        .arg(&optdir)
+        .arg("sysutils/tmux")
+        .output()
+        .unwrap();
+    scan_exit_code(&out);
+    let report = parse_json(&out);
+    let tmux = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "sysutils/tmux")
+        .unwrap_or_else(|| panic!("sysutils/tmux missing from {report}"))
+        .clone();
+    assert!(tmux["pkgname"].as_str().unwrap().ends_with("_99"), "{tmux}");
+    let overlay = overlay.canonicalize().unwrap().display().to_string();
+    assert_eq!(tmux["overlay"], overlay.as_str(), "{tmux}");
+    assert_eq!(report["overlays"], serde_json::json!([overlay]), "{report}");
+
+    let table = optique(tmp.path(), "scan")
+        .args(["-l", "--overlay-dir", &overlay, "-o"])
+        .arg(&optdir)
+        .arg("sysutils/tmux")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&table.stdout);
+    let row = text.lines().find(|l| l.contains("sysutils/tmux")).unwrap_or_default();
+    assert!(row.ends_with(&format!("[overlay {overlay}]")), "{text}");
+}

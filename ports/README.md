@@ -25,16 +25,18 @@ stays authoritative:
 # one-off, from a ports-tree-shaped overlay
 make -C /path/to/optique/ports/ports-mgmt/optique PORTSDIR=/usr/ports <target>
 
-# poudriere overlay (13.0+)
+# poudriere overlay (poudriere 3.4.0+)
 poudriere ports -c -m null -M /path/to/optique/ports -p optique-overlay
 poudriere bulk -j <jail> -p default -O optique-overlay ports-mgmt/optique
+# poudriere options has no -O; optique configures the overlay's ports
+optique tui -O optique-overlay ports-mgmt/optique
 ```
 
 Read-only sanity checks work straight from the checkout and need no network:
 
 ```sh
 cd ports/ports-mgmt/optique
-make PORTSDIR=/usr/ports -V PKGNAME        # optique-0.1.0
+make PORTSDIR=/usr/ports -V PKGNAME        # optique-<version>
 make PORTSDIR=/usr/ports -V PLIST_FILES
 make PORTSDIR=/usr/ports -V _DISTFILES | tr ' ' '\n' | wc -l
 ```

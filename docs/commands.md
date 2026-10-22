@@ -144,6 +144,8 @@ a run is read at one level.
 | `-j`, `--jail`        | `JAIL`      | poudriere jail name                    |
 | `-p`, `--ports-tree`  | `TREE`      | poudriere tree (default `default`)     |
 | `-P`, `--portsdir`    | `DIR`       | explicit ports tree                    |
+| `-O`, `--overlay`     | `NAME`      | poudriere overlay (repeatable)         |
+| `--overlay-dir`       | `DIR`       | explicit overlay (repeatable)          |
 | `-l`, `--local`       | —           | local build, poudriere.d ignored       |
 | `-s`, `--synth`       | `[PROFILE]` | synth's layout, not poudriere's        |
 | `--repo`              | `NAME`      | synth: restrict implicit list to repo  |
@@ -160,7 +162,9 @@ a run is read at one level.
 | `-h`, `--help`        | —           | print usage and exit                   |
 | `-V`, `--version`     | —           | print the version and exit             |
 
-`-s` and `-l` conflict with `-z`/`-j`/`-p` and with each other, and `-p`
+`-O` conflicts with `-l` and `-s`, `--overlay-dir` with `-s` (see
+[overlays](configuration.md#overlays)). `-s` and `-l` conflict with
+`-z`/`-j`/`-p` and with each other, and `-p`
 with `-P`; see [configuration.md](configuration.md#synth) for the synth
 layout, [local builds](configuration.md#local-builds) for `-l`, and [Choosing the ports](#choosing-the-ports) for
 `--repo` and `-f`. `--verbose` reports each subcommand's own extra detail

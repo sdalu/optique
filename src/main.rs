@@ -601,11 +601,12 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
+    let overlays = scanned.settings.overlays;
     let files = scanned.files;
     if drive {
-        tui::run_driver(session, files, db, refresher, blacklist, cli.minimal)
+        tui::run_driver(session, files, db, refresher, blacklist, overlays, cli.minimal)
     } else {
-        tui::run(session, files, db, refresher, blacklist, cli.minimal)
+        tui::run(session, files, db, refresher, blacklist, overlays, cli.minimal)
     }
     // scanned.staging (make.conf + staging db) lives until here
 }
@@ -1006,6 +1007,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         let report = report::ScanReport {
             options_dir: settings.options_dir.display().to_string(),
             ports_tree: settings.portsdir.display().to_string(),
+            overlays: settings.overlays.iter().map(|o| o.path.display().to_string()).collect(),
             ports: rows
                 .iter()
                 .map(|r| report::PortReport {
@@ -1019,6 +1021,9 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                     blacklisted: r.blacklisted,
                     in_loop: r.in_loop,
                     options_file: format!("{}/options", r.options_name),
+                    overlay: settings
+                        .overlay_of(r.key.split('@').next().unwrap_or(""))
+                        .map(|o| o.path.display().to_string()),
                     violations: r.detail.as_ref().map(|d| d.violations.clone()),
                     options: r.detail.as_ref().map(|d| d.options.clone()),
                 })
@@ -1081,6 +1086,10 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             // that this port is caught in one.
             if row.in_loop {
                 tail.push_str(" [dependency loop]");
+            }
+            // Only where an overlay, not the main tree, answers for it.
+            if let Some(o) = settings.overlay_of(row.key.split('@').next().unwrap_or("")) {
+                tail.push_str(&format!(" [overlay {}]", o.label()));
             }
             // Pad first, tint after: the escapes must not count as width.
             let cell = match marker_color(marker).filter(|_| color) {

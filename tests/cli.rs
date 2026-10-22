@@ -416,6 +416,7 @@ fn man_page_documents_every_subcommand_and_flag() {
         "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
         "POUDRIERE INTEGRATION", "-synth", "SYNTH", "Dependency loops",
         "-local", "LOCAL BUILDS", "-portsdir", "PORTSDIR", "PORT_DBDIR",
+        "-overlay", "-overlay-dir", "OVERLAYS",
         "loops_blocking", "decide", "-options", "MACHINE INTERFACE",
     ] {
         assert!(text.contains(needle), "man/optique.8 must document {needle}");

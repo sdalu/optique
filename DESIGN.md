@@ -251,6 +251,30 @@ worse for long option lists and would break `scan -f list`, the form every
 document used; and accepting both sides with a warning, which keeps two
 places to look for one setting.
 
+## Overlays: the framework's lookup, in poudriere's order
+
+`-O name` is read from `poudriere.d/ports/<name>/mnt`, as `poudriere bulk
+-O` reads it (`--overlay-dir` is the literal counterpart, as `-P` is of
+`-p`), and reaches make as `OVERLAYS+=` lines where poudriere writes them
+in the jail's make.conf (`jail_start` in its `common.sh`): after the
+prelude, before the poudriere.d layers. The overlay list is then read
+back from make (`-V OVERLAYS`), so a layer, `/etc/make.conf` or, for a
+local build, the environment counts as for the build. A port is taken
+from the first overlay holding `<origin>/Makefile`, else from the main
+tree: the framework's rule for dependencies (`Mk/Scripts/do-depends.sh`)
+and poudriere's (`_lookup_portdir`), so the scanner, clean's vanished
+ports and MOVED's existence check all use it (`src/query/makerunner.rs`,
+`locate`). MOVED is every tree's in order, first entry winning, as
+poudriere's `parse_MOVED.awk`. The cache keys on every tree: an overlay
+that is not a checkout of its own keys on the count and newest mtime of
+its files, since it is a few ports usually edited before any commit.
+
+Rejected: `OVERLAYS=` on make's command line (it replaces the make.conf's
+`+=` list, so a layer's overlay would vanish); requiring `Mk/` in an
+overlay (neither poudriere nor the framework does, and optique's own
+`ports/` has none); `-O` taking a path (the argument against `-p` taking
+one, above); following `poudriere options`, which has no overlays at all.
+
 ## Machine interface: one JSON object, all-or-nothing, replayable
 
 Every subcommand can answer on stdout with one JSON object per invocation;

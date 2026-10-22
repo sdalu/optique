@@ -89,6 +89,19 @@ pub struct Overlay {
     pub path: PathBuf,
 }
 
+impl Overlay {
+    /// How the banner, the scan table and the TUI name it: its poudriere
+    /// tree name, else its path.
+    pub fn label(&self) -> String {
+        self.name.clone().unwrap_or_else(|| self.path.display().to_string())
+    }
+}
+
+/// `Settings::overlay_of` for a bare list of overlays (the TUI keeps one).
+pub fn overlay_of<'a>(overlays: &'a [Overlay], origin: &str) -> Option<&'a Overlay> {
+    overlays.iter().find(|o| o.path.join(origin).join("Makefile").is_file())
+}
+
 /// An overlay as the command line gives it: a registered poudriere tree
 /// (-O name) or a directory (--overlay-dir).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +111,12 @@ pub enum OverlaySpec {
 }
 
 impl Settings {
+    /// The overlay a port is taken from, if any: the first holding it, as
+    /// the lookup goes; None when the main tree answers.
+    pub fn overlay_of(&self, origin: &str) -> Option<&Overlay> {
+        overlay_of(&self.overlays, origin)
+    }
+
     /// The overlays' paths, in lookup order.
     pub fn overlay_paths(&self) -> Vec<PathBuf> {
         self.overlays.iter().map(|o| o.path.clone()).collect()
@@ -1244,6 +1263,23 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.starts_with("-O ov names a poudriere tree"), "{e}");
+    }
+
+    /// The overlay a port comes from: the first holding it, named when -O
+    /// named it; none for a port only the main tree holds.
+    #[test]
+    fn overlay_of_names_the_first_holder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b) = (tmp.path().join("a"), tmp.path().join("b"));
+        for (dir, port) in [(&a, "cat/x"), (&b, "cat/x"), (&b, "cat/y")] {
+            fs::create_dir_all(dir.join(port)).unwrap();
+            fs::write(dir.join(port).join("Makefile"), "").unwrap();
+        }
+        let overlays =
+            [Overlay { name: Some("first".into()), path: a.clone() }, Overlay { name: None, path: b.clone() }];
+        assert_eq!(overlay_of(&overlays, "cat/x").map(Overlay::label).as_deref(), Some("first"));
+        assert_eq!(overlay_of(&overlays, "cat/y").map(Overlay::label), Some(b.display().to_string()));
+        assert!(overlay_of(&overlays, "cat/z").is_none());
     }
 
     /// A local build reads its make.conf in place; --overlay-dir comes first

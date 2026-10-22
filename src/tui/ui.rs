@@ -138,10 +138,14 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
     let info = &app.session.ports[&key];
-    let title = match flavor_summary(app, info) {
+    let mut title = match flavor_summary(app, info) {
         Some(flavors) => format!(" {} — {} · flavors: {} ", key, info.pkgname, flavors),
         None => format!(" {} — {} ", key, info.pkgname),
     };
+    // Only where an overlay, not the ports tree, answers for the port.
+    if let Some(o) = crate::config::overlay_of(&app.overlays, &key.origin) {
+        title.push_str(&format!("· overlay {} ", o.label()));
+    }
 
     let mut lines: Vec<Line> = Vec::new();
     banner_lines(app, info, &mut lines);

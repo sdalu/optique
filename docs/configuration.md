@@ -168,6 +168,43 @@ synth-built packages; the names are listed by `pkg query -a %R`.
 When `Directory_options` is the live `/var/db/ports`, minimal and
 redundancy cleanups also affect plain make config workflows.
 
+## Overlays
+
+An overlay is a ports tree laid over the main one, holding only the
+ports it adds or replaces (and possibly `Mk/Uses` files or a `MOVED`).
+poudriere registers it like any tree, `poudriere ports -c -p name`, and
+`poudriere bulk -O name` stacks it (poudriere 3.4.0 or later).
+`poudriere options` has no `-O`, so optique is the way to configure an
+overlay's ports:
+
+```sh
+optique scan -z server -O myoverlay -f list
+```
+
+`-O name` (repeatable) is read from
+`/usr/local/etc/poudriere.d/ports/<name>/mnt`; `--overlay-dir dir` is the
+literal counterpart, as `-P` is of `-p`. Both keep command-line order:
+the first shadows the next and the main tree. Neither needs `Mk/`: an
+overlay holds a handful of ports. They reach make as `OVERLAYS+=` lines
+where poudriere writes them in the jail's make.conf, after its own lines
+and before the poudriere.d layers, with the host's paths; the overlay
+list is then what make reports for that make.conf, so an `OVERLAYS` set
+by a layer counts too, and the startup banner lists them in order.
+
+A port is taken from the first overlay holding `<origin>/Makefile`, else
+from the main tree, as the ports framework looks dependencies up: a port
+only an overlay holds is found, as a root or a dependency, and `clean`
+counts a port as vanished only when no tree holds it. `scan` ends the row
+of a port an overlay answers for with `[overlay name]`, and the TUI's
+port pane names it. `MOVED` is the main tree's then each overlay's, read
+as one file: a chain may run across them, and an origin listed twice
+keeps its first entry, with a warning. The options directory, the
+make.conf layers and the blacklist do not depend on overlays.
+
+A local build takes `OVERLAYS` from `/etc/make.conf` or the environment,
+as make does; `--overlay-dir` comes before those. `-O` needs poudriere.d
+and conflicts with `-l` and `-s`; `--overlay-dir` conflicts with `-s`.
+
 ## Local builds
 
 Without `/usr/local/etc/poudriere.d`, or under `-l` whether it exists or

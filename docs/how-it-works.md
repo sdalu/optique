@@ -38,7 +38,8 @@ are in [DESIGN.md](../DESIGN.md).
 ## Querying a port
 
 Each port is resolved by piping a small wrapper makefile to
-`make -f /dev/stdin optique-config` in the port's directory. The wrapper
+`make -f /dev/stdin optique-config` in the port's directory: the first
+[overlay](configuration.md#overlays) holding it, else the ports tree. The wrapper
 includes the port's own `Makefile` and prints, as parse-time `.info` lines,
 everything optique needs: the options, groups and descriptions,
 `IMPLIES`/`PREVENTS`, `BROKEN`/`IGNORE`, the make.conf layers' verdicts, and
@@ -58,7 +59,8 @@ the packages installed on the host do not answer the Makefiles' probes. See
 
 Answers are cached under `~/.cache/optique/`, keyed on the ports tree's git
 HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
-`UPDATING`), the hash of the layered make.conf, and the content of the
+`UPDATING`) and every overlay's (its HEAD when it is a checkout of its own,
+else the count and newest mtime of its files), the hash of the layered make.conf, and the content of the
 port's options file. A local or synth build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
 install or delete starts a new generation. Files a make.conf `.include`s are not part of that hash:

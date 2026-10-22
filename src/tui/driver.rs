@@ -41,9 +41,10 @@ pub fn run_driver(
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
+    overlays: Vec<crate::config::Overlay>,
     minimal: bool,
 ) -> Result<()> {
-    let mut app = build_app(session, files, staging_db, refresher, blacklist, minimal);
+    let mut app = build_app(session, files, staging_db, refresher, blacklist, overlays, minimal);
     let mut terminal = Terminal::new(TestBackend::new(DEFAULT_COLS, DEFAULT_ROWS))?;
 
     let stdin = std::io::stdin();

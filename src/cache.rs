@@ -532,11 +532,11 @@ mod tests {
         let makefile = over.join("cat/port/Makefile");
         std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
         assert_eq!(trees_key(&main, &[]), tree_key(&main));
-        let before = trees_key(&main, &[over.clone()]);
+        let before = trees_key(&main, std::slice::from_ref(&over));
         assert_ne!(before, tree_key(&main));
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
-        assert_ne!(trees_key(&main, &[over.clone()]), before, "an edited port is a new generation");
+        assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "an edited port is a new generation");
     }
 
     #[test]

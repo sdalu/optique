@@ -20,6 +20,8 @@ use crate::session::Session;
 pub struct ScanReport {
     pub options_dir: String,
     pub ports_tree: String,
+    /// Trees laid over `ports_tree`, in lookup order.
+    pub overlays: Vec<String>,
     pub ports: Vec<PortReport>,
     pub loops: Vec<LoopReport>,
     pub summary: ScanSummary,
@@ -47,6 +49,8 @@ pub struct PortReport {
     pub in_loop: bool,
     /// The options file this port reads, relative to `options_dir`.
     pub options_file: String,
+    /// The overlay the port is taken from; null when the ports tree answers.
+    pub overlay: Option<String>,
     /// Why the status is `conflict`; empty otherwise. Only with `--options`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub violations: Option<Vec<String>>,

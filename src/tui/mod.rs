@@ -143,6 +143,9 @@ pub struct App {
     /// Ports poudriere won't build for this jail/tree/set. A display and
     /// attention concern only, so it lives here and not in the Session.
     pub blacklist: crate::config::Blacklist,
+    /// Trees laid over the ports tree, in lookup order: the port pane names
+    /// the one a port comes from.
+    pub overlays: Vec<crate::config::Overlay>,
     pub visible: Vec<PortKey>,
     pub list_state: ListState,
     pub focus: Focus,
@@ -226,10 +229,11 @@ pub fn run(
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
+    overlays: Vec<crate::config::Overlay>,
     minimal: bool,
 ) -> Result<()> {
     ensure_terminal()?;
-    let mut app = build_app(session, files, staging_db, refresher, blacklist, minimal);
+    let mut app = build_app(session, files, staging_db, refresher, blacklist, overlays, minimal);
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
@@ -250,6 +254,7 @@ pub(crate) fn build_app(
     staging_db: StagingDb,
     refresher: Refresher,
     blacklist: crate::config::Blacklist,
+    overlays: Vec<crate::config::Overlay>,
     minimal: bool,
 ) -> App {
     let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
@@ -260,6 +265,7 @@ pub(crate) fn build_app(
         options_files: files,
         minimal,
         blacklist,
+        overlays,
         visible: Vec::new(),
         list_state: ListState::default(),
         focus: Focus::List,
@@ -1674,7 +1680,22 @@ mod tests {
             crate::cache::Cache::disabled(),
             crate::moved::Moved::parse(""),
         );
-        build_app(session, files, db, refresher, Default::default(), false)
+        build_app(session, files, db, refresher, Default::default(), Vec::new(), false)
+    }
+
+    /// The port pane says which overlay a port comes from, and nothing for
+    /// a port the ports tree answers.
+    #[test]
+    fn the_port_pane_names_its_overlay() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        let ov = tmp.path().join("ov");
+        std::fs::create_dir_all(ov.join("cat/beta")).unwrap();
+        std::fs::write(ov.join("cat/beta/Makefile"), "").unwrap();
+        app.overlays = vec![crate::config::Overlay { name: Some("mine".into()), path: ov }];
+        assert!(!screen(&mut app).contains("overlay"), "cat/alpha is the tree's");
+        press(&mut app, 'j');
+        assert!(screen(&mut app).contains("cat/beta — beta-1.0 · overlay mine"), "{}", screen(&mut app));
     }
 
     /// However many options a port has, turning the panel on never changes

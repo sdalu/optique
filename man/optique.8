@@ -15,6 +15,8 @@
 .Op Fl z Ar set
 .Op Fl j Ar jail
 .Op Fl p Ar tree | Fl P Ar dir
+.Op Fl O Ar overlay ...
+.Op Fl -overlay-dir Ar dir ...
 .Op Fl l | Fl s Op Ar profile
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
@@ -237,6 +239,36 @@ or the local build's
 .Ev PORTSDIR .
 It must hold
 .Pa Mk/bsd.port.mk .
+.It Fl O Ar overlay , Fl -overlay Ar overlay
+Lay the poudriere ports tree named
+.Ar overlay
+over the main one, as
+.Nm poudriere Cm bulk Fl O
+does: its location is read from
+.Pa /usr/local/etc/poudriere.d/ports/ Ns Ar overlay Ns Pa /mnt .
+Repeatable; the first given shadows the next and the main tree.
+See
+.Sx OVERLAYS .
+Needs
+.Pa poudriere.d ;
+mutually exclusive with
+.Fl l
+and
+.Fl s .
+.It Fl -overlay-dir Ar dir
+Lay
+.Ar dir
+over the ports tree as an overlay, verbatim: the counterpart of
+.Fl O
+as
+.Fl P
+is of
+.Fl p ,
+for poudriere and local builds.
+Repeatable, in order with
+.Fl O .
+Mutually exclusive with
+.Fl s .
 .It Fl l , Fl -local
 Configure for a local build on this host, as
 .Ql make config
@@ -806,6 +838,8 @@ is ignored.
 The object has the keys
 .Va options_dir ,
 .Va ports_tree ,
+.Va overlays
+.Pq the trees laid over it, in lookup order ,
 .Va ports ,
 .Va loops ,
 .Va summary
@@ -833,10 +867,12 @@ and
 .Pq both for stale ports ,
 .Va mc_covered ,
 .Va blacklisted ,
-.Va in_loop
-and
+.Va in_loop ,
 .Va options_file
-.Pq the options-dir entry it reads .
+.Pq the options-dir entry it reads
+and
+.Va overlay
+.Pq the overlay the port is taken from, null for the ports tree .
 Non-ok ports come first, then alphabetical order.
 Each element of
 .Va loops
@@ -1416,6 +1452,81 @@ Blacklisted ports are marked in
 and in the interface, never demand attention and never trip
 .Cm scan Ns 's
 exit status gate, whatever their status.
+.Ss OVERLAYS
+An overlay is a ports tree laid over the main one, holding only the ports it
+adds or replaces, and possibly
+.Pa Mk/Uses
+files or a
+.Pa MOVED ;
+it is registered like any tree, with
+.Nm poudriere Cm ports Fl c Fl p Ar name ,
+and used by
+.Nm poudriere Cm bulk Fl O Ar name
+.Pq poudriere 3.4.0 or later .
+.Nm poudriere Cm options
+has no
+.Fl O ,
+so
+.Nm
+is the way to configure an overlay's ports:
+.Dl optique scan -z server -O myoverlay -f list
+.Pp
+Each
+.Fl O
+is read from its
+.Pa mnt
+file, each
+.Fl -overlay-dir
+taken as given, in command-line order; neither needs a
+.Pa Mk
+directory.
+They reach
+.Xr make 1
+as
+.Ql OVERLAYS+=
+lines where
+.Xr poudriere 8
+writes them in the jail's
+.Pa make.conf ,
+after its own lines and before the
+.Pa poudriere.d
+layers, with the host's paths.
+The overlay list is then what make reports for that
+.Pa make.conf ,
+so an
+.Va OVERLAYS
+set by a layer counts too; the startup banner lists them in order.
+A port is taken from the first overlay holding
+.Pa <origin>/Makefile ,
+else from the main tree, as the ports framework looks up dependencies:
+a port only an overlay holds is found, as a root or a dependency, and
+.Cm clean
+counts a port as vanished only when no tree holds it.
+.Cm scan
+ends the row of a port an overlay answers for with
+.Ql [overlay Ar name Ns ] ,
+and the interface's port pane names it.
+.Pa MOVED
+is the main tree's then each overlay's, read as one file: a chain may run
+across them, and an origin listed twice keeps its first entry, with a
+warning.
+The options directory, the
+.Pa make.conf
+layers and the blacklist do not depend on overlays.
+The query cache is keyed on every tree: an overlay that is a git checkout of
+its own by its HEAD, any other by the count and newest modification time of
+its files down to
+.Pa category/port/file .
+.Pp
+A local build takes
+.Va OVERLAYS
+from
+.Pa /etc/make.conf
+or the environment, as
+.Xr make 1
+does;
+.Fl -overlay-dir
+comes before those.
 .Ss SYNTH
 .Fl s Oo Ar profile Oc
 reads the
@@ -1555,6 +1666,12 @@ is the way to configure a local build on a host that also runs poudriere:
 .Dl optique scan -l -f list
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
+.It Ev OVERLAYS
+Overlays of a local build, as
+.Xr make 1
+reads them; see
+.Sx OVERLAYS .
+Never passed to poudriere or synth queries, whose builders do not see it.
 .It Ev PORTSDIR , Ev PORT_DBDIR
 The ports tree and options directory of a local build, from the
 environment or
@@ -1634,7 +1751,8 @@ exits.
 .It Pa /usr/local/etc/poudriere.d/
 Poudriere configuration root.
 .It Pa /usr/local/etc/poudriere.d/ports/<tree>/mnt
-File holding the path of the named ports tree.
+File holding the path of the named ports tree, or of an overlay named with
+.Fl O .
 .It Pa /usr/local/etc/poudriere.d/*options/
 Candidate options directories; see
 .Sx POUDRIERE INTEGRATION .

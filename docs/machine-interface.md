@@ -40,6 +40,7 @@ script — see [tui.md](tui.md#driving-the-tui-headless).
 | :------------ | :-------------------------------------------------------- |
 | `options_dir` | the resolved options directory                            |
 | `ports_tree`  | the ports tree used                                       |
+| `overlays`    | the trees laid over it, in lookup order                   |
 | `ports`       | one entry per port in the closure                         |
 | `loops`       | dependency loops found in the closure (details below)     |
 | `summary`     | counts, including `pending`, which drives the exit status |
@@ -58,8 +59,9 @@ unconfigured one.
 
 Each element of `ports` has `port`, `pkgname`, `status` (`ok`, `unconfigured`,
 `stale` or `conflict`), `undecided`, `added` and `removed` (both only
-meaningful for `stale`), `mc_covered`, `blacklisted`, `in_loop` and
-`options_file`. With `--options`, two more keys appear: `violations` (why the
+meaningful for `stale`), `mc_covered`, `blacklisted`, `in_loop`,
+`options_file` and `overlay` (the overlay the port is taken from; `null`
+for the ports tree). With `--options`, two more keys appear: `violations` (why the
 status is `conflict`) and `options`, an array in the framework's own option
 order.
 
