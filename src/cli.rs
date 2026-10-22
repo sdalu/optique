@@ -46,7 +46,7 @@ pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsSt
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "optique", version, about = "Fast FreeBSD ports options/dependency configurator", max_term_width = 80)]
+#[command(name = "optique", version, about = "Fast FreeBSD ports options configurator for poudriere, synth and local builds", max_term_width = 80)]
 pub struct Cli {
     /// Poudriere set (options land in poudriere.d/<SET>-options)
     #[arg(short = 'z', long = "set", global = true)]

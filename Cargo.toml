@@ -2,7 +2,7 @@
 name = "optique"
 version = "0.2.0"
 edition = "2021"
-description = "Fast FreeBSD ports options/dependency configurator for poudriere"
+description = "Fast FreeBSD ports options configurator for poudriere, synth and local builds"
 license = "BSD-2-Clause"
 
 [dependencies]

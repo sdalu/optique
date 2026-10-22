@@ -1,6 +1,7 @@
 # optique
 
-Configure the options of a whole poudriere build at once, in one screen.
+Configure the options of a whole build at once, in one screen: for
+poudriere, for synth, or for `make` on the host.
 
 `poudriere options -C <list>` walks the dependency tree one port at a time,
 with a dialog for each, in dependency order, with no overview and no way
@@ -10,7 +11,8 @@ second once cached), shows every port in one interface with the ones that
 need a decision first, and writes every options file in a single atomic
 pass when you apply. It reads exactly what poudriere would — the options
 directory, the make.conf layers, the blacklist — for the jail, tree and set
-you name, and it works for synth too.
+you name, synth's for a synth profile, and the host's own `/var/db/ports`
+when there is no poudriere at all.
 
 <!-- screen main -->
 ```text

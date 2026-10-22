@@ -42,7 +42,7 @@ MANSRC=		man/${MAN8}
 RELEASE=	target/release/${NAME}
 
 help:						## show this help (the default)
-	@echo '${NAME} -- fast FreeBSD ports options configurator for poudriere and synth'
+	@echo '${NAME} -- fast FreeBSD ports options configurator for poudriere, synth and local builds'
 	@echo ''
 	@echo 'Targets:'
 	@awk -F':.*## ' '/^[a-z][a-z0-9-]*:.*## /{ \

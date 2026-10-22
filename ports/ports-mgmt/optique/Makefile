@@ -4,7 +4,7 @@ DISTVERSION=	0.2.0
 CATEGORIES=	ports-mgmt
 
 MAINTAINER=	sdalu@sdalu.com
-COMMENT=	Fast ports options configurator for poudriere and synth
+COMMENT=	Fast ports options configurator for poudriere, synth and local builds
 WWW=		https://github.com/sdalu/optique
 
 LICENSE=	BSD2CLAUSE
