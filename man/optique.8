@@ -1568,7 +1568,9 @@ Overridden by
 .Ev XDG_CACHE_HOME ,
 in which case
 .Pa $XDG_CACHE_HOME/optique/
-is used.
+is used; an empty or relative
+.Ev XDG_CACHE_HOME
+is ignored.
 Stale generations are pruned automatically.
 A change to a file a
 .Pa make.conf

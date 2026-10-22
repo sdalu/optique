@@ -215,11 +215,20 @@ pub fn clear(cache_dir: &Path) -> (usize, u64) {
 }
 
 pub fn default_cache_dir() -> PathBuf {
-    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+    let xdg = std::env::var("XDG_CACHE_HOME").ok();
+    let home = std::env::var("HOME").ok();
+    cache_dir_for(xdg.as_deref(), home.as_deref())
+}
+
+/// The cache dir for the given XDG_CACHE_HOME and HOME values. As the XDG
+/// spec says, an XDG_CACHE_HOME that is empty or relative is ignored: taken,
+/// it would put the cache, and what --clear-cache deletes, under whatever
+/// directory optique runs from.
+fn cache_dir_for(xdg: Option<&str>, home: Option<&str>) -> PathBuf {
+    if let Some(x) = xdg.filter(|x| Path::new(x).is_absolute()) {
         return PathBuf::from(x).join("optique");
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    PathBuf::from(home).join(".cache/optique")
+    PathBuf::from(home.unwrap_or("/tmp")).join(".cache/optique")
 }
 
 /// A hex id (commit, hash) cut to 12 digits for the file name; anything
@@ -600,6 +609,18 @@ mod tests {
         let before = tree_key(ports);
         set_mtime(1_792_656_000);
         assert_ne!(tree_key(ports), before);
+    }
+
+    /// The XDG spec: an empty or relative XDG_CACHE_HOME is ignored, so the
+    /// cache (and --clear-cache) never lands under the current directory.
+    #[test]
+    fn default_cache_dir_ignores_empty_and_relative_xdg() {
+        let home = Some("/home/u");
+        assert_eq!(cache_dir_for(Some("/x/cache"), home), Path::new("/x/cache/optique"));
+        for xdg in [None, Some(""), Some("cache"), Some("./cache")] {
+            assert_eq!(cache_dir_for(xdg, home), Path::new("/home/u/.cache/optique"), "{xdg:?}");
+        }
+        assert_eq!(cache_dir_for(None, None), Path::new("/tmp/.cache/optique"));
     }
 
     #[test]
