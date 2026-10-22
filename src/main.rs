@@ -1506,7 +1506,7 @@ mod tests {
     fn minimal_scan_lists_problems_first() {
         use super::shown_ok;
         use crate::session::UiStatus;
-        let mut rows = vec![
+        let mut rows = [
             ("a/nofile", UiStatus::Unconfigured, true),
             ("m/stale", UiStatus::Stale, true),
             ("z/conflict", UiStatus::Conflict, false),

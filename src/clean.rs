@@ -256,10 +256,12 @@ mod tests {
     #[test]
     fn redundancy_diff_directions() {
         // defaults {A}; file result: B on, A off -> +B -A.
-        let mut o = PortOptions::default();
-        o.complete = vec!["A".into(), "B".into()];
-        o.defaults = ["A".to_string()].into();
-        o.effective = ["B".to_string()].into();
+        let o = PortOptions {
+            complete: vec!["A".into(), "B".into()],
+            defaults: ["A".to_string()].into(),
+            effective: ["B".to_string()].into(),
+            ..Default::default()
+        };
         let d = redundancy_diff(&info_with(o));
         assert_eq!(d, vec!["+B".to_string(), "-A".to_string()]);
     }
@@ -267,11 +269,13 @@ mod tests {
     #[test]
     fn redundancy_check() {
         // defaults {A}, mc unsets B; file recorded exactly that -> effective {A}.
-        let mut o = PortOptions::default();
-        o.complete = vec!["A".into(), "B".into()];
-        o.defaults = ["A".to_string()].into();
-        o.mc_unset = ["B".to_string()].into();
-        o.effective = ["A".to_string()].into();
+        let mut o = PortOptions {
+            complete: vec!["A".into(), "B".into()],
+            defaults: ["A".to_string()].into(),
+            mc_unset: ["B".to_string()].into(),
+            effective: ["A".to_string()].into(),
+            ..Default::default()
+        };
         assert!(redundancy_diff(&info_with(o.clone())).is_empty());
 
         // file deviates: B enabled although default+mc say off.

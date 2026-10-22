@@ -93,7 +93,7 @@ mod tests {
         let real = tmp.path().join("real");
         fs::create_dir_all(real.join("cat_port")).unwrap();
         fs::write(real.join("cat_port/options"), "OPTIONS_FILE_SET+=A\n").unwrap();
-        let names = vec!["cat_port".to_string(), "cat_other".to_string()];
+        let names = ["cat_port".to_string(), "cat_other".to_string()];
         let db = StagingDb::create(tmp.path(), &OptionsFiles::new(&real), names.iter()).unwrap();
         assert!(db.path().join("cat_port/options").is_file());
         assert!(!db.path().join("cat_other/options").exists());

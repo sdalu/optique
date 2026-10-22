@@ -643,11 +643,11 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('h') => app.open_port_help(),
         // The port as a whole; in the option pane 'i' is the option's.
         KeyCode::Char('i') => app.open_port_about(),
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right => {
-            if !app.editor_rows.is_empty() {
-                app.focus = Focus::Editor;
-                app.editor_select_first();
-            }
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right
+            if !app.editor_rows.is_empty() =>
+        {
+            app.focus = Focus::Editor;
+            app.editor_select_first();
         }
         _ => {}
     }

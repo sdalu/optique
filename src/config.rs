@@ -311,19 +311,9 @@ fn env_overlays() -> Vec<PathBuf> {
 /// make.conf setting counts as it does for `make config`; any failure
 /// leaves the built-in defaults.
 fn make_defaults() -> (Option<PathBuf>, Option<PathBuf>) {
-    let out = std::process::Command::new("/usr/bin/make")
-        .current_dir("/")
-        .args(["-f", "/dev/null", "-V", "PORTSDIR", "-V", "PORT_DBDIR"])
-        .env_remove("MAKEFLAGS")
-        .env_remove("MAKELEVEL")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output();
-    let Ok(out) = out else { return (None, None) };
-    if !out.status.success() {
+    let Some(text) = make_values(&["PORTSDIR", "PORT_DBDIR"], None, &[]) else {
         return (None, None);
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
+    };
     let mut lines = text.lines().map(|l| {
         let l = l.trim();
         (!l.is_empty()).then(|| PathBuf::from(l))
@@ -448,19 +438,31 @@ fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
 /// None), the environment's left out: a local build's has been written
 /// into its make.conf already. None when make cannot be asked.
 fn make_overlays(make_conf: Option<&Path>) -> Option<Vec<PathBuf>> {
+    let text = make_values(&["OVERLAYS"], make_conf, &["OVERLAYS"])?;
+    Some(text.split_whitespace().map(PathBuf::from).collect())
+}
+
+/// What `make -V` prints for `vars`, one line each, outside any port: make
+/// reads only sys.mk, the make.conf (`make_conf`, else make's own default)
+/// and the environment, less `drop_env`. None when make cannot be asked or
+/// fails.
+fn make_values(vars: &[&str], make_conf: Option<&Path>, drop_env: &[&str]) -> Option<String> {
     let mut cmd = std::process::Command::new("/usr/bin/make");
     cmd.current_dir("/")
-        .args(["-f", "/dev/null", "-V", "OVERLAYS"])
+        .args(["-f", "/dev/null"])
+        .args(vars.iter().flat_map(|v| ["-V", v]))
         .env_remove("MAKEFLAGS")
         .env_remove("MAKELEVEL")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    cmd.env_remove("OVERLAYS");
+    for var in drop_env {
+        cmd.env_remove(var);
+    }
     if let Some(conf) = make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
     let out = cmd.output().ok().filter(|o| o.status.success())?;
-    Some(String::from_utf8_lossy(&out.stdout).split_whitespace().map(PathBuf::from).collect())
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// A build on the host sees what is installed there: Makefiles probe
@@ -473,11 +475,7 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
         return settings;
     }
     let Ok(meta) = fs::metadata(pkg_db) else { return settings };
-    let mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos());
+    let mtime = crate::cache::mtime(&meta).as_nanos();
     let keyed = format!("{}\n{} {} {mtime}\n", settings.conf_hash, pkg_db.display(), meta.len());
     settings.conf_hash = crate::cache::sha256_hex(keyed.as_bytes());
     settings

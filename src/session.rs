@@ -1316,7 +1316,7 @@ mod tests {
         let mut ports = BTreeMap::new();
         ports.insert(root_key.clone(), root);
         ports.insert(dep_key.clone(), dep.clone());
-        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], &OptionsFiles::new(tmp.path()), false);
+        let mut s = Session::new(ports, HashMap::new(), std::slice::from_ref(&root_key), &OptionsFiles::new(tmp.path()), false);
 
         // User edits the dependency's options.
         s.toggle(&dep_key, "DEPOPT").unwrap();
@@ -1361,7 +1361,7 @@ mod tests {
             ports.insert(info.key.clone(), info);
         }
         let files = OptionsFiles::new(tmp.path());
-        let mut s = Session::new(ports, HashMap::new(), &[root_key.clone()], &files, false);
+        let mut s = Session::new(ports, HashMap::new(), std::slice::from_ref(&root_key), &files, false);
         assert_eq!(s.owners["cat_x"].to_string(), "cat/x@a");
 
         // Refresh: the root keeps only the non-default flavor.
@@ -1633,7 +1633,7 @@ mod tests {
         };
         let (ports, key) = mk_port(&["A", "B"], &["A"], vec![g], vec![]);
         let mut s = session_for(ports);
-        let (changed, skipped) = s.bulk_set(&[key.clone()], "A", false);
+        let (changed, skipped) = s.bulk_set(std::slice::from_ref(&key), "A", false);
         assert!(changed.is_empty());
         assert_eq!(skipped.len(), 1);
         assert_eq!(skipped[0].0, key);

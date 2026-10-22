@@ -36,7 +36,7 @@ impl Cache {
     }
 
     pub fn open(cache_dir: &Path, tree_key: &str, conf_hash: &str) -> Self {
-        let generation = format!("v{SCHEMA}-{}-{}.jsonl", &short(tree_key), &short(conf_hash));
+        let generation = format!("v{SCHEMA}-{}-{}.jsonl", short(tree_key), short(conf_hash));
         let path = cache_dir.join(&generation);
         let _ = fs::create_dir_all(cache_dir);
         prune_old_generations(cache_dir, &generation);
@@ -89,6 +89,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
+/// A file's modification time since the epoch; zero when the platform
+/// cannot tell, which only weakens a key, never breaks one.
+pub(crate) fn mtime(meta: &fs::Metadata) -> std::time::Duration {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .unwrap_or_default()
+}
+
 /// Identity of the ports tree: the git HEAD commit, falling back for non-git
 /// trees to the mtimes of the files an update rewrites (`mtime-<a>-<b>-<c>`).
 pub fn tree_key(portsdir: &Path) -> String {
@@ -103,12 +112,7 @@ pub fn tree_key(portsdir: &Path) -> String {
     let mtimes: Vec<String> = ["Mk/bsd.port.mk", "MOVED", "UPDATING"]
         .iter()
         .map(|file| {
-            fs::metadata(portsdir.join(file))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_secs())
-                .to_string()
+            fs::metadata(portsdir.join(file)).map_or(0, |m| mtime(&m).as_secs()).to_string()
         })
         .collect();
     format!("mtime-{}", mtimes.join("-"))
@@ -146,12 +150,7 @@ fn overlay_key(overlay: &Path) -> String {
             // The depth limit stops a symlink loop.
             let Ok(meta) = fs::metadata(entry.path()) else { continue };
             *count += 1;
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map_or(0, |d| d.as_nanos());
-            *newest = (*newest).max(mtime);
+            *newest = (*newest).max(mtime(&meta).as_nanos());
             if meta.is_dir() && depth > 1 {
                 walk(&entry.path(), depth - 1, count, newest);
             }

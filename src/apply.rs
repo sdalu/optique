@@ -600,7 +600,7 @@ mod tests {
         b.canonical = b.key.clone();
         b.flavors = vec!["default".into(), "lite".into()];
 
-        let ports = vec![
+        let ports = [
             (b.key.clone(), &b, BTreeSet::new()), // divergent non-default first
             (a.key.clone(), &a, ["A".to_string()].into()),
         ];
