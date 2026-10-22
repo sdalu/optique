@@ -314,7 +314,8 @@ port gaining an options file, `dropped: OPT` for an option the port no
 longer has — as the capture shows for `devel/gmake`,
 `ports-mgmt/pkg` and `www/nginx`, then writes every file atomically in
 one pass (temporary file, `fsync`, `rename`) to the set's options
-directory.
+directory. If any file cannot be written, none is and nothing is
+removed: the result names the failure, and the edits stay staged.
 
 Each options file is read once, when the TUI starts, and judged as it
 was then: a file edited outside optique while the interface is open is

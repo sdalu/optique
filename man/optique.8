@@ -489,6 +489,8 @@ Nothing touches the real options directory until
 .Ic a
 is pressed, which previews every file as a diff and then writes atomically
 .Pq temporary file, Xr fsync 2 , Xr rename 2 .
+If any file cannot be written, none is and nothing is removed: the result
+names the failure and the edits stay staged.
 Each options file is read once, at start, and judged as it was then: a file
 edited outside
 .Nm

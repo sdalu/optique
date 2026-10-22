@@ -699,6 +699,20 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
             let planned = app.compute_writes();
             let writes = planned.writes;
             let summary = apply::apply(&writes);
+            // apply is all-or-nothing: after a failed write nothing is on
+            // disk, so nothing is removed either, and the edits stay staged
+            // (and in the draft) to be applied again.
+            if !summary.failed.is_empty() {
+                let mut text = format!("nothing written to {}", app.options_dir.display());
+                for (key, msg) in &summary.failed {
+                    text.push_str(&format!("\nFAILED {key}: {msg}"));
+                }
+                if let Some(modal) = app.modal.as_mut() {
+                    modal.writes = writes;
+                    modal.done = Some(text);
+                }
+                return;
+            }
             let mut removed = 0usize;
             let mut text =
                 format!("{} file(s) written to {}", summary.written, app.options_dir.display());
@@ -710,9 +724,6 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
             }
             if removed > 0 {
                 text.push_str(&format!("\n{removed} redundant file(s) removed (--minimal)"));
-            }
-            for (key, msg) in &summary.failed {
-                text.push_str(&format!("\nFAILED {key}: {msg}"));
             }
             // Only the files apply touched are read again; the rest are as
             // the scan read them.
@@ -2327,6 +2338,27 @@ mod tests {
         let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
         assert!(done.contains("\n1 redundant file(s) removed (--minimal)"), "{done}");
         assert!(!tmp.path().join("options/cat_beta").exists());
+    }
+
+    /// A write that fails writes nothing (apply is all-or-nothing), so it
+    /// removes nothing either, and the staged edits stay staged.
+    #[test]
+    fn a_failed_apply_removes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.minimal = true;
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        // The temp file cannot be created where a directory stands.
+        std::fs::create_dir_all(tmp.path().join("options/cat_alpha/.options.optique.tmp")).unwrap();
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("nothing written"), "{done}");
+        assert!(done.contains("FAILED cat/alpha"), "{done}");
+        assert!(!done.contains("removed"), "{done}");
+        assert!(tmp.path().join("options/cat_beta/options").is_file(), "beta's file kept");
+        assert!(app.session.dirty(), "the edit is still staged");
     }
 
     /// A draft left by a quit is adopted at start, one undo step per port;
