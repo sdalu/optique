@@ -1048,7 +1048,7 @@ impl App {
     }
 
     /// Move the list selection to the given port. A view that hides the
-    /// target (filter, t, optionless ports never listed) is widened as far
+    /// target (filter, L, t, optionless ports never listed) is widened as far
     /// as needed — the user asked to go there.
     fn jump_to_port(&mut self, target: &PortKey) {
         if !self.session.ports.contains_key(target) {
@@ -1064,6 +1064,11 @@ impl App {
         if !self.filter.is_empty() {
             self.filter.clear();
             widened.push("filter cleared");
+            self.rebuild_visible(Some(target.clone()));
+        }
+        if self.only_loops && !self.visible.contains(target) {
+            self.only_loops = false;
+            widened.push("loop view left");
             self.rebuild_visible(Some(target.clone()));
         }
         if self.hide_ok && !self.visible.contains(target) {
@@ -2614,6 +2619,34 @@ mod tests {
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.why.is_none(), "Enter closes the overlay");
         assert_eq!(app.selected_key().unwrap().origin, "cat/beta");
+    }
+
+    /// Under L the why overlay still lists dependents outside the loop, and
+    /// Enter on one leaves the loop view to reach it, as it clears a filter.
+    #[test]
+    fn enter_on_a_dependent_outside_the_loop_view_selects_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(
+            tmp.path(),
+            &[
+                ("cat/alpha", &["cat/beta"]),
+                ("cat/beta", &["cat/alpha"]),
+                ("cat/gamma", &["cat/alpha"]),
+            ],
+        );
+        press(&mut app, 'L');
+        assert_eq!(visible(&app), ["cat/alpha", "cat/beta"]);
+        assert_eq!(selected(&app), "cat/alpha");
+        press(&mut app, 'r');
+        let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.origin == "cat/gamma");
+        for _ in 0..at.expect("gamma is a dependent of alpha") {
+            hit(&mut app, KeyCode::Down);
+        }
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(selected(&app), "cat/gamma");
+        assert!(!app.only_loops, "the loop view let go");
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!((msg.as_str(), err), ("jumped to cat/gamma (loop view left)", false));
     }
 
     /// A port that depends on itself is a loop of one, and says so instead of
