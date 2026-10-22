@@ -283,7 +283,7 @@ walked port by port.
 │✓ devel│3 options file(s) will be written to                        │       │
 │✓ devel│poudriere.d/server-options:                                 │       │
 │✓ devel│                                                            │       │
-│✓ devel│devel/gmake                             new file (1 options)│       │
+│✓ devel│devel/gmake                             new file (1 of 1 on)│       │
 │✓ devel│ports-mgmt/pkg                          dropped: OLDOPT     │       │
 │✓ devel│www/nginx                               +DEBUGLOG           │       │
 │✓ devel│                                                            │       │

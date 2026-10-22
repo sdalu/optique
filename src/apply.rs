@@ -92,7 +92,8 @@ impl PendingWrite {
     /// Human-readable one-line change summary.
     pub fn describe(&self) -> String {
         if self.old.is_none() {
-            return format!("new file ({} options)", self.enabled.len());
+            // The file records every option, on or off.
+            return format!("new file ({} of {} on)", self.enabled.len(), self.complete.len());
         }
         let c = self.changes();
         let mut parts = Vec::new();
@@ -651,6 +652,14 @@ mod tests {
         // A brand-new file describes itself by option count.
         let w2 = PendingWrite { old: None, ..w };
         assert!(w2.describe().contains("new file"));
+    }
+
+    /// A new file records every option of the port, not just the enabled
+    /// ones: the summary counts both.
+    #[test]
+    fn describe_new_file_counts_every_option() {
+        let w = pending(None, &["A", "B", "C"], &["B"]);
+        assert_eq!(w.describe(), "new file (1 of 3 on)");
     }
 
     #[test]
