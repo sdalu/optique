@@ -1419,6 +1419,9 @@ impl App {
     /// Merge finished background scans into the session.
     fn drain_refresh_events(&mut self) {
         let mut merged = None;
+        // Set once a dep error or a port that just broke is flashed: the
+        // refresh count must not take its place on the line.
+        let mut alerted = false;
         while let Ok(ev) = self.refresher.rx.try_recv() {
             match ev {
                 RefreshEvent::Progress { done, discovered } => {
@@ -1440,10 +1443,12 @@ impl App {
                             &format!("refresh: {errors} dep error(s), e.g. {key}: {msg}"),
                             true,
                         );
+                        alerted = true;
                     }
                     // A port that just broke outranks dep errors on the line.
                     if let Some(msg) = blamed {
                         self.flash(&msg, true);
+                        alerted = true;
                     }
                 }
             }
@@ -1452,7 +1457,7 @@ impl App {
             self.refresh_progress = None;
         }
         if let Some((added, removed)) = merged {
-            if added > 0 || removed > 0 {
+            if (added > 0 || removed > 0) && !alerted {
                 self.flash(
                     &format!("dependencies refreshed: +{added} −{removed} port(s)"),
                     false,
@@ -2185,6 +2190,42 @@ mod tests {
         ev.send(done(vec![alpha], vec![])).unwrap();
         app.drain_refresh_events();
         assert!(!app.blame.contains_key("cat_alpha"), "a port that recovers is cleared");
+    }
+
+    /// A port that just broke outranks the refresh count on the line, even
+    /// when the same re-scan also added a dependency.
+    #[test]
+    fn a_rescan_that_breaks_a_port_and_adds_a_dep_keeps_the_blame() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let (ev, _req) = fake_refresher(&mut app);
+        app.refresh_snapshots
+            .insert("cat_alpha".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+        let mut alpha = info_of(&app, "cat/alpha");
+        let mut gamma = alpha.clone();
+        gamma.key = PortKey::parse("cat/gamma").unwrap();
+        gamma.canonical = gamma.key.clone();
+        gamma.options_name = "cat_gamma".into();
+        alpha.ignore = Some("needs gamma".into());
+        alpha.deps = vec![crate::model::port::DepEdge {
+            target: gamma.key.clone(),
+            spec: "dep:cat/gamma".into(),
+            test_only: false,
+        }];
+        ev.send(done(vec![alpha, gamma], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.session.ports.contains_key(&PortKey::parse("cat/gamma").unwrap()), "added");
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!((msg.as_str(), err), ("cat/alpha: now IGNORE (needs gamma) — +DOCS", true));
+
+        // A dep error outranks it too.
+        let failed = PortKey::parse("cat/broken").unwrap();
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.deps.clear();
+        ev.send(done(vec![alpha], vec![(failed, "no such port".into())])).unwrap();
+        app.drain_refresh_events();
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!((msg.as_str(), err), ("refresh: 1 dep error(s), e.g. cat/broken: no such port", true));
     }
 
     /// The m and w views and the blacklist change what counts as a problem.
