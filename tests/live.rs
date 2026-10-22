@@ -835,3 +835,31 @@ fn minimal_scan_counts_bare_defaults_as_done() {
     let pkg = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "ports-mgmt/pkg").unwrap().clone();
     assert_eq!((pkg["status"].as_str(), pkg["mc_covered"].as_bool()), (Some("unconfigured"), Some(true)), "{pkg}");
 }
+
+/// Under -m the rows shown as ok (no file, defaults decide) sort with the
+/// ok ones: a conflict comes first, not among them. textproc/rxp's
+/// single-choice CHAR_SIZE group with both members set is the conflict.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn minimal_scan_lists_problems_first() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(optdir.join("textproc_rxp")).unwrap();
+    fs::write(
+        optdir.join("textproc_rxp/options"),
+        "_OPTIONS_READ=rxp-1\n_FILE_COMPLETE_OPTIONS_LIST=8 16\n\
+         OPTIONS_FILE_SET+=8\nOPTIONS_FILE_SET+=16\n",
+    )
+    .unwrap();
+    let out = optique(tmp.path(), "scan")
+        .args(["-m", "-l", "-o"])
+        .arg(&optdir)
+        .args(["devel/gmake", "textproc/rxp"])
+        .output()
+        .unwrap();
+    assert_eq!(scan_exit_code(&out), 1, "a conflict is pending");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let first = text.lines().next().unwrap_or_default();
+    assert!(first.contains("textproc/rxp") && first.contains("CONFLICT"), "{text}");
+    assert!(text.contains("ok (no file"), "{text}");
+}

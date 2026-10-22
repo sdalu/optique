@@ -658,6 +658,19 @@ fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     moved
 }
 
+/// Whether scan shows a row as ok: its status is, or -m makes the defaults
+/// and make.conf the decision and they leave nothing open for this
+/// unconfigured or stale port. Rows sort on it, so the ones shown as
+/// problems come first.
+fn shown_ok(status: &session::UiStatus, minimal: bool, covered: bool) -> bool {
+    use session::UiStatus;
+    match status {
+        UiStatus::Ok => true,
+        UiStatus::Unconfigured | UiStatus::Stale => minimal && covered,
+        _ => false,
+    }
+}
+
 /// The resolution the command line asks for.
 fn resolve_settings(cli: &Cli, staging_dir: &Path) -> Result<config::Settings> {
     config::resolve(
@@ -977,7 +990,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             }),
         });
     }
-    rows.sort_by_key(|r| (r.status == UiStatus::Ok, r.key.clone()));
+    rows.sort_by_key(|r| (shown_ok(&r.status, cli.minimal, r.mc_covered()), r.key.clone()));
 
     let unconfigured = rows.iter().filter(|r| r.status == UiStatus::Unconfigured).count();
     let stale = rows.iter().filter(|r| r.status == UiStatus::Stale).count();
@@ -1065,10 +1078,10 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             let (marker, text) = match &row.status {
                 // Under -m the defaults are the decision: a port they settle
                 // is done, its file (or lack of one) left as sync will.
-                UiStatus::Unconfigured if cli.minimal && row.mc_covered() => {
+                UiStatus::Unconfigured if shown_ok(&row.status, cli.minimal, row.mc_covered()) => {
                     ("", "ok (no file: defaults + make.conf)".to_string())
                 }
-                UiStatus::Stale if cli.minimal && row.mc_covered() => {
+                UiStatus::Stale if shown_ok(&row.status, cli.minimal, row.mc_covered()) => {
                     ("", format!("ok (stale file{}: defaults + make.conf decide)", row.stale_detail()))
                 }
                 UiStatus::Unconfigured => ("?", format!("UNCONFIGURED{decision}")),
@@ -1486,6 +1499,27 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::split_raw_origins;
+
+    /// Under -m a settled unconfigured or stale port shows as ok and sorts
+    /// with the ok ones: a conflict comes before it, not among it.
+    #[test]
+    fn minimal_scan_lists_problems_first() {
+        use super::shown_ok;
+        use crate::session::UiStatus;
+        let mut rows = vec![
+            ("a/nofile", UiStatus::Unconfigured, true),
+            ("m/stale", UiStatus::Stale, true),
+            ("z/conflict", UiStatus::Conflict, false),
+            ("b/ok", UiStatus::Ok, true),
+        ];
+        rows.sort_by_key(|(k, st, cov)| (shown_ok(st, true, *cov), k.to_string()));
+        let order: Vec<&str> = rows.iter().map(|r| r.0).collect();
+        assert_eq!(order, ["z/conflict", "a/nofile", "b/ok", "m/stale"]);
+        // Without -m an unconfigured port is a problem, covered or not.
+        assert!(!shown_ok(&UiStatus::Unconfigured, false, true));
+        assert!(!shown_ok(&UiStatus::Unconfigured, true, false), "-m, something open");
+        assert!(!shown_ok(&UiStatus::Conflict, true, true));
+    }
     use super::parse_installed;
 
     #[test]
