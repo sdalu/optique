@@ -270,6 +270,12 @@ on the count and newest mtime of its files, never on its git HEAD, since
 it is a few ports edited in place before any commit (keying on HEAD served
 a stale answer for a port edited in a git overlay).
 
+A local build's environment `OVERLAYS` is made absolute and written into
+its make.conf after `--overlay-dir` (`OVERLAYS:=` before the real
+make.conf, still read in place), and kept out of every query's
+environment: left there, bmake's `+=` put it before `--overlay-dir`, and
+a relative path was read from the port's directory.
+
 Rejected: `OVERLAYS=` on make's command line (it replaces the make.conf's
 `+=` list, so a layer's overlay would vanish); requiring `Mk/` in an
 overlay (neither poudriere nor the framework does, and optique's own

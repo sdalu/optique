@@ -1670,9 +1670,14 @@ is the way to configure a local build on a host that also runs poudriere:
 .It Ev OVERLAYS
 Overlays of a local build, as
 .Xr make 1
-reads them; see
+reads them, after
+.Fl -overlay-dir ;
+see
 .Sx OVERLAYS .
-Never passed to poudriere or synth queries, whose builders do not see it.
+Made absolute and written into the build's
+.Pa make.conf ,
+never passed to a query through the environment; ignored by poudriere and
+synth builds, whose builders do not see it.
 .It Ev PORTSDIR , Ev PORT_DBDIR
 The ports tree and options directory of a local build, from the
 environment or

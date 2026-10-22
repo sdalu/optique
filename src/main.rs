@@ -273,7 +273,6 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             make_conf: settings.make_conf.clone(),
             port_dbdir: settings.options_dir.clone(),
             overlays: settings.overlay_paths(),
-            inherit_env_overlays: settings.inherit_env_overlays,
         };
         let runner = MakeRunner::new(ctx.clone(), jobs);
         let mut by_key: std::collections::HashMap<_, _> =
@@ -597,7 +596,6 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         make_conf: scanned.settings.make_conf.clone(),
         port_dbdir: db.path().to_path_buf(),
         overlays: scanned.settings.overlay_paths(),
-        inherit_env_overlays: scanned.settings.inherit_env_overlays,
     };
     let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
     let blacklist = scanned.settings.blacklist;
@@ -690,7 +688,6 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         make_conf: settings.make_conf.clone(),
         port_dbdir: settings.options_dir.clone(),
         overlays: settings.overlay_paths(),
-        inherit_env_overlays: settings.inherit_env_overlays,
     };
 
     let paint = stderr_color(cli);

@@ -154,7 +154,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let moved = Moved::parse("cat/gone||2026-01-01|expired\ncat/old|cat/new|2026-01-01|renamed\n");
         let mut cache = Cache::disabled();
@@ -198,7 +197,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let moved = Moved::parse(
             "cat/old|cat/new|2026-01-01|renamed\n\
@@ -252,7 +250,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: vec![tmp.path().join("first"), tmp.path().join("second")],
-            inherit_env_overlays: false,
         };
         let a = PortKey::parse("cat/a").unwrap();
         let files = OptionsFiles::new(&ctx.port_dbdir);
@@ -287,7 +284,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -326,7 +322,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("cat/a").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -363,7 +358,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let bad = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/bad").unwrap())
             .unwrap_err()
@@ -408,7 +402,6 @@ mod tests {
             make_conf: None,
             port_dbdir: options_dir.clone(),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let roots = vec![PortKey::parse("audio/lame").unwrap()];
         let moved = Moved::parse("");

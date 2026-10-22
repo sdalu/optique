@@ -19,8 +19,6 @@ pub struct QueryCtx {
     pub port_dbdir: PathBuf,
     /// Trees laid over `portsdir`, in lookup order (`config::Settings`).
     pub overlays: Vec<PathBuf>,
-    /// Whether the environment's `OVERLAYS` reaches make (a local build).
-    pub inherit_env_overlays: bool,
 }
 
 impl QueryCtx {
@@ -128,11 +126,10 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     // The overlays reach make through the make.conf, never on the command
-    // line, where OVERLAYS= would replace make.conf's `+=` list; and the
-    // environment's only for a local build, whose make reads it anyway.
-    if !ctx.inherit_env_overlays {
-        cmd.env_remove("OVERLAYS");
-    }
+    // line, where OVERLAYS= would replace make.conf's `+=` list, nor through
+    // the environment: a local build's has been written into its make.conf,
+    // where it keeps its place after --overlay-dir and its absolute path.
+    cmd.env_remove("OVERLAYS");
     if let Some(conf) = &ctx.make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
@@ -365,7 +362,6 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         (tmp, ctx)
     }
@@ -470,7 +466,6 @@ mod tests {
             make_conf: None,
             port_dbdir: staging.path().to_path_buf(),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
         let key = PortKey::parse("www/nginx").unwrap();
 
@@ -527,7 +522,6 @@ mod tests {
             make_conf: Some(make_conf),
             port_dbdir: db.path().to_path_buf(),
             overlays: Vec::new(),
-            inherit_env_overlays: false,
         };
 
         // Mk/Uses/iconv.mk adds libiconv when ${LOCALBASE}/include/iconv.h

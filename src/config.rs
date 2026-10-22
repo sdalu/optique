@@ -75,10 +75,6 @@ pub struct Settings {
     /// a port shadows the others and the main tree): the `OVERLAYS` make
     /// itself reports once the make.conf is settled.
     pub overlays: Vec<Overlay>,
-    /// Whether an `OVERLAYS` in optique's environment reaches the queries:
-    /// for a local build, where make reads the environment; never for
-    /// poudriere or synth, whose builders do not.
-    pub inherit_env_overlays: bool,
 }
 
 /// A ports tree laid over the main one (the framework's `OVERLAYS`).
@@ -293,8 +289,20 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         ports_from_make: ports.is_some(),
         db_from_make: db.is_some(),
         pkg_db: &pkg_db,
+        env_overlays: &env_overlays(),
     };
     resolve_host(&host, req, staging_dir)
+}
+
+/// `OVERLAYS` from the environment, each made absolute against optique's
+/// directory: make, run with -C in a port's directory, would otherwise
+/// read a relative one from there.
+fn env_overlays() -> Vec<PathBuf> {
+    std::env::var("OVERLAYS")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|p| std::path::absolute(p).ok())
+        .collect()
 }
 
 /// PORTSDIR and PORT_DBDIR as make(1) sees them on this host, from the
@@ -344,6 +352,9 @@ struct HostPaths<'a> {
     db_from_make: bool,
     /// pkg(8)'s database of installed packages (`local.sqlite`).
     pkg_db: &'a Path,
+    /// `OVERLAYS` from optique's environment, made absolute against its own
+    /// directory: what make would read for a local build.
+    env_overlays: &'a [PathBuf],
 }
 
 /// A poudriere build when poudriere.d exists and -l was not given, a local
@@ -410,7 +421,7 @@ fn overlay_lines(overlays: &[Overlay]) -> String {
 /// lookup follows exactly the overlays make will use. Names come back from
 /// the command line by path; if make cannot be asked, the given ones stand.
 fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
-    let reported = make_overlays(settings.make_conf.as_deref(), settings.inherit_env_overlays);
+    let reported = make_overlays(settings.make_conf.as_deref());
     settings.overlays = match reported {
         None => given,
         Some(paths) => paths
@@ -434,9 +445,9 @@ fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
 }
 
 /// `OVERLAYS` as make sees it under `make_conf` (make's own default when
-/// None), the environment's left out unless `inherit_env`. None when make
-/// cannot be asked.
-fn make_overlays(make_conf: Option<&Path>, inherit_env: bool) -> Option<Vec<PathBuf>> {
+/// None), the environment's left out: a local build's has been written
+/// into its make.conf already. None when make cannot be asked.
+fn make_overlays(make_conf: Option<&Path>) -> Option<Vec<PathBuf>> {
     let mut cmd = std::process::Command::new("/usr/bin/make");
     cmd.current_dir("/")
         .args(["-f", "/dev/null", "-V", "OVERLAYS"])
@@ -444,9 +455,7 @@ fn make_overlays(make_conf: Option<&Path>, inherit_env: bool) -> Option<Vec<Path
         .env_remove("MAKELEVEL")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    if !inherit_env {
-        cmd.env_remove("OVERLAYS");
-    }
+    cmd.env_remove("OVERLAYS");
     if let Some(conf) = make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
@@ -515,12 +524,20 @@ fn resolve_local(
     let (staged, mut conf_hash, make_conf_sources) =
         concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
     let mut make_conf = staged.map(|_| host.make_conf.to_path_buf());
-    // --overlay-dir: a small make.conf naming the overlays first, then
-    // including the real one, still read in place for its own .includes.
-    if !overlays.is_empty() {
+    // --overlay-dir, then the environment's OVERLAYS (absolute): a small
+    // make.conf setting them in that order, then including the real one,
+    // still read in place for its own .includes, whose += lines follow.
+    // The environment's go through it, not through the queries' own
+    // environment, where bmake's += would have put them first.
+    let paths: Vec<String> = overlays
+        .iter()
+        .map(|o| o.path.display().to_string())
+        .chain(host.env_overlays.iter().map(|p| p.display().to_string()))
+        .collect();
+    if !paths.is_empty() {
         let text = format!(
-            "{}.sinclude \"{}\"\n",
-            overlay_lines(overlays),
+            "OVERLAYS:={}\n.sinclude \"{}\"\n",
+            paths.join(" "),
             std::path::absolute(host.make_conf)?.display()
         );
         let path = staging_dir.join("local-make.conf");
@@ -539,7 +556,6 @@ fn resolve_local(
         blacklist: Blacklist::default(),
         notes,
         overlays: Vec::new(),
-        inherit_env_overlays: true,
     })
 }
 
@@ -580,7 +596,6 @@ fn resolve_poudriere(
         blacklist,
         notes: Vec::new(),
         overlays: Vec::new(),
-        inherit_env_overlays: false,
     })
 }
 
@@ -724,7 +739,6 @@ fn resolve_synth(
         blacklist: Blacklist::default(),
         notes,
         overlays: Vec::new(),
-        inherit_env_overlays: false,
     })
 }
 
@@ -1083,6 +1097,7 @@ mod tests {
             ports_from_make: false,
             db_from_make: false,
             pkg_db: Path::new("/nonexistent/local.sqlite"),
+            env_overlays: &[],
         }
     }
 
@@ -1234,7 +1249,6 @@ mod tests {
             s.overlays,
             [Overlay { name: None, path: dir.clone() }, Overlay { name: Some("ov".into()), path: named.clone() }]
         );
-        assert!(!s.inherit_env_overlays, "a jail does not see optique's environment");
         let conf = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
         let lines = format!("OVERLAYS+={}\nOVERLAYS+={}\n", dir.display(), named.display());
         let at = conf.find(&lines).expect("the OVERLAYS lines are staged");
@@ -1307,11 +1321,36 @@ mod tests {
         let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
         let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
         assert_eq!(paths, [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]);
-        assert!(s.inherit_env_overlays);
         assert!(s.notes.iter().any(|n| n.contains("set by make.conf")), "{:?}", s.notes);
         let plain = resolve_host(&host, &Request::default(), &stage).unwrap();
         assert_eq!(plain.make_conf.as_deref(), Some(conf.as_path()), "read in place without one");
         assert_ne!(s.conf_hash, plain.conf_hash);
+    }
+
+    /// A local build's overlays, in make's order: --overlay-dir, then the
+    /// environment's (absolute), then make.conf's own; the environment's
+    /// reach make as make.conf lines, not through the queries' environment.
+    #[test]
+    fn local_overlay_dirs_come_before_the_environments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let (mine, env) = (tmp.path().join("mine"), tmp.path().join("env"));
+        fs::create_dir_all(&mine).unwrap();
+        fs::create_dir_all(&env).unwrap();
+        let absent = tmp.path().join("no-poudriere.d");
+        let envs = [env.clone()];
+        let host = HostPaths { env_overlays: &envs, ..host(tmp.path(), &absent, &ports, tmp.path()) };
+        let specs = [OverlaySpec::Dir(mine.clone())];
+        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
+        assert_eq!(paths, [mine.canonicalize().unwrap(), env.canonicalize().unwrap()]);
+        // Without --overlay-dir the environment's alone, through make.conf.
+        let s = resolve_host(&host, &Request::default(), &stage).unwrap();
+        let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
+        assert!(conf.contains(&env.display().to_string()), "{conf}");
     }
 
     /// make's PORTSDIR and PORT_DBDIR are a local build's defaults, and the
