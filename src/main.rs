@@ -27,7 +27,21 @@ use crate::moved::Moved;
 use crate::query::makerunner::QueryCtx;
 use crate::query::scanner::{self, ScanResult};
 
-fn main() -> Result<()> {
+/// Exit status of a run that failed outright. 1 is taken: scan and decide
+/// answer "something is left to do" with it, so a failure must not look the
+/// same to a gate. 2 is clap's, for bad usage.
+const EXIT_ERROR: i32 = 3;
+
+fn main() {
+    if let Err(e) = run() {
+        // As the standard library would print it, causes included.
+        eprintln!("Error: {e:?}");
+        let _ = std::io::stdout().flush();
+        std::process::exit(EXIT_ERROR);
+    }
+}
+
+fn run() -> Result<()> {
     let cli = Cli::parse_from(cli::disambiguate_synth(std::env::args_os()));
     if cli.clear_cache {
         let dir = cache::default_cache_dir();

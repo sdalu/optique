@@ -19,6 +19,7 @@
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
 .Op Fl -no-cache
+.Op Fl -clear-cache
 .Op Fl -color Ar when
 .Op Cm tui
 .Op Fl -drive
@@ -225,6 +226,11 @@ Defaults to
 .Ic min Ns Pq 16 , Va ncpu .
 .It Fl -no-cache
 Neither read nor write the persistent query cache.
+.It Fl -clear-cache
+Delete the persistent query cache
+.Pq every generation file, drafts left alone
+before running; given alone, without a subcommand or a package list, clear
+it and exit.
 .It Fl -color Ar when
 When to colorize output:
 .Cm auto
@@ -1450,9 +1456,10 @@ for its port rather than take it for an unconfigured one, so no command
 writes over it, and
 .Cm clean
 leaves it in place.
-.It other
+.It 3
 An error occurred, for example an unreadable package list or an unresolvable
 ports tree.
+It is never 1, so that a failed run cannot pass for a pending decision.
 .El
 .Pp
 .Cm decide
@@ -1466,7 +1473,7 @@ The plan was not honoured, and nothing was written: some value was refused or
 undone, a port was not in the closure, the result would conflict, or a file
 could not be written.
 The report on standard output says which.
-.It other
+.It 3
 An error occurred, for example a malformed plan or an unresolvable ports tree.
 .El
 .Pp
@@ -1474,7 +1481,7 @@ An error occurred, for example a malformed plan or an unresolvable ports tree.
 .Cm sync
 and
 .Cm clean
-exit 0 on success and non-zero on error, with a diagnostic on standard error.
+exit 0 on success and 3 on error, with a diagnostic on standard error.
 Per-file failures during
 .Cm sync
 or

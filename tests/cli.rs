@@ -300,3 +300,25 @@ fn tui_refuses_without_terminal_before_scanning() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("real terminal"), "{err}");
 }
+
+/// A run that fails outright exits 3, never 1: scan and decide answer
+/// "something is left to do" with 1, and a gate must tell the two apart.
+/// Bad usage stays clap's 2.
+#[test]
+fn errors_exit_3_not_the_gates_1() {
+    let tmp = tempfile::tempdir().unwrap();
+    for sub in ["scan", "sync"] {
+        let out = optique()
+            .env("XDG_CACHE_HOME", tmp.path())
+            .args([sub, "-o"])
+            .arg(tmp.path().join("options"))
+            .args(["-f", "/nonexistent/optique-list"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(3), "{sub}: {}", String::from_utf8_lossy(&out.stderr));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.starts_with("Error: cannot read list file"), "{stderr}");
+    }
+    let out = optique().args(["scan", "--no-such-flag"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2));
+}
