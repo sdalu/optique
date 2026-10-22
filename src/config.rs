@@ -73,6 +73,23 @@ pub struct Settings {
     pub notes: Vec<String>,
 }
 
+impl Settings {
+    /// Every path made absolute against optique's own directory. make runs
+    /// with -C in the port's directory, so a relative PORT_DBDIR, PORTSDIR
+    /// or __MAKE_CONF would be read from there while optique reads the
+    /// same path from here: the saved choices of a relative -o were
+    /// invisible to make, and `clean --redundant` took them for defaults.
+    fn absolute(mut self) -> Result<Self> {
+        let abs = |p: &Path| {
+            std::path::absolute(p).with_context(|| format!("resolving {}", p.display()))
+        };
+        self.portsdir = abs(&self.portsdir)?;
+        self.options_dir = abs(&self.options_dir)?;
+        self.make_conf = self.make_conf.as_deref().map(abs).transpose()?;
+        Ok(self)
+    }
+}
+
 /// Compiled blacklist: patterns from every existing poudriere(8)
 /// blacklist layer for this jail/tree/set.
 #[derive(Debug, Default)]
@@ -198,7 +215,8 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
             req.portsdir,
             req.options_dir,
             staging_dir,
-        );
+        )?
+        .absolute();
     }
     let poudriere_d = Path::new(POUDRIERE_D);
     // Only a local build asks make for its defaults: a poudriere build
@@ -272,9 +290,9 @@ struct HostPaths<'a> {
 /// one otherwise.
 fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
     if req.local || !host.poudriere_d.is_dir() {
-        resolve_local(host, req, staging_dir)
+        resolve_local(host, req, staging_dir)?.absolute()
     } else {
-        resolve_poudriere(host, req, staging_dir)
+        resolve_poudriere(host, req, staging_dir)?.absolute()
     }
 }
 
@@ -907,6 +925,37 @@ mod tests {
         assert_eq!(s.env, QueryEnv::Jail { package_building: true });
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
+    }
+
+    /// make runs with -C in the port's directory, so a relative path handed
+    /// to it would be read from there while optique reads it from its own
+    /// directory: every path leaves the resolution absolute.
+    #[test]
+    fn resolved_paths_are_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let absent = tmp.path().join("no-poudriere.d");
+        let etc = Path::new("relative-make.conf");
+        let host = HostPaths {
+            make_conf: etc,
+            ..host(tmp.path(), &absent, &ports, Path::new("relative-db"))
+        };
+        let cwd = std::env::current_dir().unwrap();
+        let rel = Path::new("relative-options");
+        for req in [Request::default(), Request { options_dir: Some(rel), ..Request::default() }] {
+            let s = resolve_host(&host, &req, &stage).unwrap();
+            assert!(s.options_dir.is_absolute(), "{}", s.options_dir.display());
+            assert!(s.options_dir.starts_with(&cwd), "{}", s.options_dir.display());
+        }
+        // A make.conf found relative to optique is handed to make absolute.
+        fs::write(cwd.join(etc), "# test\n").ok();
+        let s = resolve_host(&host, &Request::default(), &stage);
+        fs::remove_file(cwd.join(etc)).ok();
+        let make_conf = s.unwrap().make_conf.unwrap();
+        assert_eq!(make_conf, cwd.join(etc));
     }
 
     /// make's PORTSDIR and PORT_DBDIR are a local build's defaults, and the

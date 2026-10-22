@@ -719,3 +719,28 @@ fn synth_without_a_profile_make_conf_reads_none() {
     let report = parse_json(&out);
     assert_eq!(report["errors"], serde_json::json!([]), "{report}");
 }
+
+/// A relative -o is the same directory for make as for optique: make runs
+/// in the port's directory, and a relative PORT_DBDIR read from there hid
+/// every saved choice, so `clean --redundant` took a file turning an
+/// option off for one repeating the defaults.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn a_relative_options_dir_is_the_one_make_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("opts/devel_gmake/options");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    // NLS is on by default: turning it off is a real choice.
+    fs::write(&file, "_FILE_COMPLETE_OPTIONS_LIST=NLS\nOPTIONS_FILE_UNSET+=NLS\n").unwrap();
+
+    let out = optique(tmp.path())
+        .current_dir(tmp.path())
+        .args(["--no-cache", "-n", "clean", "--redundant", "-o", "opts"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{err}");
+    assert!(!stdout.contains("redundant"), "a real choice taken for a redundant one:\n{stdout}{err}");
+    assert!(file.exists());
+}
