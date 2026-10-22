@@ -71,6 +71,30 @@ pub struct Settings {
     /// Remarks about the resolution itself (e.g. a flag that does not apply
     /// to the selected backend), printed by the startup banner.
     pub notes: Vec<String>,
+    /// Ports trees laid over `portsdir`, in lookup order (the first holding
+    /// a port shadows the others and the main tree): the `OVERLAYS` make
+    /// itself reports once the make.conf is settled.
+    pub overlays: Vec<Overlay>,
+    /// Whether an `OVERLAYS` in optique's environment reaches the queries:
+    /// for a local build, where make reads the environment; never for
+    /// poudriere or synth, whose builders do not.
+    pub inherit_env_overlays: bool,
+}
+
+/// A ports tree laid over the main one (the framework's `OVERLAYS`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Overlay {
+    /// The poudriere tree name it was given as (-O), if any.
+    pub name: Option<String>,
+    pub path: PathBuf,
+}
+
+/// An overlay as the command line gives it: a registered poudriere tree
+/// (-O name) or a directory (--overlay-dir).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OverlaySpec {
+    Name(String),
+    Dir(PathBuf),
 }
 
 impl Settings {
@@ -203,6 +227,8 @@ pub struct Request<'a> {
     pub portsdir: Option<&'a Path>,
     /// -o: the options dir, taken as given.
     pub options_dir: Option<&'a Path>,
+    /// -O and --overlay-dir, in command-line order.
+    pub overlays: &'a [OverlaySpec],
 }
 
 /// `Cli::check_globals` rejects the flag combinations that make no sense
@@ -222,6 +248,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
             staging_dir,
         )?
         .absolute()?;
+        let settings = with_overlays(settings, Vec::new());
         return Ok(key_installed_packages(settings, &pkg_db));
     }
     let poudriere_d = Path::new(POUDRIERE_D);
@@ -298,12 +325,109 @@ struct HostPaths<'a> {
 /// A poudriere build when poudriere.d exists and -l was not given, a local
 /// one otherwise.
 fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
-    let settings = if req.local || !host.poudriere_d.is_dir() {
-        resolve_local(host, req, staging_dir)?.absolute()?
+    let local = req.local || !host.poudriere_d.is_dir();
+    let given = given_overlays(host.poudriere_d, req.overlays, local)?;
+    let settings = if local {
+        resolve_local(host, req, &given, staging_dir)?.absolute()?
     } else {
-        resolve_poudriere(host, req, staging_dir)?.absolute()?
+        resolve_poudriere(host, req, &given, staging_dir)?.absolute()?
     };
+    let settings = with_overlays(settings, given);
     Ok(key_installed_packages(settings, host.pkg_db))
+}
+
+/// The overlays the command line names, in its order: a -O name read from
+/// `poudriere.d/ports/<name>/mnt` as poudriere's `bulk -O` does (an overlay
+/// need not be a whole tree, so no `Mk/` is asked of it), a --overlay-dir
+/// as given. Paths are canonical, as make's `:tA` would make them.
+fn given_overlays(poudriere_d: &Path, specs: &[OverlaySpec], local: bool) -> Result<Vec<Overlay>> {
+    let mut out = Vec::new();
+    for spec in specs {
+        let (name, path) = match spec {
+            OverlaySpec::Name(name) => {
+                if local {
+                    bail!(
+                        "-O {name} names a poudriere tree, but {} does not exist",
+                        poudriere_d.display()
+                    );
+                }
+                let dir = poudriere_d.join("ports").join(name);
+                if !dir.is_dir() {
+                    bail!("no poudriere overlay '{name}' ({} does not exist)", dir.display());
+                }
+                let Ok(mnt) = fs::read_to_string(dir.join("mnt")) else {
+                    bail!("poudriere overlay '{name}' has no mnt file in {}", dir.display());
+                };
+                (Some(name.clone()), PathBuf::from(mnt.trim()))
+            }
+            OverlaySpec::Dir(dir) => (None, dir.clone()),
+        };
+        let what = name.as_deref().map_or_else(
+            || format!("--overlay-dir {}", path.display()),
+            |n| format!("poudriere overlay '{n}' points to {}, which", path.display()),
+        );
+        if !path.is_dir() {
+            bail!("{what} is not a directory");
+        }
+        let path = path.canonicalize().with_context(|| format!("resolving {}", path.display()))?;
+        out.push(Overlay { name, path });
+    }
+    Ok(out)
+}
+
+/// The `OVERLAYS+=` lines the given overlays add to a make.conf, in order.
+fn overlay_lines(overlays: &[Overlay]) -> String {
+    overlays.iter().map(|o| format!("OVERLAYS+={}\n", o.path.display())).collect()
+}
+
+/// Settle `settings.overlays` on what make reports for the staged make.conf
+/// (and, for a local build, the environment): -O and --overlay-dir lines,
+/// a poudriere.d layer, /etc/make.conf or a synth profile alike, so the
+/// lookup follows exactly the overlays make will use. Names come back from
+/// the command line by path; if make cannot be asked, the given ones stand.
+fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
+    let reported = make_overlays(settings.make_conf.as_deref(), settings.inherit_env_overlays);
+    settings.overlays = match reported {
+        None => given,
+        Some(paths) => paths
+            .into_iter()
+            .map(|path| {
+                let path = path.canonicalize().unwrap_or(path);
+                let name = given.iter().find(|o| o.path == path).and_then(|o| o.name.clone());
+                if name.is_none() && !given.iter().any(|o| o.path == path) {
+                    let what = if path.is_dir() {
+                        "set by make.conf or the environment"
+                    } else {
+                        "does not exist"
+                    };
+                    settings.notes.push(format!("overlay {} {what}", path.display()));
+                }
+                Overlay { name, path }
+            })
+            .collect(),
+    };
+    settings
+}
+
+/// `OVERLAYS` as make sees it under `make_conf` (make's own default when
+/// None), the environment's left out unless `inherit_env`. None when make
+/// cannot be asked.
+fn make_overlays(make_conf: Option<&Path>, inherit_env: bool) -> Option<Vec<PathBuf>> {
+    let mut cmd = std::process::Command::new("/usr/bin/make");
+    cmd.current_dir("/")
+        .args(["-f", "/dev/null", "-V", "OVERLAYS"])
+        .env_remove("MAKEFLAGS")
+        .env_remove("MAKELEVEL")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if !inherit_env {
+        cmd.env_remove("OVERLAYS");
+    }
+    if let Some(conf) = make_conf {
+        cmd.arg(format!("__MAKE_CONF={}", conf.display()));
+    }
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).split_whitespace().map(PathBuf::from).collect())
 }
 
 /// A build on the host sees what is installed there: Makefiles probe
@@ -331,7 +455,12 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
 /// the staging like any layer, so that the cache keys its content and the
 /// banner names it, but make reads the original: a copy elsewhere would
 /// lose the directory its relative `.include`s are found from.
-fn resolve_local(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
+fn resolve_local(
+    host: &HostPaths,
+    req: &Request,
+    overlays: &[Overlay],
+    staging_dir: &Path,
+) -> Result<Settings> {
     if req.jail.is_some() || req.set.is_some() || req.tree.is_some() {
         bail!(
             "-j/-z/-p name poudriere's configuration, but {} does not exist",
@@ -359,9 +488,22 @@ fn resolve_local(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<
         }
     };
     let options_dir_is_new = !options_dir.is_dir();
-    let (staged, conf_hash, make_conf_sources) =
-        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, staging_dir)?;
-    let make_conf = staged.map(|_| host.make_conf.to_path_buf());
+    let (staged, mut conf_hash, make_conf_sources) =
+        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
+    let mut make_conf = staged.map(|_| host.make_conf.to_path_buf());
+    // --overlay-dir: a small make.conf naming the overlays first, then
+    // including the real one, still read in place for its own .includes.
+    if !overlays.is_empty() {
+        let text = format!(
+            "{}.sinclude \"{}\"\n",
+            overlay_lines(overlays),
+            std::path::absolute(host.make_conf)?.display()
+        );
+        let path = staging_dir.join("local-make.conf");
+        fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
+        conf_hash = crate::cache::sha256_hex(format!("{conf_hash}\n{text}").as_bytes());
+        make_conf = Some(path);
+    }
     Ok(Settings {
         portsdir,
         options_dir,
@@ -372,10 +514,17 @@ fn resolve_local(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<
         env: QueryEnv::Host,
         blacklist: Blacklist::default(),
         notes,
+        overlays: Vec::new(),
+        inherit_env_overlays: true,
     })
 }
 
-fn resolve_poudriere(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
+fn resolve_poudriere(
+    host: &HostPaths,
+    req: &Request,
+    overlays: &[Overlay],
+    staging_dir: &Path,
+) -> Result<Settings> {
     let poudriere_d = host.poudriere_d;
     let (tree, jail, set) = (req.tree, req.jail, req.set);
     let tree_name = tree.unwrap_or("default");
@@ -392,7 +541,7 @@ fn resolve_poudriere(host: &HostPaths, req: &Request, staging_dir: &Path) -> Res
     let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
     let env = QueryEnv::Jail { package_building: !off };
     let (make_conf, conf_hash, make_conf_sources) =
-        layer_make_conf(poudriere_d, jail, tree_name, set, env, staging_dir)?;
+        layer_make_conf(poudriere_d, jail, tree_name, set, env, overlays, staging_dir)?;
 
     let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
 
@@ -406,6 +555,8 @@ fn resolve_poudriere(host: &HostPaths, req: &Request, staging_dir: &Path) -> Res
         env,
         blacklist,
         notes: Vec::new(),
+        overlays: Vec::new(),
+        inherit_env_overlays: false,
     })
 }
 
@@ -530,6 +681,7 @@ fn resolve_synth(
     let (make_conf, conf_hash, make_conf_sources) = concat_make_conf(
         &[synth_dir.join(format!("{profile}-make.conf"))],
         QueryEnv::Host,
+        &[],
         staging_dir,
     )?;
     // A profile without a make.conf still names one: left unset, make would
@@ -547,6 +699,8 @@ fn resolve_synth(
         env: QueryEnv::Host,
         blacklist: Blacklist::default(),
         notes,
+        overlays: Vec::new(),
+        inherit_env_overlays: false,
     })
 }
 
@@ -769,35 +923,41 @@ fn layer_make_conf(
     tree: &str,
     set: Option<&str>,
     env: QueryEnv,
+    overlays: &[Overlay],
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
-    concat_make_conf(&paths, env, staging_dir)
+    concat_make_conf(&paths, env, overlays, staging_dir)
 }
 
 /// Stage a make.conf holding the jail environment alone, no layers.
 #[cfg(test)]
 pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
     let (path, _, _) =
-        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, staging_dir)?;
+        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], staging_dir)?;
     Ok(path.expect("the jail environment is never empty"))
 }
 
 /// Concatenate every existing candidate, in order, into one staged
-/// `make.conf`, between the jail prelude and trailer in a jail's `env`. The
+/// `make.conf`, between the jail prelude and trailer in a jail's `env`, the
+/// overlays' `OVERLAYS+=` lines where poudriere writes them in the jail's
+/// make.conf: after the prelude, before the layers (host paths, as the
+/// jail's `/overlays/<name>` does not exist here). The
 /// hash covers the combined text (so an empty layering hashes too, and the
 /// jail environment keys a cache generation of its own); nothing is written
 /// when there is nothing to write.
 fn concat_make_conf(
     candidates: &[PathBuf],
     env: QueryEnv,
+    overlays: &[Overlay],
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut combined = String::new();
     let mut sources = Vec::new();
     if let QueryEnv::Jail { package_building } = env {
         combined.push_str(POUDRIERE_JAIL_PRELUDE);
+        combined.push_str(&overlay_lines(overlays));
         if package_building {
             combined.push_str(PACKAGE_BUILDING_LINES);
         }
@@ -920,7 +1080,7 @@ mod tests {
         let none = Request::default();
         let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
 
-        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &stage).unwrap();
+        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], &stage).unwrap();
         assert_eq!(hash(&host), bare, "no database, nothing to key");
         fs::write(&pkg_db, "one package").unwrap();
         let one = hash(&host);
@@ -1023,6 +1183,96 @@ mod tests {
         assert_eq!(make_conf, cwd.join(etc));
     }
 
+    /// -O names a poudriere tree (its mnt), --overlay-dir a directory; both
+    /// keep command-line order, reach make as OVERLAYS+= after the jail
+    /// prelude, and come back from make named.
+    #[test]
+    fn overlays_resolve_in_order_and_reach_make() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        let named = tmp.path().join("named");
+        let dir = tmp.path().join("dir");
+        fs::create_dir_all(&named).unwrap(); // no Mk/: an overlay need not be a tree
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(pd.join("ports/ov")).unwrap();
+        fs::write(pd.join("ports/ov/mnt"), format!("{}\n", named.display())).unwrap();
+        let host = host(tmp.path(), &pd, &ports, tmp.path());
+        let specs = [OverlaySpec::Dir(dir.clone()), OverlaySpec::Name("ov".into())];
+        let req = Request { overlays: &specs, ..Request::default() };
+
+        let s = resolve_host(&host, &req, &stage).unwrap();
+        let (dir, named) = (dir.canonicalize().unwrap(), named.canonicalize().unwrap());
+        assert_eq!(
+            s.overlays,
+            [Overlay { name: None, path: dir.clone() }, Overlay { name: Some("ov".into()), path: named.clone() }]
+        );
+        assert!(!s.inherit_env_overlays, "a jail does not see optique's environment");
+        let conf = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
+        let lines = format!("OVERLAYS+={}\nOVERLAYS+={}\n", dir.display(), named.display());
+        let at = conf.find(&lines).expect("the OVERLAYS lines are staged");
+        assert!(at > conf.find("BATCH=yes").unwrap() && at < conf.find("PACKAGE_BUILDING").unwrap(), "{conf}");
+        let bare = resolve_host(&host, &Request::default(), &stage).unwrap();
+        assert_ne!(s.conf_hash, bare.conf_hash, "the overlays key their own generation");
+        assert!(bare.overlays.is_empty());
+
+        // The errors, in poudriere's terms.
+        let err = |specs: &[OverlaySpec]| {
+            resolve_host(&host, &Request { overlays: specs, ..Request::default() }, &stage)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err(&[OverlaySpec::Name("nope".into())]).starts_with("no poudriere overlay 'nope'"));
+        fs::create_dir_all(pd.join("ports/nomnt")).unwrap();
+        assert!(err(&[OverlaySpec::Name("nomnt".into())]).contains("has no mnt file"));
+        fs::create_dir_all(pd.join("ports/gone")).unwrap();
+        fs::write(pd.join("ports/gone/mnt"), "/nonexistent/overlay\n").unwrap();
+        assert!(err(&[OverlaySpec::Name("gone".into())]).ends_with("is not a directory"));
+        assert!(err(&[OverlaySpec::Dir("/nonexistent/dir".into())]).starts_with("--overlay-dir"));
+
+        // No poudriere.d: a name has nothing to be read from.
+        let local = HostPaths { poudriere_d: Path::new("/nonexistent/poudriere.d"), ..host };
+        let e = resolve_host(&local, &Request { overlays: &[OverlaySpec::Name("ov".into())], ..Request::default() }, &stage)
+            .unwrap_err()
+            .to_string();
+        assert!(e.starts_with("-O ov names a poudriere tree"), "{e}");
+    }
+
+    /// A local build reads its make.conf in place; --overlay-dir comes first
+    /// through a small make.conf that includes it, and an overlay that
+    /// make.conf sets itself follows, unnamed and noted.
+    #[test]
+    fn local_overlay_dirs_go_before_the_make_confs_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let (mine, theirs) = (tmp.path().join("mine"), tmp.path().join("theirs"));
+        fs::create_dir_all(&mine).unwrap();
+        fs::create_dir_all(&theirs).unwrap();
+        let etc = tmp.path().join("etc");
+        fs::create_dir_all(&etc).unwrap();
+        fs::write(etc.join("make.conf"), ".include \"overlays.conf\"\n").unwrap();
+        fs::write(etc.join("overlays.conf"), format!("OVERLAYS+={}\n", theirs.display())).unwrap();
+        let absent = tmp.path().join("no-poudriere.d");
+        let conf = etc.join("make.conf");
+        let host = HostPaths { make_conf: &conf, ..host(tmp.path(), &absent, &ports, tmp.path()) };
+        let specs = [OverlaySpec::Dir(mine.clone())];
+
+        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
+        assert_eq!(paths, [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]);
+        assert!(s.inherit_env_overlays);
+        assert!(s.notes.iter().any(|n| n.contains("set by make.conf")), "{:?}", s.notes);
+        let plain = resolve_host(&host, &Request::default(), &stage).unwrap();
+        assert_eq!(plain.make_conf.as_deref(), Some(conf.as_path()), "read in place without one");
+        assert_ne!(s.conf_hash, plain.conf_hash);
+    }
+
     /// make's PORTSDIR and PORT_DBDIR are a local build's defaults, and the
     /// banner says where they came from.
     #[test]
@@ -1081,7 +1331,7 @@ mod tests {
         assert_eq!(s.make_conf_sources, vec![etc.clone()]);
         // Read in place, for its relative .includes, and keyed all the same.
         assert_eq!(s.make_conf.as_ref(), Some(&etc));
-        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &stage).unwrap();
+        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], &stage).unwrap();
         assert_ne!(s.conf_hash, empty_hash);
         // The same host without -l is a poudriere build.
         let s = resolve_host(&host, &Request::default(), &stage).unwrap();
@@ -1197,10 +1447,10 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         let host = HostPaths { poudriere_conf: &conf, ..host(tmp.path(), &pd, &ports, &db) };
 
-        let on = resolve_poudriere(&host, &Request::default(), &stage).unwrap();
+        let on = resolve_poudriere(&host, &Request::default(), &[], &stage).unwrap();
         assert_eq!(on.env, QueryEnv::Jail { package_building: true });
         fs::write(&conf, "NO_PACKAGE_BUILDING=yes\n").unwrap();
-        let off = resolve_poudriere(&host, &Request::default(), &stage).unwrap();
+        let off = resolve_poudriere(&host, &Request::default(), &[], &stage).unwrap();
         assert_eq!(off.env, QueryEnv::Jail { package_building: false });
         let text = fs::read_to_string(off.make_conf.unwrap()).unwrap();
         assert!(!text.contains("PACKAGE_BUILDING"), "{text}");
@@ -1244,7 +1494,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], &stage).unwrap();
         assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
@@ -1263,7 +1513,7 @@ mod tests {
         fs::write(pd.join("s1-make.conf"), "B=2\n").unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert!(text.lines().any(|l| l == "A=1"), "{text}");
         assert!(text.lines().any(|l| l == "B=2"), "{text}");
@@ -1278,7 +1528,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, jail_hash, _) =
-            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &stage).unwrap();
+            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         // poudriere's own lines come before the layers, as in a jail...
         assert!(text.find("PACKAGE_BUILDING=yes").unwrap() < text.find("/opt/local").unwrap());
@@ -1286,16 +1536,16 @@ mod tests {
         assert!(text.trim_end().ends_with("LOCALBASE=/nonexistent"), "{text}");
 
         // The environment keys its own cache generation.
-        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &stage).unwrap();
+        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], &stage).unwrap();
         assert_ne!(jail_hash, host_hash);
 
         // An empty layering still stages a make.conf in a jail's environment.
         let empty = tmp.path().join("empty.d");
         fs::create_dir_all(&empty).unwrap();
-        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], &stage).unwrap();
         assert!(sources.is_empty());
         assert!(path.is_some());
-        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], &stage).unwrap();
         assert!(path.is_none());
     }
 

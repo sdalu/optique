@@ -62,13 +62,13 @@ pub fn disambiguate_synth<I: IntoIterator<Item = OsString>>(args: I) -> Vec<OsSt
 
 /// Short options that take a value; in a cluster (`-nz ws`) the value is the
 /// rest of the word, or the next word when the option ends it.
-const VALUE_SHORTS: [char; 7] = ['z', 'j', 'p', 'P', 'o', 'f', 'J'];
+const VALUE_SHORTS: [char; 8] = ['z', 'j', 'p', 'P', 'O', 'o', 'f', 'J'];
 
 /// Long options that take a value, given as the next word unless attached
 /// with `=`.
-const VALUE_LONGS: [&str; 9] = [
-    "--set", "--jail", "--ports-tree", "--portsdir", "--options-dir", "--file", "--jobs",
-    "--repo", "--color",
+const VALUE_LONGS: [&str; 11] = [
+    "--set", "--jail", "--ports-tree", "--portsdir", "--overlay", "--overlay-dir",
+    "--options-dir", "--file", "--jobs", "--repo", "--color",
 ];
 
 /// The action comes first: `optique scan -z ws -f list`. With no action the
@@ -123,6 +123,40 @@ pub fn check_action_first(args: &[OsString]) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse the (already rewritten and checked) arguments, merging -O and
+/// --overlay-dir into one list in command-line order: which overlay shadows
+/// which depends on it, and clap keeps the two apart.
+pub fn parse(args: Vec<OsString>) -> Cli {
+    use clap::{CommandFactory as _, FromArgMatches as _};
+    let matches = Cli::command().get_matches_from(args);
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    // The options sit with the action when there is one, else at the top.
+    let level = matches
+        .subcommand()
+        .map(|(_, sub)| sub)
+        .filter(|sub| sub.try_contains_id("overlay").is_ok())
+        .unwrap_or(&matches);
+    let indices = |id: &str| -> Vec<usize> {
+        level.indices_of(id).map(Iterator::collect).unwrap_or_default()
+    };
+    let mut specs: Vec<(usize, crate::config::OverlaySpec)> = Vec::new();
+    specs.extend(
+        indices("overlay")
+            .into_iter()
+            .zip(cli.overlay.iter())
+            .map(|(i, n)| (i, crate::config::OverlaySpec::Name(n.clone()))),
+    );
+    specs.extend(
+        indices("overlay_dir")
+            .into_iter()
+            .zip(cli.overlay_dir.iter())
+            .map(|(i, d)| (i, crate::config::OverlaySpec::Dir(d.clone()))),
+    );
+    specs.sort_by_key(|(i, _)| *i);
+    cli.overlays = specs.into_iter().map(|(_, s)| s).collect();
+    cli
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "optique",
@@ -149,6 +183,20 @@ pub struct Cli {
     /// resolution (e.g. /usr/ports)
     #[arg(short = 'P', long = "portsdir", global = true, value_name = "DIR")]
     pub portsdir: Option<PathBuf>,
+
+    /// Poudriere ports tree laid over the main one, as poudriere bulk -O;
+    /// repeatable, the first given shadows the next and the main tree
+    #[arg(short = 'O', long = "overlay", global = true, value_name = "NAME")]
+    pub overlay: Vec<String>,
+
+    /// Directory laid over the ports tree as an overlay, the counterpart of
+    /// -O as -P is of -p; repeatable, in order with -O
+    #[arg(long = "overlay-dir", global = true, value_name = "DIR")]
+    pub overlay_dir: Vec<PathBuf>,
+
+    /// -O and --overlay-dir merged in command-line order (set by `parse`).
+    #[arg(skip)]
+    pub overlays: Vec<crate::config::OverlaySpec>,
 
     /// Configure for a local build on this host, ignoring poudriere.d even
     /// when it exists: ports tree from PORTSDIR, options dir from
@@ -253,6 +301,8 @@ impl Cli {
             "jail" => self.jail.is_some(),
             "ports-tree" => self.tree.is_some(),
             "portsdir" => self.portsdir.is_some(),
+            "overlay" => !self.overlay.is_empty(),
+            "overlay-dir" => !self.overlay_dir.is_empty(),
             "repo" => !self.repo.is_empty(),
             "verbose" => self.verbose,
             "quiet" => self.quiet,
@@ -263,9 +313,12 @@ impl Cli {
             ("local", "set"),
             ("local", "jail"),
             ("local", "ports-tree"),
+            ("local", "overlay"),
             ("synth", "set"),
             ("synth", "jail"),
             ("synth", "ports-tree"),
+            ("synth", "overlay"),
+            ("synth", "overlay-dir"),
             ("ports-tree", "portsdir"),
             ("verbose", "quiet"),
         ];
@@ -287,6 +340,23 @@ impl Cli {
                 return error(
                     clap::error::ErrorKind::MissingRequiredArgument,
                     format!("the argument '--{a}' requires '--{b}'"),
+                );
+            }
+        }
+        // poudriere would mount an overlay given twice twice, and the tree
+        // itself as its own overlay: both are mistakes.
+        let tree = self.tree.as_deref().unwrap_or("default");
+        for (i, name) in self.overlay.iter().enumerate() {
+            if self.overlay[..i].contains(name) {
+                return error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    format!("overlay '{name}' given twice"),
+                );
+            }
+            if name == tree && self.portsdir.is_none() {
+                return error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    format!("overlay '{name}' is the ports tree itself"),
                 );
             }
         }
@@ -501,6 +571,16 @@ mod tests {
     #[test]
     fn empty_is_an_error() {
         assert!(collect_roots(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn overlays_keep_command_line_order() {
+        use crate::config::OverlaySpec::{Dir, Name};
+        let parse = |args: &[&str]| parse(args.iter().map(OsString::from).collect()).overlays;
+        let want = vec![Name("a".into()), Dir("/d".into()), Name("b".into())];
+        assert_eq!(parse(&["optique", "scan", "-O", "a", "--overlay-dir", "/d", "-O", "b", "x/y"]), want);
+        assert_eq!(parse(&["optique", "-O", "a", "--overlay-dir=/d", "--overlay", "b", "x/y"]), want);
+        assert!(parse(&["optique", "scan", "x/y"]).is_empty());
     }
 
     #[test]

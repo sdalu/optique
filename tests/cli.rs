@@ -156,6 +156,9 @@ fn local_and_portsdir_conflicts() {
         (vec!["scan", "-l", "-s", "foo/bar"], "--local"),
         (vec!["scan", "-p", "default", "-P", "/usr/ports", "foo/bar"], "--portsdir"),
         (vec!["scan", "-v", "-q", "foo/bar"], "--quiet"),
+        (vec!["scan", "-l", "-O", "ov", "foo/bar"], "--overlay"),
+        (vec!["scan", "-s", "-O", "ov", "foo/bar"], "--overlay"),
+        (vec!["scan", "-s", "--overlay-dir", "/tmp", "foo/bar"], "--overlay-dir"),
         // No action: the TUI's options, checked the same way.
         (vec!["-l", "-z", "ws", "foo/bar"], "--local"),
     ] {
@@ -186,6 +189,21 @@ fn options_before_the_action_are_refused() {
     let out = optique().args(["-o", "scan", "-l", "-P", "/nonexistent"]).output().unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!err.contains("options go after"), "{err}");
+}
+
+/// An overlay given twice, or naming the main tree itself, is a mistake.
+#[test]
+fn an_overlay_twice_or_the_tree_itself_is_refused() {
+    for (args, msg) in [
+        (vec!["scan", "-O", "a", "-O", "a", "foo/bar"], "overlay 'a' given twice"),
+        (vec!["scan", "-O", "default", "foo/bar"], "overlay 'default' is the ports tree itself"),
+        (vec!["scan", "-p", "t", "-O", "t", "foo/bar"], "overlay 't' is the ports tree itself"),
+    ] {
+        let out = optique().args(&args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(msg), "{args:?}: {err}");
+    }
 }
 
 /// --repo needs -s, in either order, and is refused without it.

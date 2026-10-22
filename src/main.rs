@@ -31,7 +31,6 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
-use clap::Parser;
 
 use crate::cli::{Cli, Command};
 use crate::moved::Moved;
@@ -65,7 +64,7 @@ fn run() -> Result<()> {
         use clap::CommandFactory as _;
         Cli::command().error(clap::error::ErrorKind::ArgumentConflict, msg).exit();
     }
-    let cli = Cli::parse_from(args);
+    let cli = cli::parse(args);
     if let Err(e) = cli.check_globals() {
         e.exit();
     }
@@ -649,6 +648,7 @@ fn resolve_settings(cli: &Cli, staging_dir: &Path) -> Result<config::Settings> {
             local: cli.local,
             portsdir: cli.portsdir.as_deref(),
             options_dir: cli.options_dir.as_deref(),
+            overlays: &cli.overlays,
         },
         staging_dir,
     )
@@ -678,6 +678,15 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         );
         for note in rs.notes.iter().chain(settings.notes.iter()) {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+        }
+        // In lookup order: the first holding a port answers for it.
+        for (i, o) in settings.overlays.iter().enumerate() {
+            let label = if i == 0 { "overlay:" } else { "        " };
+            let what = match &o.name {
+                Some(name) => format!("{name} ({})", o.path.display()),
+                None => o.path.display().to_string(),
+            };
+            eprintln!("  {}     {what}", tint(paint, ansi::CYAN, label));
         }
         eprintln!(
             "  {} {}{}",
