@@ -137,7 +137,9 @@ These flags are accepted before or after the subcommand name
 | :-------------------- | :---------- | :------------------------------------- |
 | `-z`, `--set`         | `SET`       | poudriere set name                     |
 | `-j`, `--jail`        | `JAIL`      | poudriere jail name                    |
-| `-p`, `--ports-tree`  | `TREE`      | ports tree name (default `default`)    |
+| `-p`, `--ports-tree`  | `TREE`      | poudriere tree (default `default`)     |
+| `-P`, `--portsdir`    | `DIR`       | explicit ports tree                    |
+| `-l`, `--local`       | —           | local build, poudriere.d ignored       |
 | `-s`, `--synth`       | `[PROFILE]` | synth's layout, not poudriere's        |
 | `--repo`              | `NAME`      | synth: restrict implicit list to repo  |
 | `-o`, `--options-dir` | `DIR`       | explicit options dir                   |
@@ -153,8 +155,9 @@ These flags are accepted before or after the subcommand name
 | `-h`, `--help`        | —           | print usage and exit                   |
 | `-V`, `--version`     | —           | print the version and exit             |
 
-`-s` conflicts with `-z`/`-j`; see [configuration.md](configuration.md#synth)
-for the synth layout and [Choosing the ports](#choosing-the-ports) for
+`-s` and `-l` conflict with `-z`/`-j`/`-p` and with each other, and `-p`
+with `-P`; see [configuration.md](configuration.md#synth) for the synth
+layout, [local builds](configuration.md#local-builds) for `-l`, and [Choosing the ports](#choosing-the-ports) for
 `--repo` and `-f`. `--verbose` reports each subcommand's own extra detail
 (effective options and warnings for `scan`, final state for `sync`,
 kept-reasons for `clean`); `--quiet` is ignored by `scan --json`. `--color`

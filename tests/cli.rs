@@ -132,11 +132,31 @@ fn synth_conflicts_with_poudriere_flags() {
     for args in [
         vec!["-s", "-z", "ws", "scan", "foo/bar"],
         vec!["--synth", "LiveSystem", "-j", "141amd64", "scan", "foo/bar"],
+        vec!["-s", "-p", "default", "scan", "foo/bar"],
     ] {
         let out = optique().args(&args).output().unwrap();
         assert!(!out.status.success(), "{args:?} must be rejected");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("--synth"), "{args:?}: {err}");
+        assert!(err.contains("cannot be used with"), "{args:?}: {err}");
+    }
+}
+
+/// -l is a local build: no poudriere or synth flag goes with it, and -p (a
+/// poudriere tree name) does not go with -P (a directory) either.
+#[test]
+fn local_and_portsdir_conflicts() {
+    for (args, flag) in [
+        (vec!["-l", "-z", "ws", "scan", "foo/bar"], "--local"),
+        (vec!["--local", "-j", "141amd64", "scan", "foo/bar"], "--local"),
+        (vec!["-l", "-p", "default", "scan", "foo/bar"], "--local"),
+        (vec!["-l", "-s", "scan", "foo/bar"], "--local"),
+        (vec!["-p", "default", "-P", "/usr/ports", "scan", "foo/bar"], "--portsdir"),
+    ] {
+        let out = optique().args(&args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} must be rejected");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(flag), "{args:?}: {err}");
         assert!(err.contains("cannot be used with"), "{args:?}: {err}");
     }
 }
@@ -206,10 +226,14 @@ fn malformed_origin_is_a_clean_error() {
 
 #[test]
 fn no_arguments_is_a_helpful_error() {
-    let out = optique().output().unwrap();
-    assert!(!out.status.success());
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("no ports given"), "{err}");
+    // The hint names no build-specific flag: -z would be refused with -l.
+    for args in [vec![], vec!["-l"]] {
+        let out = optique().args(&args).output().unwrap();
+        assert!(!out.status.success());
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("no ports given"), "{args:?}: {err}");
+        assert!(!err.contains("-z"), "{args:?}: {err}");
+    }
 }
 
 #[test]
@@ -285,6 +309,7 @@ fn man_page_documents_every_subcommand_and_flag() {
         "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
         "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
         "POUDRIERE INTEGRATION", "-synth", "SYNTH", "Dependency loops",
+        "-local", "LOCAL BUILDS", "-portsdir", "PORTSDIR", "PORT_DBDIR",
         "loops_blocking", "decide", "-options", "MACHINE INTERFACE",
     ] {
         assert!(text.contains(needle), "man/optique.8 must document {needle}");

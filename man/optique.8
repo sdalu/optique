@@ -3,7 +3,7 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd July 26, 2026
+.Dd October 22, 2026
 .Dt OPTIQUE 8
 .Os
 .Sh NAME
@@ -14,8 +14,8 @@
 .Op Fl v | Fl q | Fl m
 .Op Fl z Ar set
 .Op Fl j Ar jail
-.Op Fl p Ar tree
-.Op Fl s Op Ar profile
+.Op Fl p Ar tree | Fl P Ar dir
+.Op Fl l | Fl s Op Ar profile
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
 .Op Fl -no-cache
@@ -100,7 +100,9 @@ Every result is cached
 .Pq see Sx FILES
 keyed on the ports tree revision, the hash of the merged
 .Pa make.conf
-layers and the content of the port's own options file, so subsequent runs
+layers
+.Pq their own text, not the files they include; see Sx CAVEATS
+and the content of the port's own options file, so subsequent runs
 re-invoke
 .Nm make
 only for ports whose inputs actually changed and typically finish in well
@@ -181,9 +183,47 @@ Poudriere ports tree name.
 Defaults to
 .Ql default .
 The tree's location is read from
-.Pa /usr/local/etc/poudriere.d/ports/ Ns Ar tree Ns Pa /mnt ,
-falling back to
+.Pa /usr/local/etc/poudriere.d/ports/ Ns Ar tree Ns Pa /mnt ;
+a
+.Ar tree
+poudriere does not know is an error, and only the implicit
+.Ql default
+falls back to
 .Pa /usr/ports .
+Without
+.Pa /usr/local/etc/poudriere.d
+it is an error, as are
+.Fl j
+and
+.Fl z .
+Mutually exclusive with
+.Fl P ,
+.Fl l
+and
+.Fl s .
+.It Fl P Ar dir , Fl -portsdir Ar dir
+Use
+.Ar dir
+as the ports tree verbatim, bypassing the poudriere tree lookup, synth's
+.Va Directory_portsdir
+or the local build's
+.Ev PORTSDIR .
+It must hold
+.Pa Mk/bsd.port.mk .
+.It Fl l , Fl -local
+Configure for a local build on this host, as
+.Ql make config
+would, ignoring
+.Pa /usr/local/etc/poudriere.d
+even when it exists.
+See
+.Sx LOCAL BUILDS .
+Mutually exclusive with
+.Fl z ,
+.Fl j ,
+.Fl p
+and
+.Fl s .
 .It Fl s Oo Ar profile Oc , Fl -synth Oo Ar profile Oc
 Configure for
 .Xr synth 1
@@ -196,9 +236,11 @@ is honoured, falling back to
 See
 .Sx SYNTH .
 Mutually exclusive with
-.Fl z
+.Fl z ,
+.Fl j ,
+.Fl p
 and
-.Fl j .
+.Fl l .
 Because the profile name is optional, a name that could be read as something
 else
 .Pq a subcommand, an option, or anything containing a slash
@@ -207,7 +249,8 @@ must be attached, as
 .It Fl o Ar dir , Fl -options-dir Ar dir
 Use
 .Ar dir
-as the options directory verbatim, bypassing poudriere resolution entirely.
+as the options directory verbatim, bypassing the poudriere, synth or local
+resolution entirely.
 .It Fl f Ar pkglist , Fl -file Ar pkglist
 Read port origins from
 .Ar pkglist ,
@@ -231,6 +274,10 @@ Delete the persistent query cache
 .Pq every generation file, drafts left alone
 before running; given alone, without a subcommand or a package list, clear
 it and exit.
+Needed after editing a file that a
+.Pa make.conf
+includes; see
+.Sx CAVEATS .
 .It Fl -color Ar when
 When to colorize output:
 .Cm auto
@@ -1161,21 +1208,21 @@ is.
 .Sh POUDRIERE INTEGRATION
 All poudriere state is read from
 .Pa /usr/local/etc/poudriere.d .
-If that directory does not exist and neither
-.Fl j
-nor
-.Fl z
-was given,
+Its existence is what selects poudriere: without it, or under
+.Fl l ,
 .Nm
-falls back to a plain
-.Pa /var/db/ports ;
-with
-.Fl j
-or
+configures a local build instead
+.Pq see Sx LOCAL BUILDS ,
+and
+.Fl j ,
 .Fl z
-it is an error.
+or
+.Fl p
+without it is an error.
 .Fl o
-bypasses this resolution completely.
+bypasses the options directory resolution below, and
+.Fl P
+the ports tree lookup.
 .Pp
 Given
 .Fl j Ar jail ,
@@ -1247,6 +1294,21 @@ and
 .Ql FORCED
 badges report.
 .Pp
+The layers are concatenated into one staged file, as poudriere concatenates
+them into the jail's
+.Pa make.conf ,
+so an
+.Ic .include
+with a relative path does not find its file here any more than it would in
+the jail; synth's profile
+.Pa make.conf
+is handled the same way.
+The query cache is keyed on the text of the
+.Pa make.conf
+files, not of the files they include: after editing an included file, run
+once with
+.Fl -clear-cache .
+.Pp
 The layers are wrapped in the environment of a
 .Xr poudriere 8
 jail, not the host's: they come after the lines poudriere puts at the top
@@ -1278,10 +1340,10 @@ reads after it, for the jail, tree and set given
 and
 .Va PACKAGE_BUILDING_FLAVORS
 are left out, as poudriere leaves them out.
-Without a
-.Pa poudriere.d
-.Pq plain Pa /var/db/ports
-queries see the host as it is, which is then the machine that builds.
+A local build
+.Pq Sx LOCAL BUILDS
+has no jail: queries see the host as it is, which is then the machine that
+builds.
 .Pp
 The
 .Pa blacklist
@@ -1341,11 +1403,12 @@ the one synth appends to each builder's
 .Pa make.conf :
 there is no layering, and synth has no blacklist.
 .Fl o
-still overrides the options directory, while
+and
+.Fl P
+still override the options directory and the ports tree;
 .Fl p
-names a poudriere tree and is therefore ignored under
-.Fl s ,
-which the startup banner notes.
+names a poudriere tree and is refused with
+.Fl s .
 .Pp
 When no ports are given at all, synth mode uses the installed packages as
 the list, mirroring how synth builds what is installed: the origins come
@@ -1373,6 +1436,84 @@ is the live
 minimal and redundancy cleanups also affect plain
 .Ql make config
 workflows.
+.Ss LOCAL BUILDS
+Without
+.Pa /usr/local/etc/poudriere.d ,
+or under
+.Fl l
+whether it exists or not,
+.Nm
+configures ports for a build on this host, the way
+.Ql make config
+does:
+.Bl -bullet -offset indent
+.It
+the ports tree is
+.Ev PORTSDIR
+and the options directory
+.Ev PORT_DBDIR ,
+both as
+.Xr make 1
+sees them, from the environment or
+.Pa /etc/make.conf ,
+falling back to
+.Pa /usr/ports
+and
+.Pa /var/db/ports ;
+the startup banner notes a value that came from either variable, and
+.Fl P
+and
+.Fl o
+override them;
+.It
+the one
+.Pa make.conf
+layer is
+.Pa /etc/make.conf ,
+or the file
+.Ev __MAKE_CONF
+names in the environment, read in place so that its relative
+.Ic .include Ns s
+resolve; the cache still ignores the content of included files;
+.It
+queries see the host's installed packages under
+.Pa /usr/local ,
+since they are what the build will find
+.Pq no Ql LOCALBASE=/nonexistent ;
+.It
+there is no blacklist.
+.El
+.Pp
+.Fl l
+is the way to configure a local build on a host that also runs poudriere:
+.Dl optique -l scan -f list
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev PORTSDIR , Ev PORT_DBDIR
+The ports tree and options directory of a local build, from the
+environment or
+.Pa /etc/make.conf ;
+see
+.Sx LOCAL BUILDS .
+Ignored by poudriere and synth builds, and never passed through to the
+queries, which are always given the tree and options directory
+.Nm
+resolved.
+.It Ev __MAKE_CONF
+The
+.Pa make.conf
+of a local build, instead of
+.Pa /etc/make.conf ;
+see
+.Sx LOCAL BUILDS .
+Poudriere and synth builds always pass their own.
+.It Ev NO_COLOR
+Turns colour off under
+.Fl -color Ns = Ns Cm auto .
+.It Ev XDG_CACHE_HOME
+Moves the query cache; see
+.Sx FILES .
+.El
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa ~/.cache/optique/
@@ -1384,6 +1525,11 @@ in which case
 .Pa $XDG_CACHE_HOME/optique/
 is used.
 Stale generations are pruned automatically.
+A change to a file a
+.Pa make.conf
+includes does not start a new generation; clear the cache with
+.Fl -clear-cache
+.Pq see Sx CAVEATS .
 Disabled entirely by
 .Fl -no-cache .
 .It Pa ~/.cache/optique/drafts/
@@ -1430,8 +1576,24 @@ The profile's
 .Pa make.conf
 under
 .Fl s .
+.It Pa /etc/make.conf
+The
+.Pa make.conf
+of a local build, unless
+.Ev __MAKE_CONF
+names another.
+.It Pa /usr/ports/
+The ports tree of a local build when
+.Ev PORTSDIR
+names none, and of poudriere's implicit
+.Ql default
+tree when
+.Pa poudriere.d
+names none.
 .It Pa /var/db/ports/
-Fallback options directory when no poudriere configuration is present.
+The options directory of a local build when
+.Ev PORT_DBDIR
+names none.
 .El
 .Sh EXIT STATUS
 .Cm scan
@@ -1575,3 +1737,22 @@ Project and design by
 implementation with
 .An Claude ,
 Anthropic's coding assistant.
+.Sh CAVEATS
+The query cache is keyed on the text of the
+.Pa make.conf
+files themselves
+.Pq the poudriere.d layers, synth's profile file, or a local build's Pa /etc/make.conf ,
+not on the files they pull in with
+.Ic .include
+or
+.Ic .sinclude .
+After editing such an included file,
+.Nm
+keeps serving the answers cached under the old content, without any
+warning, until the ports tree revision or a
+.Pa make.conf
+itself changes.
+Run once with
+.Fl -clear-cache
+.Pq or use Fl -no-cache
+to have the edit seen.

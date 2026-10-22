@@ -56,9 +56,27 @@ pub struct Cli {
     #[arg(short = 'j', long = "jail", global = true)]
     pub jail: Option<String>,
 
-    /// Poudriere ports tree name [default: default]
-    #[arg(short = 'p', long = "ports-tree", global = true)]
+    /// Poudriere ports tree name, located through
+    /// poudriere.d/ports/<TREE>/mnt [default: default]
+    #[arg(short = 'p', long = "ports-tree", global = true, conflicts_with = "portsdir")]
     pub tree: Option<String>,
+
+    /// Explicit ports tree, overriding the poudriere, synth or local
+    /// resolution (e.g. /usr/ports)
+    #[arg(short = 'P', long = "portsdir", global = true, value_name = "DIR")]
+    pub portsdir: Option<PathBuf>,
+
+    /// Configure for a local build on this host, ignoring poudriere.d even
+    /// when it exists: ports tree from PORTSDIR, options dir from
+    /// PORT_DBDIR (environment or /etc/make.conf, else /usr/ports and
+    /// /var/db/ports), /etc/make.conf, the installed packages
+    #[arg(
+        short = 'l',
+        long = "local",
+        global = true,
+        conflicts_with_all = ["set", "jail", "tree", "synth"]
+    )]
+    pub local: bool,
 
     /// Use the synth(1) layout instead of poudriere's: options dir and ports
     /// tree from /usr/local/etc/synth/synth.ini, make.conf from
@@ -71,7 +89,7 @@ pub struct Cli {
         value_name = "PROFILE",
         num_args = 0..=1,
         default_missing_value = SYNTH_DEFAULT_PROFILE,
-        conflicts_with_all = ["set", "jail"]
+        conflicts_with_all = ["set", "jail", "tree"]
     )]
     pub synth: Option<String>,
 
@@ -82,8 +100,8 @@ pub struct Cli {
     #[arg(long = "repo", global = true, value_name = "NAME", requires = "synth")]
     pub repo: Vec<String>,
 
-    /// Explicit options dir, overriding the poudriere or synth resolution
-    /// (e.g. /var/db/ports)
+    /// Explicit options dir, overriding the poudriere, synth or local
+    /// resolution (e.g. /var/db/ports)
     #[arg(short = 'o', long = "options-dir", global = true)]
     pub options_dir: Option<PathBuf>,
 

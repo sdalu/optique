@@ -168,85 +168,181 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     rest.ends_with(parts[parts.len() - 1])
 }
 
-/// `tree` is None when -p wasn't given ("default" is used for lookups, but —
-/// like `poudriere options` — the tree name is then left out of a
-/// newly-created options dir name).
-///
-/// `synth` selects the synth(1) layout instead of the poudriere one; it is
-/// mutually exclusive with `jail`/`set` (clap rejects the combination).
-pub fn resolve(
-    tree: Option<&str>,
-    jail: Option<&str>,
-    set: Option<&str>,
-    synth: Option<&str>,
-    options_dir_flag: Option<&Path>,
-    staging_dir: &Path,
-) -> Result<Settings> {
-    if let Some(profile) = synth {
+/// What the command line asks of the resolution.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Request<'a> {
+    /// -p: None when not given ("default" is used for lookups, but — like
+    /// `poudriere options` — the tree name is then left out of a
+    /// newly-created options dir name).
+    pub tree: Option<&'a str>,
+    pub jail: Option<&'a str>,
+    pub set: Option<&'a str>,
+    /// -s: the synth(1) layout instead of poudriere's, with this profile
+    /// (empty for synth.ini's selection).
+    pub synth: Option<&'a str>,
+    /// -l: a local build, poudriere.d ignored even when it exists.
+    pub local: bool,
+    /// -P: the ports tree, taken as given.
+    pub portsdir: Option<&'a Path>,
+    /// -o: the options dir, taken as given.
+    pub options_dir: Option<&'a Path>,
+}
+
+/// clap rejects the flag combinations that make no sense (-s or -l with
+/// -z/-j/-p, -p with -P), so `req` is consistent here.
+pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
+    if let Some(profile) = req.synth {
         return resolve_synth(
             Path::new(SYNTH_DIR),
             profile,
-            tree.is_some(),
-            options_dir_flag,
+            req.portsdir,
+            req.options_dir,
             staging_dir,
         );
     }
+    let poudriere_d = Path::new(POUDRIERE_D);
+    // Only a local build asks make for its defaults: a poudriere build
+    // reads neither the environment's nor /etc/make.conf's.
+    let local = req.local || !poudriere_d.is_dir();
+    let (ports, db) = if local { make_defaults() } else { (None, None) };
+    // make's own default, which the environment may move as for any make.
+    let make_conf = std::env::var_os("__MAKE_CONF")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("/etc/make.conf"), PathBuf::from);
     let host = HostPaths {
         poudriere_conf: Path::new(POUDRIERE_CONF),
-        poudriere_d: Path::new(POUDRIERE_D),
-        ports: Path::new("/usr/ports"),
-        db: Path::new("/var/db/ports"),
+        poudriere_d,
+        ports: ports.as_deref().unwrap_or(Path::new("/usr/ports")),
+        db: db.as_deref().unwrap_or(Path::new("/var/db/ports")),
+        make_conf: &make_conf,
+        ports_from_make: ports.is_some(),
+        db_from_make: db.is_some(),
     };
-    resolve_poudriere(&host, tree, jail, set, options_dir_flag, staging_dir)
+    resolve_host(&host, req, staging_dir)
 }
 
-/// The host paths the poudriere resolution falls back on, as one value so
-/// a test can point them into a tempdir.
+/// PORTSDIR and PORT_DBDIR as make(1) sees them on this host, from the
+/// environment or /etc/make.conf (sys.mk reads it), None where neither
+/// sets one. make is asked rather than the environment read, so that a
+/// make.conf setting counts as it does for `make config`; any failure
+/// leaves the built-in defaults.
+fn make_defaults() -> (Option<PathBuf>, Option<PathBuf>) {
+    let out = std::process::Command::new("/usr/bin/make")
+        .current_dir("/")
+        .args(["-f", "/dev/null", "-V", "PORTSDIR", "-V", "PORT_DBDIR"])
+        .env_remove("MAKEFLAGS")
+        .env_remove("MAKELEVEL")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    let Ok(out) = out else { return (None, None) };
+    if !out.status.success() {
+        return (None, None);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines().map(|l| {
+        let l = l.trim();
+        (!l.is_empty()).then(|| PathBuf::from(l))
+    });
+    (lines.next().flatten(), lines.next().flatten())
+}
+
+/// The host paths the resolution reads, as one value so a test can point
+/// them into a tempdir.
+#[derive(Clone, Copy)]
 struct HostPaths<'a> {
     /// poudriere's own configuration, read before poudriere.d's.
     poudriere_conf: &'a Path,
     poudriere_d: &'a Path,
-    /// The ports tree when no poudriere tree names one.
+    /// The ports tree of a local build, and of poudriere's default tree
+    /// when poudriere.d names none.
     ports: &'a Path,
-    /// The options dir of plain `make config` when there is no poudriere.d.
+    /// The options dir of a local build.
     db: &'a Path,
+    /// The make.conf of a local build: `__MAKE_CONF` from the environment,
+    /// else make's own default, /etc/make.conf.
+    make_conf: &'a Path,
+    /// Whether `ports` and `db` are make's PORTSDIR and PORT_DBDIR rather
+    /// than the built-in defaults (the startup banner says so).
+    ports_from_make: bool,
+    db_from_make: bool,
 }
 
-fn resolve_poudriere(
-    host: &HostPaths,
-    tree: Option<&str>,
-    jail: Option<&str>,
-    set: Option<&str>,
-    options_dir_flag: Option<&Path>,
-    staging_dir: &Path,
-) -> Result<Settings> {
-    let poudriere_d = host.poudriere_d;
-    let tree_name = tree.unwrap_or("default");
-    let portsdir = resolve_portsdir(poudriere_d, host.ports, tree_name)?;
-
-    let (options_dir, options_dir_is_new) = match options_dir_flag {
-        Some(d) => (d.to_path_buf(), !d.is_dir()),
-        None if poudriere_d.is_dir() => {
-            resolve_options_dir(poudriere_d, jail, tree_name, tree.is_some(), set)
-        }
-        None => {
-            if jail.is_some() || set.is_some() {
-                bail!("-j/-z given but {} does not exist", poudriere_d.display());
-            }
-            let d = host.db.to_path_buf();
-            let is_new = !d.is_dir();
-            (d, is_new)
-        }
-    };
-
-    // Without poudriere.d the target is the host's own /var/db/ports, built
-    // on the host: there what is installed is the truth, not a leak.
-    let env = if poudriere_d.is_dir() {
-        let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
-        QueryEnv::Jail { package_building: !off }
+/// A poudriere build when poudriere.d exists and -l was not given, a local
+/// one otherwise.
+fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
+    if req.local || !host.poudriere_d.is_dir() {
+        resolve_local(host, req, staging_dir)
     } else {
-        QueryEnv::Host
+        resolve_poudriere(host, req, staging_dir)
+    }
+}
+
+/// A local build: `make config` on this host, built here. What is
+/// installed is then the truth, not a leak. The make.conf goes through
+/// the staging like any layer, so that the cache keys its content and the
+/// banner names it, but make reads the original: a copy elsewhere would
+/// lose the directory its relative `.include`s are found from.
+fn resolve_local(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
+    if req.jail.is_some() || req.set.is_some() || req.tree.is_some() {
+        bail!(
+            "-j/-z/-p name poudriere's configuration, but {} does not exist",
+            host.poudriere_d.display()
+        );
+    }
+    let mut notes = Vec::new();
+    let portsdir = match req.portsdir {
+        Some(dir) => checked_portsdir(dir)?,
+        None if is_ports_tree(host.ports) => {
+            if host.ports_from_make {
+                notes.push(format!("ports tree {} from PORTSDIR", host.ports.display()));
+            }
+            host.ports.to_path_buf()
+        }
+        None => bail!("no ports tree at {}; pass -P", host.ports.display()),
     };
+    let options_dir = match req.options_dir {
+        Some(d) => d.to_path_buf(),
+        None => {
+            if host.db_from_make {
+                notes.push(format!("options dir {} from PORT_DBDIR", host.db.display()));
+            }
+            host.db.to_path_buf()
+        }
+    };
+    let options_dir_is_new = !options_dir.is_dir();
+    let (staged, conf_hash, make_conf_sources) =
+        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, staging_dir)?;
+    let make_conf = staged.map(|_| host.make_conf.to_path_buf());
+    Ok(Settings {
+        portsdir,
+        options_dir,
+        options_dir_is_new,
+        make_conf,
+        make_conf_sources,
+        conf_hash,
+        env: QueryEnv::Host,
+        blacklist: Blacklist::default(),
+        notes,
+    })
+}
+
+fn resolve_poudriere(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<Settings> {
+    let poudriere_d = host.poudriere_d;
+    let (tree, jail, set) = (req.tree, req.jail, req.set);
+    let tree_name = tree.unwrap_or("default");
+    let portsdir = match req.portsdir {
+        Some(dir) => checked_portsdir(dir)?,
+        None => resolve_portsdir(poudriere_d, host.ports, tree_name, tree.is_some())?,
+    };
+
+    let (options_dir, options_dir_is_new) = match req.options_dir {
+        Some(d) => (d.to_path_buf(), !d.is_dir()),
+        None => resolve_options_dir(poudriere_d, jail, tree_name, tree.is_some(), set),
+    };
+
+    let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
+    let env = QueryEnv::Jail { package_building: !off };
     let (make_conf, conf_hash, make_conf_sources) =
         layer_make_conf(poudriere_d, jail, tree_name, set, env, staging_dir)?;
 
@@ -270,7 +366,23 @@ fn is_ports_tree(dir: &Path) -> bool {
     dir.join("Mk/bsd.port.mk").is_file()
 }
 
-fn resolve_portsdir(poudriere_d: &Path, fallback: &Path, tree: &str) -> Result<PathBuf> {
+/// -P: taken as given, but it has to be a ports tree.
+fn checked_portsdir(dir: &Path) -> Result<PathBuf> {
+    if !is_ports_tree(dir) {
+        bail!("-P {} is not a ports tree (no Mk/bsd.port.mk)", dir.display());
+    }
+    Ok(dir.to_path_buf())
+}
+
+/// The tree poudriere.d names. Only the implicit `default` may fall back to
+/// `fallback` when poudriere.d names none: a tree given with -p that
+/// poudriere does not know is a typo, not /usr/ports.
+fn resolve_portsdir(
+    poudriere_d: &Path,
+    fallback: &Path,
+    tree: &str,
+    tree_explicit: bool,
+) -> Result<PathBuf> {
     let mnt = poudriere_d.join("ports").join(tree).join("mnt");
     if let Ok(path) = fs::read_to_string(&mnt) {
         let p = PathBuf::from(path.trim());
@@ -279,11 +391,14 @@ fn resolve_portsdir(poudriere_d: &Path, fallback: &Path, tree: &str) -> Result<P
         }
         bail!("poudriere tree '{tree}' points to {} which is not a ports tree", p.display());
     }
+    if tree_explicit {
+        bail!("no poudriere tree '{tree}' ({} does not exist)", mnt.display());
+    }
     if is_ports_tree(fallback) {
         Ok(fallback.to_path_buf())
     } else {
         bail!(
-            "no poudriere tree '{tree}' and no {}; pass -p or mount a ports tree",
+            "no poudriere tree '{tree}' and no {}; pass -p or -P",
             fallback.display()
         )
     }
@@ -296,7 +411,7 @@ fn resolve_portsdir(poudriere_d: &Path, fallback: &Path, tree: &str) -> Result<P
 fn resolve_synth(
     synth_dir: &Path,
     profile: &str,
-    tree_explicit: bool,
+    portsdir_flag: Option<&Path>,
     options_dir_flag: Option<&Path>,
     staging_dir: &Path,
 ) -> Result<Settings> {
@@ -314,11 +429,6 @@ fn resolve_synth(
         profile
     };
     let setting = |key: &str| synth_ini_lookup(&ini, profile, key);
-    if tree_explicit {
-        notes.push(
-            "-p is a poudriere tree name; synth uses Directory_portsdir".to_string(),
-        );
-    }
     // A named profile that synth.ini doesn't know silently gets built-in
     // defaults — say so, it is usually a typo.
     if !ini.is_empty() && !synth_ini_has_section(&ini, profile) {
@@ -327,8 +437,9 @@ fn resolve_synth(
         ));
     }
 
-    let portsdir = match setting("Directory_portsdir") {
-        Some(dir) => {
+    let portsdir = match (portsdir_flag, setting("Directory_portsdir")) {
+        (Some(dir), _) => checked_portsdir(dir)?,
+        (None, Some(dir)) => {
             let p = PathBuf::from(dir);
             if !is_ports_tree(&p) {
                 bail!(
@@ -339,7 +450,7 @@ fn resolve_synth(
             }
             p
         }
-        None => {
+        (None, None) => {
             let fallback = PathBuf::from("/usr/ports");
             if !is_ports_tree(&fallback) {
                 bail!(
@@ -720,54 +831,181 @@ mod tests {
         assert_eq!(dir, pd.join("s-options"));
     }
 
+    /// A fake ports tree at `dir`.
+    fn fake_tree(dir: &Path) {
+        fs::create_dir_all(dir.join("Mk")).unwrap();
+        fs::write(dir.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+    }
+
+    fn host<'a>(tmp: &'a Path, poudriere_d: &'a Path, ports: &'a Path, db: &'a Path) -> HostPaths<'a> {
+        HostPaths {
+            poudriere_conf: tmp,
+            poudriere_d,
+            ports,
+            db,
+            make_conf: Path::new("/nonexistent/make.conf"),
+            ports_from_make: false,
+            db_from_make: false,
+        }
+    }
+
     /// Resolution with and without a poudriere.d, against a fake host.
     #[test]
     fn resolve_follows_poudriere_d_or_falls_back_to_the_host() {
         let tmp = tempfile::tempdir().unwrap();
+        let conf = tmp.path().join("poudriere.conf");
         let ports = tmp.path().join("ports");
-        fs::create_dir_all(ports.join("Mk")).unwrap();
-        fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        fake_tree(&ports);
         let db = tmp.path().join("db");
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let absent = tmp.path().join("no-poudriere.d");
-        let host = HostPaths { poudriere_conf: &tmp.path().join("poudriere.conf"), poudriere_d: &absent, ports: &ports, db: &db };
+        let host = host(&conf, &absent, &ports, &db);
+        let none = Request::default();
 
         // No poudriere.d: plain make config on this host.
-        let s = resolve_poudriere(&host, None, None, None, None, &stage).unwrap();
+        let s = resolve_host(&host, &none, &stage).unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
         assert!(s.options_dir_is_new, "{} does not exist yet", db.display());
         assert!(s.env == QueryEnv::Host && s.make_conf.is_none());
+        assert!(s.notes.is_empty(), "built-in defaults earn no note: {:?}", s.notes);
         fs::create_dir_all(&db).unwrap();
-        assert!(!resolve_poudriere(&host, None, None, None, None, &stage).unwrap().options_dir_is_new);
-        // A set or jail means poudriere, which is not there.
-        for (jail, set) in [(Some("j"), None), (None, Some("s"))] {
-            let err = resolve_poudriere(&host, None, jail, set, None, &stage).unwrap_err().to_string();
-            assert!(err.starts_with("-j/-z given but"), "{err}");
+        assert!(!resolve_host(&host, &none, &stage).unwrap().options_dir_is_new);
+        // A set, jail or tree means poudriere, which is not there.
+        for req in [
+            Request { jail: Some("j"), ..none },
+            Request { set: Some("s"), ..none },
+            Request { tree: Some("t"), ..none },
+        ] {
+            let err = resolve_host(&host, &req, &stage).unwrap_err().to_string();
+            assert!(err.starts_with("-j/-z/-p name poudriere's"), "{err}");
         }
         // -o is taken as given either way.
         let mine = tmp.path().join("mine");
-        let s = resolve_poudriere(&host, None, None, None, Some(&mine), &stage).unwrap();
+        let s = resolve_host(&host, &Request { options_dir: Some(&mine), ..none }, &stage).unwrap();
         assert_eq!(s.options_dir, mine);
         assert!(s.options_dir_is_new, "created on apply");
-        let s = resolve_poudriere(&host, None, None, None, Some(&db), &stage).unwrap();
+        let s = resolve_host(&host, &Request { options_dir: Some(&db), ..none }, &stage).unwrap();
         assert!(!s.options_dir_is_new);
         // No ports tree anywhere: say where it was looked for.
         let bare = tmp.path().join("bare");
-        let nohost = HostPaths { poudriere_conf: &tmp.path().join("poudriere.conf"), poudriere_d: &absent, ports: &bare, db: &db };
-        let err = resolve_poudriere(&nohost, None, None, None, None, &stage).unwrap_err().to_string();
+        let nohost = HostPaths { ports: &bare, ..host };
+        let err = resolve_host(&nohost, &none, &stage).unwrap_err().to_string();
         assert!(err.contains(&bare.display().to_string()), "{err}");
 
         // A poudriere.d: its options dir naming, a jail's environment.
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();
-        let host = HostPaths { poudriere_conf: &tmp.path().join("poudriere.conf"), poudriere_d: &pd, ports: &ports, db: &db };
-        let s = resolve_poudriere(&host, None, None, Some("s"), None, &stage).unwrap();
+        let host = HostPaths { poudriere_d: &pd, ..host };
+        let s = resolve_host(&host, &Request { set: Some("s"), ..none }, &stage).unwrap();
         assert_eq!(s.options_dir, pd.join("s-options"));
         assert!(s.options_dir_is_new);
         assert_eq!(s.env, QueryEnv::Jail { package_building: true });
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
+    }
+
+    /// make's PORTSDIR and PORT_DBDIR are a local build's defaults, and the
+    /// banner says where they came from.
+    #[test]
+    fn local_defaults_from_make_are_noted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let absent = tmp.path().join("no-poudriere.d");
+        let host = HostPaths {
+            ports_from_make: true,
+            db_from_make: true,
+            ..host(tmp.path(), &absent, &ports, &db)
+        };
+        let s = resolve_host(&host, &Request::default(), &stage).unwrap();
+        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
+        assert!(s.notes.iter().any(|n| n.ends_with("from PORTSDIR")), "{:?}", s.notes);
+        assert!(s.notes.iter().any(|n| n.ends_with("from PORT_DBDIR")), "{:?}", s.notes);
+        // -P and -o win, and then there is nothing to note.
+        let other = tmp.path().join("other");
+        fake_tree(&other);
+        let req = Request { portsdir: Some(&other), options_dir: Some(&other), ..Request::default() };
+        let s = resolve_host(&host, &req, &stage).unwrap();
+        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (other.as_path(), other.as_path()));
+        assert!(s.notes.is_empty(), "{:?}", s.notes);
+    }
+
+    /// -l ignores a poudriere.d that exists: the host's tree, options dir,
+    /// environment, and no poudriere layer or blacklist.
+    #[test]
+    fn local_ignores_poudriere_d() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(pd.join("options")).unwrap();
+        fs::write(pd.join("make.conf"), "WITH_DEBUG=yes\n").unwrap();
+        fs::write(pd.join("blacklist"), "www/*\n").unwrap();
+        let host = host(tmp.path(), &pd, &ports, &db);
+
+        let local = Request { local: true, ..Request::default() };
+        let s = resolve_host(&host, &local, &stage).unwrap();
+        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
+        assert_eq!(s.env, QueryEnv::Host);
+        assert!(s.make_conf.is_none() && s.make_conf_sources.is_empty());
+        assert!(s.blacklist.is_empty());
+        // The host's make.conf, not poudriere.d's, staged and keyed.
+        let etc = tmp.path().join("etc-make.conf");
+        fs::write(&etc, "DEFAULT_VERSIONS+=ssl=base\n").unwrap();
+        let s = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap();
+        assert_eq!(s.make_conf_sources, vec![etc.clone()]);
+        // Read in place, for its relative .includes, and keyed all the same.
+        assert_eq!(s.make_conf.as_ref(), Some(&etc));
+        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &stage).unwrap();
+        assert_ne!(s.conf_hash, empty_hash);
+        // The same host without -l is a poudriere build.
+        let s = resolve_host(&host, &Request::default(), &stage).unwrap();
+        assert_eq!(s.options_dir, pd.join("options"));
+        assert!(!s.blacklist.is_empty());
+    }
+
+    /// Under a poudriere.d, -p must name a tree poudriere knows; only the
+    /// implicit default may fall back. -P bypasses the lookup.
+    #[test]
+    fn poudriere_tree_is_strict_and_portsdir_overrides_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let named = tmp.path().join("named");
+        fake_tree(&named);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(pd.join("ports/main")).unwrap();
+        fs::write(pd.join("ports/main/mnt"), format!("{}\n", named.display())).unwrap();
+        let host = host(tmp.path(), &pd, &ports, &db);
+        let none = Request::default();
+
+        let s = resolve_host(&host, &Request { tree: Some("main"), ..none }, &stage).unwrap();
+        assert_eq!(s.portsdir, named);
+        let err = resolve_host(&host, &Request { tree: Some("mian"), ..none }, &stage)
+            .unwrap_err()
+            .to_string();
+        assert!(err.starts_with("no poudriere tree 'mian'"), "{err}");
+        // No -p and no default tree: the fallback.
+        assert_eq!(resolve_host(&host, &none, &stage).unwrap().portsdir, ports);
+
+        // -P: taken as given, but checked.
+        let s = resolve_host(&host, &Request { portsdir: Some(&named), ..none }, &stage).unwrap();
+        assert_eq!(s.portsdir, named);
+        assert!(matches!(s.env, QueryEnv::Jail { .. }), "still a poudriere build");
+        let err = resolve_host(&host, &Request { portsdir: Some(&db), ..none }, &stage)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is not a ports tree"), "{err}");
     }
 
     #[test]
@@ -839,12 +1077,12 @@ mod tests {
         let db = tmp.path().join("db");
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let host = HostPaths { poudriere_conf: &conf, poudriere_d: &pd, ports: &ports, db: &db };
+        let host = HostPaths { poudriere_conf: &conf, ..host(tmp.path(), &pd, &ports, &db) };
 
-        let on = resolve_poudriere(&host, None, None, None, None, &stage).unwrap();
+        let on = resolve_poudriere(&host, &Request::default(), &stage).unwrap();
         assert_eq!(on.env, QueryEnv::Jail { package_building: true });
         fs::write(&conf, "NO_PACKAGE_BUILDING=yes\n").unwrap();
-        let off = resolve_poudriere(&host, None, None, None, None, &stage).unwrap();
+        let off = resolve_poudriere(&host, &Request::default(), &stage).unwrap();
         assert_eq!(off.env, QueryEnv::Jail { package_building: false });
         let text = fs::read_to_string(off.make_conf.unwrap()).unwrap();
         assert!(!text.contains("PACKAGE_BUILDING"), "{text}");
@@ -861,10 +1099,10 @@ mod tests {
         fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
         fs::create_dir_all(pd.join("ports/mytree")).unwrap();
         fs::write(pd.join("ports/mytree/mnt"), format!("{}\n", tree.display())).unwrap();
-        assert_eq!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree").unwrap(), tree);
+        assert_eq!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).unwrap(), tree);
         // A tree pointing at a non-ports dir is an error, not a fallback.
         fs::write(pd.join("ports/mytree/mnt"), "/nonexistent\n").unwrap();
-        assert!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree").is_err());
+        assert!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).is_err());
     }
 
     #[test]
@@ -1020,18 +1258,18 @@ not a key value line
 
         // Unknown named profile: noted, defaults still apply (/var/db/ports
         // triggers the live-dir note too). /usr/ports exists on this host.
-        let s = resolve_synth(&synth, "typo", false, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "typo", None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("'typo' has no section")), "{:?}", s.notes);
         assert!(s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
 
         // Bare -s honours profile_selected; known section → no missing note.
-        let s = resolve_synth(&synth, "", false, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "", None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("profile Live (synth.ini")), "{:?}", s.notes);
         assert!(!s.notes.iter().any(|n| n.contains("no section")), "{:?}", s.notes);
 
         // -o override: no live-dir note.
         let o = tmp.path().join("other");
-        let s = resolve_synth(&synth, "Live", false, Some(&o), &stage).unwrap();
+        let s = resolve_synth(&synth, "Live", None, Some(&o), &stage).unwrap();
         assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
     }
 
@@ -1061,7 +1299,7 @@ not a key value line
         // A second profile's make.conf must not be picked up.
         fs::write(synth.join("Other-make.conf"), "A=1\n").unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", false, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         assert_eq!(s.options_dir, opts);
         assert!(!s.options_dir_is_new);
@@ -1069,18 +1307,18 @@ not a key value line
         let staged = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
         assert!(staged.contains("ssl=openssl"), "{staged}");
         assert!(!staged.contains("A=1"), "other profile leaked in: {staged}");
-        // synth has no blacklist, and -p was not given so no note.
+        // synth has no blacklist, and nothing to note.
         assert!(s.blacklist.is_empty());
         assert!(s.notes.is_empty());
         assert!(!s.conf_hash.is_empty());
 
-        // -o wins over Directory_options; -p only earns a note.
+        // -o wins over Directory_options, -P over Directory_portsdir.
         let elsewhere = tmp.path().join("elsewhere");
-        let s = resolve_synth(&synth, "LiveSystem", true, Some(&elsewhere), &stage).unwrap();
-        assert_eq!(s.options_dir, elsewhere);
-        assert!(s.options_dir_is_new);
-        assert_eq!(s.notes.len(), 1);
-        assert!(s.notes[0].contains("Directory_portsdir"), "{:?}", s.notes);
+        fake_tree(&elsewhere);
+        let s = resolve_synth(&synth, "LiveSystem", Some(&elsewhere), Some(&elsewhere), &stage)
+            .unwrap();
+        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (elsewhere.as_path(), elsewhere.as_path()));
+        assert!(s.notes.is_empty(), "{:?}", s.notes);
     }
 
     #[test]
@@ -1105,7 +1343,7 @@ not a key value line
         )
         .unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", false, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         // Nonexistent Directory_options is still the target, flagged as new.
         assert_eq!(s.options_dir, opts);
@@ -1120,7 +1358,7 @@ not a key value line
             format!("[LiveSystem]\nDirectory_portsdir={}/nope\n", tmp.path().display()),
         )
         .unwrap();
-        let err = resolve_synth(&synth, "LiveSystem", false, Some(&opts), &stage)
+        let err = resolve_synth(&synth, "LiveSystem", None, Some(&opts), &stage)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a ports tree"), "{err}");
@@ -1130,7 +1368,7 @@ not a key value line
         // only exercised through -o here).
         fs::remove_file(synth.join("synth.ini")).unwrap();
         if is_ports_tree(Path::new("/usr/ports")) {
-            let s = resolve_synth(&synth, "LiveSystem", false, None, &stage).unwrap();
+            let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
             assert_eq!(s.options_dir, Path::new("/var/db/ports"));
         }
     }

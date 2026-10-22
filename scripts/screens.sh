@@ -29,9 +29,8 @@ opt=poudriere.d/server-options
 here=$(pwd)
 
 optique() {
-	# -p names a tree no poudriere.d defines: /usr/ports, whatever the host's
-	# own poudriere trees point at.
-	"$bin" -p optique-screens-no-such-tree "$@"
+	# /usr/ports, whatever the host's own poudriere trees point at.
+	"$bin" -P /usr/ports "$@"
 }
 
 # The fixture: the closure configured, then one file left behind by a tree

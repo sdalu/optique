@@ -3,8 +3,8 @@
 //!
 //! They never touch real configuration: options dirs are tempdirs (-o) and
 //! the query cache is redirected via XDG_CACHE_HOME. Nor do they read the
-//! host's poudriere trees: -p names one no poudriere.d defines, so the ports
-//! tree resolves to /usr/ports whatever poudriere's `default` points at.
+//! host's poudriere trees: -P names /usr/ports whatever poudriere's
+//! `default` points at.
 
 use std::fs;
 use std::process::Command;
@@ -12,7 +12,7 @@ use std::process::Command;
 fn optique(cache: &std::path::Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_optique"));
     c.env("XDG_CACHE_HOME", cache);
-    c.args(["-p", "optique-live-tests-no-such-tree"]);
+    c.args(["-P", "/usr/ports"]);
     c
 }
 
@@ -649,4 +649,46 @@ fn wrapper_metadata_matches_known_nginx_facts() {
     for opt in ["GSSAPI_MIT", "HTTP_PERL", "IPV6"] {
         assert!(nginx_state.contains(opt), "expected {opt} in: {nginx_state}");
     }
+}
+
+/// A local build reads the make.conf `make` would, `__MAKE_CONF` from the
+/// environment included, and reads it in place, so that a relative
+/// `.include` in it still finds its file.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn local_make_conf_is_the_environments_and_read_in_place() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let conf_dir = tmp.path().join("conf");
+    fs::create_dir_all(&conf_dir).unwrap();
+    fs::write(conf_dir.join("make.conf"), ".include \"make.conf.local\"\n").unwrap();
+    fs::write(conf_dir.join("make.conf.local"), "ports-mgmt_pkg_SET+=DOCS\n").unwrap();
+
+    let out = optique(tmp.path())
+        .env("__MAKE_CONF", conf_dir.join("make.conf"))
+        .args(["-l", "scan", "--json", "--options", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    scan_exit_code(&out);
+    let report = parse_json(&out);
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+    let pkg = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "ports-mgmt/pkg")
+        .unwrap_or_else(|| panic!("ports-mgmt/pkg missing from {report}"))
+        .clone();
+    let docs = pkg["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "DOCS")
+        .unwrap_or_else(|| panic!("DOCS missing from {pkg}"))
+        .clone();
+    assert_eq!(docs["makeconf"]["value"], true, "the included file's stance: {docs}");
+    assert_ne!(docs["makeconf"]["scope"], "global", "{docs}");
 }

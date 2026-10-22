@@ -1,9 +1,10 @@
 # Where optique reads its configuration
 
 optique resolves the options directory, make.conf and the blacklist
-exactly as `poudriere(8)` would before a build, or as `synth(1)` would
-under `-s`, and in the same order; see [Commands](commands.md) for the
-global flags (`-z`, `-j`, `-p`, `-s`, `-o`) that steer the resolution. It
+exactly as `poudriere(8)` would before a build, as `synth(1)` would
+under `-s`, or as `make config` would for a [local build](#local-builds),
+and in the same order; see [Commands](commands.md) for the global flags
+(`-z`, `-j`, `-p`, `-P`, `-l`, `-s`, `-o`) that steer the resolution. It
 writes options files only in the resolved options directory, and only when
 you apply in the TUI or run `sync`, `decide` or `clean`; its query cache and
 the TUI's drafts live under `~/.cache/optique`.
@@ -31,10 +32,19 @@ tree component only when `-p` was given explicitly.
 
 `-o dir` bypasses this resolution entirely and uses `dir` verbatim.
 
-Without a poudriere.d at all, and without `-j`/`-z`, the options
-directory falls back to plain `/var/db/ports` — see
-[Without poudriere](#without-poudriere) below. Giving `-j` or `-z` when
-`/usr/local/etc/poudriere.d` does not exist is an error.
+The existence of `/usr/local/etc/poudriere.d` is what selects poudriere.
+Without it, or under `-l`, optique configures a
+[local build](#local-builds) instead, and giving `-j`, `-z` or `-p`
+without it is an error.
+
+## The ports tree
+
+`-p tree` (default `default`) is read from
+`/usr/local/etc/poudriere.d/ports/<tree>/mnt`. A tree poudriere does not
+know is an error, so a typo is not quietly answered from another tree;
+only the implicit `default` falls back to `/usr/ports` when poudriere.d
+names none. `-P dir` bypasses the lookup and uses `dir`, which must be a
+ports tree; it cannot be combined with `-p`.
 
 ## make.conf layers
 
@@ -58,6 +68,17 @@ options, its option list and its dependencies), `OPTIONS_SET`,
 `OPTIONS_UNSET`, the per-port `<PORT>_SET`/`<PORT>_UNSET`, and `*_FORCE`
 knobs.
 
+The layers are concatenated into one staged file, as poudriere itself
+concatenates them into the jail's make.conf, so an `.include` with a
+relative path does not find its file here any more than it would in the
+jail (synth's profile make.conf is handled the same way, as synth appends
+it to each builder's).
+
+**Limitation:** the query cache is keyed on the text of the make.conf
+files, not of the files they `.include`. After editing an included file,
+run with `--clear-cache` once, or its change is not seen until something
+else invalidates the cached answers.
+
 ## The jail environment
 
 The merged layers above are wrapped in the environment of a poudriere
@@ -80,9 +101,8 @@ those files is not seen. The startup banner's
 `poudriere jail (host packages under /usr/local not seen)`, or the same
 line with `; NO_PACKAGE_BUILDING set` appended.
 
-Without a poudriere.d (plain `/var/db/ports`), there is no jail
-wrapping at all: queries see the host as it is, which is then the
-machine that builds — see [Without poudriere](#without-poudriere).
+A [local build](#local-builds) has no jail wrapping at all: queries see
+the host as it is, which is then the machine that builds.
 
 ## The blacklist
 
@@ -116,7 +136,8 @@ commands serve a synth host. The profile defaults to synth.ini's
 `profile_selected`, then `LiveSystem`. Because the profile name is
 optional, a name that could be read as something else (a subcommand, an
 option, or anything containing a slash) must be attached, as
-`--synth=name`. `-s` is mutually exclusive with `-z` and `-j`.
+`--synth=name`. `-s` is mutually exclusive with `-z`, `-j`, `-p` and
+`-l`.
 
 The ports tree comes from `Directory_portsdir` and the options
 directory from `Directory_options`, both read from the profile's
@@ -129,9 +150,8 @@ under `-s`. There is no jail environment either: synth builds on the host
 it configures, so the host's installed packages are part of what it
 builds against.
 
-`-o dir` still overrides the options directory. `-p` names a poudriere
-tree and is therefore ignored under `-s`, which the startup banner
-notes.
+`-o dir` and `-P dir` still override the options directory and the
+ports tree.
 
 When no ports are given at all (no origins, no `-f`), synth mode uses
 the installed packages as the list, mirroring how synth builds what is
@@ -145,12 +165,34 @@ synth-built packages; the names are listed by `pkg query -a %R`.
 When `Directory_options` is the live `/var/db/ports`, minimal and
 redundancy cleanups also affect plain make config workflows.
 
-## Without poudriere
+## Local builds
 
-When `/usr/local/etc/poudriere.d` does not exist and neither `-j` nor
-`-z` is given, optique falls back to plain `/var/db/ports` as the
-options directory, with no jail wrapping and no blacklist: queries see
-the host's own environment, which is then the machine that builds.
-`-p`/`--ports-tree` still falls back to `/usr/ports` when no poudriere
-tree points elsewhere. `-o dir` overrides the options directory in this
-case as in every other.
+Without `/usr/local/etc/poudriere.d`, or under `-l` whether it exists or
+not, optique configures ports for a build on this host, the way
+`make config` does:
+
+- the ports tree is `PORTSDIR` and the options directory `PORT_DBDIR`,
+  both as `make(1)` sees them, from the environment or `/etc/make.conf`,
+  falling back to `/usr/ports` and `/var/db/ports`; the startup banner
+  notes a value that came from either variable, and `-P` and `-o`
+  override them;
+- the one make.conf layer is `/etc/make.conf`, or the file
+  `__MAKE_CONF` names in the environment, read in place so that its
+  relative `.include`s resolve (the cache limitation under
+  [make.conf layers](#makeconf-layers) still applies);
+- queries see the host's installed packages under `/usr/local`, since
+  they are what the build will find (no `LOCALBASE=/nonexistent`);
+- there is no blacklist.
+
+`-l` is the way to configure a local build on a host that also runs
+poudriere:
+
+```sh
+optique -l scan -f list
+```
+
+`-l` is mutually exclusive with `-z`, `-j`, `-p` and `-s`. Poudriere and
+synth builds ignore `PORTSDIR` and `PORT_DBDIR`, and whatever the build,
+every query is given the ports tree and options directory optique
+resolved, so a `PORTSDIR` in the environment cannot send `make` to
+another tree.

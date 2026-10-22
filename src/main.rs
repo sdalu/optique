@@ -17,6 +17,7 @@ mod staging;
 mod tui;
 
 use std::io::Write as _;
+use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context as _, Result};
@@ -96,8 +97,10 @@ fn run() -> Result<()> {
         }
         None => {
             if cli.files.is_empty() && cli.synth.is_none() {
+                // No build-specific flag in the hint: it must hold for
+                // poudriere, local and any flags already given.
                 anyhow::bail!(
-                    "no ports given; try `optique -z <set> category/port…` or `optique -f pkglist`"
+                    "no ports given; name them (`category/port…`) or a list (`-f pkglist`)"
                 );
             }
             let rs = roots_or_installed(&cli, &[])?;
@@ -145,14 +148,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
 
     if !args.unused {
         let staging = tempfile::tempdir()?;
-        let settings = config::resolve(
-            cli.tree.as_deref(),
-            cli.jail.as_deref(),
-            cli.set.as_deref(),
-            cli.synth.as_deref(),
-            cli.options_dir.as_deref(),
-            staging.path(),
-        )?;
+        let settings = resolve_settings(cli, staging.path())?;
         let moved = Moved::load(&settings.portsdir);
         let ctx = CleanCtx {
             settings,
@@ -601,16 +597,25 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
     }
 }
 
+/// The resolution the command line asks for.
+fn resolve_settings(cli: &Cli, staging_dir: &Path) -> Result<config::Settings> {
+    config::resolve(
+        &config::Request {
+            tree: cli.tree.as_deref(),
+            jail: cli.jail.as_deref(),
+            set: cli.set.as_deref(),
+            synth: cli.synth.as_deref(),
+            local: cli.local,
+            portsdir: cli.portsdir.as_deref(),
+            options_dir: cli.options_dir.as_deref(),
+        },
+        staging_dir,
+    )
+}
+
 fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let staging = tempfile::tempdir()?;
-    let settings = config::resolve(
-        cli.tree.as_deref(),
-        cli.jail.as_deref(),
-        cli.set.as_deref(),
-        cli.synth.as_deref(),
-        cli.options_dir.as_deref(),
-        staging.path(),
-    )?;
+    let settings = resolve_settings(cli, staging.path())?;
 
     let jobs = default_jobs(cli);
     let mut cache = new_cache(cli, &settings);

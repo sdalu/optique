@@ -58,6 +58,35 @@ spell `/usr/local` literally still see the host (one in the tree,
 view on purpose: it builds on the host it configures, so what that host has
 installed is part of the truth, as it is for a plain `/var/db/ports`.
 
+## Which build is configured: poudriere.d, unless `-l` says otherwise
+
+The existence of `/usr/local/etc/poudriere.d` selects a poudriere build;
+without it, or under `-l`, a local build is configured: the tree and
+options directory are `PORTSDIR` and `PORT_DBDIR` as `make -V` reports
+them (so `/etc/make.conf` counts as it does for `make config`), the host
+environment applies, and the make.conf (`__MAKE_CONF`, else
+`/etc/make.conf`) is hashed like a layer so the cache keys its content,
+but read in place: a staged copy lost the directory its relative
+`.include`s resolve from, and every query failed. Included files are not
+hashed, in any build; `--clear-cache` is the documented answer, since
+following includes means evaluating make.conf the way make does. Detection stays the default because it is right
+for most hosts; `-l` exists because a host running poudriere may still
+build some ports itself, and only the flag can say so (`src/config.rs`,
+`resolve`).
+
+`-p` names a poudriere tree and nothing else: without poudriere.d it is
+an error, as `-j` and `-z` are, and a tree poudriere does not know is an
+error rather than `/usr/ports`, which answered a typo from the wrong tree.
+A literal tree is `-P dir`, the counterpart of `-o`, valid for every
+build. Every query is given `PORTSDIR` explicitly, canonicalised as
+make's own autodetection would, because an inherited one silently
+replaced the framework of the tree being queried.
+
+Rejected: `-p` taking a path when there is no poudriere.d, which makes
+an argument's meaning depend on a directory that installing poudriere
+creates; guessing a local build from `-o /var/db/ports`; reading
+`PORTSDIR` from the environment alone, which misses `/etc/make.conf`.
+
 ## Persistent cache, keyed on what actually changed
 
 Results are cached under `~/.cache/optique/`, keyed on the ports tree's git

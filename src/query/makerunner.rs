@@ -77,10 +77,15 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         anyhow::bail!("no such port: {} ({} missing)", key.origin, portdir.display());
     }
 
+    // Given rather than left to make, which would take a PORTSDIR from the
+    // environment or /etc/make.conf over this tree; resolved as make's own
+    // autodetection from the port's directory would (`:tA`).
+    let portsdir = ctx.portsdir.canonicalize().unwrap_or_else(|_| ctx.portsdir.clone());
     let mut cmd = Command::new("/usr/bin/make");
     cmd.arg("-C")
         .arg(&portdir)
         .args(["-f", "/dev/stdin", "optique-config"])
+        .arg(format!("PORTSDIR={}", portsdir.display()))
         .arg(format!("PORTDIR={}", portdir.display()))
         .arg(format!("PORT_DBDIR={}", ctx.port_dbdir.display()))
         // Don't let the caller's environment distort the query.

@@ -107,7 +107,7 @@ once. For cron or CI, `sync` does the middle three steps without asking.
 | `clean`         | remove options files of gone, unused or redundant ports  |
 
 Every command takes the same global options (`-z set`, `-j jail`,
-`-p tree`, `-o dir`, `-s profile`, `-f pkglist`, ...) and every one but the
+`-p tree`, `-P dir`, `-o dir`, `-s profile`, `-l`, `-f pkglist`, ...) and every one but the
 TUI can answer in JSON.
 
 ## Documentation
