@@ -209,7 +209,11 @@ consider worth persisting:
   deviations end up on disk.
 - Bare defaults then count as decided: `scan`'s exit gate and the TUI's
   attention views only flag deviations and conflicts, not every option a
-  port happens to have.
+  port happens to have. A port the defaults and make.conf settle reads
+  `ok (no file: defaults + make.conf)` in `scan` (or names its stale
+  file's changes) and wears `≈` in the TUI, instead of `?` or `!`; the
+  JSON keeps its factual `status` (`unconfigured`, `stale`) with
+  `mc_covered` true.
 
 `clean`'s counterpart is `-r`/`--redundant`, not `--minimal`: giving
 `--minimal` to `clean` without `--redundant` has no effect, and a note on

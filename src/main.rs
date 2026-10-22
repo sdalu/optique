@@ -1058,11 +1058,19 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         for row in &rows {
             let (key, pkgname) = (&row.key, &row.pkgname);
             let decision = if row.mc_covered() {
-                if cli.minimal { " [defaults/mc ≈]" } else { " [mc-covered ≈]" }.to_string()
+                " [mc-covered ≈]".to_string()
             } else {
                 format!(" undecided: {}", row.undecided.join(" "))
             };
             let (marker, text) = match &row.status {
+                // Under -m the defaults are the decision: a port they settle
+                // is done, its file (or lack of one) left as sync will.
+                UiStatus::Unconfigured if cli.minimal && row.mc_covered() => {
+                    ("", "ok (no file: defaults + make.conf)".to_string())
+                }
+                UiStatus::Stale if cli.minimal && row.mc_covered() => {
+                    ("", format!("ok (stale file{}: defaults + make.conf decide)", row.stale_detail()))
+                }
                 UiStatus::Unconfigured => ("?", format!("UNCONFIGURED{decision}")),
                 UiStatus::Stale => {
                     ("!", format!("STALE{}{decision}", row.stale_detail()))

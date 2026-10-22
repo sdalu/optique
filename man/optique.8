@@ -394,7 +394,20 @@ An existing identical file is removed instead of rewritten, so only
 deviations are persisted.
 Bare defaults also count as decided:
 .Cm scan
-and the TUI attention views then only flag deviations and conflicts.
+and the TUI then only flag deviations and conflicts, a port the defaults
+and
+.Pa make.conf
+settle showing as done
+.Po
+.Ql ok (no file: defaults + make.conf)
+in
+.Cm scan ,
+.Sq \(ap
+in the TUI, as under its
+.Ic m
+view
+.Pc
+whether it has a file, a stale one, or none.
 .It Fl q , Fl -quiet
 Drop the startup banner and the per-port and per-file listings on standard
 output.

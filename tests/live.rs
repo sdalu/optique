@@ -807,3 +807,31 @@ fn an_overlay_port_shadows_the_trees() {
     let row = text.lines().find(|l| l.contains("sysutils/tmux")).unwrap_or_default();
     assert!(row.ends_with(&format!("[overlay {overlay}]")), "{text}");
 }
+
+/// Under -m the defaults are the decision: on an empty options dir every
+/// port they settle is done, not UNCONFIGURED, and the gate passes; the
+/// JSON keeps the factual status.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn minimal_scan_counts_bare_defaults_as_done() {
+    let tmp = tempfile::tempdir().unwrap();
+    let optdir = tmp.path().join("options");
+    fs::create_dir_all(&optdir).unwrap();
+    let run = |json: bool| {
+        let mut c = optique(tmp.path(), "scan");
+        c.args(["-m", "-l", "-o"]).arg(&optdir);
+        if json {
+            c.arg("--json");
+        }
+        c.arg("ports-mgmt/pkg").output().unwrap()
+    };
+    let out = run(false);
+    let text = String::from_utf8_lossy(&out.stdout);
+    let row = text.lines().find(|l| l.contains("ports-mgmt/pkg")).unwrap_or_default();
+    assert!(row.ends_with("ok (no file: defaults + make.conf)"), "{text}");
+    assert!(!text.contains("UNCONFIGURED"), "{text}");
+
+    let report = parse_json(&run(true));
+    let pkg = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "ports-mgmt/pkg").unwrap().clone();
+    assert_eq!((pkg["status"].as_str(), pkg["mc_covered"].as_bool()), (Some("unconfigured"), Some(true)), "{pkg}");
+}

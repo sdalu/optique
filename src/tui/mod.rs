@@ -787,7 +787,9 @@ impl App {
             return UiStatus::Ok;
         }
         let mut status = self.session.status(info);
-        if self.mc_relax
+        // Under -m the defaults are the decision, as if the m view were on:
+        // a port they settle needs no file, so it is not waiting on anyone.
+        if (self.mc_relax || self.minimal)
             && matches!(status, UiStatus::Stale | UiStatus::Unconfigured)
             && self.session.covered_by_makeconf(info)
         {
@@ -2371,6 +2373,25 @@ mod tests {
         let modal = app.modal.as_ref().expect("the apply preview opened");
         assert_eq!(modal.conflicted, [key]);
         assert!(screen(&mut app).contains("1 port(s) still have conflicting options: cat/alpha"));
+    }
+
+    /// Under -m the defaults are the decision: a port with no options file
+    /// (or a stale one whose new options the defaults settle) is ✓, not ?,
+    /// without the m view; an edit or a conflict still shows.
+    #[test]
+    fn minimal_mode_counts_bare_defaults_as_decided() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let status = |app: &App, p: &str| app.effective_status(&info_of(app, p));
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Unconfigured, "without -m");
+        // As -m sets them both.
+        app.minimal = true;
+        app.session.minimal = true;
+        assert!(!app.mc_relax);
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Edited, "an edit still shows");
     }
 
     /// In minimal mode apply removes a file that only repeats the defaults

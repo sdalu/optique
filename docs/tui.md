@@ -324,7 +324,9 @@ After an apply, the files it wrote are read again.
 
 Under `-m`/`--minimal`, only deviations from defaults and make.conf are
 persisted, and a bare default counts as already decided, so the
-interface flags only deviations and conflicts. A port whose configuration
+interface flags only deviations and conflicts: a port the defaults and
+make.conf settle shows `≈` (as under the `m` view) rather than `?` or
+`!`, file or no file. A port whose configuration
 matches what its defaults and make.conf already produce gets no options
 file at all: apply skips writing it, and removes an existing file that
 had become identical.
