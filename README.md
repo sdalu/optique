@@ -63,15 +63,16 @@ poudriere overlay.
 
 ## Quick start
 
-Review and set the options of a package list's whole closure, for the
-build you run:
+Review and set the options of a package list's whole closure (for
+synth, of everything installed), for the build you run:
 
 ```sh
 # poudriere: the set "server" (add -j jail, -p tree as you build them)
-optique -z server -f /usr/local/etc/poudriere.d/pkglist/server.lst
+optique -z server -f server.lst
 
-# synth: synth.ini's selected profile, or one named with --synth=name
-optique -s -f server.lst
+# synth: the installed packages, with synth.ini's selected profile (or
+# --synth=name); -f list replaces them with a list, as for the others
+optique -s
 
 # make on this host (/var/db/ports, /etc/make.conf), even where poudriere
 # is installed; without poudriere.d, -l is implied
@@ -88,6 +89,7 @@ optique -z server scan -f server.lst
 # The unattended refresh after a ports tree update: keep saved choices,
 # take defaults for new options, drop removed ones
 optique -z server sync -f server.lst
+optique -s sync            # synth: everything installed, before upgrade-system
 ```
 
 ## The workflow
