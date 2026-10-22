@@ -183,7 +183,9 @@ undecided options, has a conflict, is caught in a dependency loop that is
 not fully blacklisted, or could not be checked because its query failed.
 Ports make.conf fully decides (`[mc-covered ≈]`) and blacklisted ports
 never count. Per-file failures during `sync` or `clean` are reported one by
-one and counted in the summary without failing the run.
+one and counted in the summary without failing the run. A file `sync`
+cannot write stops it from writing or removing any other: every file is
+written aside first and renamed into place only once all of them were.
 
 For `scan` and `decide`, the exit status answers "is there anything left
 to do" rather than plain success or failure, which is what makes `scan` a

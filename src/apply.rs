@@ -314,30 +314,79 @@ pub struct ApplySummary {
     pub failed: Vec<(PortKey, String)>,
 }
 
-/// Write every pending file atomically (tmp + fsync + rename).
+/// Write every pending file atomically, and the pass as a whole: every
+/// temporary file is written (tmp + fsync) first, and only once all of them
+/// are does any rename into place. When one cannot be written, the temporary
+/// files already written are removed and nothing is renamed, so a failed pass
+/// leaves the options dir as it was.
 pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
     let mut summary = ApplySummary { written: 0, failed: Vec::new() };
+    let mut staged: Vec<(&PendingWrite, Staged)> = Vec::new();
     for w in writes {
-        match write_atomic(w) {
-            Ok(()) => summary.written += 1,
+        match write_temp(w) {
+            Ok(s) => staged.push((w, s)),
             Err(e) => summary.failed.push((w.key.clone(), format!("{e:#}"))),
+        }
+    }
+    if !summary.failed.is_empty() {
+        for (_, s) in staged {
+            s.discard();
+        }
+        return summary;
+    }
+    for (w, s) in staged {
+        match fs::rename(&s.tmp, &w.path) {
+            Ok(()) => summary.written += 1,
+            Err(e) => {
+                summary
+                    .failed
+                    .push((w.key.clone(), format!("renaming into place: {}: {e}", w.path.display())));
+                s.discard();
+            }
         }
     }
     summary
 }
 
-fn write_atomic(w: &PendingWrite) -> Result<()> {
+/// A temporary file written and synced, waiting to be renamed into place.
+struct Staged {
+    tmp: PathBuf,
+    /// The options-dir entry did not exist before: discarding removes it
+    /// again (when it is empty).
+    new_dir: Option<PathBuf>,
+}
+
+impl Staged {
+    fn discard(self) {
+        let _ = fs::remove_file(&self.tmp);
+        if let Some(dir) = self.new_dir {
+            let _ = fs::remove_dir(dir);
+        }
+    }
+}
+
+fn write_temp(w: &PendingWrite) -> Result<Staged> {
     let dir = w.path.parent().context("options path has no parent")?;
+    let new_dir = (!dir.exists()).then(|| dir.to_path_buf());
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     let tmp = dir.join(".options.optique.tmp");
-    {
-        let mut f = fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
-        f.write_all(w.content.as_bytes())?;
-        f.sync_all()?;
+    let staged = Staged { tmp, new_dir };
+    let mut f = match fs::File::create(&staged.tmp) {
+        Ok(f) => f,
+        Err(e) => {
+            // Never ours to remove: whatever holds the name was there before.
+            if let Some(dir) = &staged.new_dir {
+                let _ = fs::remove_dir(dir);
+            }
+            return Err(e).with_context(|| format!("creating {}", staged.tmp.display()));
+        }
+    };
+    if let Err(e) = f.write_all(w.content.as_bytes()).and_then(|()| f.sync_all()) {
+        let tmp = staged.tmp.display().to_string();
+        staged.discard();
+        return Err(e).with_context(|| format!("writing {tmp}"));
     }
-    fs::rename(&tmp, &w.path)
-        .with_context(|| format!("renaming into place: {}", w.path.display()))?;
-    Ok(())
+    Ok(staged)
 }
 
 #[cfg(test)]
@@ -687,6 +736,32 @@ mod tests {
         let summary = apply(&[w]);
         assert_eq!(summary.written, 0);
         assert_eq!(summary.failed.len(), 1);
+    }
+
+    /// `decide` is all-or-nothing: when one file of the pass cannot be
+    /// written, none is, and no temporary file is left behind.
+    #[test]
+    fn decide_write_failure_writes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let w = |name: &str| PendingWrite {
+            key: PortKey::parse(&name.replace('_', "/")).unwrap(),
+            path: tmp.path().join(name).join("options"),
+            old: None,
+            enabled: BTreeSet::new(),
+            complete: vec![],
+            content: "x\n".into(),
+        };
+        // Sorted first, so it is the one that would land before the failure.
+        let ok = w("sysutils_tmux");
+        // A directory squatting the temp name: creating the temp file fails.
+        let bad = w("textproc_expat2");
+        fs::create_dir_all(tmp.path().join("textproc_expat2/.options.optique.tmp")).unwrap();
+        let summary = apply(&[ok, bad]);
+        assert_eq!(summary.written, 0);
+        assert_eq!(summary.failed.len(), 1, "{:?}", summary.failed);
+        assert_eq!(summary.failed[0].0.to_string(), "textproc/expat2");
+        assert!(!tmp.path().join("sysutils_tmux/options").exists(), "nothing written");
+        assert!(!tmp.path().join("sysutils_tmux/.options.optique.tmp").exists(), "temp removed");
     }
 
     #[test]

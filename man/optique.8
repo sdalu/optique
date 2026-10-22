@@ -1718,6 +1718,10 @@ Per-file failures during
 or
 .Cm clean
 are reported individually and counted in the summary without failing the run.
+A file
+.Cm sync
+cannot write stops it from writing or removing any other: every file is
+written aside first and renamed into place only once all of them were.
 Invalid command line usage exits 2.
 .Sh EXAMPLES
 Review the closure of two ports interactively for the poudriere set

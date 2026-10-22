@@ -1126,6 +1126,7 @@ impl WritePass {
 /// Carry out a write pass — unless it is a dry run or blocked — and assemble
 /// the report `sync` and `decide` both answer with. Failures are collected
 /// rather than raised: a per-file problem must not hide the rest of the pass.
+/// A file that cannot be written stops the whole pass (see `apply::apply`).
 fn commit_writes(
     pass: &WritePass,
     ports: &std::collections::BTreeMap<model::origin::PortKey, model::port::PortInfo>,
@@ -1144,7 +1145,10 @@ fn commit_writes(
         for (key, message) in summary.failed {
             errors.push(report::ErrorEntry { subject: key.to_string(), message });
         }
-        for r in &pass.removals {
+        // Removals run only once every write landed: a pass that failed to
+        // write leaves the options dir as it found it.
+        let removals = if errors.is_empty() { &pass.removals[..] } else { &[] };
+        for r in removals {
             match clean::remove_entry(r) {
                 Ok(note) => {
                     removed += 1;
@@ -1191,6 +1195,38 @@ fn commit_writes(
             conflicts: pass.conflicts.len(),
         },
         errors,
+    }
+}
+
+#[cfg(test)]
+mod commit_writes_tests {
+    /// A pass whose write failed removes nothing either: the options dir is
+    /// left exactly as it was found.
+    #[test]
+    fn a_failed_write_removes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dead = tmp.path().join("cat_dead");
+        std::fs::create_dir_all(&dead).unwrap();
+        std::fs::write(dead.join("options"), "x\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port/.options.optique.tmp")).unwrap();
+        let write = crate::apply::PendingWrite {
+            key: crate::model::origin::PortKey::parse("cat/port").unwrap(),
+            path: tmp.path().join("cat_port/options"),
+            old: None,
+            enabled: Default::default(),
+            complete: vec![],
+            content: "x\n".into(),
+        };
+        let removal = crate::clean::Removal {
+            options_name: "cat_dead".into(),
+            dir: dead.clone(),
+            reason: "test".into(),
+        };
+        let pass = super::WritePass::new(vec![write], vec![removal], Vec::new());
+        let report = super::commit_writes(&pass, &Default::default(), tmp.path(), false);
+        assert_eq!(report.summary.failed, 1);
+        assert_eq!(report.summary.removed, 0);
+        assert!(dead.join("options").exists(), "the removal waited for the writes");
     }
 }
 
