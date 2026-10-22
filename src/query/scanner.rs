@@ -48,6 +48,9 @@ pub fn scan(
     let mut seen: HashSet<PortKey> = HashSet::new();
     let mut in_flight = 0usize;
     let mut done = 0usize;
+    // Keys in `seen` that are no port to query: a moved port's old name and
+    // a removed port. Done as soon as resolved, so progress reaches its total.
+    let mut resolved_away = 0usize;
 
     let mut pending: Vec<PortKey> = roots.to_vec();
     loop {
@@ -65,6 +68,7 @@ pub fn scan(
                     result
                         .moved_notes
                         .push(format!("{} moved to {origin} ({reason})", key.origin));
+                    resolved_away += 1;
                     let new_key = key.with_origin(&origin);
                     if !seen.insert(new_key.clone()) {
                         continue;
@@ -75,6 +79,7 @@ pub fn scan(
                     result
                         .errors
                         .push((key.clone(), format!("port removed from tree: {reason}")));
+                    resolved_away += 1;
                     continue;
                 }
             };
@@ -105,7 +110,7 @@ pub fn scan(
             Err(_) => break,
         }
         progress(&ScanProgress {
-            done: done + result.from_cache,
+            done: done + result.from_cache + resolved_away,
             discovered: seen.len(),
             from_cache: result.from_cache,
         });
@@ -150,8 +155,14 @@ mod tests {
             PortKey::parse("cat/absent").unwrap(),
         ];
         let files = OptionsFiles::new(tmp.path());
-        let result = scan(&roots, &ctx, &files, 2, &mut cache, &moved, |_| {});
+        let mut last = None;
+        let result =
+            scan(&roots, &ctx, &files, 2, &mut cache, &moved, |p| last = Some((p.done, p.discovered)));
         assert!(result.ports.is_empty());
+        // Progress ends complete: the removed port and the old name of the
+        // moved one count as done, not as work never finished.
+        let (done, discovered) = last.unwrap();
+        assert_eq!(done, discovered, "progress ends at {done}/{discovered}");
         // cat/gone reported exactly once despite two references.
         let gone: Vec<_> =
             result.errors.iter().filter(|(k, _)| k.origin == "cat/gone").collect();
