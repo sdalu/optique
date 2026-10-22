@@ -7,9 +7,11 @@ pub enum MovedResult {
     Unchanged,
     /// Followed one or more MOVED entries to a new origin.
     MovedTo { origin: String, reason: String },
-    /// Entry with an empty target: the port was removed. Also a chain that
-    /// cycles, which leads to no port either.
+    /// Entry with an empty target: the port was removed.
     Removed { reason: String },
+    /// The chain comes back to an origin it passed, none of them in the
+    /// tree: it leads to no port, but nothing says one was removed.
+    Cycle,
 }
 
 #[derive(Debug, Default)]
@@ -49,14 +51,14 @@ impl Moved {
     /// an origin moved away can be reused later, so the chase stops at the
     /// first origin `exists` says is in the tree, the one asked for included.
     /// A chain that comes back to an origin it passed leads to no port: it
-    /// is reported as removed, with the cycle as the reason.
+    /// is reported as a cycle.
     pub fn resolve(&self, origin: &str, exists: impl Fn(&str) -> bool) -> MovedResult {
         let mut current = origin.to_string();
         let mut reason = String::new();
         let mut passed = HashSet::new();
         while let Some((next, why)) = self.map.get(&current).filter(|_| !exists(&current)) {
             if !passed.insert(current.clone()) {
-                return MovedResult::Removed { reason: "MOVED entries form a cycle".to_string() };
+                return MovedResult::Cycle;
             }
             reason = why.clone();
             match next {
@@ -116,7 +118,7 @@ mod tests {
     #[test]
     fn cycle_guard() {
         let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|r\nc/c|a/a|d|into the cycle\n");
-        let cycle = MovedResult::Removed { reason: "MOVED entries form a cycle".into() };
+        let cycle = MovedResult::Cycle;
         assert_eq!(m.resolve("a/a", |_| false), cycle);
         assert_eq!(m.resolve("b/b", |_| false), cycle);
         assert_eq!(m.resolve("c/c", |_| false), cycle);

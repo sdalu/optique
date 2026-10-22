@@ -82,6 +82,14 @@ pub fn scan(
                     resolved_away += 1;
                     continue;
                 }
+                MovedResult::Cycle => {
+                    result.errors.push((
+                        key.clone(),
+                        "not in the tree, and its MOVED entries form a cycle".to_string(),
+                    ));
+                    resolved_away += 1;
+                    continue;
+                }
             };
             if let Some(info) = cache.lookup(&key, files) {
                 result.from_cache += 1;

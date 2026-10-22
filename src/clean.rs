@@ -72,6 +72,9 @@ pub fn classify_entries(
                 format!("port moved to {new} (its options live under another name)")
             }
             MovedResult::Unchanged => "port no longer exists in the tree".to_string(),
+            MovedResult::Cycle => {
+                "port no longer exists in the tree (its MOVED entries form a cycle)".to_string()
+            }
         };
         removals.push(Removal { options_name: name, dir, reason });
     }
