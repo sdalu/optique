@@ -392,7 +392,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 /// that pkg repository (%R).
 fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
     let origins = std::process::Command::new("pkg")
-        .args(["query", "-a", "%o\t%R"])
+        .args(["query", "-a", "%n\t%o\t%R"])
         .output()
         .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
     if !origins.status.success() {
@@ -400,7 +400,7 @@ fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
     }
     // One line per annotation; only the "flavor" ones matter.
     let annots = std::process::Command::new("pkg")
-        .args(["query", "-a", "%o\t%At\t%Av"])
+        .args(["query", "-a", "%n\t%At\t%Av"])
         .output()
         .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
     let roots = parse_installed(
@@ -422,9 +422,12 @@ fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
     Ok(roots)
 }
 
-/// Pure part of installed_roots: `origins` lines are `origin\trepository`,
-/// `annots` lines are `origin\tannotation\tvalue`. Unparsable origins are
-/// skipped, duplicates collapse, the result is sorted.
+/// Pure part of installed_roots: `origins` lines are
+/// `package\torigin\trepository`, `annots` lines are
+/// `package\tannotation\tvalue`. Both are keyed by package, not origin:
+/// several flavors of one origin can be installed at once (polkit-qt-1 for
+/// qt5 and qt6), each its own root. Unparsable origins are skipped,
+/// duplicates collapse, the result is sorted.
 fn parse_installed(
     origins: &str,
     annots: &str,
@@ -433,17 +436,18 @@ fn parse_installed(
     let mut flavor: std::collections::HashMap<&str, &str> = Default::default();
     for line in annots.lines() {
         let mut f = line.split('\t');
-        if let (Some(origin), Some("flavor"), Some(value)) = (f.next(), f.next(), f.next()) {
-            flavor.insert(origin, value);
+        if let (Some(pkg), Some("flavor"), Some(value)) = (f.next(), f.next(), f.next()) {
+            flavor.insert(pkg, value);
         }
     }
-    let mut seen = std::collections::HashSet::new();
-    let mut roots = Vec::new();
+    let mut roots = std::collections::BTreeSet::new();
     for line in origins.lines() {
         let mut f = line.split('\t');
-        let (Some(origin), pkg_repo) = (f.next(), f.next()) else { continue };
+        let (Some(pkg), Some(origin), pkg_repo) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
         let origin = origin.trim();
-        if origin.is_empty() || !seen.insert(origin.to_string()) {
+        if origin.is_empty() {
             continue;
         }
         if !repos.is_empty() {
@@ -452,17 +456,16 @@ fn parse_installed(
                 continue;
             }
         }
-        let spec = match flavor.get(origin) {
+        let spec = match flavor.get(pkg) {
             Some(fl) => format!("{origin}@{fl}"),
             None => origin.to_string(),
         };
         // Packages not built from ports may carry unparsable origins: skip.
         if let Some(key) = model::origin::PortKey::parse(&spec) {
-            roots.push(key);
+            roots.insert(key);
         }
     }
-    roots.sort();
-    roots
+    roots.into_iter().collect()
 }
 
 /// The resolved root list plus notes destined for the startup banner's
@@ -1369,14 +1372,14 @@ mod tests {
 
     #[test]
     fn installed_list_flavors_and_repo_filter() {
-        let origins = "www/nginx\tpoudriere\n\
-                       graphics/ImageMagick7\tSynth\n\
-                       devel/binutils\tSynth\n\
-                       www/nginx\tpoudriere\n\
-                       not-an-origin\tSynth\n";
-        let annots = "graphics/ImageMagick7\tflavor\tnox11\n\
-                      devel/binutils\tflavor\tnative\n\
-                      www/nginx\tcpe\tsomething\n";
+        let origins = "nginx\twww/nginx\tpoudriere\n\
+                       ImageMagick7-nox11\tgraphics/ImageMagick7\tSynth\n\
+                       binutils\tdevel/binutils\tSynth\n\
+                       nginx\twww/nginx\tpoudriere\n\
+                       junk\tnot-an-origin\tSynth\n";
+        let annots = "ImageMagick7-nox11\tflavor\tnox11\n\
+                      binutils\tflavor\tnative\n\
+                      nginx\tcpe\tsomething\n";
         // Unfiltered: three ports, flavors applied, dup and junk dropped.
         let all = parse_installed(origins, annots, &[]);
         let names: Vec<String> = all.iter().map(|k| k.to_string()).collect();
@@ -1394,6 +1397,32 @@ mod tests {
         assert_eq!(both.len(), 3);
         // Unknown repo: empty (caller turns this into an error).
         assert!(parse_installed(origins, annots, &["nope".to_string()]).is_empty());
+    }
+
+    /// Several flavors of one origin installed side by side are each a
+    /// root: keyed by origin, all but the last annotated one were dropped
+    /// (183 of 2230 packages on one host).
+    #[test]
+    fn installed_list_keeps_every_flavor_of_one_origin() {
+        let origins = "polkit-qt5-1\tsysutils/polkit-qt-1\tSynth\n\
+                       polkit-qt6-1\tsysutils/polkit-qt-1\tSynth\n\
+                       gpu-firmware-amd-kmod-aldebaran\tgraphics/gpu-firmware-amd-kmod\tSynth\n\
+                       gpu-firmware-amd-kmod-arcturus\tgraphics/gpu-firmware-amd-kmod\tSynth\n";
+        let annots = "polkit-qt5-1\tflavor\tqt5\n\
+                      polkit-qt6-1\tflavor\tqt6\n\
+                      gpu-firmware-amd-kmod-aldebaran\tflavor\taldebaran\n\
+                      gpu-firmware-amd-kmod-arcturus\tflavor\tarcturus\n";
+        let names: Vec<String> =
+            parse_installed(origins, annots, &[]).iter().map(|k| k.to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "graphics/gpu-firmware-amd-kmod@aldebaran",
+                "graphics/gpu-firmware-amd-kmod@arcturus",
+                "sysutils/polkit-qt-1@qt5",
+                "sysutils/polkit-qt-1@qt6",
+            ]
+        );
     }
 
     #[test]

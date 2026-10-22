@@ -23,8 +23,9 @@ for the bare default-TUI invocation — and plain
 Under `-s`/`--synth` (see [configuration.md](configuration.md#synth)), an
 empty list is not an error: `tui`, `scan`, `sync` and `clean --unused` fall
 back to the packages currently installed on the host, matching synth's own
-"build what's installed" (`pkg query -a %o`, with flavors from the pkg
-`flavor` annotation). `--repo NAME` (repeatable)
+"build what's installed": one root per installed package (`pkg query -a
+%o`, with the flavor from that package's `flavor` annotation, so flavors
+installed side by side are each a root). `--repo NAME` (repeatable)
 narrows that implicit list to packages installed from the named pkg
 repositories, and is rejected when any ports *are* given, since it only
 means something for the implicit list.

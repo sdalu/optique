@@ -1421,12 +1421,13 @@ names a poudriere tree and is refused with
 .Fl s .
 .Pp
 When no ports are given at all, synth mode uses the installed packages as
-the list, mirroring how synth builds what is installed: the origins come
-from
+the list, mirroring how synth builds what is installed: one root per
+installed package, its origin from
 .Ql pkg query -a %o
-with flavors from the pkg
+and its flavor from the package's
 .Ql flavor
-annotation.
+annotation, so several flavors of one origin installed side by side are
+each a root.
 This applies to the TUI,
 .Cm scan ,
 .Cm sync

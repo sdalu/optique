@@ -156,8 +156,10 @@ ports tree.
 
 When no ports are given at all (no origins, no `-f`), synth mode uses
 the installed packages as the list, mirroring how synth builds what is
-installed: the origins come from `pkg query -a %o`, with flavors from
-the pkg `flavor` annotation. This applies to the TUI, `scan`, `sync`
+installed: one root per installed package, its origin from
+`pkg query -a %o` and its flavor from that package's `flavor`
+annotation, so several flavors of one origin installed side by side
+(polkit-qt-1 for qt5 and qt6) are each a root. This applies to the TUI, `scan`, `sync`
 and `clean --unused` (see [Commands](commands.md)). `--repo name` is
 repeatable and restricts that implicit list to packages installed from
 the named pkg repositories, e.g. `--repo Synth` to consider only
