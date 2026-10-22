@@ -111,7 +111,8 @@ Renamed ports are resolved through the tree's
 .Pa MOVED
 file, for origins no longer in the tree only, since a name moved away can
 be reused: a chain of moves stops at the first origin that exists.
-Ports that vanished surface as per-edge errors.
+Ports that vanished, or whose chain of moves comes back on itself without
+reaching one, surface as per-edge errors.
 .Ss Dependency loops
 Resolving the closure also detects dependency loops: ports that are, directly
 or through other ports, their own dependency.

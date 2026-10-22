@@ -67,8 +67,9 @@ only ports whose inputs changed are queried again. Renamed ports are
 followed through the tree's `MOVED` file, for origins no longer in the
 tree only: a name moved away can be reused (math/mumps moved to
 math/mumps-edf, then math/mumps4 to math/mumps), so a chain of moves
-stops at the first origin that exists. A port that is gone, or whose
-query fails, is reported as an error, and `scan` counts it in its exit
+stops at the first origin that exists. A port that is gone, whose chain
+of moves cycles without reaching one, or whose query fails, is reported
+as an error, and `scan` counts it in its exit
 status.
 
 Each options file is read once per run, whoever needs it: the cache check,

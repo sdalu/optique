@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 /// Outcome of resolving an origin through the MOVED file.
@@ -7,7 +7,8 @@ pub enum MovedResult {
     Unchanged,
     /// Followed one or more MOVED entries to a new origin.
     MovedTo { origin: String, reason: String },
-    /// Entry with an empty target: the port was removed.
+    /// Entry with an empty target: the port was removed. Also a chain that
+    /// cycles, which leads to no port either.
     Removed { reason: String },
 }
 
@@ -44,18 +45,18 @@ impl Moved {
         Moved { map }
     }
 
-    /// Chase MOVED chains (with a cycle guard) for a bare origin (no flavor).
-    /// MOVED is history and an origin moved away can be reused later, so the
-    /// chase stops at the first origin `exists` says is in the tree, the one
-    /// asked for included.
+    /// Chase MOVED chains for a bare origin (no flavor). MOVED is history and
+    /// an origin moved away can be reused later, so the chase stops at the
+    /// first origin `exists` says is in the tree, the one asked for included.
+    /// A chain that comes back to an origin it passed leads to no port: it
+    /// is reported as removed, with the cycle as the reason.
     pub fn resolve(&self, origin: &str, exists: impl Fn(&str) -> bool) -> MovedResult {
         let mut current = origin.to_string();
         let mut reason = String::new();
-        let mut hops = 0;
+        let mut passed = HashSet::new();
         while let Some((next, why)) = self.map.get(&current).filter(|_| !exists(&current)) {
-            hops += 1;
-            if hops > 32 {
-                break; // cycle or absurd chain; treat as unresolvable
+            if !passed.insert(current.clone()) {
+                return MovedResult::Removed { reason: "MOVED entries form a cycle".to_string() };
             }
             reason = why.clone();
             match next {
@@ -109,10 +110,19 @@ mod tests {
         );
     }
 
+    /// A cycle among origins absent from the tree leads nowhere: reported,
+    /// never redirected to whichever origin the chase stopped at. One of
+    /// its origins in the tree ends the chase there as any chain does.
     #[test]
     fn cycle_guard() {
-        let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|r\n");
-        // must terminate; result is one of the two origins
-        let _ = m.resolve("a/a", |_| false);
+        let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|r\nc/c|a/a|d|into the cycle\n");
+        let cycle = MovedResult::Removed { reason: "MOVED entries form a cycle".into() };
+        assert_eq!(m.resolve("a/a", |_| false), cycle);
+        assert_eq!(m.resolve("b/b", |_| false), cycle);
+        assert_eq!(m.resolve("c/c", |_| false), cycle);
+        assert_eq!(
+            m.resolve("c/c", |o| o == "b/b"),
+            MovedResult::MovedTo { origin: "b/b".into(), reason: "r".into() }
+        );
     }
 }
