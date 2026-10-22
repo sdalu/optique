@@ -296,6 +296,19 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(none.starts_with("no such port: cat/none"), "{none}");
+
+        // A failed .include: make carries on, prints a dump and exits 1.
+        // The dump is partial, so the port fails, naming the missing file.
+        let tmp = fake_tree(&[(
+            "cat/half",
+            "PKGNAME=a-1.0\nCOMPLETE_OPTIONS_LIST=X\n.include \"/nonexistent/common.mk\"\n",
+        )]);
+        let ctx = QueryCtx { portsdir: tmp.path().join("ports"), ..ctx };
+        let half = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/half").unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(half.starts_with("make failed"), "{half}");
+        assert!(half.contains("Cannot open /nonexistent/common.mk"), "{half}");
     }
 
     /// Startup on a real closure reads each options file once, cold or warm:

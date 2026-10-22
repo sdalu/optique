@@ -126,8 +126,14 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     if let Some(why) = unreadable_options_file(&text, &ctx.port_dbdir) {
         anyhow::bail!("{why}");
     }
-    if !out.status.success() && !text.contains("OPTIQUE|") {
-        anyhow::bail!("make failed ({}): {}", out.status, last_lines(&text, 5));
+    // Any failure fails the port, dump or not: make carries on past a
+    // .include it cannot find and prints a dump that is missing whatever the
+    // file would have set. That file is named first, being the cause; the
+    // tail would only show the dump.
+    if !out.status.success() {
+        let cause = text.lines().find(|l| l.contains("Could not find") || l.contains("Cannot open"));
+        let why = cause.map_or_else(|| last_lines(&text, 5), |l| l.trim().to_string());
+        anyhow::bail!("make failed ({}): {why}", out.status);
     }
     parse::parse_dump(key, &text)
 }
