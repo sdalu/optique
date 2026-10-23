@@ -53,7 +53,7 @@ LOCALBASE=/nonexistent
 /// it bears on evaluating a Makefile: the slave's PORTSDIR, PORT_DBDIR and
 /// friends are chroot paths optique sets its own way. synth gives
 /// `PACKAGE_BUILDING` alone, never `PACKAGE_BUILDING_FLAVORS`. The profile
-/// line comes first, from [`synth_prelude`].
+/// line comes first and the ccache lines last, from [`synth_prelude`].
 const SYNTH_SCAN_PRELUDE: &str = "\
 USE_PACKAGE_DEPENDS_ONLY=yes
 PACKAGE_BUILDING=yes
@@ -68,9 +68,28 @@ const SYNTH_SCAN_TRAILER: &str = "\
 LOCALBASE=/nonexistent
 ";
 
-/// synth's header for `profile`, as its scan slave's make.conf starts.
-fn synth_prelude(profile: &str) -> String {
-    format!("# --- synth scan environment (optique) ---\nSYNTHPROFILE={profile}\n{SYNTH_SCAN_PRELUDE}")
+/// What synth adds to that header when the profile's `Directory_ccache`
+/// exists (replicant.adb:754-757): ports then gain devel/ccache as a build
+/// dependency.
+const SYNTH_SCAN_CCACHE: &str = "\
+WITH_CCACHE_BUILD=yes
+CCACHE_DIR=/ccache
+";
+
+/// synth's header for `profile`, as its scan slave's make.conf starts,
+/// with the ccache lines when `ccache` is on.
+fn synth_prelude(profile: &str, ccache: bool) -> String {
+    let ccache = if ccache { SYNTH_SCAN_CCACHE } else { "" };
+    format!(
+        "# --- synth scan environment (optique) ---\nSYNTHPROFILE={profile}\n\
+         {SYNTH_SCAN_PRELUDE}{ccache}"
+    )
+}
+
+/// Does synth turn ccache on for a profile whose `Directory_ccache` is
+/// `setting`? Only when that path exists; unset is synth's `disabled`.
+fn synth_ccache(setting: Option<&str>) -> bool {
+    setting.is_some_and(|dir| dir != "disabled" && Path::new(dir).exists())
 }
 
 const SYNTH_DIR: &str = "/usr/local/etc/synth";
@@ -875,8 +894,9 @@ fn resolve_synth(
     // synth reads ports in a chroot with nothing installed, under its own
     // header and the profile's make.conf alone: never the host's
     // /etc/make.conf, whose absence the always non-empty staged file keeps.
+    let ccache = synth_ccache(setting("Directory_ccache").as_deref());
     let (make_conf, conf_hash, make_conf_sources) = stage_make_conf(
-        synth_prelude(profile),
+        synth_prelude(profile, ccache),
         &[synth_dir.join(format!("{profile}-make.conf"))],
         SYNTH_SCAN_TRAILER,
         staging_dir,
@@ -1122,7 +1142,7 @@ pub(crate) fn stage_synth_make_conf(
     profile_make_conf: &Path,
 ) -> Result<PathBuf> {
     let (path, _, _) = stage_make_conf(
-        synth_prelude(profile),
+        synth_prelude(profile, false),
         &[profile_make_conf.to_path_buf()],
         SYNTH_SCAN_TRAILER,
         staging_dir,
@@ -2157,6 +2177,48 @@ not a key value line
         assert!(s.notes.is_empty(), "{:?}", s.notes);
     }
 
+    /// synth's header gains its ccache lines, after the rest of it and
+    /// before the profile's make.conf, only when Directory_ccache exists.
+    #[test]
+    fn synth_ccache_follows_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let tree = tmp.path().join("ports");
+        let ccache = tmp.path().join("ccache");
+        let stage = tmp.path().join("stage");
+        fake_tree(&tree);
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(
+            synth.join("synth.ini"),
+            format!(
+                "[A]\nDirectory_portsdir={}\nDirectory_options={}\nDirectory_ccache={}\n",
+                tree.display(),
+                tmp.path().display(),
+                ccache.display()
+            ),
+        )
+        .unwrap();
+        fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
+        let staged = || {
+            let s = resolve_synth(&synth, "A", None, None, &stage).unwrap();
+            fs::read_to_string(s.make_conf.unwrap()).unwrap()
+        };
+
+        let absent = staged();
+        assert!(!absent.contains("CCACHE"), "{absent}");
+
+        fs::create_dir_all(&ccache).unwrap();
+        let present = staged();
+        let at = |needle: &str| present.find(needle).unwrap_or_else(|| panic!("{needle}: {present}"));
+        assert!(at("BATCH=yes\n") < at("WITH_CCACHE_BUILD=yes\nCCACHE_DIR=/ccache\n"), "{present}");
+        assert!(at("CCACHE_DIR=/ccache\n") < at("X=1\n"), "{present}");
+
+        // Unset is synth's "disabled", never a path looked up.
+        assert!(!synth_ccache(None));
+        assert!(!synth_ccache(Some("disabled")));
+    }
+
     #[test]
     fn synth_resolution_without_profile_files() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2190,7 +2252,7 @@ not a key value line
         assert_eq!(s.make_conf.as_deref(), Some(stage.join("make.conf").as_path()));
         assert!(s.make_conf_sources.is_empty());
         let staged = fs::read_to_string(stage.join("make.conf")).unwrap();
-        assert_eq!(staged, format!("{}{SYNTH_SCAN_TRAILER}", synth_prelude("LiveSystem")));
+        assert_eq!(staged, format!("{}{SYNTH_SCAN_TRAILER}", synth_prelude("LiveSystem", false)));
 
         // Directory_portsdir naming a non-tree is an error, not a fallback.
         fs::write(

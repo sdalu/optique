@@ -2051,7 +2051,15 @@ synth puts at the top of that chroot's
 .Po
 .Va SYNTHPROFILE , PACKAGE_BUILDING , BATCH , USE_PACKAGE_DEPENDS_ONLY ,
 but not
-.Va PACKAGE_BUILDING_FLAVORS
+.Va PACKAGE_BUILDING_FLAVORS ;
+.Va WITH_CCACHE_BUILD
+and
+.Va CCACHE_DIR
+when the profile's
+.Va Directory_ccache
+exists, so ports gain
+.Pa devel/ccache
+as a build dependency as in synth
 .Pc
 and is followed by
 .Ql LOCALBASE=/nonexistent .

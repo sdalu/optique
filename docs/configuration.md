@@ -175,8 +175,11 @@ blacklist under `-s`.
 synth reads each port in a chroot whose `/usr/local` is empty, so the
 queries do too: the profile's file comes after the lines synth puts at
 the top of that chroot's make.conf (`SYNTHPROFILE`, `PACKAGE_BUILDING`,
-`BATCH`, `USE_PACKAGE_DEPENDS_ONLY`; no `PACKAGE_BUILDING_FLAVORS`) and
-is followed by `LOCALBASE=/nonexistent`. Without it a port Makefile
+`BATCH`, `USE_PACKAGE_DEPENDS_ONLY`; no `PACKAGE_BUILDING_FLAVORS`;
+`WITH_CCACHE_BUILD` and `CCACHE_DIR` when the profile's
+`Directory_ccache` exists, so ports gain devel/ccache as a build
+dependency as they do in synth) and is followed by
+`LOCALBASE=/nonexistent`. Without it a port Makefile
 that probes installed files would answer for the host: with php82
 installed, `Mk/Uses/php.mk` reads its `php.conf` and every `php84-*`
 extension builds against `lang/php82`. The startup banner's
