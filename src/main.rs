@@ -350,7 +350,11 @@ struct Redundancy {
 }
 
 /// Query the port of every live entry and mark the files that only repeat
-/// defaults + make.conf. An entry whose query fails is left alone.
+/// defaults + make.conf. Flavors of one origin share its file, and a flavor
+/// can set its own defaults, so the default flavor's verdict is not enough:
+/// every other flavor in its FLAVORS is queried as well, one make query each,
+/// and the file goes only when none of them deviates. An entry one of whose
+/// queries fails is left alone.
 fn find_redundant(
     cli: &Cli,
     settings: &config::Settings,
@@ -359,68 +363,146 @@ fn find_redundant(
     live: &[clean::LiveEntry],
 ) -> Redundancy {
     use crate::query::makerunner::{MakeRunner, ScanEvent};
+    use model::origin::PortKey;
+    use model::port::PortInfo;
+
+    /// An entry whose other flavors are still being queried.
+    struct Flavors<'a> {
+        entry: &'a clean::LiveEntry,
+        /// The flavors reading this entry's file, default flavor first.
+        infos: Vec<PortInfo>,
+        waiting: usize,
+        failed: Option<String>,
+    }
 
     let paint = stderr_color(cli);
     let runner = MakeRunner::new(query_ctx(settings, settings.options_dir.clone()), jobs);
     let by_key: std::collections::HashMap<_, _> = live.iter().map(|e| (e.key.clone(), e)).collect();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
     let mut found = Redundancy::default();
-    let judge = |info: model::port::PortInfo, found: &mut Redundancy| {
-        let Some(entry) = by_key.get(&info.key) else { return };
-        // The verdict below is only valid for the file this port actually
-        // reads; a custom/legacy OPTIONS_NAME means the entry belongs to some
-        // other port — leave it alone.
-        if info.options_name != entry.options_name {
-            let note = format!(
-                "{}: {} uses options name {} — not this entry, left alone",
-                entry.options_name, info.key, info.options_name
-            );
-            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
-            found.warnings.push(note);
+    let mut warn = |found: &mut Redundancy, note: String| {
+        eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+        found.warnings.push(note);
+    };
+    let mut pending: std::collections::HashMap<PortKey, Flavors> = Default::default();
+    // The verdict once every flavor reading the file is known.
+    let settle = |mut f: Flavors, found: &mut Redundancy, warn: &mut dyn FnMut(&mut Redundancy, String)| {
+        if let Some(why) = f.failed {
+            warn(found, why);
             return;
         }
-        let diff = clean::redundancy_diff(&info);
-        if diff.is_empty() {
-            found.removals.push(clean::Removal {
-                options_name: entry.options_name.clone(),
-                dir: entry.dir.clone(),
+        // Answers arrive in any order; the reason names the same flavor each run.
+        f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
+        match shared_file_deviation(&f.infos) {
+            None => found.removals.push(clean::Removal {
+                options_name: f.entry.options_name.clone(),
+                dir: f.entry.dir.clone(),
                 reason: "redundant: repeats defaults + make.conf".to_string(),
-            });
-        } else if cli.verbose {
-            found.kept.push((
-                entry.options_name.clone(),
-                format!("deviates from defaults + make.conf: {}", diff.join(" ")),
-            ));
+            }),
+            Some(why) if cli.verbose => found.kept.push((f.entry.options_name.clone(), why)),
+            Some(_) => {}
         }
     };
+
+    let mut ask: Vec<PortKey> = live.iter().map(|e| e.key.clone()).collect();
+    let mut ready: std::collections::VecDeque<std::result::Result<PortInfo, (PortKey, String)>> =
+        Default::default();
     let mut in_flight = 0usize;
     let mut done = 0usize;
-    for entry in live {
-        if let Some(info) = cache.lookup(&entry.key, &files) {
-            done += 1;
-            judge(info, &mut found);
-        } else {
-            runner.submit(entry.key.clone());
-            in_flight += 1;
+    let mut total = live.len();
+    loop {
+        for key in ask.drain(..) {
+            match cache.lookup(&key, &files) {
+                Some(info) => ready.push_back(Ok(info)),
+                None => {
+                    runner.submit(key);
+                    in_flight += 1;
+                }
+            }
         }
-    }
-    while in_flight > 0 {
+        while let Some(result) = ready.pop_front() {
+            done += 1;
+            let key = match &result {
+                Ok(info) => info.key.clone(),
+                Err((key, _)) => key.clone(),
+            };
+            let plain = PortKey::new(key.origin.clone(), None);
+            if key.flavor.is_none() {
+                let Some(entry) = by_key.get(&key) else { continue };
+                let info = match result {
+                    Ok(info) => info,
+                    Err((_, msg)) => {
+                        warn(&mut found, format!("{key}: query failed, left alone ({msg})"));
+                        continue;
+                    }
+                };
+                // The verdict below is only valid for the file this port
+                // actually reads; a custom/legacy OPTIONS_NAME means the entry
+                // belongs to some other port — leave it alone.
+                if info.options_name != entry.options_name {
+                    let note = format!(
+                        "{}: {} uses options name {} — not this entry, left alone",
+                        entry.options_name, info.key, info.options_name
+                    );
+                    warn(&mut found, note);
+                    continue;
+                }
+                let others: Vec<PortKey> = info
+                    .flavors
+                    .iter()
+                    .filter(|f| info.canonical.flavor.as_ref() != Some(*f))
+                    .map(|f| PortKey::new(key.origin.clone(), Some(f.clone())))
+                    .collect();
+                let f = Flavors { entry, infos: vec![info], waiting: others.len(), failed: None };
+                // A deviating default flavor settles it: no need to ask the others.
+                if others.is_empty() || shared_file_deviation(&f.infos).is_some() {
+                    settle(f, &mut found, &mut warn);
+                    continue;
+                }
+                total += others.len();
+                ask.extend(others);
+                pending.insert(plain, f);
+                continue;
+            }
+            let Some(f) = pending.get_mut(&plain) else { continue };
+            f.waiting -= 1;
+            match result {
+                // A flavor with an options name of its own, or with no
+                // options at all (glib20@bootstrap), does not read this file.
+                Ok(info) if info.options_name == f.entry.options_name && info.options.has_options() => {
+                    f.infos.push(info)
+                }
+                Ok(_) => {}
+                Err((_, msg)) => {
+                    f.failed.get_or_insert_with(|| {
+                        format!("{}: {key}: query failed, left alone ({msg})", f.entry.options_name)
+                    });
+                }
+            }
+            if f.waiting == 0 {
+                let f = pending.remove(&plain).expect("pending entry just seen");
+                settle(f, &mut found, &mut warn);
+            }
+        }
+        if !ask.is_empty() {
+            continue;
+        }
+        if in_flight == 0 {
+            break;
+        }
         match runner.events.recv() {
             Ok(ScanEvent::PortDone(info)) => {
                 in_flight -= 1;
-                done += 1;
                 cache.insert(&info, &files);
-                judge(*info, &mut found);
+                ready.push_back(Ok(*info));
             }
             Ok(ScanEvent::PortError { key, msg }) => {
                 in_flight -= 1;
-                let warning = format!("{key}: query failed, left alone ({msg})");
-                eprintln!("{} {warning}", tint(paint, ansi::YELLOW, "warning:"));
-                found.warnings.push(warning);
+                ready.push_back(Err((key, msg)));
             }
             Err(_) => break,
         }
-        eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{} ports", live.len())));
+        eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{total} ports")));
         let _ = std::io::stderr().flush();
     }
     if done > 0 {
@@ -429,6 +511,23 @@ fn find_redundant(
     runner.shutdown();
     found.kept.sort();
     found
+}
+
+/// Why a shared options file is not redundant, judged for every flavor that
+/// reads it (`infos`, default flavor first, each queried with the file in
+/// place): the first flavor it moves away from defaults + make.conf. None
+/// when the file changes nothing for any of them.
+fn shared_file_deviation(infos: &[model::port::PortInfo]) -> Option<String> {
+    infos.iter().enumerate().find_map(|(i, info)| {
+        let diff = clean::redundancy_diff(info);
+        if diff.is_empty() {
+            None
+        } else if i == 0 {
+            Some(format!("deviates from defaults + make.conf: {}", diff.join(" ")))
+        } else {
+            Some(format!("deviates from defaults + make.conf for {}: {}", info.key, diff.join(" ")))
+        }
+    })
 }
 
 /// What the make queries need from the settings; `port_dbdir` is where they
@@ -1487,6 +1586,26 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::split_raw_origins;
+
+    /// A shared file is redundant only when no flavor reading it deviates:
+    /// www/sogo@pgsql defaults to PGSQL, the file turns MYSQL on instead.
+    #[test]
+    fn a_shared_file_deviating_for_another_flavor_is_not_redundant() {
+        use crate::model::port::PortInfo;
+        let flavor = |f: &str, default: &str| {
+            let mut info = PortInfo::stub(&format!("www/sogo@{f}"));
+            info.flavors = vec!["mysql".into(), "pgsql".into()];
+            info.options.complete = vec!["MYSQL".into(), "PGSQL".into()];
+            info.options.defaults = [default.to_string()].into();
+            // Queried with the file in place: MYSQL on, PGSQL off.
+            info.options.effective = ["MYSQL".to_string()].into();
+            info
+        };
+        let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
+        assert_eq!(super::shared_file_deviation(std::slice::from_ref(&mysql)), None);
+        let why = super::shared_file_deviation(&[mysql, pgsql]).expect("@pgsql reads MYSQL from the file");
+        assert!(why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"), "{why}");
+    }
 
     /// Under -m a settled unconfigured or stale port shows as ok and sorts
     /// with the ok ones: a conflict comes before it, not among it.

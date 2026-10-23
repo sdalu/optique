@@ -1409,6 +1409,18 @@ Disagreements confined to options one flavor does not even have, such as those
 removed by
 .Va OPTIONS_EXCLUDE ,
 are structural and not reported.
+A flavor can set defaults of its own, which the shared file then overrides,
+so a shared file is removed as repeating defaults plus
+.Pa make.conf
+only when it does so for every flavor reading it:
+.Fl -minimal
+judges the flavors in the closure,
+.Cm clean Fl -redundant
+queries every flavor in the port's
+.Va FLAVORS ,
+one
+.Xr make 1
+query each, and keeps the file when one of them cannot be queried.
 .Pp
 With
 .Fl n

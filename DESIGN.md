@@ -228,6 +228,14 @@ judged from its view — exactly what `make config` on the plain origin
 produces — and a divergent flavor's difference is reported as a warning,
 not an error (`src/apply.rs`, `src/session.rs`).
 
+Removing the file is the exception: it decides every flavor reading it, and
+a flavor can set its own defaults (`www/sogo@pgsql` adds `PGSQL`), so
+`--minimal` removes it only when it repeats defaults + make.conf for every
+flavor in the closure, and `clean --redundant` queries every flavor in
+`FLAVORS`, one make query each, keeping the file when one fails (`src/main.rs`,
+`find_redundant`). Rejected: judging only the default flavor, which deleted a
+file `@pgsql` still read.
+
 Rejected: treating the divergence as a conflict that aborts planning, which
 stopped every plan touching such an origin.
 

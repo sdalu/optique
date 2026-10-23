@@ -216,7 +216,15 @@ pub fn plan_writes<'a>(
             // either way, so they must not count as a deviation.
             let closed =
                 crate::session::close_implies(chosen.info, chosen.enabled.clone());
-            if closed == crate::session::nofile_effective(chosen.info) {
+            // The file decides every flavor sharing it: it goes only when
+            // none of them ends up elsewhere without it (a flavor can set its
+            // own OPTIONS_DEFAULT, as www/sogo@pgsql does).
+            let file = written_file(chosen.info, &chosen.enabled);
+            let shared_redundant = cands.iter().filter(|c| !std::ptr::eq(*c, chosen)).all(|c| {
+                crate::session::effective_with(c.info, Some(&file))
+                    == crate::session::nofile_effective(c.info)
+            });
+            if closed == crate::session::nofile_effective(chosen.info) && shared_redundant {
                 if files.bytes(options_name).is_some() {
                     removals.push(crate::clean::Removal {
                         options_name: options_name.clone(),
@@ -308,13 +316,18 @@ fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String
     if !same_list || !old.unlined().is_empty() {
         return false;
     }
-    let would = SavedOptionsFile {
+    let would = written_file(info, enabled);
+    crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
+}
+
+/// The file writing `enabled` from `info`'s view produces, as make reads it.
+fn written_file(info: &PortInfo, enabled: &BTreeSet<String>) -> SavedOptionsFile {
+    SavedOptionsFile {
         complete: info.options.complete.clone(),
         set: enabled.clone(),
         unset: info.options.complete.iter().filter(|o| !enabled.contains(*o)).cloned().collect(),
         ..Default::default()
-    };
-    crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
+    }
 }
 
 /// Leftover options files owned by ports that no longer have ANY options.
@@ -898,6 +911,47 @@ mod tests {
         );
         assert_eq!(planned.writes.len(), 1);
         assert!(planned.removals.is_empty());
+    }
+
+    /// A file the default flavor could drop still decides another flavor
+    /// sharing it: www/sogo@pgsql defaults to PGSQL, the file says MYSQL.
+    #[test]
+    fn minimal_mode_keeps_a_file_another_flavor_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flavor = |f: &str, default: &str| {
+            let mut info = mk_info(&["MYSQL", "PGSQL"], &[default]);
+            info.key = PortKey::parse(&format!("www/sogo@{f}")).unwrap();
+            info.canonical = info.key.clone();
+            info.flavors = vec!["mysql".into(), "pgsql".into()];
+            info.options_name = "www_sogo".into();
+            info.options.defaults = [default.to_string()].into();
+            info
+        };
+        let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
+        fs::create_dir_all(tmp.path().join("www_sogo")).unwrap();
+        fs::write(
+            tmp.path().join("www_sogo/options"),
+            "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=MYSQL PGSQL\n\
+             OPTIONS_FILE_SET+=MYSQL\nOPTIONS_FILE_UNSET+=PGSQL\n",
+        )
+        .unwrap();
+        let mysql_on: BTreeSet<String> = ["MYSQL".to_string()].into();
+        let ports = [(&mysql, mysql_on.clone()), (&pgsql, mysql_on.clone())];
+        let planned = plan_writes(
+            ports.iter().map(|(i, e)| (&i.key, *i, e.clone())),
+            &OptionsFiles::new(tmp.path()),
+            true,
+        );
+        assert!(planned.removals.is_empty(), "@pgsql reads MYSQL from the file: {:?}", planned.removals);
+        assert!(planned.writes.is_empty(), "the file is up to date");
+
+        // Alone, the default flavor cannot see @pgsql: the file goes.
+        let planned = plan_writes(
+            std::iter::once((&mysql.key, &mysql, mysql_on)),
+            &OptionsFiles::new(tmp.path()),
+            true,
+        );
+        assert_eq!(planned.removals.len(), 1);
     }
 
     #[test]
