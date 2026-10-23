@@ -6294,7 +6294,8 @@ mod tests {
 
     /// The list's +N, the STALE line and the pane's N count the same
     /// options, on a hand-edited file too: IMAP has a line but no place in
-    /// the list, MQTT neither; both are new.
+    /// the list and is settled; POP3 is listed with no line and MQTT has
+    /// neither, so both are new.
     #[test]
     fn plus_n_and_the_panes_n_marks_agree() {
         let tmp = tempfile::tempdir().unwrap();
@@ -6302,18 +6303,18 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("options"),
-            "_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=IMAP\n",
+            "_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A POP3\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=IMAP\n",
         )
         .unwrap();
-        let mut app = alpha_app(tmp.path(), &["A", "IMAP", "MQTT"]);
+        let mut app = alpha_app(tmp.path(), &["A", "IMAP", "MQTT", "POP3"]);
         let shown = screen(&mut app);
         assert!(shown.contains("cat/alpha +2 "), "{shown}");
-        assert!(shown.contains("STALE: new IMAP MQTT"), "{shown}");
-        let marked: Vec<&str> = ["A", "IMAP", "MQTT"]
+        assert!(shown.contains("STALE: new MQTT POP3"), "{shown}");
+        let marked: Vec<&str> = ["A", "IMAP", "MQTT", "POP3"]
             .into_iter()
             .filter(|o| shown.lines().any(|l| l.contains("│N [") && l.contains(&format!("] {o} "))))
             .collect();
-        assert_eq!(marked, ["IMAP", "MQTT"], "{shown}");
+        assert_eq!(marked, ["MQTT", "POP3"], "{shown}");
     }
 
     /// A STALE line too long for the pane wraps to a second, under its

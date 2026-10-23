@@ -92,6 +92,31 @@ impl Fixture {
         json(&child.wait_with_output().unwrap())
     }
 
+    /// `make -C <origin> <args>` on the fixture's tree, options dir and
+    /// make.conf, in an environment as bare as optique's queries.
+    pub fn make(&self, origin: &str, args: &[&str]) -> std::process::Output {
+        Command::new("/usr/bin/make")
+            .env_clear()
+            .env("PATH", "/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin")
+            .arg("-C")
+            .arg(self.tree.join(origin))
+            .arg(format!("PORTSDIR={}", self.tree.display()))
+            .arg(format!("PORT_DBDIR={}", self.options.display()))
+            .arg(format!("__MAKE_CONF={}", self.make_conf.display()))
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// The words of `make -V <var>` for `origin`, sorted.
+    pub fn make_v(&self, origin: &str, var: &str) -> Vec<String> {
+        let out = self.make(origin, &["-V", var]);
+        assert!(out.status.success(), "make -V {var}: {}", stderr(&out));
+        let mut words: Vec<String> = stdout(&out).split_whitespace().map(str::to_string).collect();
+        words.sort();
+        words
+    }
+
     /// `scan --json --options` for these ports, and the one named `port`.
     pub fn scan_port(&self, args: &[&str], port: &str) -> serde_json::Value {
         let mut all = vec!["--json", "--options"];

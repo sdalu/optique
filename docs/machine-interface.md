@@ -92,9 +92,9 @@ re-running `make`:
 
 [^1]: absent when no layer mentions the option.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
-[^4]: or not settled by it: missing from its `_FILE_COMPLETE_OPTIONS_LIST`
-    or without a SET/UNSET line, which only a hand edit leaves and which
-    `sync` rewrites.
+[^4]: that is, the file has no SET or UNSET line for it, as make counts
+    `NEW_OPTIONS`; a line settles the option even when the file's
+    `_FILE_COMPLETE_OPTIONS_LIST`, which make never reads, misses it.
 
 ## Plans for `decide`
 

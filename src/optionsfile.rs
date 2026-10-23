@@ -57,16 +57,19 @@ impl SavedOptionsFile {
     /// `make config-conditional` asks about them again. `make config` never
     /// writes such a file; a hand edit or a write cut short does.
     pub fn unlined(&self) -> Vec<&str> {
-        self.complete.iter().map(String::as_str).filter(|o| self.value(o).is_none()).collect()
+        self.complete.iter().map(String::as_str).filter(|o| !self.decides(o)).collect()
     }
 
-    /// Whether the file settles the option as `make config` writes it: in
-    /// its complete list and with a SET or UNSET line. An option short of
-    /// either is new to it: make's `config-conditional` asks again about
-    /// one missing from the list, an unlined one sits at its defaults, and
-    /// apply rewrites the file for both.
+    /// Whether the file settles the option: it has a SET or UNSET line for
+    /// it. bsd.options.mk starts NEW_OPTIONS as the port's whole list and
+    /// takes out every option a SET or UNSET line names (the file's own
+    /// `_FILE_COMPLETE_OPTIONS_LIST` is written, never read), so an option
+    /// short of a line is new to make, listed or not, and one with a line
+    /// is settled, listed or not. Apply rewrites a file whose list differs
+    /// all the same (`apply::up_to_date`): that is the rewrite rule, not
+    /// newness.
     pub fn decides(&self, opt: &str) -> bool {
-        self.value(opt).is_some() && self.complete.iter().any(|o| o == opt)
+        self.value(opt).is_some()
     }
 }
 
@@ -121,6 +124,19 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.complete, vec!["SPEECHD", "FLITE"]);
         assert!(f.set.contains("SPEECHD"));
         assert!(f.unset.contains("FLITE"));
+    }
+
+    /// bsd.options.mk:306-408: NEW_OPTIONS loses every option a SET or
+    /// UNSET line names, and the file's list is never read: C, with a line
+    /// but not listed, is settled; B, listed with no line, is not.
+    #[test]
+    fn a_line_settles_an_option_whatever_the_list() {
+        let f = SavedOptionsFile::parse(
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=C\n",
+        );
+        let settled: Vec<bool> = ["A", "B", "C", "D"].iter().map(|o| f.decides(o)).collect();
+        assert_eq!(settled, [true, false, true, false]);
+        assert_eq!(f.unlined(), ["B"]);
     }
 
     #[test]

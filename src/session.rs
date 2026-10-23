@@ -459,7 +459,8 @@ impl Session {
         let saved = self.state(info)?.saved.as_ref()?;
         let owner = self.owner_info(info);
         let cur = &owner.options.complete;
-        // New: what the file does not settle (SavedOptionsFile::decides).
+        // New: what the file gives no SET or UNSET line, as make's
+        // NEW_OPTIONS counts it (SavedOptionsFile::decides).
         // Obsolete: whatever it mentions, list or line, that the tree lost;
         // a non-default flavor cannot tell that from what it merely lacks,
         // and a write keeps those lines (apply::planned_file), so none.
@@ -1311,11 +1312,11 @@ mod tests {
         assert!(!s2.covered_by_makeconf(&s2.ports[&key]));
     }
 
-    /// New is what the file does not settle, list and line both, as apply
-    /// judges it; obsolete is whatever it mentions that the tree lost. A
-    /// hand-edited file with a line but no list entry (IMAP), a list entry
-    /// but no line (POP3), or neither (MQTT) is behind on each; a gone
-    /// option with a line only (OLD) is obsolete.
+    /// New is what the file gives no SET or UNSET line, as make's
+    /// NEW_OPTIONS counts it; obsolete is whatever it mentions that the tree
+    /// lost. On a hand-edited file a list entry with no line (POP3) or
+    /// nothing at all (MQTT) is new, a line with no list entry (IMAP) is
+    /// settled; a gone option with a line only (OLD) is obsolete.
     #[test]
     fn stale_delta_follows_what_the_file_settles() {
         let (ports, key) = mk_port(&["A", "IMAP", "MQTT", "POP3"], &["A"], vec![], vec![]);
@@ -1330,7 +1331,7 @@ mod tests {
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
         let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         let (added, removed) = s.stale_delta(&s.ports[&key]).unwrap();
-        assert_eq!(added, ["IMAP", "MQTT", "POP3"]);
+        assert_eq!(added, ["MQTT", "POP3"]);
         assert_eq!(removed, ["OLD"]);
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Stale);
         // scan --json's per-option `new` says the same.
@@ -1339,7 +1340,7 @@ mod tests {
             .filter(|o| o.new)
             .map(|o| o.name)
             .collect();
-        assert_eq!(new, ["IMAP", "MQTT", "POP3"]);
+        assert_eq!(new, ["MQTT", "POP3"]);
     }
 
     #[test]

@@ -595,15 +595,17 @@ option is on.
 .Pp
 Each option row starts with
 .Ql N
-when the option was added to the port since its options file was written, or
-the file does not settle it
-.Po
-missing from its
+when its options file has no SET or UNSET line for the option, which is how
+.Nm make
+counts it new: the option was added to the port since the file was written,
+or a hand edit left it unlined.
+An option with a line is settled even when the file's
 .Va _FILE_COMPLETE_OPTIONS_LIST
-or without a SET or UNSET line, which only a hand edit leaves and apply
-rewrites
-.Pc ,
-so every such option can be found down the pane's left edge, and carries the
+misses it, since
+.Nm make
+never reads that list; apply still rewrites such a file.
+New options can thus be found down the pane's left edge.
+Each row then carries the
 staged value, the port default
 .Pq Ql on No or Ql off ,
 and then a second
