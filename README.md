@@ -17,24 +17,24 @@ when there is no poudriere at all or `-l` asks for a local build.
 <!-- screen main -->
 ```text
 ┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
-│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
-│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
-│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
-│✓  devel/cmake-core            │║key features to build modern and efficient ║
-│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
-│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
-│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
-│✓  devel/libunistring          │║  [x] DEBUGLOG                  off        ║
-│✓  devel/ninja                 │║  [x] DSO                       on         ║
-│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
-│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
-│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
-│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
-│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
-│✓  lang/python312              │║  [ ] OTEL                      off        ║
-│✓  misc/help2man               │║  [x] THREADS                   on         ║
-│✓  print/texinfo               │║  [x] WWW                       on         ║
-│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
+│── 19 ok ──────────────────────│║  [x] DEBUGLOG                  off        ║
+│✓  converters/libiconv         │║  [x] DSO                       on         ║
+│✓  devel/cmake-core            │║  [x] FILE_AIO                  on         ║
+│✓  devel/gettext-runtime       │║  [x] IPV6                      on         ║
+│✓  devel/gettext-tools         │║  [ ] NJS                       off        ║
+│✓  devel/libtextstyle          │║  [ ] NJS_QJS                   off        ║
+│✓  devel/libunistring          │║  [ ] NJS_XML                   off        ║
+│✓  devel/ninja                 │║  [ ] OTEL                      off        ║
+│✓  devel/p5-Locale-libintl     │║  [x] THREADS                   on         ║
+│✓  devel/pcre2                 │║  [x] WWW                       on         ║
+│✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
+│✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
+│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
+│✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
+│✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
+│✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
+│✓  security/rhash              │║  [x] HTTP_DAV                  on         ║
 │✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
 │✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
 │✓* www/nginx                   │║                                           ║

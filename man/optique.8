@@ -570,9 +570,34 @@ Options that no longer exist are struck through and dropped on apply; options
 excluded by the current flavor but managed through the default flavor are
 listed in their own section.
 .Pp
+Above the rows, a line each says what is wrong with the port or whose view it
+is:
+.Ql BROKEN: ,
+.Ql IGNORE:
+and the option changes likely to blame,
+.Ql DEPRECATED: ,
+the flavor owning its options file, and a
+.Ql CONFLICT:
+per rule the staged options break.
+A row, a group header or one of those lines too wide for the pane ends in
+.Ql \[u2026]
+after its last whole word rather than being cut mid-word at the border; a
+.Ql CONFLICT:
+line first wraps to a second line, under its text, and is cut only past that.
+The port list's title is cut the same way.
+.Pp
+The pane's title names the port and its package; a flavored port's title
+lists its flavors after
+.Ql flavors: ,
+marking with
+.Ql *
+the flavor whose view owns the shared options file and with
+.Ql \[u2039]
+the flavor shown in the pane.
+.Pp
 A two-line panel at the bottom of the pane follows the cursor: titled with the
 name of the option under it, it gives that option's description as the ports
-framework states it, wrapped to the pane instead of cut at its edge as the rows
+framework states it, wrapped to the pane instead of cut short as the rows
 are.
 Because of that panel a row keeps its trailing description only while a useful
 amount of it fits \(em under about sixteen columns of room the row drops it
@@ -654,13 +679,34 @@ Undo the last option change, whichever port it was on and whatever made it
 .Pq a toggle, Ic d , Ic U , a bulk decision or a restored draft .
 Up to 100 changes back; the affected port is re-queried like any other edit.
 .It Ic B
-Bulk-set one option across all currently visible ports.
+Bulk-set one option across the listed ports, those of them that have it.
 The prompt accepts
 .Ar OPTION Ns Cm = Ns Cm on Ns | Ns Cm off ,
 or the shorthands
 .Ar OPTION Ns Cm +
 and
-.Ar OPTION Ns Cm - .
+.Ar OPTION Ns Cm - ,
+prefilled with
+.Ar OPTION Ns Cm =
+when the cursor is on an option.
+Its title says which ports it works on,
+.Ql bulk over the N listed ports ,
+followed by
+.Ql (filter: TEXT) ,
+.Ql (attention only)
+or
+.Ql (in a loop)
+for what narrows them; its bottom border counts, as you type, the listed
+ports carrying the option named so far
+.Pq Ql M carry OPTION ,
+or says in red
+.Ql no listed port has OPTION .
+.Ic Ctrl-U
+clears the line,
+.Ic Enter
+applies and
+.Ic Esc
+cancels; an input that does not parse is quoted whole in the error.
 .It Ic n , p
 Jump to the next or previous port needing attention; from the option pane,
 onto its first option.
@@ -737,9 +783,12 @@ and
 in the same popup as
 .Ic h .
 .It Ic V
-Hide the port description at the top of the option pane, or show it again
-.Pq it starts shown :
-the comment and as much of the
+Show or hide the port description at the top of the option pane, a choice
+that holds until quit.
+It is shown at start when the terminal has 30 rows or more; with no
+.Ic V
+pressed it follows the terminal, a resize across 30 rows showing or hiding it.
+The panel holds the comment and as much of the
 .Pa pkg-descr
 as fits in five lines.
 The panel keeps that height from one port to the next, shrinking only on a

@@ -15,6 +15,9 @@ use crate::session::UiStatus;
 use super::{clamp_u16, App, EditorRow, Focus, OverlayKind};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    // The description panel's default goes by the terminal's height, taken
+    // at every frame so a resize across it shows or hides the panel.
+    app.note_screen(f.area().height);
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
@@ -153,6 +156,7 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         title.push_str(&format!(" — filter: {}", app.filter));
     }
     title.push(' ');
+    let title = fit_title(&title, area.width.saturating_sub(2) as usize);
     let (border_style, border_type) =
         pane_border(app.focus == Focus::List || app.focus == Focus::Filter);
     let list = List::new(items)
@@ -197,9 +201,14 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         title.push_str(&format!("· overlay {} ", o.label()));
     }
 
+    // Text width of the pane: the rows are cut at it, so the row builder needs
+    // it to decide whether a description still fits (the detail panel splits
+    // the pane's height, never its width).
+    let inner_width = area.width.saturating_sub(2) as usize;
+
     let mut lines: Vec<Line> = Vec::new();
-    banner_lines(app, info, &mut lines);
-    // One line per banner condition, and nothing else in `lines` yet.
+    banner_lines(app, info, inner_width, &mut lines);
+    // The banner's lines, and nothing else in `lines` yet.
     let banner = lines.len();
 
     // Align the name column to the longest option of this port.
@@ -213,11 +222,6 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         .max()
         .unwrap_or(12)
         .clamp(12, 28);
-
-    // Text width of the pane: the rows are cut at it, so the row builder needs
-    // it to decide whether a description still fits (the detail panel splits
-    // the pane's height, never its width).
-    let inner_width = area.width.saturating_sub(2) as usize;
 
     let state = app.session.state(info);
     for (i, row) in app.editor_rows.iter().enumerate() {
@@ -274,6 +278,12 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         }
     }
 
+    // A row wider than the pane ends in `…` at a word, not cut mid-word at
+    // the border.
+    for line in &mut lines {
+        ellipsize(line, inner_width);
+    }
+
     // One box for the pane; inside it, what the port is on top and the
     // option under the cursor at the bottom, each across a rule from the
     // option rows.
@@ -283,14 +293,15 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         width: area.width.saturating_sub(2),
         height: area.height.saturating_sub(2),
     };
-    let mut about = if app.show_about {
+    let shown = app.about_shown();
+    let mut about = if shown {
         let descr = app.about_text.get(&key).map(String::as_str).unwrap_or("");
         about_lines(info, descr, inner_width)
     } else {
         Vec::new()
     };
     let (opt, mut detail) = option_detail(app, info, inner.width);
-    let layout = editor_layout(inner, app.show_about);
+    let layout = editor_layout(inner, shown);
 
     // Keep the selected row in view: scroll so it sits inside the rows.
     let rows_height = layout.rows.height as usize;
@@ -304,17 +315,15 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         .borders(Borders::ALL)
         .border_type(border_type)
         .border_style(border_style);
+    let mut room = (area.width as usize).saturating_sub(2);
     if info.pkg_help.is_some() {
         let marker = " [h] notes ";
-        let room = (area.width as usize).saturating_sub(2 + marker.len() + 1);
-        if title.chars().count() > room {
-            title = format!("{}… ", title.chars().take(room.saturating_sub(2)).collect::<String>());
-        }
+        room = room.saturating_sub(marker.len() + 1);
         block = block.title_top(
             Line::from(Span::styled(marker, key_hint())).right_aligned(),
         );
     }
-    f.render_widget(block.title(title), area);
+    f.render_widget(block.title(fit_title(&title, room)), area);
     if let Some(panel) = layout.about {
         // A cut description says where the rest is.
         let cut = mark_if_clipped(&mut about, panel.height as usize, inner_width);
@@ -540,13 +549,47 @@ fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) -> 
     }
     lines.truncate(cap);
     let Some(last) = lines.last_mut() else { return true };
+    shorten_for_marker(last, width);
+    last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    true
+}
+
+/// Cut `line` to `width` columns when it is wider, at a word boundary, and
+/// end it with `…` in the style of the text it follows; true when it was
+/// cut. A pane cuts its rows at its right edge, mid-word and silently: cut
+/// here, a row says there is more.
+fn ellipsize(line: &mut Line<'static>, width: usize) -> bool {
+    if line.width() <= width {
+        return false;
+    }
+    shorten_for_marker(line, width);
+    let style = line.spans.last().map_or_else(Style::default, |s| s.style);
+    line.spans.push(Span::styled("…", style.remove_modifier(Modifier::REVERSED)));
+    true
+}
+
+/// A border title (a blank at each end) fitted to `room` columns: cut at a
+/// word with `…` when it is wider, its closing blank kept.
+fn fit_title(title: &str, room: usize) -> String {
+    if Line::from(title).width() <= room {
+        return title.to_string();
+    }
+    let mut line = Line::from(title.trim_end().to_string());
+    ellipsize(&mut line, room.saturating_sub(1));
+    format!("{line} ")
+}
+
+/// Shorten `line` so a one-column marker still fits in `width`: back to the
+/// last word boundary when that cuts a word, keeping a word cut in two only
+/// when it is the line's first; no blank is left before the marker.
+fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
     // The character the shortening stopped before, if it cut into a span.
     let mut next: Option<char> = None;
-    while last.width() + 1 > width {
-        let Some(span) = last.spans.last_mut() else { break };
+    while line.width() + 1 > width {
+        let Some(span) = line.spans.last_mut() else { break };
         let mut text = span.content.to_string();
         let Some(c) = text.pop() else {
-            last.spans.pop();
+            line.spans.pop();
             continue;
         };
         next = Some(c);
@@ -554,17 +597,33 @@ fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) -> 
     }
     // A word cut in two goes whole, when the line has another before it.
     if next.is_some_and(|c| !c.is_whitespace()) {
-        if let Some(span) = last.spans.last_mut() {
+        let n = line.spans.len();
+        let before = line.spans[..n.saturating_sub(1)].iter().any(|s| !s.content.trim().is_empty());
+        if let Some(span) = line.spans.last_mut() {
             let text = span.content.as_ref();
             if !text.ends_with(' ') {
-                if let Some(end) = text.rfind(' ').filter(|&e| !text[..e].trim().is_empty()) {
+                if let Some(end) =
+                    text.rfind(' ').filter(|&e| before || !text[..e].trim().is_empty())
+                {
                     span.content = text[..end].to_string().into();
                 }
             }
         }
     }
-    last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
-    true
+    // The blanks the cut left at the end go, and a span left with nothing.
+    let mut n = line.spans.len();
+    while let Some(span) = line.spans.last_mut() {
+        let text = span.content.trim_end();
+        if text.is_empty() && n > 1 {
+            line.spans.pop();
+            n -= 1;
+            continue;
+        }
+        if text.len() != span.content.len() {
+            span.content = text.to_string().into();
+        }
+        break;
+    }
 }
 
 /// The flavors of this port, marking the current one (`‹`) and the one whose
@@ -608,7 +667,10 @@ fn blame_of<'a>(app: &'a App, info: &PortInfo) -> Option<&'a String> {
     app.blame.get(&info.options_name)
 }
 
-fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
+/// The lines above a port's option rows saying what is wrong with it or
+/// whose view it is, in a pane `width` columns wide. A CONFLICT too long for
+/// one line wraps to a second, under its text; the pane cuts the rest.
+fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'static>>) {
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     if let Some(m) = &info.broken {
         lines.push(Line::from(Span::styled(format!("BROKEN: {m}"), red)));
@@ -635,7 +697,19 @@ fn banner_lines(app: &App, info: &PortInfo, lines: &mut Vec<Line<'static>>) {
         )));
     }
     for v in app.session.violations(info) {
-        lines.push(Line::from(Span::styled(format!("CONFLICT: {v}"), red)));
+        let text = format!("CONFLICT: {v}");
+        let mut wrapped: Vec<Line<'static>> = wrap_text(&text, width, "CONFLICT: ".len())
+            .into_iter()
+            .map(|t| Line::from(Span::styled(t, red)))
+            .collect();
+        mark_if_clipped(&mut wrapped, 2, width);
+        if let Some(mark) = wrapped.last_mut().and_then(|l| l.spans.last_mut()) {
+            // The marker in the banner's red, not the panels' gray.
+            if mark.content == "…" {
+                mark.style = red;
+            }
+        }
+        lines.extend(wrapped);
     }
 }
 
@@ -1233,13 +1307,25 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                     "managed via the default flavor's view of the shared file",
                 ),
                 Line::default(),
+                head("In the pane's title"),
+                legend(
+                    "flavor*",
+                    Style::default(),
+                    "the flavor whose view owns the shared options file",
+                ),
+                legend("flavor‹", Style::default(), "the flavor shown in the pane"),
+                legend("[h] notes", key_hint(), "the port ships notes (pkg-help) — h reads them"),
+                Line::default(),
                 head("Above the rows"),
                 legend(
                     "port panel",
                     Style::default().add_modifier(Modifier::BOLD),
-                    "the port's comment and pkg-descr (V hides it), in five",
+                    "the port's comment and pkg-descr, in five lines;",
                 ),
-                Line::from(Span::raw("                   lines — v shows it all, from either pane")),
+                // Aligned on the legend's text column (2 + 14 + " = ").
+                Line::from(Span::raw("                   shown at start on a terminal of 30 rows or more")),
+                Line::from(Span::raw("                   — V shows or hides it until you quit, v shows it")),
+                Line::from(Span::raw("                   all, from either pane")),
                 Line::default(),
                 head("Below the rows"),
                 legend(
@@ -1252,13 +1338,13 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             ]);
         }
         2 => lines.extend([
-            keyline("j/k ↑/↓", "move · g/G first/last"),
+            keyline("j/k ↑/↓", "move · g/G first/last · the same keys scroll every popup"),
             keyline("PgUp/PgDn", "page up / down · also Ctrl-B / Ctrl-F"),
             keyline("Enter", "edit selected port · Esc/Tab/← back to the list"),
             keyline("Space", "toggle option (group rules enforced)"),
             keyline("d / U", "reset port to defaults / revert to saved state"),
-            keyline("u", "undo the last option change"),
-            keyline("B", "bulk: set an option on/off across all visible ports"),
+            keyline("u", "undo the last change on any port: Space, d, U, B, a restored draft"),
+            keyline("B", "bulk: set an option on/off across the listed ports · Ctrl-U clears"),
             keyline("n / p", "next / previous port needing attention"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
@@ -1747,10 +1833,26 @@ fn draw_bulk(f: &mut Frame, app: &App) {
         ..centered_rect(70, 20, full)
     };
     f.render_widget(Clear, area);
+    let room = area.width.saturating_sub(2) as usize;
+    let title = fit_title(&format!(" {} ", app.bulk_scope()), room);
+    // Under the line, kept current as it is typed: how many listed ports
+    // carry the option named so far, then the keys.
+    let keys = "Enter apply · Esc cancel · Ctrl-U clear ";
+    let hint = match app.bulk_carriers() {
+        None => vec![Span::raw(format!(" {keys}"))],
+        Some((opt, 0)) => vec![
+            Span::styled(format!(" no listed port has {opt} "), Style::default().fg(Color::Red)),
+            Span::raw(format!("· {keys}")),
+        ],
+        Some((opt, n)) => vec![Span::raw(format!(" {n} carry {opt} · {keys}"))],
+    };
+    let mut hint_line = Line::from(hint);
+    ellipsize(&mut hint_line, room);
     let p = Paragraph::new(Line::from(format!(" {input}▏"))).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" bulk: OPTION=on|off — Enter apply, Esc cancel ")
+            .title(title)
+            .title_bottom(hint_line)
             .border_style(Style::default().fg(Color::LightBlue)),
     );
     f.render_widget(p, area);
@@ -2072,5 +2174,43 @@ no library.")),
             key_legend(&Focus::Editor, 200),
             " ?:help a:apply q:quit Space:toggle i:info d:defaults U:revert u:undo n/p:next-problem"
         );
+    }
+
+    /// A line or a title too wide ends in `…` after a whole word, its first
+    /// word kept, cut, when it is the only one; one that fits is untouched.
+    #[test]
+    fn ellipsize_cuts_at_a_word() {
+        let cut = |spans: Vec<Span<'static>>, width: usize| {
+            let mut line = Line::from(spans);
+            ellipsize(&mut line, width);
+            line.to_string()
+        };
+        assert_eq!(cut(vec![Span::raw("one two three")], 13), "one two three");
+        assert_eq!(cut(vec![Span::raw("one two three")], 12), "one two…");
+        assert_eq!(cut(vec![Span::raw("one two three")], 9), "one two…", "no blank before the marker");
+        assert_eq!(cut(vec![Span::raw("onetwothree")], 6), "onetw…", "the only word, cut");
+        // Across spans: a description's first word goes whole too.
+        assert_eq!(cut(vec![Span::raw("  [x] DOCS"), Span::raw("  Build docs")], 16), "  [x] DOCS…");
+        assert_eq!(fit_title(" Ports (3) — filter: abc ", 25), " Ports (3) — filter: abc ");
+        assert_eq!(fit_title(" Ports (3) — filter: abc ", 21), " Ports (3) —… ");
+        assert_eq!(fit_title(" Ports (3) — filter: abc ", 22), " Ports (3) — filter:… ");
+        assert!(Line::from(fit_title(" Ports (3) — filter: abc ", 20)).width() <= 20);
+    }
+
+    /// The help names the pane title's flavor glyphs and the keys as they
+    /// are: V for the panel, Ctrl-U in the bulk prompt, u and U, Ctrl-B/F.
+    #[test]
+    fn the_help_names_the_flavor_glyphs_and_the_current_keys() {
+        let text = |tab: usize| rendered(200, 80, |f| { draw_help(f, tab, &mut 0); }).join("\n");
+        let row = text(1);
+        assert!(row.contains("flavor* = the flavor whose view owns the shared options file"), "{row}");
+        assert!(row.contains("flavor‹ = the flavor shown in the pane"), "{row}");
+        assert!(row.contains("[h] notes = the port ships notes (pkg-help)"), "{row}");
+        assert!(row.contains("30 rows or more") && row.contains("V shows or hides it until you quit"), "{row}");
+        let keys = text(2);
+        for want in ["Ctrl-B / Ctrl-F", "Ctrl-U clears", "  u ", "d / U", "  V ", "  v ", "  h "] {
+            assert!(keys.contains(want), "{want:?} in\n{keys}");
+        }
+        assert!(!keys.contains("  I "), "I is no key");
     }
 }

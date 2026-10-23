@@ -28,6 +28,11 @@ const REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 /// mistakes; the oldest entries are dropped past this).
 const UNDO_MAX: usize = 100;
 
+/// Terminal rows from which the description panel shows unless 'V' said
+/// otherwise: on a shorter one its five lines would take the option rows'
+/// place.
+const ABOUT_MIN_ROWS: u16 = 30;
+
 #[derive(PartialEq)]
 pub enum Focus {
     List,
@@ -207,9 +212,16 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
-    /// The option pane opens with the port's description. On at start; 'V'
-    /// turns it off and on.
-    pub show_about: bool,
+    /// The port description panel as chosen with 'V', until quit; None
+    /// while no choice was made, when the panel follows the terminal's
+    /// height (`about_shown`).
+    pub about_choice: Option<bool>,
+    /// Rows of the terminal at the last frame, kept by the drawing code;
+    /// zero before the first frame.
+    pub screen_rows: u16,
+    /// Whether the panel was shown when its text was last synced: a frame
+    /// that turns it on (a resize) reads the selected port's pkg-descr.
+    pub about_synced: bool,
     /// pkg-descr text per port, read when the panel first shows that port
     /// (on a change of selection or of the panel, never from the draw path:
     /// the loop redraws every 150 ms and the ports tree may be on NFS). A
@@ -348,7 +360,9 @@ pub(crate) fn build_app(
         loops,
         hidden,
         hide_ok: false,
-        show_about: true,
+        about_choice: None,
+        screen_rows: 0,
+        about_synced: false,
         about_text: HashMap::new(),
         only_loops: false,
         sort_problems_first: true,
@@ -585,6 +599,14 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     // The bulk prompt takes text input, so it grabs the keys before the
     // filter branch and the plain command keys.
     if app.bulk.is_some() {
+        // Ctrl-U clears the line, as in a shell; read before the folding
+        // made it no key, and nowhere else.
+        if ctrl && key.code == KeyCode::Char('u') {
+            if let Some(input) = app.bulk.as_mut() {
+                input.clear();
+            }
+            return KeyOutcome::Continue;
+        }
         match code {
             KeyCode::Esc => app.bulk = None,
             KeyCode::Enter => {
@@ -652,9 +674,12 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             "showing all ports",
         ),
         KeyCode::Char('V') => {
-            app.show_about = !app.show_about;
+            // A choice that holds until quit, whatever the terminal's size.
+            let shown = !app.about_shown();
+            app.about_choice = Some(shown);
+            app.about_synced = shown;
             app.flash(
-                if app.show_about {
+                if shown {
                     "port description shown (V: hide · v: full text)"
                 } else {
                     "port description hidden (V: show · v: full text)"
@@ -1401,11 +1426,41 @@ impl App {
         }
     }
 
+    /// Whether the description panel shows: as chosen with 'V', else only
+    /// on a terminal of ABOUT_MIN_ROWS rows or more, where it leaves the
+    /// option rows room enough.
+    pub fn about_shown(&self) -> bool {
+        self.about_choice.unwrap_or(self.screen_rows >= ABOUT_MIN_ROWS)
+    }
+
+    /// Take the terminal's height at a frame, before it is drawn. A frame
+    /// that turns the panel on (the first one, or a resize) reads the
+    /// selected port's pkg-descr, once: only a change does. The first-run
+    /// summary stays the message, as it did when the read came at start.
+    pub(crate) fn note_screen(&mut self, rows: u16) {
+        self.screen_rows = rows;
+        let shown = self.about_shown();
+        if shown == self.about_synced {
+            return;
+        }
+        self.about_synced = shown;
+        match self.summary.take() {
+            Some(summary) => {
+                let (message, unread) = (self.message.clone(), self.message_unread);
+                self.sync_about();
+                self.summary = Some(summary);
+                self.message = message;
+                self.message_unread = unread;
+            }
+            None => self.sync_about(),
+        }
+    }
+
     /// Read the selected port's pkg-descr for the panel, when the panel is
     /// on and has not read it yet. A file that cannot be read says so and is
     /// tried again next time.
     fn sync_about(&mut self) {
-        if !self.show_about {
+        if !self.about_shown() {
             return;
         }
         let Some(key) = self.selected_key() else { return };
@@ -1460,6 +1515,35 @@ impl App {
             _ => String::new(),
         };
         self.bulk = Some(prefill);
+    }
+
+    /// What the bulk prompt works on, for its title: the listed ports, and
+    /// what narrows them when anything does (the filter, t, L).
+    pub(crate) fn bulk_scope(&self) -> String {
+        let n = self.visible.len();
+        let mut out = format!("bulk over the {n} listed port{}", if n == 1 { "" } else { "s" });
+        if !self.filter.is_empty() {
+            out.push_str(&format!(" (filter: {})", self.filter));
+        }
+        if self.hide_ok {
+            out.push_str(" (attention only)");
+        }
+        if self.only_loops {
+            out.push_str(" (in a loop)");
+        }
+        out
+    }
+
+    /// The option the bulk input names so far, and how many listed ports
+    /// carry it; None while the input names none.
+    pub(crate) fn bulk_carriers(&self) -> Option<(String, usize)> {
+        let opt = bulk_option(self.bulk.as_deref()?)?;
+        let n = self
+            .visible
+            .iter()
+            .filter(|k| self.session.ports[*k].options.complete.contains(&opt))
+            .count();
+        Some((opt, n))
     }
 
     /// Apply a typed bulk decision to every visible port carrying the option.
@@ -1944,27 +2028,42 @@ fn push_capped(stack: &mut Vec<(String, BTreeSet<String>)>, entry: (String, BTre
 
 /// Parse a bulk decision: `NAME=on`/`NAME=off` (value case-insensitive), or the
 /// shorthands `NAME+` (on) and `NAME-` (off). The option name is uppercased.
+/// An error quotes the whole input, then says what was expected.
 fn parse_bulk(input: &str) -> Result<(String, bool), String> {
     const SYNTAX: &str = "expected OPTION=on|off (or OPTION+ / OPTION-)";
     let input = input.trim();
+    let fail = |reason: &str| Err(format!("\"{input}\": {reason}"));
     let (name, on) = if let Some((name, value)) = input.split_once('=') {
         match value.trim().to_lowercase().as_str() {
             "on" => (name, true),
             "off" => (name, false),
-            other => return Err(format!("{other:?} is not on or off — {SYNTAX}")),
+            _ => return fail(SYNTAX),
         }
     } else if let Some(name) = input.strip_suffix('+') {
         (name, true)
     } else if let Some(name) = input.strip_suffix('-') {
         (name, false)
     } else {
-        return Err(SYNTAX.to_string());
+        return fail(SYNTAX);
     };
     let name = name.trim().to_uppercase();
     if name.is_empty() {
-        return Err(format!("no option name — {SYNTAX}"));
+        return fail(&format!("no option name — {SYNTAX}"));
     }
     Ok((name, on))
+}
+
+/// The option a bulk input names so far, uppercased as `parse_bulk` reads
+/// it: what comes before `=`, or before a trailing `+`/`-`, or the whole
+/// text while it is still being typed. None while it names nothing.
+fn bulk_option(input: &str) -> Option<String> {
+    let input = input.trim();
+    let name = match input.split_once('=') {
+        Some((name, _)) => name,
+        None => input.strip_suffix(['+', '-']).unwrap_or(input),
+    };
+    let name = name.trim().to_uppercase();
+    (!name.is_empty()).then_some(name)
 }
 
 #[cfg(test)]
@@ -2116,6 +2215,7 @@ mod tests {
         let key = PortKey::parse("cat/alpha").unwrap();
         app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
         app.about_text.insert(key.clone(), "word ".repeat(400));
+        assert!(screen(&mut app).contains("The alpha port"), "shown on 35 rows");
         press(&mut app, 'V');
         assert!(!screen(&mut app).contains("The alpha port"), "V hides it");
         press(&mut app, 'V');
@@ -2208,7 +2308,8 @@ mod tests {
         let descr = tmp.path().join("pkg-descr");
         let key = PortKey::parse("cat/alpha").unwrap();
         app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
-        // Built with the panel on, the app has read the port already.
+        // A frame on 35 rows shows the panel, which has read the port.
+        screen(&mut app);
         app.about_text.clear();
         app.rebuild_editor();
         let msg = app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
@@ -2522,7 +2623,7 @@ mod tests {
             press(&mut app, c);
         }
         hit(&mut app, KeyCode::Backspace);
-        ctrl(&mut app, 'u');
+        ctrl(&mut app, 'w');
         assert_eq!(app.bulk.as_deref(), Some("DOCS=on"), "no control characters");
         hit(&mut app, KeyCode::Enter);
         assert!(app.bulk.is_none());
@@ -2747,9 +2848,9 @@ mod tests {
         app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
         assert!(screen(&mut app).contains("The alpha port"));
         press(&mut app, 'I');
-        assert!(app.show_about && app.message.is_none(), "I does nothing");
+        assert!(app.about_shown() && app.message.is_none(), "I does nothing");
         press(&mut app, 'V');
-        assert!(!app.show_about);
+        assert!(!app.about_shown());
         assert_eq!(
             app.message.as_ref().map(|(m, _)| m.as_str()),
             Some("port description hidden (V: show · v: full text)")
@@ -4503,5 +4604,304 @@ mod tests {
         ev.send(done(vec![alpha, beta], vec![])).unwrap();
         app.drain_refresh_events();
         assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +cat/beta");
+    }
+
+    /// The description panel's default: hidden on a terminal under 30 rows,
+    /// shown from 30, decided at every frame.
+    #[test]
+    fn the_description_panel_shows_from_30_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
+        assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"), "hidden on 24 rows");
+        assert!(!screen_at(&mut app, 80, 29).contains("The alpha port"), "hidden on 29 rows");
+        assert!(screen_at(&mut app, 80, 30).contains("The alpha port"), "shown on 30 rows");
+    }
+
+    /// V is a choice that holds until quit: no resize undoes it, either way.
+    #[test]
+    fn v_overrides_the_height_both_ways() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
+        let msg = |app: &App| app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+
+        assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"));
+        press(&mut app, 'V');
+        assert_eq!(msg(&app), "port description shown (V: hide · v: full text)");
+        assert!(screen_at(&mut app, 80, 24).contains("The alpha port"), "V shows it on 24 rows");
+        assert!(screen_at(&mut app, 80, 40).contains("The alpha port"));
+        assert!(screen_at(&mut app, 80, 24).contains("The alpha port"), "and it stays");
+
+        press(&mut app, 'V');
+        assert_eq!(msg(&app), "port description hidden (V: show · v: full text)");
+        assert!(!screen_at(&mut app, 80, 40).contains("The alpha port"), "V hides it on 40 rows");
+        assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"));
+        assert!(!screen_at(&mut app, 80, 40).contains("The alpha port"), "and it stays");
+    }
+
+    /// With no V pressed, a resize across 30 rows shows or hides the panel,
+    /// and the one that shows it reads the description it needs.
+    #[test]
+    fn a_resize_across_30_rows_turns_the_panel_and_reads_the_description() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let descr = tmp.path().join("pkg-descr");
+        std::fs::write(&descr, "Alpha does things.\n").unwrap();
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
+        app.rebuild_editor();
+        assert!(!screen_at(&mut app, 80, 24).contains("Alpha does things."));
+        assert!(!app.about_text.contains_key(&key), "nothing read while hidden");
+        assert!(screen_at(&mut app, 80, 30).contains("Alpha does things."), "read on the resize");
+        assert!(app.about_text.contains_key(&key));
+        assert!(!screen_at(&mut app, 80, 24).contains("Alpha does things."), "hidden again");
+    }
+
+    /// A port with a long option description, group description, banner
+    /// and CONFLICT, for the cut tests.
+    fn long_texts_app(tmp: &std::path::Path) -> App {
+        use crate::model::options::{GroupKind, OptionDef, OptionGroup};
+        let mut app = app_for(tmp, &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["DOCS".into(), "A".into(), "B".into()];
+        info.options.defs.insert(
+            "DOCS".into(),
+            OptionDef { desc: "Build and install the documentation of every module".into(), ..Default::default() },
+        );
+        info.options.defs.insert(
+            "A".into(),
+            OptionDef {
+                prevents: vec!["B".into()],
+                prevents_msg: Some(
+                    "the two backends install the same files under the same names and cannot be \
+                     installed together on one system, whatever the flavor, in any jail or set"
+                        .into(),
+                ),
+                ..Default::default()
+            },
+        );
+        info.options.groups.push(OptionGroup {
+            kind: GroupKind::Multi,
+            name: "BACKENDS".into(),
+            desc: "Storage backends this port links against at build time".into(),
+            members: vec!["A".into(), "B".into()],
+        });
+        info.broken = Some("does not build against the current toolchain release at all".into());
+        let name = info.options_name.clone();
+        let staged = &mut app.session.states.get_mut(&name).unwrap().staged;
+        staged.insert("A".into());
+        staged.insert("B".into());
+        app.rebuild_editor();
+        app
+    }
+
+    /// Whether `row` ends in `…` right after a whole word of `text`.
+    fn cut_at_a_word(row: &str, text: &str) -> bool {
+        let Some(body) = row.trim_end_matches(['│', '║']).trim_end().strip_suffix('…') else {
+            return false;
+        };
+        // The longest tail of the row that starts the text.
+        (0..body.len())
+            .filter(|&i| body.is_char_boundary(i))
+            .map(|i| &body[i..])
+            .find(|tail| !tail.is_empty() && text.starts_with(tail))
+            .is_some_and(|tail| text[tail.len()..].starts_with(' ') && !tail.ends_with(' '))
+    }
+
+    /// Option rows, group headers and banners wider than the pane end in
+    /// `…` at a word, not mid-word at the border.
+    #[test]
+    fn cut_rows_end_with_an_ellipsis_at_a_word() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = long_texts_app(tmp.path());
+        let shown = screen_at(&mut app, 80, 24);
+        let row = |needle: &str| shown.lines().find(|l| l.contains(needle)).unwrap_or_default().to_string();
+        let docs = row("DOCS");
+        assert!(cut_at_a_word(&docs, "Build and install the documentation of every module"), "{docs}\n{shown}");
+        let header = row("── BACKENDS");
+        assert!(
+            cut_at_a_word(
+                &header,
+                "── BACKENDS — multi (pick at least one): Storage backends this port links against"
+            ),
+            "{header}\n{shown}"
+        );
+        let broken = row("BROKEN:");
+        assert!(
+            cut_at_a_word(&broken, "does not build against the current toolchain release at all"),
+            "{broken}\n{shown}"
+        );
+    }
+
+    /// A CONFLICT too long for a line wraps to a second, under its text,
+    /// and what does not fit in two ends in `…`.
+    #[test]
+    fn a_long_conflict_wraps_to_two_lines_then_is_cut() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = long_texts_app(tmp.path());
+        let shown = screen_at(&mut app, 80, 24);
+        let lines: Vec<&str> = shown.lines().collect();
+        let at = lines.iter().position(|l| l.contains("CONFLICT: ")).expect(&shown);
+        // The option pane's text, between its borders.
+        let pane = |l: &str| l.split(['│', '║']).nth(3).unwrap_or_default().to_string();
+        let first = pane(lines[at]);
+        let second = pane(lines[at + 1]);
+        let indent = first.find("CONFLICT: ").unwrap() + "CONFLICT: ".len();
+        assert!(second.starts_with(&" ".repeat(indent)), "under its text:\n{shown}");
+        assert!(!second[indent..].starts_with(' '), "{second:?}");
+        assert!(second.trim_end().ends_with('…'), "cut after two lines:\n{shown}");
+        assert!(!pane(lines[at + 2]).starts_with(&" ".repeat(indent)), "no third line:\n{shown}");
+        assert!(!first.trim_end().ends_with('…'), "the first line is whole words, unmarked");
+    }
+
+    /// The list's title ends in `…` at a word when it does not fit.
+    #[test]
+    fn a_long_list_title_ends_with_an_ellipsis_at_a_word() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, '/');
+        for c in "a long filter text that cannot fit".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        let shown = screen_at(&mut app, 80, 24);
+        let top = shown.lines().next().unwrap();
+        let title = top.split('╔').nth(1).unwrap().split(" ═").next().unwrap();
+        assert!(title.ends_with('…'), "{top}");
+        let body = title.trim_start().trim_end_matches('…');
+        assert!(!body.ends_with(' '));
+        let full = "Ports (0) — filter: a long filter text that cannot fit";
+        assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+    }
+
+    /// The bulk prompt's title says which ports it works on and what
+    /// narrows them.
+    #[test]
+    fn the_bulk_title_names_its_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'B');
+        assert!(screen(&mut app).contains("┌ bulk over the 3 listed ports ─"), "{}", screen(&mut app));
+        hit(&mut app, KeyCode::Esc);
+
+        press(&mut app, '/');
+        for c in "a".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        let n = app.visible.len();
+        press(&mut app, 'B');
+        assert!(
+            screen(&mut app).contains(&format!("┌ bulk over the {n} listed ports (filter: a) ─")),
+            "{}",
+            screen(&mut app)
+        );
+        hit(&mut app, KeyCode::Esc);
+        hit(&mut app, KeyCode::Esc);
+
+        press(&mut app, 't');
+        press(&mut app, 'B');
+        assert!(
+            screen(&mut app).contains("┌ bulk over the 2 listed ports (attention only) ─"),
+            "{}",
+            screen(&mut app)
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut looped = looped_app(tmp.path());
+        press(&mut looped, 'L');
+        press(&mut looped, 'B');
+        assert!(
+            screen(&mut looped).contains("┌ bulk over the 2 listed ports (in a loop) ─"),
+            "{}",
+            screen(&mut looped)
+        );
+        hit(&mut looped, KeyCode::Esc);
+        press(&mut looped, 't');
+        press(&mut looped, 'B');
+        let n = looped.visible.len();
+        let title = format!("┌ bulk over the {n} listed port{} (attention only) (in a loop) ─", if n == 1 { "" } else { "s" });
+        assert!(screen(&mut looped).contains(&title), "{}", screen(&mut looped));
+    }
+
+    /// The bottom border counts, as it is typed, the listed ports carrying
+    /// the option, and says so in red when none does.
+    #[test]
+    fn the_bulk_prompt_counts_the_ports_carrying_the_option() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'B');
+        assert!(screen(&mut app).contains("└ Enter apply · Esc cancel · Ctrl-U clear ─"), "{}", screen(&mut app));
+        for c in "docs".chars() {
+            press(&mut app, c);
+        }
+        assert!(screen(&mut app).contains("└ 3 carry DOCS · Enter apply · Esc cancel · Ctrl-U clear ─"));
+        for c in "=on".chars() {
+            press(&mut app, c);
+        }
+        assert!(screen(&mut app).contains("└ 3 carry DOCS · Enter apply"));
+        ctrl(&mut app, 'u');
+        for c in "X11+".chars() {
+            press(&mut app, c);
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
+        let warning = "no listed port has X11";
+        assert!(shown.contains(&format!("└ {warning} · Enter apply")), "{shown}");
+        // In red: the cell under its first letter.
+        let buffer = terminal.backend().buffer();
+        let (row, line) = shown.lines().enumerate().find(|(_, l)| l.contains(warning)).unwrap();
+        let col = line[..line.find(warning).unwrap()].chars().count();
+        assert_eq!(buffer[(col as u16, row as u16)].fg, ratatui::style::Color::Red);
+    }
+
+    /// Ctrl-U clears the bulk line, and is no key anywhere else.
+    #[test]
+    fn ctrl_u_clears_the_bulk_line_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let before = (selected(&app), app.filter.clone(), app.focus == Focus::List);
+        ctrl(&mut app, 'u');
+        assert_eq!((selected(&app), app.filter.clone(), app.focus == Focus::List), before);
+        assert!(app.message.is_none() && app.undo.is_empty() && !app.session.dirty());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        assert!(app.session.dirty());
+        ctrl(&mut app, 'u');
+        assert_eq!(app.undo.len(), 1, "Ctrl-U is not u: nothing undone");
+
+        press(&mut app, 'B');
+        for c in "DOCS=off".chars() {
+            press(&mut app, c);
+        }
+        ctrl(&mut app, 'u');
+        assert_eq!(app.bulk.as_deref(), Some(""), "cleared, the prompt still open");
+    }
+
+    /// A bulk input that does not parse is quoted whole in the error.
+    #[test]
+    fn a_bulk_error_quotes_the_whole_input() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'B');
+        for c in " CURL=DOCS=off ".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.message,
+            Some(("\"CURL=DOCS=off\": expected OPTION=on|off (or OPTION+ / OPTION-)".to_string(), true))
+        );
+        assert_eq!(
+            parse_bulk("=on").unwrap_err(),
+            "\"=on\": no option name — expected OPTION=on|off (or OPTION+ / OPTION-)"
+        );
+        assert_eq!(parse_bulk("docs").unwrap_err(), "\"docs\": expected OPTION=on|off (or OPTION+ / OPTION-)");
     }
 }

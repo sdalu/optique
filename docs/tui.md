@@ -16,24 +16,24 @@ tty — unless `--drive` is given (see
 <!-- screen main -->
 ```text
 ┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
-│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
-│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
-│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
-│✓  devel/cmake-core            │║key features to build modern and efficient ║
-│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
-│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
-│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
-│✓  devel/libunistring          │║  [x] DEBUGLOG                  off        ║
-│✓  devel/ninja                 │║  [x] DSO                       on         ║
-│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
-│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
-│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
-│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
-│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
-│✓  lang/python312              │║  [ ] OTEL                      off        ║
-│✓  misc/help2man               │║  [x] THREADS                   on         ║
-│✓  print/texinfo               │║  [x] WWW                       on         ║
-│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
+│── 19 ok ──────────────────────│║  [x] DEBUGLOG                  off        ║
+│✓  converters/libiconv         │║  [x] DSO                       on         ║
+│✓  devel/cmake-core            │║  [x] FILE_AIO                  on         ║
+│✓  devel/gettext-runtime       │║  [x] IPV6                      on         ║
+│✓  devel/gettext-tools         │║  [ ] NJS                       off        ║
+│✓  devel/libtextstyle          │║  [ ] NJS_QJS                   off        ║
+│✓  devel/libunistring          │║  [ ] NJS_XML                   off        ║
+│✓  devel/ninja                 │║  [ ] OTEL                      off        ║
+│✓  devel/p5-Locale-libintl     │║  [x] THREADS                   on         ║
+│✓  devel/pcre2                 │║  [x] WWW                       on         ║
+│✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
+│✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
+│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
+│✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
+│✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
+│✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
+│✓  security/rhash              │║  [x] HTTP_DAV                  on         ║
 │✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
 │✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
 │✓* www/nginx                   │║                                           ║
@@ -151,24 +151,24 @@ Three further markers may trail the port's name:
 <!-- screen options -->
 ```text
 ┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
-│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
-│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
-│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
-│✓  devel/cmake-core            │║key features to build modern and efficient ║
-│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
-│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
-│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
-│✓  devel/libunistring          │║  [ ] DEBUGLOG                  off        ║
-│✓  devel/ninja                 │║  [x] DSO                       on         ║
-│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
-│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
-│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
-│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
-│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
-│✓  lang/python312              │║  [ ] OTEL                      off        ║
-│✓  misc/help2man               │║  [x] THREADS                   on         ║
-│✓  print/texinfo               │║  [x] WWW                       on         ║
-│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
+│── 19 ok ──────────────────────│║  [ ] DEBUGLOG                  off        ║
+│✓  converters/libiconv         │║  [x] DSO                       on         ║
+│✓  devel/cmake-core            │║  [x] FILE_AIO                  on         ║
+│✓  devel/gettext-runtime       │║  [x] IPV6                      on         ║
+│✓  devel/gettext-tools         │║  [ ] NJS                       off        ║
+│✓  devel/libtextstyle          │║  [ ] NJS_QJS                   off        ║
+│✓  devel/libunistring          │║  [ ] NJS_XML                   off        ║
+│✓  devel/ninja                 │║  [ ] OTEL                      off        ║
+│✓  devel/p5-Locale-libintl     │║  [x] THREADS                   on         ║
+│✓  devel/pcre2                 │║  [x] WWW                       on         ║
+│✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
+│✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
+│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
+│✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
+│✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
+│✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
+│✓  security/rhash              │║  [x] HTTP_DAV                  on         ║
 │✓  textproc/expat2             │╟ FILE_AIO ─────────────────────────────────╢
 │✓  textproc/libxml2            │║  Enable file aio                          ║
 │✓  www/nginx                   │║                                           ║
@@ -197,6 +197,21 @@ option the port no longer has
 is struck through and dropped on apply; one excluded by the current
 flavor but managed through the default flavor's shared file is listed in
 its own section.
+
+Above the rows, a line each says what is wrong with the port or whose
+view it is: `BROKEN:`, `IGNORE:` and the option changes likely to blame,
+`DEPRECATED:`, the flavor owning its options file, and a `CONFLICT:` per
+rule the staged options break. A row, a group header or one of those
+lines too wide for the pane ends in `…` after its last whole word, rather
+than being cut mid-word at the border; a `CONFLICT:` line wraps first to
+a second line, under its text, and is cut only past that. The list's
+title is cut the same way.
+
+The pane's title names the port and its package. A flavored port's title
+lists its flavors after `flavors:`, marking with `*` the flavor whose view
+owns the shared options file and with `‹` the flavor shown in the pane:
+`flavors: py311* py312‹` is the `py312` view of a file the `py311` view
+owns.
 
 Whatever room is left on the row, after the badges, carries the option's
 own description — the one thing the row usually has no space for; a row
@@ -236,7 +251,7 @@ portconfig's own Ports Collection help, not the port's.
 
 <!-- screen about -->
 ```text
-╔ Ports (1 · 20 optionless) — fi╗┌ devel/pcre2 — pcre2-10.49 ────────────────┐
+╔ Ports (1 · 20 optionless) —… ═╗┌ devel/pcre2 — pcre2-10.49 ────────────────┐
 ║✓  devel/pcre2                 ║│Perl Compatible Regular Expressions        │
 ║                               ║│library, version 2                         │
 ║                               ║│PCRE2 is the name used for a revised API   │
@@ -247,7 +262,7 @@ portconfig's own Ports Collection help, not the port's.
 ║                               ║│  [ ] LIBBZ2       off                     │
 ║                               ║│  [ ] LIBZ         off                     │
 ║                               ║│  [x] STATIC       on                      │
-║                               ║│── CLI — radio (pick at most one): Command-│
+║                               ║│── CLI — radio (pick at most one):…        │
 ║                               ║│  ( ) LIBEDIT      off                     │
 ║                               ║│  ( ) READLINE     off                     │
 ║                               ║│                                           │
@@ -259,12 +274,14 @@ portconfig's own Ports Collection help, not the port's.
 ║                               ║│  Enter: edit the options                  │
 ║                               ║│                                           │
 ╚═══════════════════════════════╝└───────────────────────────────────────────┘
- 0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
+ port description shown (V: hide · v: full text)
 ```
 <!-- /screen -->
 
-The port's description sits above the options pane — shown at start, `V`
-hides it and brings it back. It is the port's `COMMENT` and as much of its `pkg-descr`
+The port's description sits above the options pane — shown at start when
+the terminal has 30 rows or more; `V` shows or hides it until you quit.
+With no `V` pressed, it follows the terminal: a resize across 30 rows
+shows or hides it. It is the port's `COMMENT` and as much of its `pkg-descr`
 as fits in five lines, a bulleted line keeping a line of its own. The
 panel keeps that height from one port to the next, so the option rows do
 not move; it shrinks only on a pane too short to leave the options four
@@ -295,8 +312,8 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 | `Space`                          | toggle the option, enforcing group rules                  |
 | `d`                              | reset the port to its defaults, from either pane          |
 | `U`                              | revert the port to its saved state, from either pane      |
-| `u`                              | undo the last option change, up to 100 back               |
-| `B`                              | bulk-set one option across every visible port             |
+| `u`                              | undo the last change, on any port, up to 100 back         |
+| `B`                              | bulk-set one option across the listed ports               |
 | `n`/`p`                          | next / previous port needing attention                    |
 | `f`                              | jump to the next flavor of the same origin                |
 | `i`                              | the selected option's details, in the option pane         |
@@ -308,6 +325,16 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 `Space` alone toggles: `Enter` takes the list into the option pane and
 does nothing once there. From the option pane, `n` and `p` move to the
 port and put the cursor on its first option.
+
+`B` asks for `OPTION=on`, `OPTION=off`, `OPTION+` or `OPTION-`, prefilled
+with `OPTION=` when the cursor is on an option, and sets it on every
+listed port that has it. The prompt's title says which ports those are —
+`bulk over the 12 listed ports`, then `(filter: TEXT)`, `(attention
+only)` or `(in a loop)` for what narrows them — and its bottom border
+counts, as you type, the listed ports carrying the option named so far,
+`5 carry DOCS`, or says in red `no listed port has DOCS`. `Ctrl-U`
+clears the line, `Enter` applies, `Esc` cancels; an input that does not
+parse is quoted whole in the error.
 
 ### Views and actions
 
@@ -337,13 +364,13 @@ gained, and to unconfigured ones when it decides all of them.
 
 <!-- screen why -->
 ```text
-╔ Ports (1 · 20 optionless) — fi╗┌ devel/libunistring — libunistring-1.4.2 ──┐
-║✓  devel/libunistring          ║│Unicode string library                     │
-║                               ║│GNU LIBUNISTRING - Unicode string library  │
-║                               ║│This library provides functions for        │
-║                               ║│manipulating Unicode strings and for       │
-║           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
-║           │www/nginx  (root)                                   │ull text ──┤
+╔ Ports (1 · 20 optionless) —… ═╗┌ devel/libunistring — libunistring-1.4.2 ──┐
+║✓  devel/libunistring          ║│  [x] DOCS         on                      │
+║                               ║│                                           │
+║                               ║│                                           │
+║                               ║│                                           │
+║           ┌ why devel/libunistring? ───────────────────────────┐           │
+║           │www/nginx  (root)                                   │           │
 ║           │ └─ devel/pcre2                                     │           │
 ║           │  └─ devel/cmake-core                               │           │
 ║           │   └─ dns/libidn2                                   │           │
@@ -378,24 +405,24 @@ walked port by port. Any other key closes it.
 <!-- screen apply -->
 ```text
 ╔ Ports (21 · 20 optionless) ═══╗┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-║!  ports-mgmt/pkg              ║│Robust and small WWW server                │
-║── 19 ok ──────────────────────║│NGINX is a high performance edge web server│
-║✓  converters/libiconv         ║│with the lowest memory footprint and the   │
-║✓  deve┌ apply? ────────────────────────────────────────────────────┐icient │
+║!  ports-mgmt/pkg              ║│  [ ] DEBUG                     off        │
+║── 19 ok ──────────────────────║│  [x] DEBUGLOG                  off        │
+║✓  converters/libiconv         ║│  [x] DSO                       on         │
+║✓  deve┌ apply? ────────────────────────────────────────────────────┐       │
 ║✓  deve│3 options file(s) will be written to …/server-options:      │       │
-║✓  deve│                                                            │text ──┤
+║✓  deve│                                                            │       │
 ║✓  deve│devel/gmake                             new file (1 of 1 on)│       │
 ║✓  deve│ports-mgmt/pkg                          dropped: OLDOPT     │       │
 ║✓  deve│www/nginx                               +DEBUGLOG           │       │
 ║✓  deve│                                                            │       │
 ║✓  deve│                                                            │       │
-║✓  deve│                                                            │       │
+║✓  deve│                                                            │uire…  │
 ║✓  deve│                                                            │       │
 ║✓  lang│                                                            │       │
 ║✓  lang│                                                            │       │
 ║✓  misc│                                                            │       │
 ║✓  prin│                                                            │       │
-║✓  secu│                                                            │uire HT│
+║✓  secu│                                                            │       │
 ║✓  text└ y: write · n: cancel · j/k scroll ─────────────────────────┘───────┤
 ║✓  textproc/libxml2            ║│  Enter: edit the options                  │
 ║✓* www/nginx                   ║│                                           │
