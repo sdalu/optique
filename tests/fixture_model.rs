@@ -332,3 +332,23 @@ fn a_continued_line_is_read_as_make_reads_it() {
     assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
     assert_eq!(port["status"], "ok", "{port}");
 }
+
+/// bsd.port.mk's pre-check-config takes a SINGLE group for conditional when
+/// ALL_OPTIONS (OPTIONS_DEFINE) matches its name. AUDIO is defined and a
+/// member of the GROUP G, and names the SINGLE group AUDIO: with AUDIO off,
+/// check-config passes and PORT_OPTIONS is empty; optique reports no
+/// conflict and nothing on.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_group_named_after_a_defined_member_is_conditional() {
+    let f = Fixture::new();
+    let origin = "misc/model-defined-group";
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, Vec::<String>::new());
+    let check = f.make(origin, &["check-config"]);
+    assert!(check.status.success(), "check-config fails: {}", common::stdout(&check));
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["violations"], serde_json::json!([]), "{port}");
+    assert_ne!(port["status"], "conflict", "{port}");
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+}

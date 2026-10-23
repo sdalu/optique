@@ -601,7 +601,13 @@ a
 or
 .Dv MULTI
 group named after one of the port's options is enforced only while that
-option is on.
+option is on; the option must be one of
+.Va OPTIONS_DEFINE ,
+which
+.Nm make
+reads as
+.Va ALL_OPTIONS ,
+whether or not it is also a group member.
 .Pp
 Each option row starts with
 .Ql N

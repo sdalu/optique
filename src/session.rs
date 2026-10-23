@@ -711,21 +711,22 @@ fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<Stri
 }
 
 /// The SINGLE and MULTI groups make's pre-check-config (bsd.port.mk) leaves
-/// unchecked for `set`, and `set` as it leaves it. A group named after an
-/// option of the port's own (ALL_OPTIONS, modelled as an option of the port
-/// that is no group's member) is conditional: checked while that option is
-/// on; otherwise its members are dropped from PORT_OPTIONS and the group
-/// is not checked. The SINGLE groups go first, then the MULTI ones, each
-/// judged on the set the ones before left. RADIO and GROUP are never
+/// unchecked for `set`, and `set` as it leaves it. A group whose name
+/// ALL_OPTIONS matches (`ALL_OPTIONS:M${group}`: OPTIONS_DEFINE, not group
+/// members) is conditional: checked while `set` has an option the name
+/// matches (`PORT_OPTIONS:M${group}`); otherwise every option a member
+/// matches is dropped from PORT_OPTIONS (`PORT_OPTIONS:N${opt}`) and the
+/// group is not checked. The SINGLE groups go first, then the MULTI ones,
+/// each judged on the set the ones before left. RADIO and GROUP are never
 /// conditional, and PREVENTS is judged after all of them.
 fn unchecked_groups(o: &PortOptions, mut set: BTreeSet<String>) -> (BTreeSet<&str>, BTreeSet<String>) {
     let mut unchecked = BTreeSet::new();
     for kind in [GroupKind::Single, GroupKind::Multi] {
         for g in o.groups.iter().filter(|g| g.kind == kind) {
-            let conditional = o.complete.contains(&g.name) && o.group_of(&g.name).is_none();
-            if conditional && !set.contains(&g.name) {
+            let conditional = o.all.iter().any(|a| str_match(a, &g.name));
+            if conditional && !set.iter().any(|p| str_match(p, &g.name)) {
                 for m in &g.members {
-                    set.remove(m);
+                    set.retain(|p| !str_match(p, m));
                 }
                 unchecked.insert(g.name.as_str());
             }
@@ -1213,12 +1214,13 @@ mod tests {
             "M1",
             OptionDef { prevents: vec!["M2".into()], ..Default::default() },
         )];
-        let (ports, key) = mk_port(
+        let (mut ports, key) = mk_port(
             &["AUDIO", "M", "R", "AUDIO1", "AUDIO2", "M1", "M2", "R1", "R2"],
             &[],
             vec![group(GroupKind::Single, "AUDIO"), group(GroupKind::Multi, "M"), group(GroupKind::Radio, "R")],
             defs,
         );
+        ports.get_mut(&key).unwrap().options.all = set(&["AUDIO", "M", "R"]);
         let mut s = session_for(ports);
         assert!(s.violations(&s.ports[&key]).is_empty(), "{:?}", s.violations(&s.ports[&key]));
         let name = s.ports[&key].options_name.clone();
@@ -2579,8 +2581,9 @@ mod tests {
             desc: String::new(),
             members: vec!["NAS".into(), "RPLAY".into(), "SOX".into()],
         };
-        let (ports, key) =
+        let (mut ports, key) =
             mk_port(&["DOCS", "NLS", "AUDIO", "NAS", "RPLAY", "SOX"], &[], vec![g], vec![]);
+        ports.get_mut(&key).unwrap().options.all = set(&["AUDIO", "DOCS", "NLS"]);
         let info = &ports[&key];
         let file = SavedOptionsFile {
             complete: info.options.complete.clone(),
@@ -2593,6 +2596,39 @@ mod tests {
         on.set.insert("AUDIO".into());
         on.unset.remove("AUDIO");
         assert_eq!(effective_with(info, Some(&on)), set(&["AUDIO", "NAS", "NLS"]));
+    }
+
+    /// bsd.port.mk's pre-check-config takes a SINGLE or MULTI group for
+    /// conditional when ALL_OPTIONS (OPTIONS_DEFINE) matches its name, a
+    /// group member or not: AUDIO, defined and a member of the GROUP G,
+    /// names the SINGLE group AUDIO, which goes unchecked while AUDIO is
+    /// off. A group named after an option that is only a group member
+    /// (not in ALL_OPTIONS) is always checked.
+    #[test]
+    fn a_group_is_conditional_by_all_options() {
+        let group = |kind, name: &str, members: &[&str]| OptionGroup {
+            kind,
+            name: name.into(),
+            desc: String::new(),
+            members: members.iter().map(|m| m.to_string()).collect(),
+        };
+        let (mut ports, key) = mk_port(
+            &["AUDIO", "NAS", "SOX"],
+            &[],
+            vec![group(GroupKind::Group, "G", &["AUDIO"]), group(GroupKind::Single, "AUDIO", &["NAS", "SOX"])],
+            vec![],
+        );
+        ports.get_mut(&key).unwrap().options.all = set(&["AUDIO"]);
+        let s = session_for(ports.clone());
+        assert!(s.violations(&s.ports[&key]).is_empty(), "{:?}", s.violations(&s.ports[&key]));
+        assert_eq!(nofile_effective(&s.ports[&key]), set(&[]));
+
+        ports.get_mut(&key).unwrap().options.all = set(&[]);
+        let s = session_for(ports);
+        assert_eq!(
+            s.violations(&s.ports[&key]),
+            ["group AUDIO needs exactly one member enabled (0 enabled)"]
+        );
     }
 
     fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {

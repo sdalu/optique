@@ -242,6 +242,12 @@ pub struct PortOptions {
     /// set (defined empty) is not the same as None (undefined).
     #[serde(default)]
     pub r#override: Option<BTreeSet<String>>,
+    /// ALL_OPTIONS: OPTIONS_DEFINE (arch variants included) as
+    /// bsd.options.mk leaves it, no group member unless also defined. A
+    /// SINGLE or MULTI group is conditional when its name matches one of
+    /// these (bsd.port.mk's pre-check-config `ALL_OPTIONS:M${group}`).
+    #[serde(default)]
+    pub all: BTreeSet<String>,
 }
 
 /// Where an option's current value comes from, following the

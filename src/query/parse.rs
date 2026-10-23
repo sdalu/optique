@@ -46,6 +46,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                     .collect();
             }
             "DEFAULT" => opts.defaults = words(value),
+            "ALL" => opts.all = words(value),
             "PORT_OPTIONS" => opts.effective = words(value),
             // Dumped only `.if defined(OPTIONS_OVERRIDE)` (bsd.options.mk:
             // 300-304): an absent tag leaves `override` None (undefined), a
@@ -342,6 +343,7 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
 OPTIQUE|PKGNAME|foo-1.0
 OPTIQUE|COMPLETE|A B C D E F G H I J K
 OPTIQUE|DEFAULT|A
+OPTIQUE|ALL|A B
 OPTIQUE|PORT_OPTIONS|A B
 OPTIQUE|MC_SET|C
 OPTIQUE|MC_UNSET|D
@@ -366,6 +368,7 @@ OPTIQUE|MULTI|SOME|G H
         let info = parse_dump(&key, text).unwrap();
         let o = &info.options;
         assert_eq!(o.defaults, set(&["A"]));
+        assert_eq!(o.all, set(&["A", "B"]));
         assert_eq!(o.effective, set(&["A", "B"]));
         assert_eq!(o.mc_set, set(&["C"]));
         assert_eq!(o.mc_unset, set(&["D"]));
