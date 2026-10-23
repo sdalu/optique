@@ -66,8 +66,64 @@ pub struct ApplyModal {
     /// Their options files; a file flavors share conflicts when any of
     /// them does.
     pub conflicting_files: BTreeSet<String>,
-    /// Result text once applied.
-    pub done: Option<String>,
+    /// What the apply did, once applied.
+    pub done: Option<ApplyDone>,
+}
+
+/// What an apply did: its result box and the message left once the box
+/// closes both read it.
+pub struct ApplyDone {
+    /// Ports whose options file could not be written, and why. Apply is
+    /// all-or-nothing: with any, nothing was written and nothing removed.
+    pub failed: Vec<(PortKey, String)>,
+    pub written: usize,
+    /// Ports in conflict left out (`s`), their edits still staged.
+    pub skipped: usize,
+    /// Redundant files removed (`--minimal`).
+    pub removed: usize,
+    /// Removals that failed, by file name, and why.
+    pub rm_failed: Vec<(String, String)>,
+    pub notes: Vec<String>,
+}
+
+impl ApplyDone {
+    /// The result's lines, `dir` the options directory as it is to read;
+    /// a failure's reasons are as `apply` gave them, paths whole.
+    pub fn lines(&self, dir: &str) -> Vec<String> {
+        if !self.failed.is_empty() {
+            let mut lines = vec![format!("nothing written to {dir}")];
+            lines.extend(self.failed.iter().map(|(key, msg)| format!("{key}: {msg}")));
+            return lines;
+        }
+        let mut lines = vec![format!("{} file(s) written to {dir}", self.written)];
+        if self.skipped > 0 {
+            lines.push(format!("{} port(s) skipped: conflicting options", self.skipped));
+        }
+        lines.extend(self.rm_failed.iter().map(|(name, e)| format!("FAILED rm {name}: {e}")));
+        if self.removed > 0 {
+            lines.push(format!("{} redundant file(s) removed (--minimal)", self.removed));
+        }
+        lines.extend(self.notes.iter().map(|note| format!("note: {note}")));
+        lines
+    }
+
+    /// The status-bar message left once the result box closes, and whether
+    /// it is an error: what was written, or why nothing was, its paths cut
+    /// to their last component.
+    pub fn message(&self) -> (String, bool) {
+        if let Some((_, reason)) = self.failed.first() {
+            let reason = trim_reason(&ui::elide_paths(reason, 0));
+            return (format!("apply failed: nothing written — {reason}"), true);
+        }
+        let mut msg = format!("{} file(s) written", self.written);
+        if self.removed > 0 {
+            msg.push_str(&format!(", {} removed", self.removed));
+        }
+        if self.skipped > 0 {
+            msg.push_str(&format!(", {} skipped: conflicting", self.skipped));
+        }
+        (msg, false)
+    }
 }
 
 /// The dependency loop a port is caught in, as the "why" overlay shows it:
@@ -880,34 +936,40 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
 }
 
 fn handle_modal_key(app: &mut App, code: KeyCode) {
-    let showing_result = match &app.modal {
-        Some(m) => m.done.is_some(),
-        None => return,
-    };
-    if showing_result {
-        app.modal = None;
-        // Applied files changed statuses; refresh the list (matters with hide_ok).
-        app.refresh_view();
+    let Some(modal) = &app.modal else { return };
+    if modal.done.is_some() {
+        // The list was rebuilt as the apply ended; what it did stays in the
+        // status bar until the next key.
+        if let Some(done) = app.modal.take().and_then(|m| m.done) {
+            let (msg, error) = done.message();
+            app.flash(&msg, error);
+        }
         return;
     }
-    let conflicts = app.modal.as_ref().is_some_and(|m| !m.conflicted.is_empty());
+    let conflicts = !modal.conflicted.is_empty();
     match code {
         KeyCode::Char('Y') => commit_apply(app, false),
         KeyCode::Char('y') if !conflicts => commit_apply(app, false),
         KeyCode::Char('s') if conflicts => commit_apply(app, true),
-        // With conflicts a lowercase y is too easy to type by habit: it
-        // writes nothing and leaves the choice open.
-        KeyCode::Char('y') => {
-            app.flash("conflicts remain: Y writes anyway · s skips them · n cancels", false)
-        }
-        _ => match scroll_key(code, app.modal.as_ref().map_or(0, |m| m.scroll), app.page.apply) {
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.modal = None,
+        _ => match scroll_key(code, modal.scroll, app.page.apply) {
             // In entries, clamped at draw time to the last page.
             Some(at) => {
                 if let Some(modal) = app.modal.as_mut() {
                     modal.scroll = at;
                 }
             }
-            None => app.modal = None,
+            // No answer: the preview stays open and says which keys are.
+            // Enter by habit must not cancel, and with conflicts a
+            // lowercase y must not write.
+            None => app.flash(
+                if conflicts {
+                    "conflicts remain: Y writes anyway · s skips them · n cancels"
+                } else {
+                    "y writes · n cancels"
+                },
+                false,
+            ),
         },
     }
 }
@@ -925,47 +987,37 @@ fn commit_apply(app: &mut App, skip_conflicting: bool) {
         0
     };
     let done = apply::commit(&planned.writes, &planned.removals);
+    let result = ApplyDone {
+        failed: done.summary.failed,
+        written: done.summary.written,
+        skipped,
+        removed: done.removed.count,
+        rm_failed: done.removed.failed,
+        notes: done.removed.notes,
+    };
     // apply is all-or-nothing: after a failed write nothing is on disk, so
     // nothing is removed either, and the edits stay staged (and in the
     // draft) to be applied again.
-    if !done.summary.failed.is_empty() {
-        let mut text = format!("nothing written to {}", app.options_dir.display());
-        for (key, msg) in &done.summary.failed {
-            text.push_str(&format!("\nFAILED {key}: {msg}"));
+    if result.failed.is_empty() {
+        // Only the files apply touched are read again; the rest are as the
+        // scan read them, and a skipped port keeps its edits staged.
+        let touched: Vec<&str> = planned.touched().collect();
+        app.options_files.forget(touched.iter().copied());
+        app.session.reload_saved(&app.options_files, touched.iter().copied());
+        // The files on disk changed: attributions built on the pre-apply
+        // staged history would now point at the wrong changes.
+        app.blame.clear();
+        // The edits are on disk now, and the draft has served its purpose
+        // — unless some were skipped and are still to be applied.
+        if skipped == 0 {
+            draft::discard(&app.options_dir);
         }
-        if let Some(modal) = app.modal.as_mut() {
-            modal.done = Some(text);
-        }
-        return;
-    }
-    let mut text = format!("{} file(s) written to {}", done.summary.written, app.options_dir.display());
-    if skipped > 0 {
-        text.push_str(&format!("\n{skipped} port(s) skipped: conflicting options"));
-    }
-    for (name, e) in &done.removed.failed {
-        text.push_str(&format!("\nFAILED rm {name}: {e}"));
-    }
-    if done.removed.count > 0 {
-        text.push_str(&format!("\n{} redundant file(s) removed (--minimal)", done.removed.count));
-    }
-    for note in &done.removed.notes {
-        text.push_str(&format!("\nnote: {note}"));
-    }
-    // Only the files apply touched are read again; the rest are as the scan
-    // read them, and a skipped port keeps its edits staged.
-    let touched: Vec<&str> = planned.touched().collect();
-    app.options_files.forget(touched.iter().copied());
-    app.session.reload_saved(&app.options_files, touched.iter().copied());
-    // The files on disk changed: attributions built on the pre-apply staged
-    // history would now point at the wrong changes.
-    app.blame.clear();
-    // The edits are on disk now, and the draft has served its purpose —
-    // unless some were skipped and are still to be applied.
-    if skipped == 0 {
-        draft::discard(&app.options_dir);
+        // Statuses changed: the list, its divider and its order are
+        // rebuilt now, under the result box.
+        app.refresh_view();
     }
     if let Some(modal) = app.modal.as_mut() {
-        modal.done = Some(text);
+        modal.done = Some(result);
     }
 }
 
@@ -3488,10 +3540,9 @@ mod tests {
         press(&mut app, 'a');
         press(&mut app, 'y');
         assert!(app.modal.as_ref().unwrap().done.is_some());
-        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"], "not yet rebuilt");
+        assert!(visible(&app).is_empty(), "rebuilt under the result: nothing needs attention");
         press(&mut app, 'x');
         assert!(app.modal.is_none());
-        assert!(visible(&app).is_empty(), "applied: nothing needs attention");
     }
 
     /// Apply writes every port, listed or not, so its preview warns about a
@@ -3522,6 +3573,14 @@ mod tests {
         let shown = screen(&mut app);
         assert!(shown.contains(" apply with 1 conflicting? "), "{shown}");
         assert!(shown.contains("conflicting (Y writes them, s skips them):"), "{shown}");
+    }
+
+    /// The apply's result as its lines read, the options directory whole;
+    /// empty while there is none.
+    fn done_text(app: &App) -> String {
+        let dir = app.options_dir.display().to_string();
+        let done = app.modal.as_ref().and_then(|m| m.done.as_ref());
+        done.map_or_else(String::new, |d| d.lines(&dir).join("\n"))
     }
 
     /// Put `origin` in conflict: two members of a SINGLE group staged on.
@@ -3555,7 +3614,7 @@ mod tests {
         assert!(shown.contains(" y: write · n: cancel · j/k scroll "), "{shown}");
         assert!(!shown.contains("conflicting"), "{shown}");
         press(&mut app, 'y');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("2 file(s) written"), "{done}");
         assert!(!done.contains("skipped"), "{done}");
         let shown = screen(&mut app);
@@ -3605,7 +3664,7 @@ mod tests {
         draft::save(&app.session, &app.options_dir).unwrap();
         press(&mut app, 'a');
         press(&mut app, 'Y');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("3 file(s) written"), "{done}");
         assert!(!done.contains("skipped"), "{done}");
         assert_ne!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
@@ -3622,7 +3681,7 @@ mod tests {
         draft::save(&app.session, &app.options_dir).unwrap();
         press(&mut app, 'a');
         press(&mut app, 's');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("2 file(s) written"), "{done}");
         assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
         assert!(tmp.path().join("options/cat_alpha/options").is_file());
@@ -3659,7 +3718,7 @@ mod tests {
         assert_eq!(modal.conflicted, [PortKey::parse("cat/alpha@b").unwrap()]);
         assert_eq!(modal.conflicting_files, ["cat_alpha".to_string()].into());
         press(&mut app, 's');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("1 file(s) written"), "{done}");
         assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
         assert!(!tmp.path().join("options/cat_alpha").exists(), "the shared file is skipped");
@@ -3696,7 +3755,7 @@ mod tests {
         app.minimal = true;
         press(&mut app, 'a');
         press(&mut app, 'y');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.contains("\n1 redundant file(s) removed (--minimal)"), "{done}");
         assert!(!tmp.path().join("options/cat_beta").exists());
     }
@@ -3714,13 +3773,304 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("options/cat_alpha/.options.optique.tmp")).unwrap();
         press(&mut app, 'a');
         press(&mut app, 'y');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("nothing written"), "{done}");
-        assert!(done.contains("FAILED cat/alpha"), "{done}");
+        assert!(done.contains("\ncat/alpha: creating "), "{done}");
         assert!(!done.contains("removed"), "{done}");
         assert!(tmp.path().join("options/cat_beta/options").is_file(), "beta's file kept");
         assert!(app.session.dirty(), "the edit is still staged");
     }
+
+    /// A failed apply says so in its title and border, names the options
+    /// directory once and each port's reason with its path cut short, and
+    /// leaves the failure in the status bar once closed, until the next key.
+    #[test]
+    fn a_failed_apply_reads_as_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        std::fs::create_dir_all(tmp.path().join("options/cat_alpha/.options.optique.tmp")).unwrap();
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
+        assert!(shown.contains(" apply — FAILED "), "{shown}");
+        assert!(!shown.contains(" apply — done "), "{shown}");
+        assert_eq!(shown.matches("nothing written to ").count(), 1, "the directory once:\n{shown}");
+        assert!(shown.contains("cat/alpha: creating …/.options.optique.tmp: "), "{shown}");
+        let alpha = tmp.path().join("options/cat_alpha").display().to_string();
+        assert!(!shown.contains(&alpha), "the reason's path is cut short:\n{shown}");
+        // The border in red: the cell under the title's first corner.
+        let (row, line) = shown.lines().enumerate().find(|(_, l)| l.contains(" apply — FAILED ")).unwrap();
+        let col = line[..line.find(" apply — FAILED ").unwrap()].chars().count() - 1;
+        assert_eq!(terminal.backend().buffer()[(col as u16, row as u16)].fg, ratatui::style::Color::Red);
+
+        press(&mut app, 'x');
+        assert!(app.modal.is_none());
+        let (msg, error) = app.message.clone().expect("the failure is left in the status bar");
+        assert!(error, "{msg}");
+        assert!(
+            msg.starts_with("apply failed: nothing written — creating …/.options.optique.tmp: "),
+            "{msg}"
+        );
+        assert!(screen_at(&mut app, 80, 24).contains(" apply failed: nothing written — "));
+        press(&mut app, 'j');
+        assert!(app.message.is_none(), "an ordinary message: the next key clears it");
+    }
+
+    /// A successful apply leaves what it wrote, removed and skipped in the
+    /// status bar once its box is closed.
+    #[test]
+    fn a_done_apply_leaves_its_count_in_the_status_bar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        assert!(screen(&mut app).contains(" apply — done "));
+        assert!(app.message.is_none(), "nothing under the box yet");
+        press(&mut app, 'x');
+        assert_eq!(app.message, Some(("2 file(s) written".to_string(), false)));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.minimal = true;
+        press(&mut app, 'a');
+        press(&mut app, 'y');
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(app.message, Some(("0 file(s) written, 1 removed".to_string(), false)));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        make_conflict(&mut app, "cat/beta");
+        press(&mut app, 'a');
+        press(&mut app, 's');
+        hit(&mut app, KeyCode::Esc);
+        assert_eq!(app.message, Some(("2 file(s) written, 1 skipped: conflicting".to_string(), false)));
+    }
+
+    /// The list, its divider and its order are rebuilt as soon as the apply
+    /// is done, under its result box.
+    #[test]
+    fn the_divider_follows_an_apply_under_its_result() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = five_ports(tmp.path());
+        assert!(screen(&mut app).contains("║── 2 ok "), "{}", screen(&mut app));
+        press(&mut app, 'a');
+        press(&mut app, 's');
+        let shown = screen(&mut app);
+        assert!(shown.contains(" apply — done "), "{shown}");
+        assert!(shown.contains("║── 4 ok "), "rebuilt under the box:\n{shown}");
+        assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/beta", "cat/delta", "cat/gamma"]);
+    }
+
+    /// In the preview only n, N and Esc cancel: Enter, typed by habit, and
+    /// any other key that is no answer say what the answers are.
+    #[test]
+    fn only_n_and_esc_cancel_the_apply_preview() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        for cancel in [KeyCode::Char('n'), KeyCode::Char('N'), KeyCode::Esc] {
+            press(&mut app, 'a');
+            hit(&mut app, cancel);
+            assert!(app.modal.is_none(), "{cancel:?} cancels");
+        }
+        press(&mut app, 'a');
+        for other in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Char('s'), KeyCode::Tab] {
+            hit(&mut app, other);
+            assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "{other:?} does not cancel");
+            assert_eq!(app.message, Some(("y writes · n cancels".to_string(), false)), "{other:?}");
+        }
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+        hit(&mut app, KeyCode::Esc);
+
+        make_conflict(&mut app, "cat/beta");
+        press(&mut app, 'a');
+        for other in [KeyCode::Enter, KeyCode::Char('y')] {
+            hit(&mut app, other);
+            assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "{other:?} does not cancel");
+            assert_eq!(
+                app.message,
+                Some(("conflicts remain: Y writes anyway · s skips them · n cancels".to_string(), false)),
+                "{other:?}"
+            );
+        }
+        assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Continue), "Ctrl-C asks to quit");
+        assert!(app.quit_confirm);
+    }
+
+    /// The text of the bottom-border hint on the row holding `marker`.
+    fn border_hint(shown: &str, marker: &str) -> String {
+        let row = shown.lines().find(|l| l.contains(marker) && l.contains('└'));
+        let row = row.unwrap_or_else(|| panic!("no border with {marker}:\n{shown}"));
+        let after = &row[row.find('└').unwrap() + '└'.len_utf8()..];
+        // Up to the border's dashes, or its corner when the hint fills it.
+        after.split(['─', '┘']).next().unwrap_or_default().to_string()
+    }
+
+    /// `hint` is one of `forms` whole, or the last of them cut after a
+    /// whole token with `…`.
+    fn whole_or_cut_at_a_token(hint: &str, forms: &[&str]) -> bool {
+        if forms.contains(&hint) {
+            return true;
+        }
+        let Some(kept) = hint.strip_suffix(" … ") else { return false };
+        let last = forms.last().unwrap();
+        last.starts_with(kept) && last[kept.len()..].starts_with(" · ")
+    }
+
+    /// The popups' bottom hints are fitted to the box: the long form, a
+    /// short one, or the short one cut at a token — never mid-word.
+    #[test]
+    fn popup_hints_are_never_cut_mid_word() {
+        let apply = [" y: write · n: cancel · j/k scroll ", " y write · n cancel · j/k "];
+        let conflict = [
+            " Y: write anyway · s: skip conflicting · n: cancel · j/k scroll ",
+            " Y write · s skip · n cancel ",
+        ];
+        let why = [
+            " Enter: jump · r: why of selection · j/k move · other key closes ",
+            " Enter jump · r why · j/k move · other key closes ",
+            " Enter jump · r why · j/k ",
+        ];
+        let bulk = [
+            " 3 carry DOCS · Enter apply · Esc cancel · Ctrl-U clear ",
+            " 3 carry DOCS · Enter · Esc · ^U clear ",
+        ];
+        let help = [
+            " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes ",
+            " 1-4/Tab switch · j/k scroll · other closes ",
+            " 1-4 · j/k · other closes ",
+        ];
+        let help_fits = [" 1-4/Tab/←→ switch · any other key closes ", " 1-4/Tab switch · other closes "];
+        for (width, height) in [(60, 20), (80, 24), (100, 35)] {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut app = three_ports(tmp.path());
+            press(&mut app, 'a');
+            let hint = border_hint(&screen_at(&mut app, width, height), "write");
+            assert!(whole_or_cut_at_a_token(&hint, &apply), "{width}: {hint:?}");
+            hit(&mut app, KeyCode::Esc);
+
+            press(&mut app, 'r');
+            let hint = border_hint(&screen_at(&mut app, width, height), "Enter");
+            assert!(whole_or_cut_at_a_token(&hint, &why), "{width}: {hint:?}");
+            hit(&mut app, KeyCode::Esc);
+
+            press(&mut app, 'B');
+            for c in "docs".chars() {
+                press(&mut app, c);
+            }
+            let hint = border_hint(&screen_at(&mut app, width, height), "carry");
+            assert!(whole_or_cut_at_a_token(&hint, &bulk), "{width}: {hint:?}");
+            hit(&mut app, KeyCode::Esc);
+
+            press(&mut app, '?');
+            let hint = border_hint(&screen_at(&mut app, width, height), "closes");
+            assert!(
+                whole_or_cut_at_a_token(&hint, &help) || whole_or_cut_at_a_token(&hint, &help_fits),
+                "{width}: {hint:?}"
+            );
+            hit(&mut app, KeyCode::Esc);
+
+            make_conflict(&mut app, "cat/beta");
+            press(&mut app, 'a');
+            let hint = border_hint(&screen_at(&mut app, width, height), "write");
+            assert!(whole_or_cut_at_a_token(&hint, &conflict), "{width}: {hint:?}");
+        }
+    }
+
+    /// The quit prompt is as high as its lines and shows them whole, at 80
+    /// and 60 columns; at 40 its keys take two lines, none of them cut.
+    #[test]
+    fn the_quit_prompt_shows_its_lines_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        for (width, height) in [(80, 24), (60, 20)] {
+            press(&mut app, 'q');
+            let shown = screen_at(&mut app, width, height);
+            let rows: Vec<&str> = shown.lines().collect();
+            let top = rows.iter().position(|r| r.contains("┌ quit ")).expect("the prompt");
+            assert!(rows[top + 1].contains("│Keep staged edits as a draft?"), "{width}:\n{shown}");
+            assert!(rows[top + 2].contains("│y save & quit · n discard & quit · Esc stay"), "{width}:\n{shown}");
+            // Under them, only the count of background makes, when other
+            // tests run some.
+            let makes = rows[top + 3].contains("background make process");
+            assert!(rows[top + 3].contains('└') || makes, "as high as its lines: {width}:\n{shown}");
+            let left = rows[top].chars().position(|c| c == '┌').unwrap();
+            assert_eq!(left, (width as usize - 52) / 2, "52 wide, centred: {width}");
+            assert!(matches!(hit(&mut app, KeyCode::Esc), KeyOutcome::Continue));
+            assert!(!app.quit_confirm, "Esc stays");
+        }
+        press(&mut app, 'q');
+        let shown = screen_at(&mut app, 40, 20);
+        let rows: Vec<&str> = shown.lines().collect();
+        let top = rows.iter().position(|r| r.contains("┌ quit ")).expect("the prompt");
+        assert!(rows[top + 2].contains("│y save & quit · n discard & quit"), "{shown}");
+        assert!(rows[top + 3].contains("│Esc stay"), "{shown}");
+        assert_eq!(rows[top].chars().position(|c| c == '┌'), Some(2), "36 wide: {shown}");
+        assert!(matches!(press(&mut app, 'n'), KeyOutcome::Quit), "n still answers");
+    }
+
+    /// The option details name the group as its header does: NAME — LABEL.
+    #[test]
+    fn the_option_details_name_the_group_as_its_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        make_conflict(&mut app, "cat/alpha");
+        app.refresh_view();
+        app.select_index(0);
+        assert_eq!(selected(&app), "cat/alpha");
+        hit(&mut app, KeyCode::Enter);
+        let mut found = false;
+        for _ in 0..3 {
+            press(&mut app, 'i');
+            let shown = screen(&mut app);
+            if shown.contains("group: ") {
+                assert!(shown.contains("group: GUI — single (pick exactly one)"), "{shown}");
+                found = true;
+                break;
+            }
+            hit(&mut app, KeyCode::Esc);
+            press(&mut app, 'j');
+        }
+        assert!(found, "an option of the group has its details");
+    }
+
+    /// A help line too long for the box goes on under its description's
+    /// first column, not under the key.
+    #[test]
+    fn a_wrapped_help_line_hangs_under_its_description() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        // The column `text` starts at on the row holding it, and the first
+        // column of text inside the box on the row under it.
+        let hangs = |shown: &str, text: &str| {
+            let rows: Vec<&str> = shown.lines().collect();
+            let at = rows.iter().position(|r| r.contains(text));
+            let at = at.unwrap_or_else(|| panic!("{text}:\n{shown}"));
+            let chars: Vec<char> = rows[at].chars().collect();
+            let text_col = rows[at][..rows[at].find(text).unwrap()].chars().count();
+            let left = chars[..text_col].iter().rposition(|&c| c == '│').expect("the box's left border");
+            let next: Vec<char> = rows[at + 1].chars().collect();
+            let first = (left + 1..next.len()).find(|&i| !next[i].is_whitespace());
+            (text_col, first)
+        };
+        press(&mut app, '?');
+        press(&mut app, '3');
+        let shown = screen_at(&mut app, 60, 20);
+        let (text_col, next) = hangs(&shown, "undo the last change");
+        assert_eq!(next, Some(text_col), "a key line hangs under its description:\n{shown}");
+
+        // A legend's too, under the column after " = ".
+        press(&mut app, '2');
+        press(&mut app, 'G');
+        let shown = screen_at(&mut app, 60, 20);
+        let (text_col, next) = hangs(&shown, "the description of the");
+        assert_eq!(next, Some(text_col), "a legend hangs under its description:\n{shown}");
+    }
+
 
     /// A draft left by a quit is adopted at start, one undo step per port;
     /// a draft that no longer changes anything is dropped.
@@ -3811,7 +4161,7 @@ mod tests {
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(app.modal.is_some(), "the apply preview opened");
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("1 file(s) written"), "{done}");
         assert!(!done.contains("redundant"), "nothing removed, nothing said: {done}");
         assert!(tmp.path().join("options/cat_alpha/options").is_file());
@@ -4044,7 +4394,7 @@ mod tests {
         hit(&mut app, KeyCode::PageUp);
         assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "still the preview");
         press(&mut app, 'y');
-        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        let done = done_text(&app);
         assert!(done.starts_with("40 file(s) written"), "{done}");
     }
 

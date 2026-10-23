@@ -1206,9 +1206,19 @@ fn draw_apply_modal(f: &mut Frame, app: &mut App) {
     let mut lines: Vec<Line> = Vec::new();
     // Rows of the entries scrolled past (j/k skip whole entries).
     let mut skipped = 0;
-    if let Some(done) = &modal.done {
-        for l in done.lines() {
-            lines.push(Line::from(l.to_string()));
+    if let Some(done) = modal.done.as_ref().filter(|d| !d.failed.is_empty()) {
+        // Nothing written: the directory once, as the preview gives it,
+        // then each port's reason, its paths cut to fit.
+        let head = |dir: &str| format!("nothing written to {dir}");
+        let dir = dir.display().to_string();
+        let room = (width as usize).saturating_sub(head("").chars().count());
+        lines.push(Line::from(head(&elide_dir(&dir, room))));
+        for (key, msg) in &done.failed {
+            lines.push(Line::from(elide_paths(&format!("{key}: {msg}"), width as usize)));
+        }
+    } else if let Some(done) = &modal.done {
+        for l in done.lines(&dir.display().to_string()) {
+            lines.push(Line::from(l));
         }
     } else {
         for w in &modal.warnings {
@@ -1270,17 +1280,28 @@ fn draw_apply_modal(f: &mut Frame, app: &mut App) {
         lines.extend(entries.into_iter().skip(modal.scroll));
     }
 
+    let failed = modal.done.as_ref().is_some_and(|d| !d.failed.is_empty());
     let (title, keys) = match (&modal.done, modal.conflicted.len()) {
+        (Some(_), _) if failed => (" apply — FAILED ".to_string(), " any key closes ".to_string()),
         (Some(_), _) => (" apply — done ".to_string(), " any key closes ".to_string()),
-        (None, 0) => (" apply? ".to_string(), " y: write · n: cancel · j/k scroll ".to_string()),
+        (None, 0) => (
+            " apply? ".to_string(),
+            fitting(width, &[" y: write · n: cancel · j/k scroll ", " y write · n cancel · j/k "]),
+        ),
         (None, n) => (
             format!(" apply with {n} conflicting? "),
-            " Y: write anyway · s: skip conflicting · n: cancel · j/k scroll ".to_string(),
+            fitting(
+                width,
+                &[
+                    " Y: write anyway · s: skip conflicting · n: cancel · j/k scroll ",
+                    " Y write · s skip · n cancel ",
+                ],
+            ),
         ),
     };
     // j/k scroll by whole entries, skipped from the list: count their rows in.
     let rows = skipped + wrapped_height(&lines, width);
-    let border = Style::default().fg(Color::LightYellow);
+    let border = Style::default().fg(if failed { Color::Red } else { Color::LightYellow });
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
@@ -1312,6 +1333,31 @@ fn elide_dir(dir: &str, room: usize) -> String {
         .map(elided)
         .find(|e| e.chars().count() <= room)
         .unwrap_or_else(|| elided(1))
+}
+
+/// `text` with each absolute path in it (a word starting with `/`) cut to
+/// its last components by `elide_dir`, so the whole fits `room` columns as
+/// far as the paths can make it; 0 keeps their last component alone.
+pub(crate) fn elide_paths(text: &str, room: usize) -> String {
+    let mut out = text.to_string();
+    let width = |s: &str| s.chars().count();
+    let mut from = 0;
+    while let Some(at) = out[from..].find('/').map(|i| from + i) {
+        // A path starts a word.
+        if at > 0 && !out[..at].ends_with(char::is_whitespace) {
+            from = at + 1;
+            continue;
+        }
+        let end = out[at..].find(char::is_whitespace).map_or(out.len(), |i| at + i);
+        // A colon or a comma after it is the text's, not the path's.
+        let end = at + out[at..end].trim_end_matches([':', ',', ';', ')']).len();
+        let path = &out[at..end];
+        let others = width(&out) - width(path);
+        let short = elide_dir(path, room.saturating_sub(others));
+        out.replace_range(at..end, &short);
+        from = at + short.len();
+    }
+    out
 }
 
 /// Help overlay tab titles; indices match `App.help_tab`.
@@ -1379,63 +1425,80 @@ fn wrapped_height(lines: &[Line], width: u16) -> usize {
         .sum()
 }
 
+/// `lead` then `text` word-wrapped to `width` columns, each further row
+/// indented to start under the text's first column, not under the lead.
+fn hang(lead: Vec<Span<'static>>, text: &str, width: usize) -> Vec<Line<'static>> {
+    let indent: usize = lead.iter().map(Span::width).sum();
+    let rows = wrap_text(text, width.saturating_sub(indent).max(8), 0);
+    let mut rows = rows.into_iter();
+    let mut first = lead;
+    first.push(Span::raw(rows.next().unwrap_or_default()));
+    let mut lines = vec![Line::from(first)];
+    lines.extend(rows.map(|r| Line::from(format!("{}{r}", " ".repeat(indent)))));
+    lines
+}
+
 /// Draw the help on tab `tab`; returns how many rows of text it showed.
 fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     let area = centered_rect(78, 72, f.area());
     f.render_widget(Clear, area);
+    let width = area.width.saturating_sub(2) as usize;
 
+    // Every line is a lead (a key, a marker, a label) and a description
+    // wrapped under its own first column.
     let key = |k: &str| Span::styled(format!("{k:<12}"), Style::default().fg(Color::LightBlue));
-    let keyline = |k: &str, txt: &str| {
-        Line::from(vec![Span::raw("  "), key(k), Span::raw(txt.to_string())])
-    };
-    let mark = |m: &str, c: Color, txt: &str| {
-        Line::from(vec![
-            Span::styled(format!("  {m:<3}"), Style::default().fg(c)),
-            Span::raw(txt.to_string()),
-        ])
+    let keyline = |k: &str, txt: &str| hang(vec![Span::raw("  "), key(k)], txt, width);
+    // A marker, then a name in a column of its own when there is one, the
+    // description wrapped under what follows it.
+    let mark = |m: &str, c: Color, name: &str, txt: &str| {
+        let mut lead = vec![Span::styled(format!("  {m:<3}"), Style::default().fg(c))];
+        if !name.is_empty() {
+            lead.push(Span::raw(format!("{name:<13}")));
+        }
+        hang(lead, txt, width)
     };
     // Name-color legend: the label rendered in its actual style, aligned on '='.
     let legend = |label: &str, style: Style, txt: &str| {
-        Line::from(vec![
+        let lead = vec![
             Span::raw("  "),
             Span::styled(format!("{label:>14}"), style),
             Span::styled(" = ", Style::default().fg(Color::DarkGray)),
-            Span::raw(txt.to_string()),
-        ])
+        ];
+        hang(lead, txt, width)
     };
-
-
     let head = |t: &str| {
-        Line::from(Span::styled(
+        vec![Line::from(Span::styled(
             format!(" {t}"),
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-        ))
+        ))]
     };
+    let blank = || vec![Line::default()];
     let mut lines: Vec<Line> = Vec::new();
     match tab {
         0 => lines.extend([
             head("First column: the port's state"),
-            mark("✗", Color::Red, "conflict     staged options violate PREVENTS or group rules"),
-            mark("?", Color::Yellow, "unconfigured no saved options file"),
-            mark("!", Color::LightRed, "stale        option list changed since the file was written"),
-            mark("≠", Color::Magenta, "mc-conflict  contradicts make.conf policy (w view)"),
-            mark("≈", Color::DarkGray, "mc-covered   decided by make.conf, no attention (m view)"),
-            mark("✓", Color::DarkGray, "ok"),
-            Line::default(),
+            mark("✗", Color::Red, "conflict", "staged options violate PREVENTS or group rules"),
+            mark("?", Color::Yellow, "unconfigured", "no saved options file"),
+            mark("!", Color::LightRed, "stale", "option list changed since the file was written"),
+            mark("≠", Color::Magenta, "mc-conflict", "contradicts make.conf policy (w view)"),
+            mark("≈", Color::DarkGray, "mc-covered", "decided by make.conf, no attention (m view)"),
+            mark("✓", Color::DarkGray, "", "ok"),
+            blank(),
             head("Second column"),
-            mark("*", Color::Cyan, "edited       staged changes not yet applied (?*)"),
-            Line::default(),
+            mark("*", Color::Cyan, "edited", "staged changes not yet applied (?*)"),
+            blank(),
             head("Between the groups"),
-            Line::from(vec![
-                Span::styled("  ── N ok ──", Style::default().fg(Color::DarkGray)),
-                Span::raw(" parts the N ok ports (≈ ✓) from the rest"),
-            ]),
-            Line::default(),
+            hang(
+                vec![Span::styled("  ── N ok ── ", Style::default().fg(Color::DarkGray))],
+                "parts the N ok ports (≈ ✓) from the rest",
+                width,
+            ),
+            blank(),
             head("After the port name"),
-            mark("⚠", Color::Red, "port is BROKEN/IGNORE with the current options"),
-            mark("⊘", Color::DarkGray, "blacklisted for this jail/tree/set (never needs attention)"),
-            mark("∞", Color::Red, "caught in a dependency loop — r lists it, Enter jumps to any port"),
-            Line::default(),
+            mark("⚠", Color::Red, "", "port is BROKEN/IGNORE with the current options"),
+            mark("⊘", Color::DarkGray, "", "blacklisted for this jail/tree/set (never needs attention)"),
+            mark("∞", Color::Red, "", "caught in a dependency loop — r lists it, Enter jumps to any port"),
+            blank(),
             head("Port name color"),
             legend(
                 "red bold name",
@@ -1444,10 +1507,12 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             ),
             legend("red name", Style::default().fg(Color::Red), "conflicting staged options"),
             legend("dim name", Style::default().fg(Color::DarkGray), "blacklisted"),
-        ]),
+        ]
+        .into_iter()
+        .flatten()),
         1 => {
             // A realistic sample row, styled exactly like the editor renders it.
-            lines.push(head("A row, piece by piece"));
+            lines.extend(head("A row, piece by piece"));
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled("N", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -1507,10 +1572,10 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                     "enabling marks the port BROKEN (⚠ignored → IGNORE)",
                 ),
             ] {
-                lines.push(legend(label, style, txt));
+                lines.extend(legend(label, style, txt));
             }
             lines.extend([
-                Line::default(),
+                blank(),
                 head("Trailing sections"),
                 legend(
                     "struck-through",
@@ -1522,7 +1587,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                     Style::default().fg(Color::DarkGray),
                     "managed via the default flavor's view of the shared file",
                 ),
-                Line::default(),
+                blank(),
                 head("In the pane's title"),
                 legend(
                     "flavor*",
@@ -1531,32 +1596,31 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                 ),
                 legend("flavor‹", Style::default(), "the flavor shown in the pane"),
                 legend("[h] notes", key_hint(), "the port ships notes (pkg-help) — h reads them"),
-                Line::default(),
+                blank(),
                 head("On the pane's bottom border"),
                 legend("overlay: NAME", Style::default(), "the overlay the port is taken from"),
                 legend("+A -B", Style::default().fg(Color::Cyan), "staged changes, not yet applied"),
                 legend("3/12", Style::default().fg(Color::Cyan), "the cursor's option, while the pane has the focus"),
-                Line::default(),
+                blank(),
                 head("Above the rows"),
                 legend(
                     "port panel",
                     Style::default().add_modifier(Modifier::BOLD),
-                    "the port's comment and pkg-descr, in five lines;",
+                    "the port's comment and pkg-descr, in five lines; shown at start on a \
+                     terminal of 30 rows or more — V shows or hides it until you quit, v \
+                     shows it all, from either pane",
                 ),
-                // Aligned on the legend's text column (2 + 14 + " = ").
-                Line::from(Span::raw("                   shown at start on a terminal of 30 rows or more")),
-                Line::from(Span::raw("                   — V shows or hides it until you quit, v shows it")),
-                Line::from(Span::raw("                   all, from either pane")),
-                Line::default(),
+                blank(),
                 head("Below the rows"),
                 legend(
                     "option panel",
                     Style::default().fg(Color::Gray),
-                    "the description of the option under the cursor, in",
+                    "the description of the option under the cursor, in 1–2 lines — i on \
+                     it shows it all",
                 ),
-                // Aligned on the legend's text column (2 + 14 + " = ").
-                Line::from(Span::raw("                   1–2 lines — i on it shows it all")),
-            ]);
+            ]
+            .into_iter()
+            .flatten());
         }
         2 => lines.extend([
             keyline("j/k ↑/↓", "move · g/G first/last · the same keys scroll every popup"),
@@ -1573,7 +1637,9 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("V", "show / hide the port description above the options"),
             keyline("h", "port notes (pkg-help) — marked [h] notes in the pane title"),
             keyline("r", "why is this port here? — chain, loop, dependents; Enter jumps"),
-        ]),
+        ]
+        .into_iter()
+        .flatten()),
         _ => lines.extend([
             keyline("t", "show only ports needing attention"),
             keyline("s", "toggle problems-first / stable alphabetical sort"),
@@ -1585,7 +1651,9 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("? F1", "this help"),
             keyline("Ctrl-L", "force a full screen repaint"),
             keyline("q Ctrl-C", "quit — offers keeping staged edits as a draft"),
-        ]),
+        ]
+        .into_iter()
+        .flatten()),
     }
 
     // Clamp the scroll to what actually overflows the inner area, counted in
@@ -1594,10 +1662,16 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     let rows = wrapped_height(&lines, area.width.saturating_sub(2));
     let max_scroll = rows.saturating_sub(inner_height) as u16;
     *scroll = (*scroll).min(max_scroll);
+    // Fitted like every popup's hint: never cut mid-word on a narrow box.
+    let room = area.width.saturating_sub(2);
     let hint = if max_scroll > 0 {
-        " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes "
+        fitting(room, &[
+            " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes ",
+            " 1-4/Tab switch · j/k scroll · other closes ",
+            " 1-4 · j/k · other closes ",
+        ])
     } else {
-        " 1-4/Tab/←→ switch · any other key closes "
+        fitting(room, &[" 1-4/Tab/←→ switch · any other key closes ", " 1-4/Tab switch · other closes "])
     };
     let border = Style::default().fg(Color::LightBlue);
     // The tabs head the box, out of the scrolled text: they stay in view.
@@ -1773,6 +1847,7 @@ fn draw_why(f: &mut Frame, app: &mut App) {
         &[
             " Enter: jump · r: why of selection · j/k move · other key closes ",
             " Enter jump · r why · j/k move · other key closes ",
+            " Enter jump · r why · j/k ",
         ],
     );
     let border = Style::default().fg(Color::LightBlue);
@@ -1788,14 +1863,26 @@ fn draw_why(f: &mut Frame, app: &mut App) {
 }
 
 /// The first of `hints` that fits on a border `width` columns wide between
-/// its corners, else the last (the shortest).
-fn fitting<'a>(width: u16, hints: &[&'a str]) -> &'a str {
-    hints
-        .iter()
-        .find(|h| h.chars().count() <= width as usize)
-        .or(hints.last())
-        .copied()
-        .unwrap_or_default()
+/// its corners, else the last (the shortest) cut at a whole token (`·`
+/// parts them) to end in `…`. With not even its first token in, that token
+/// is cut at a word.
+fn fitting(width: u16, hints: &[&str]) -> String {
+    let room = width as usize;
+    let fits = |h: &str| Line::from(h).width() <= room;
+    if let Some(hint) = hints.iter().find(|h| fits(h)) {
+        return hint.to_string();
+    }
+    let Some(last) = hints.last() else { return String::new() };
+    let tokens: Vec<&str> = last.trim().split(" · ").collect();
+    let cut = (1..tokens.len())
+        .rev()
+        .map(|keep| format!(" {} … ", tokens[..keep].join(" · ")))
+        .find(|h| fits(h));
+    cut.unwrap_or_else(|| {
+        let mut line = Line::from(format!(" {}", tokens[0]));
+        ellipsize(&mut line, room.saturating_sub(1));
+        format!("{line} ")
+    })
 }
 
 
@@ -1853,7 +1940,7 @@ fn draw_opt_info(f: &mut Frame, app: &mut App) {
         lines.push(Line::from(vec![
             Span::styled("group: ", dim),
             Span::raw(g.name.clone()),
-            Span::styled(format!(" ({})", g.kind.label()), dim),
+            Span::styled(format!(" — {}", g.kind.label()), dim),
         ]));
     }
     if let Some(by) = app.session.implied_by(info, opt) {
@@ -2058,17 +2145,29 @@ fn draw_bulk(f: &mut Frame, app: &App) {
     let title = fit_title(&format!(" {} ", app.bulk_scope()), room);
     // Under the line, kept current as it is typed: how many listed ports
     // carry the option named so far, then the keys.
-    let keys = "Enter apply · Esc cancel · Ctrl-U clear ";
-    let hint = match app.bulk_carriers() {
-        None => vec![Span::raw(format!(" {keys}"))],
-        Some((opt, 0)) => vec![
-            Span::styled(format!(" no listed port has {opt} "), Style::default().fg(Color::Red)),
-            Span::raw(format!("· {keys}")),
-        ],
-        Some((opt, n)) => vec![Span::raw(format!(" {n} carry {opt} · {keys}"))],
+    let (count, missing) = match app.bulk_carriers() {
+        None => (String::new(), None),
+        Some((opt, 0)) => {
+            let none = format!("no listed port has {opt}");
+            (format!("{none} · "), Some(none))
+        }
+        Some((opt, n)) => (format!("{n} carry {opt} · "), None),
     };
-    let mut hint_line = Line::from(hint);
-    ellipsize(&mut hint_line, room);
+    let hint = fitting(
+        clamp_u16(room),
+        &[
+            &format!(" {count}Enter apply · Esc cancel · Ctrl-U clear "),
+            &format!(" {count}Enter · Esc · ^U clear "),
+        ],
+    );
+    // An option no listed port carries is said in red, as far as it shows.
+    let hint_line = match missing.and_then(|none| Some((hint.strip_prefix(&format!(" {none}"))?, none))) {
+        Some((rest, none)) => Line::from(vec![
+            Span::styled(format!(" {none}"), Style::default().fg(Color::Red)),
+            Span::raw(rest.to_string()),
+        ]),
+        None => Line::from(hint),
+    };
     let p = Paragraph::new(Line::from(format!(" {input}▏"))).block(
         Block::default()
             .borders(Borders::ALL)
@@ -2079,14 +2178,23 @@ fn draw_bulk(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+/// The keys of the quit prompt, on one line when it fits, else split so
+/// that no answer is cut.
+const QUIT_KEYS: [&str; 2] = ["y save & quit · n discard & quit", "Esc stay"];
+
+/// The quit prompt: a box 52 columns wide at most, 4 less than the screen
+/// at least, as high as its lines need, in the middle of the screen.
 fn draw_quit_confirm(f: &mut Frame) {
-    let area = centered_rect(50, 20, f.area());
-    f.render_widget(Clear, area);
-    // The answers on a line of their own, so none is split by the wrap.
-    let mut lines = vec![
-        Line::from("Keep staged edits as a draft?"),
-        Line::from("y save & quit · n discard & quit · Esc stay"),
-    ];
+    let full = f.area();
+    let width = 52.min(full.width.saturating_sub(4));
+    let inner = width.saturating_sub(2);
+    let mut lines = vec![Line::from("Keep staged edits as a draft?")];
+    let keys = QUIT_KEYS.join(" · ");
+    if keys.chars().count() <= inner as usize {
+        lines.push(Line::from(keys));
+    } else {
+        lines.extend(QUIT_KEYS.map(Line::from));
+    }
     let active = crate::query::makerunner::active_make_count();
     if active > 0 {
         lines.push(Line::from(Span::styled(
@@ -2094,8 +2202,16 @@ fn draw_quit_confirm(f: &mut Frame) {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    let height = (wrapped_height(&lines, inner) as u16 + 2).min(full.height);
+    let area = Rect {
+        x: full.x + (full.width - width) / 2,
+        y: full.y + (full.height - height) / 2,
+        width,
+        height,
+    };
+    f.render_widget(Clear, area);
     let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
+        .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::ALL).title(" quit ").border_style(Style::default().fg(Color::Red)));
     f.render_widget(p, area);
 }
@@ -2116,6 +2232,29 @@ mod tests {
         assert_eq!(elide_dir("/var/db/ports/", 10), "…/db/ports");
         assert_eq!(elide_dir("/db/ports", 4), "…/ports");
         assert_eq!(elide_dir("/ports", 3), "/ports", "nothing to elide");
+    }
+
+    /// A path in a text gives way to fit, down to its last component; the
+    /// colon after it stays the text's.
+    #[test]
+    fn paths_in_a_text_keep_their_last_components() {
+        let text = "creating /var/db/ports/cat_alpha/.tmp: Is a directory";
+        assert_eq!(elide_paths(text, 80), text, "it fits");
+        assert_eq!(elide_paths(text, 45), "creating …/cat_alpha/.tmp: Is a directory");
+        assert_eq!(elide_paths(text, 0), "creating …/.tmp: Is a directory");
+        assert_eq!(elide_paths("a/b and/or c", 0), "a/b and/or c", "only words starting with /");
+    }
+
+    /// A hint is the first form that fits, else the last cut at a whole
+    /// token, else its first token cut at a word.
+    #[test]
+    fn a_hint_is_fitted_at_a_token() {
+        let forms = [" alpha: one · beta: two · gamma: three ", " a one · b two · c three "];
+        assert_eq!(fitting(40, &forms), forms[0]);
+        assert_eq!(fitting(25, &forms), forms[1]);
+        assert_eq!(fitting(20, &forms), " a one · b two … ");
+        assert_eq!(fitting(12, &forms), " a one … ");
+        assert_eq!(fitting(6, &forms), " a… ");
     }
 
     /// The panels are sized from the pane alone, never from the port, the

@@ -799,8 +799,12 @@ on the port list once it is left there.
 Apply: preview every file diff;
 .Ic y
 writes every file atomically,
-.Ic n
-or any other key but the scroll keys cancels.
+.Ic n , N
+or
+.Ic Esc
+cancels, and any other key but the scroll keys,
+.Ic Enter
+included, leaves the preview open and names the keys.
 When ports in conflict would be written, the preview lists them first and
 .Ic y
 writes nothing:
@@ -808,6 +812,18 @@ writes nothing:
 writes every file anyway, and
 .Ic s
 every file but the conflicting ports'.
+The result is titled
+.Ql apply \[em] done ,
+the list behind it already rebuilt, or, when a file could not be written
+and nothing was,
+.Ql apply \[em] FAILED
+in a red border, with each failed port and its reason.
+Once it is closed, the status bar says what the apply did until the next
+key:
+.Ql 2 file(s) written ,
+with how many files were removed and ports skipped, or
+.Ql apply failed: nothing written
+and the first reason.
 .It Ic i
 In the option pane, show details for the selected option: description, group,
 .Va IMPLIES

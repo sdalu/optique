@@ -468,11 +468,19 @@ port gaining an options file, `dropped: OPT` for an option the port no
 longer has — as the capture shows for `devel/gmake`,
 `ports-mgmt/pkg` and `www/nginx`, then, on `y`, writes every file
 atomically in one pass (temporary file, `fsync`, `rename`) to the set's
-options directory. The keys sit on the preview's bottom border, and the
+options directory. The keys sit on the preview's bottom border, in a
+shorter form (`y write · n cancel · j/k`) on a narrow box, and the
 `written to` line shortens a directory too long for it to `…` and its
-last two components; the result after the apply shows it whole. If any
-file cannot be written, none is and nothing is removed: the result names
-the failure, and the edits stay staged.
+last two components. The result, `apply — done`, shows the directory
+whole, and the list behind it — its order and its `── N ok ──`
+divider — is already rebuilt. If any file cannot be written, none is and
+nothing is removed: the result, `apply — FAILED` in a red border, names
+the directory once, shortened the same way, then each failed port with
+its reason, the path in it cut to its last components, and the edits
+stay staged. Once the result is closed, the status bar says what the
+apply did until the next key: `2 file(s) written`, followed by
+`, 1 removed` and `, 1 skipped: conflicting` when it did so, or in red
+`apply failed: nothing written — ` and the first reason.
 
 A port whose staged options still violate their constraints (`✗`) makes
 its file conflicting: the build's `check-config` would fail on it. When
@@ -485,8 +493,9 @@ every planned file but theirs), and the result adds `N port(s) skipped:
 conflicting options`. A skipped port's file stays as it is on disk; its
 edits stay staged, still marked `✗`, and still in the draft a quit
 offers to keep. Flavors share one options file, so the file conflicts
-when any of them does. `n` or any other key but the scroll keys
-cancels.
+when any of them does. `n`, `N` or `Esc` cancels; any other key but the
+scroll keys, `Enter` included, leaves the preview open and names the
+keys, `y writes · n cancels` (or, with a conflict, the line above).
 
 Each options file is read once, when the TUI starts, and judged as it
 was then: a file edited outside optique while the interface is open is
