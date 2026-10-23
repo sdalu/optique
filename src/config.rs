@@ -1082,9 +1082,28 @@ fn layer_make_conf(
     jail_lines: &str,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
-    let paths: Vec<PathBuf> =
+    let mut paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
+    paths.extend(plugin_make_confs(poudriere_d));
     concat_make_conf(&paths, env, overlays, jail_lines, staging_dir)
+}
+
+/// The hook plugins' make.conf files poudriere appends after the layers
+/// (`setup_makeconf` in common.sh): `hooks/plugins/*/make.conf`, in the
+/// shell glob's order (names sorted, dot entries left out); only a regular
+/// file counts, as for its `[ -f ]`.
+fn plugin_make_confs(poudriere_d: &Path) -> Vec<PathBuf> {
+    let Ok(dir) = fs::read_dir(poudriere_d.join("hooks/plugins")) else { return Vec::new() };
+    let mut names: Vec<std::ffi::OsString> = dir
+        .filter_map(|e| e.ok().map(|e| e.file_name()))
+        .filter(|n| !n.as_encoded_bytes().starts_with(b"."))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|n| poudriere_d.join("hooks/plugins").join(n).join("make.conf"))
+        .filter(|p| p.is_file())
+        .collect()
 }
 
 /// Stage a make.conf holding the jail environment alone, no layers.
@@ -1448,6 +1467,34 @@ mod tests {
         fs::remove_dir_all(pd.join("jails")).unwrap();
         let (conf, notes, _) = staged(&pd);
         assert!(!conf.contains("OSREL") && notes.len() == 1, "{conf}{notes:?}");
+    }
+
+    /// poudriere appends its hook plugins' make.conf files after the
+    /// layers, in glob order: so does the staged one, before the trailer,
+    /// and the banner lists them with the layers.
+    #[test]
+    fn hook_plugin_make_confs_follow_the_layers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        let plugins = pd.join("hooks/plugins");
+        for (dir, text) in [("b", "B=1\n"), ("a", "A=1\n"), (".hidden", "H=1\n")] {
+            fs::create_dir_all(plugins.join(dir)).unwrap();
+            fs::write(plugins.join(dir).join("make.conf"), text).unwrap();
+        }
+        fs::create_dir_all(plugins.join("none")).unwrap(); // a plugin with no make.conf
+        fs::write(plugins.join("loose"), "not a plugin\n").unwrap();
+        fs::write(pd.join("make.conf"), "LAYER=1\n").unwrap();
+        let s = resolve_host(&host(tmp.path(), &pd, &ports, tmp.path()), &Request::default(), &stage).unwrap();
+        let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
+        let at = |s: &str| conf.find(s).unwrap_or_else(|| panic!("{s} missing: {conf}"));
+        assert!(at("LAYER=1") < at("A=1") && at("A=1") < at("B=1") && at("B=1") < at("LOCALBASE"), "{conf}");
+        assert!(!conf.contains("H=1"), "{conf}");
+        let want = [pd.join("make.conf"), plugins.join("a/make.conf"), plugins.join("b/make.conf")];
+        assert_eq!(s.make_conf_sources, want);
     }
 
     /// Under the staged make.conf of an 11.2 jail, security/ca_root_nss

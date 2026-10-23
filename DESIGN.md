@@ -38,7 +38,9 @@ writes at the top of every jail's make.conf (`PACKAGE_BUILDING` and the
 three others, copied from `setup_makeconf` in its `common.sh`, which skip
 more probes and change a few option defaults) and ends with
 `LOCALBASE=/nonexistent`, after the layers so none can undo it
-(`src/config.rs`). Being part of the staged text, the environment is
+(`src/config.rs`). Between the two, after the layers, come the hook
+plugins' `hooks/plugins/*/make.conf`, which poudriere appends there too.
+Being part of the staged text, the environment is
 covered by the make.conf hash, so it keys its own cache generation. On the
 same closure it removed both leaks, in agreement with poudriere's graph,
 and changed nothing else but dependency spec paths and the defaults

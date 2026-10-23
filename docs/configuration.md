@@ -62,6 +62,10 @@ make.conf
 <jail>-<tree>-<set>-make.conf
 ```
 
+After them, as poudriere appends them, come the hook plugins'
+`hooks/plugins/*/make.conf` files, in name order; the startup banner
+lists them among the `make.conf:` sources.
+
 Port queries therefore see exactly what a poudriere build would see,
 including `DEFAULT_VERSIONS` (which can change a port's default
 options, its option list and its dependencies), `OPTIONS_SET`,

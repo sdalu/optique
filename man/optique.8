@@ -1771,6 +1771,12 @@ make.conf
 <jail>-<tree>-<set>-make.conf
 .Ed
 .Pp
+After them, as
+.Xr poudriere 8
+appends them, come the hook plugins'
+.Pa hooks/plugins/*/make.conf
+files, in name order; the startup banner lists them with the layers.
+.Pp
 Port queries therefore see exactly what a poudriere build would see, including
 .Va DEFAULT_VERSIONS ,
 whose entries can change a port's default options, its option list and its
