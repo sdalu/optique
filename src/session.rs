@@ -807,7 +807,8 @@ pub fn undecided_options(
 
 /// Effective options as they would be WITHOUT any options file: the
 /// bsd.options.mk application order (defaults, make.conf layers, FORCE,
-/// IMPLIES closure) minus the options-file layer.
+/// IMPLIES closure, then bsd.port.mk's drop of an unchecked conditional
+/// group's members) minus the options-file layer.
 pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
     effective_with(info, None)
 }
@@ -851,7 +852,9 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
             }
         }
     }
-    close_implies(info, set)
+    // Then bsd.port.mk drops the members of a conditional group whose
+    // option is off from PORT_OPTIONS (see `unchecked_groups`).
+    unchecked_groups(o, close_implies(info, set)).1
 }
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
@@ -1981,6 +1984,33 @@ mod tests {
         let (mut ports, key) = mk_port(&["A", "B", "C"], &[], vec![], defs);
         ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
         assert_eq!(undecided_options(&ports[&key], None, false), ["C"]);
+    }
+
+    /// bsd.port.mk drops the members of a conditional SINGLE or MULTI group
+    /// whose option is off from PORT_OPTIONS: mail/faces with AUDIO off and
+    /// NAS set in its file builds without NAS.
+    #[test]
+    fn an_unchecked_conditional_group_loses_its_members() {
+        let g = OptionGroup {
+            kind: GroupKind::Single,
+            name: "AUDIO".into(),
+            desc: String::new(),
+            members: vec!["NAS".into(), "RPLAY".into(), "SOX".into()],
+        };
+        let (ports, key) =
+            mk_port(&["DOCS", "NLS", "AUDIO", "NAS", "RPLAY", "SOX"], &[], vec![g], vec![]);
+        let info = &ports[&key];
+        let file = SavedOptionsFile {
+            complete: info.options.complete.clone(),
+            set: set(&["NLS", "NAS"]),
+            unset: set(&["DOCS", "AUDIO", "RPLAY", "SOX"]),
+            ..Default::default()
+        };
+        assert_eq!(effective_with(info, Some(&file)), set(&["NLS"]));
+        let mut on = file.clone();
+        on.set.insert("AUDIO".into());
+        on.unset.remove("AUDIO");
+        assert_eq!(effective_with(info, Some(&on)), set(&["AUDIO", "NAS", "NLS"]));
     }
 
     fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
