@@ -215,20 +215,21 @@ pub fn plan_writes<'a>(
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        let old = files.saved(options_name);
+        let planned = planned_file(chosen, cands, old.as_ref());
         if minimal {
-            // Compare IMPLIES-closed sets: the framework adds implied options
-            // either way, so they must not count as a deviation.
-            let closed =
-                crate::session::close_implies(chosen.info, chosen.enabled.clone());
             // The file decides every flavor sharing it: it goes only when
             // none of them ends up elsewhere without it (a flavor can set its
-            // own OPTIONS_DEFAULT, as www/sogo@pgsql does).
-            let file = written_file(chosen.info, &chosen.enabled);
-            let shared_redundant = cands.iter().filter(|c| !std::ptr::eq(*c, chosen)).all(|c| {
-                crate::session::effective_with(c.info, Some(&file))
-                    == crate::session::nofile_effective(c.info)
-            });
-            if closed == crate::session::nofile_effective(chosen.info) && shared_redundant {
+            // own OPTIONS_DEFAULT, as www/sogo@pgsql does), judged on the
+            // file as it would be written, so OPTIONS_SLAVE and conditional
+            // groups count on both sides. Lines no flavor here can see are
+            // another flavor's choices, and keep the file.
+            let redundant = !planned.foreign
+                && cands.iter().all(|c| {
+                    crate::session::effective_with(c.info, Some(&planned.file))
+                        == crate::session::nofile_effective(c.info)
+                });
+            if redundant {
                 if files.bytes(options_name).is_some() {
                     removals.push(crate::clean::Removal {
                         options_name: options_name.clone(),
@@ -245,14 +246,21 @@ pub fn plan_writes<'a>(
         }
         let info = chosen.info;
         let enabled = &chosen.enabled;
-        let old = files.saved(options_name);
-        if old.as_ref().is_some_and(|old| up_to_date(old, info, enabled)) {
+        // The default flavor answers for the file; without it, every flavor
+        // here must find it up to date.
+        let current = |old: &SavedOptionsFile| {
+            if chosen.preferred {
+                up_to_date(old, info, enabled)
+            } else {
+                cands.iter().all(|c| up_to_date(old, c.info, &c.enabled))
+            }
+        };
+        if old.as_ref().is_some_and(current) {
             continue;
         }
-        let kept = old.as_ref().map(|old| kept_options(old, info)).unwrap_or_default();
         let mut content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
-        if let (Some(old), false) = (&old, kept.is_empty()) {
-            content = carry_over(&content, old, &kept);
+        if !planned.kept.is_empty() {
+            content = carry_over(&content, &planned.file, &planned.kept);
         }
         writes.push(PendingWrite {
             key: chosen.key.clone(),
@@ -261,7 +269,7 @@ pub fn plan_writes<'a>(
             old,
             enabled: enabled.clone(),
             complete: info.options.complete.clone(),
-            kept,
+            kept: planned.kept,
             content,
         });
     }
@@ -341,28 +349,65 @@ fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String
     crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
 }
 
-/// The options of `old` that a non-default flavor writing it lacks, in the
-/// file's order: such a flavor cannot tell an option it merely lacks (the
-/// default flavor's, OPTIONS_EXCLUDE) from one the port removed, and
-/// dropping the first loses the user's choice for good, while keeping the
-/// second is harmless (make ignores it, the default flavor's next write
-/// drops it). Empty for the default flavor or an unflavored port.
-fn kept_options(old: &SavedOptionsFile, info: &PortInfo) -> Vec<String> {
-    if crate::session::is_preferred(info) {
-        return Vec::new();
-    }
-    let mut kept: Vec<String> = Vec::new();
-    for o in old.complete.iter().chain(old.recorded()) {
-        if !info.options.complete.contains(o) && !kept.contains(o) {
-            kept.push(o.clone());
-        }
-    }
-    kept
+/// The file `chosen` writes for the flavors `cands` sharing it, as make
+/// reads it, with what goes beyond `chosen`'s own view.
+struct Planned {
+    file: SavedOptionsFile,
+    /// Options outside `chosen`'s list the file still records, in order.
+    kept: Vec<String>,
+    /// Some of them come from `old` alone: no flavor here has them.
+    foreign: bool,
 }
 
-/// `content` (a rendered file) with the `kept` options of `old` added back:
-/// each in the complete list, and with the SET/UNSET lines it had.
-fn carry_over(content: &str, old: &SavedOptionsFile, kept: &[String]) -> String {
+/// What writing the shared file from `chosen` produces. The default flavor's
+/// view is the whole file. Without it, a non-default flavor cannot tell an
+/// option it merely lacks (the default flavor's, OPTIONS_EXCLUDE) from one
+/// the port removed, and dropping the first loses the user's choice for
+/// good while keeping the second is harmless (make ignores it, the default
+/// flavor's next write drops it): so the options another flavor in the
+/// closure has go in with that flavor's staged value, and the rest of
+/// `old`'s with the lines they had.
+fn planned_file(chosen: &Candidate, cands: &[Candidate], old: Option<&SavedOptionsFile>) -> Planned {
+    let mut file = written_file(chosen.info, &chosen.enabled);
+    let mut kept: Vec<String> = Vec::new();
+    let mut foreign = false;
+    if chosen.preferred {
+        return Planned { file, kept, foreign };
+    }
+    for c in cands {
+        for o in &c.info.options.complete {
+            if !file.complete.contains(o) {
+                file.complete.push(o.clone());
+                if c.enabled.contains(o) {
+                    file.set.insert(o.clone());
+                } else {
+                    file.unset.insert(o.clone());
+                }
+                kept.push(o.clone());
+            }
+        }
+    }
+    if let Some(old) = old {
+        for o in old.complete.iter().chain(old.recorded()) {
+            if !file.complete.contains(o) {
+                file.complete.push(o.clone());
+                if old.set.contains(o) {
+                    file.set.insert(o.clone());
+                }
+                if old.unset.contains(o) {
+                    file.unset.insert(o.clone());
+                }
+                kept.push(o.clone());
+                foreign = true;
+            }
+        }
+    }
+    Planned { file, kept, foreign }
+}
+
+/// `content` (a rendered file) with the `kept` options of `file` added:
+/// each in the complete list, and with the SET/UNSET lines `file` gives it.
+fn carry_over(content: &str, file: &SavedOptionsFile, kept: &[String]) -> String {
     let mut out = String::new();
     for line in content.lines() {
         out.push_str(line);
@@ -375,10 +420,10 @@ fn carry_over(content: &str, old: &SavedOptionsFile, kept: &[String]) -> String 
         out.push('\n');
     }
     for o in kept {
-        if old.set.contains(o) {
+        if file.set.contains(o) {
             out.push_str(&format!("OPTIONS_FILE_SET+={o}\n"));
         }
-        if old.unset.contains(o) {
+        if file.unset.contains(o) {
             out.push_str(&format!("OPTIONS_FILE_UNSET+={o}\n"));
         }
     }
@@ -878,6 +923,88 @@ mod tests {
         assert_eq!(written.complete, ["A", "B", "X11", "GTK"]);
         assert_eq!(written.set, set(&["A", "B", "X11"]));
         assert_eq!(written.unset, set(&["GTK"]));
+    }
+
+    /// Under -m the file goes when the file it would write gives the no-file
+    /// outcome, OPTIONS_SLAVE included: www/w3m-img with nothing chosen
+    /// needs no file, and one repeating its defaults is removed.
+    #[test]
+    fn minimal_mode_judges_the_file_it_would_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "B"], &["A", "S"]);
+        info.options.defaults = ["A".to_string()].into();
+        info.options.slave = ["S".to_string()].into();
+        let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+        let plan = |enabled: BTreeSet<String>| {
+            plan_writes(std::iter::once((&info.key, &info, enabled)), &OptionsFiles::new(tmp.path()), true)
+        };
+        let p = plan(set(&["A"]));
+        assert!(p.writes.is_empty() && p.removals.is_empty(), "no file needed");
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n",
+        )
+        .unwrap();
+        let p = plan(set(&["A"]));
+        assert!(p.writes.is_empty());
+        assert_eq!(p.removals.len(), 1, "a file repeating the defaults goes");
+    }
+
+    /// Under -m a non-default flavor alone never removes a shared file
+    /// holding lines it cannot see: they are the default flavor's choices.
+    #[test]
+    fn minimal_mode_keeps_lines_a_lone_flavor_cannot_see() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut nox = mk_info(&["A"], &["A"]);
+        nox.options.defaults = ["A".to_string()].into();
+        nox.key = PortKey::parse("editors/emacs@nox").unwrap();
+        nox.canonical = nox.key.clone();
+        nox.flavors = vec!["full".into(), "nox".into()];
+        nox.options_name = "editors_emacs".into();
+        fs::create_dir_all(tmp.path().join("editors_emacs")).unwrap();
+        fs::write(
+            tmp.path().join("editors_emacs/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A X11\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=X11\n",
+        )
+        .unwrap();
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let p = plan_writes(std::iter::once((&nox.key, &nox, enabled)), &OptionsFiles::new(tmp.path()), true);
+        assert!(p.removals.is_empty(), "X11 is @full's choice: {:?}", p.removals.len());
+        assert!(p.writes.is_empty(), "nothing @nox sees changed");
+    }
+
+    /// Two non-default flavors and no default one: an edit to an option only
+    /// one of them has is written, with that flavor's value.
+    #[test]
+    fn two_lone_flavors_each_write_what_they_have() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flavor = |name: &str, complete: &[&str]| {
+            let mut i = mk_info(complete, &[]);
+            i.key = PortKey::parse(&format!("editors/emacs@{name}")).unwrap();
+            i.canonical = i.key.clone();
+            i.flavors = vec!["full".into(), "nox".into(), "pgtk".into()];
+            i.options_name = "editors_emacs".into();
+            i
+        };
+        let nox = flavor("nox", &["A"]);
+        let pgtk = flavor("pgtk", &["A", "Y"]);
+        fs::create_dir_all(tmp.path().join("editors_emacs")).unwrap();
+        fs::write(
+            tmp.path().join("editors_emacs/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A Y\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=Y\n",
+        )
+        .unwrap();
+        let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+        let p = plan_writes(
+            [(&nox.key, &nox, set(&["A"])), (&pgtk.key, &pgtk, set(&["A", "Y"]))].into_iter(),
+            &OptionsFiles::new(tmp.path()),
+            false,
+        );
+        assert_eq!(p.writes.len(), 1, "@pgtk turned Y on");
+        let written = SavedOptionsFile::parse(&p.writes[0].content);
+        assert_eq!(written.set, set(&["A", "Y"]));
+        assert!(written.unset.is_empty());
     }
 
     #[test]
