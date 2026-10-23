@@ -41,3 +41,22 @@ fn new_is_what_no_line_names() {
     assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
     assert_eq!(port["status"], "ok", "{port}");
 }
+
+/// The options file is a makefile (bsd.options.mk:341): several words to a
+/// line, spaces around `+=`, `=` resetting the list. make ends up with
+/// AUDIO and SOX, and so does optique.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_hand_written_file_is_read_as_make_reads_it() {
+    let f = Fixture::new();
+    f.write_file(
+        "misc_cond",
+        "OPTIONS_FILE_SET+=NAS\nOPTIONS_FILE_UNSET += DOCS SOX\n\
+         OPTIONS_FILE_SET=AUDIO SOX\nOPTIONS_FILE_UNSET=DOCS NAS\n",
+    );
+    let make = f.make_v("misc/cond", "PORT_OPTIONS");
+    assert_eq!(make, ["AUDIO", "SOX"]);
+    let port = f.scan_port(&["misc/cond"], "misc/cond");
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
+}

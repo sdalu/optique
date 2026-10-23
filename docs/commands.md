@@ -87,7 +87,9 @@ stale, matching `make config-conditional`. A file naming an option with no
 one; a hand edit or a write cut short does — is warned about by every
 command that reads it, and `sync` completes it: make reads such an option at
 its defaults, follows them if they change, and `make config-conditional` asks
-about it again. `--dry-run`/`-n` reports what
+about it again. A hand-written file is read as the makefile it is: several
+options to a line, spaces around `+=` or `=`, and `=` assigning a list
+afresh; `sync` writes it back as `make config` does. `--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in
 the same shape as `decide` (see [machine-interface.md](machine-interface.md))
 instead of the per-file listing.

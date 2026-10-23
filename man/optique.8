@@ -1400,6 +1400,18 @@ and an
 line is off, and an option on neither, named only in
 .Va _FILE_COMPLETE_OPTIONS_LIST ,
 keeps its effective value.
+Being a makefile, a hand-written file may name several options on one line,
+put spaces around
+.Ql +=
+or
+.Ql = ,
+and assign a list afresh with
+.Ql = ,
+which drops what earlier lines added to it;
+.Nm
+reads it so, and writes it back the way
+.Nm make Cm config
+does.
 It then reports every file it changed.
 A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force

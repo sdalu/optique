@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 /// Parsed form of a `${PORT_DBDIR}/<OPTIONS_NAME>/options` file as written
-/// by `make config`.
+/// by `make config`, or by hand.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SavedOptionsFile {
     /// `_OPTIONS_READ` (pkgname at the time the file was written).
@@ -13,21 +13,45 @@ pub struct SavedOptionsFile {
 }
 
 impl SavedOptionsFile {
+    /// The file read as the makefile bsd.options.mk includes (line 341):
+    /// a value is the whitespace-separated words after `+=` or `=`, with
+    /// or without spaces around either, `+=` appending to the variable and
+    /// `=` assigning it afresh, as `OPTIONS_FILE_SET=X` resets the list.
+    /// Lines that assign nothing optique reads are skipped.
     pub fn parse(text: &str) -> Self {
         let mut out = SavedOptionsFile::default();
         for line in text.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            if let Some(v) = line.strip_prefix("_OPTIONS_READ=") {
-                out.options_read = v.trim().to_string();
-            } else if let Some(v) = line.strip_prefix("_FILE_COMPLETE_OPTIONS_LIST=") {
-                out.complete = v.split_whitespace().map(str::to_string).collect();
-            } else if let Some(v) = line.strip_prefix("OPTIONS_FILE_SET+=") {
-                out.set.insert(v.trim().to_string());
-            } else if let Some(v) = line.strip_prefix("OPTIONS_FILE_UNSET+=") {
-                out.unset.insert(v.trim().to_string());
+            // A `#` starts a comment, at the head of a line or after a value.
+            let line = line.split('#').next().unwrap_or_default().trim();
+            let Some((lhs, value)) = line.split_once('=') else { continue };
+            let (name, append) = match lhs.strip_suffix('+') {
+                Some(name) => (name.trim(), true),
+                None => (lhs.trim(), false),
+            };
+            let words = value.split_whitespace().map(str::to_string);
+            match name {
+                "_OPTIONS_READ" => {
+                    let v = value.trim();
+                    if append && !out.options_read.is_empty() {
+                        out.options_read = format!("{} {v}", out.options_read);
+                    } else {
+                        out.options_read = v.to_string();
+                    }
+                }
+                "_FILE_COMPLETE_OPTIONS_LIST" => {
+                    if !append {
+                        out.complete.clear();
+                    }
+                    out.complete.extend(words);
+                }
+                "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => {
+                    let list = if name == "OPTIONS_FILE_SET" { &mut out.set } else { &mut out.unset };
+                    if !append {
+                        list.clear();
+                    }
+                    list.extend(words);
+                }
+                _ => {}
             }
         }
         out
@@ -137,6 +161,24 @@ OPTIONS_FILE_UNSET+=FLITE
         let settled: Vec<bool> = ["A", "B", "C", "D"].iter().map(|o| f.decides(o)).collect();
         assert_eq!(settled, [true, false, true, false]);
         assert_eq!(f.unlined(), ["B"]);
+    }
+
+    /// The file is a makefile (bsd.options.mk:341): several words to a
+    /// line, spaces around `+=`, and `=` assigning the list afresh.
+    #[test]
+    fn parse_reads_the_file_as_make_does() {
+        let f = SavedOptionsFile::parse(
+            "OPTIONS_FILE_SET+=A B\nOPTIONS_FILE_UNSET += C\tD\n\
+             OPTIONS_FILE_SET+=E\nOPTIONS_FILE_SET = X\nOPTIONS_FILE_SET+=Y\n\
+             _FILE_COMPLETE_OPTIONS_LIST = A B\n_FILE_COMPLETE_OPTIONS_LIST+=X\n\
+             OPTIONS_FILE_SET:=Z\n# OPTIONS_FILE_SET+=W\nOPTIONS_FILE_UNSET+=Y # not V\n",
+        );
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(f.set, words(&["X", "Y"]));
+        assert_eq!(f.unset, words(&["C", "D", "Y"]));
+        assert_eq!(f.complete, ["A", "B", "X"]);
+        let v: Vec<_> = ["A", "C", "X", "Y"].iter().map(|o| f.value(o)).collect();
+        assert_eq!(v, [None, Some(false), Some(true), Some(false)]);
     }
 
     #[test]
