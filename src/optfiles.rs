@@ -39,8 +39,14 @@ enum Read {
 pub struct OptionsFiles {
     dir: PathBuf,
     memo: RefCell<HashMap<String, Read>>,
-    /// Reads that went to disk (for tests and the curious).
+    /// The `options.local` files, kept as `memo` keeps the options files:
+    /// make reads one after the options file (bsd.options.mk's
+    /// `.sinclude`), so the cache keys on it too. optique never writes one.
+    local_memo: RefCell<HashMap<String, Read>>,
+    /// Options files read from disk (for tests and the curious).
     disk_reads: Cell<usize>,
+    /// `options.local` files read from disk.
+    local_reads: Cell<usize>,
 }
 
 impl OptionsFiles {
@@ -48,7 +54,9 @@ impl OptionsFiles {
         OptionsFiles {
             dir: dir.to_path_buf(),
             memo: RefCell::new(HashMap::new()),
+            local_memo: RefCell::new(HashMap::new()),
             disk_reads: Cell::new(0),
+            local_reads: Cell::new(0),
         }
     }
 
@@ -66,36 +74,41 @@ impl OptionsFiles {
         self.entry_dir(options_name).join("options")
     }
 
+    /// `<dir>/<options_name>/options.local`, which make reads after the
+    /// options file.
+    pub fn local_path(&self, options_name: &str) -> PathBuf {
+        self.entry_dir(options_name).join("options.local")
+    }
+
     fn read(&self, options_name: &str) -> Read {
-        if let Some(hit) = self.memo.borrow().get(options_name) {
-            return hit.clone();
-        }
-        self.disk_reads.set(self.disk_reads.get() + 1);
-        let read = match fs::read(self.path(options_name)) {
-            Ok(bytes) => Read::Present(Rc::from(bytes)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Read::Absent,
-            Err(_) => Read::Unreadable,
-        };
-        self.memo.borrow_mut().insert(options_name.to_string(), read.clone());
-        read
+        read_once(&self.memo, &self.disk_reads, options_name, || self.path(options_name))
+    }
+
+    fn read_local(&self, options_name: &str) -> Read {
+        read_once(&self.local_memo, &self.local_reads, options_name, || {
+            self.local_path(options_name)
+        })
     }
 
     /// The file's bytes, None when it is absent or cannot be read.
     pub fn bytes(&self, options_name: &str) -> Option<Rc<[u8]>> {
-        match self.read(options_name) {
-            Read::Present(bytes) => Some(bytes),
-            Read::Absent | Read::Unreadable => None,
-        }
+        self.read(options_name).bytes()
     }
 
     /// SHA-256 of the file's bytes, `ABSENT` or `UNREADABLE`: what the cache
     /// records an entry against.
     pub fn hash(&self, options_name: &str) -> String {
-        match self.read(options_name) {
-            Read::Present(bytes) => crate::cache::sha256_hex(&bytes),
-            Read::Absent => ABSENT.to_string(),
-            Read::Unreadable => UNREADABLE.to_string(),
-        }
+        self.read(options_name).hash()
+    }
+
+    /// `bytes` for the entry's `options.local`.
+    pub fn local_bytes(&self, options_name: &str) -> Option<Rc<[u8]>> {
+        self.read_local(options_name).bytes()
+    }
+
+    /// `hash` for the entry's `options.local`.
+    pub fn local_hash(&self, options_name: &str) -> String {
+        self.read_local(options_name).hash()
     }
 
     /// The saved choices the file records. A stray byte that is not UTF-8
@@ -118,6 +131,49 @@ impl OptionsFiles {
     #[cfg(test)]
     pub fn disk_reads(&self) -> usize {
         self.disk_reads.get()
+    }
+
+    #[cfg(test)]
+    pub fn local_reads(&self) -> usize {
+        self.local_reads.get()
+    }
+}
+
+/// One file of an entry: what `memo` holds, else a read from disk counted
+/// in `reads` and kept.
+fn read_once(
+    memo: &RefCell<HashMap<String, Read>>,
+    reads: &Cell<usize>,
+    options_name: &str,
+    path: impl FnOnce() -> PathBuf,
+) -> Read {
+    if let Some(hit) = memo.borrow().get(options_name) {
+        return hit.clone();
+    }
+    reads.set(reads.get() + 1);
+    let read = match fs::read(path()) {
+        Ok(bytes) => Read::Present(Rc::from(bytes)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Read::Absent,
+        Err(_) => Read::Unreadable,
+    };
+    memo.borrow_mut().insert(options_name.to_string(), read.clone());
+    read
+}
+
+impl Read {
+    fn bytes(self) -> Option<Rc<[u8]>> {
+        match self {
+            Read::Present(bytes) => Some(bytes),
+            Read::Absent | Read::Unreadable => None,
+        }
+    }
+
+    fn hash(&self) -> String {
+        match self {
+            Read::Present(bytes) => crate::cache::sha256_hex(bytes),
+            Read::Absent => ABSENT.to_string(),
+            Read::Unreadable => UNREADABLE.to_string(),
+        }
     }
 }
 

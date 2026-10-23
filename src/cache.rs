@@ -14,8 +14,8 @@ use crate::optfiles::OptionsFiles;
 ///
 /// A generation is one (ports tree state, layered make.conf) pair; any change
 /// to either starts a fresh file. Within a generation, an entry is valid as
-/// long as the port's options file content (in the PORT_DBDIR the query saw)
-/// is unchanged — that content is part of the entry.
+/// long as the port's options file and `options.local` (in the PORT_DBDIR
+/// the query saw) are unchanged — their content is part of the entry.
 pub struct Cache {
     map: HashMap<PortKey, CacheEntry>,
     file: Option<File>,
@@ -26,6 +26,8 @@ pub struct Cache {
 struct CacheEntry {
     options_name: String,
     options_hash: String,
+    /// The `options.local` make read after the options file, hashed alike.
+    local_hash: String,
     info: PortInfo,
 }
 
@@ -53,14 +55,16 @@ impl Cache {
         Cache { map, file, enabled: true }
     }
 
-    /// Return the cached PortInfo if the options file it was computed against
-    /// is still byte-identical.
+    /// Return the cached PortInfo if the options file and `options.local` it
+    /// was computed against are still byte-identical.
     pub fn lookup(&self, key: &PortKey, files: &OptionsFiles) -> Option<PortInfo> {
         if !self.enabled {
             return None;
         }
         let entry = self.map.get(key)?;
-        if files.hash(&entry.options_name) == entry.options_hash {
+        if files.hash(&entry.options_name) == entry.options_hash
+            && files.local_hash(&entry.options_name) == entry.local_hash
+        {
             Some(entry.info.clone())
         } else {
             None
@@ -74,6 +78,7 @@ impl Cache {
         let entry = CacheEntry {
             options_name: info.options_name.clone(),
             options_hash: files.hash(&info.options_name),
+            local_hash: files.local_hash(&info.options_name),
             info: info.clone(),
         };
         if let Some(f) = &mut self.file {
@@ -293,7 +298,7 @@ fn short(s: &str) -> String {
 /// one wrote with missing fields. Part of every generation file name
 /// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
 /// by the prune pass since nothing can read them again.
-const SCHEMA: u32 = 9;
+const SCHEMA: u32 = 10;
 
 /// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {

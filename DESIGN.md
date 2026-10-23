@@ -112,7 +112,8 @@ creates; guessing a local build from `-o /var/db/ports`; reading
 ## Persistent cache, keyed on what actually changed
 
 Results are cached under `~/.cache/optique/`, keyed on the ports tree's git
-HEAD, the make.conf hash, and the options-file content (`src/cache.rs`), with
+HEAD, the make.conf hash, and the content of the options file and of the
+`options.local` bsd.options.mk reads after it (`src/cache.rs`), with
 a schema number bumped whenever the parsed shape changes. `tree_key` reads
 `.git` directly — the loose ref, packed-refs, or a `gitdir` file — rather
 than spawning `git`. When `.git` is missing or anything it does not

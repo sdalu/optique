@@ -14,10 +14,12 @@ pub struct StagingDb {
 
 impl StagingDb {
     /// Create under the given staging dir and seed it with the saved options
-    /// files of every known OPTIONS_NAME, byte for byte: the cache the
-    /// background re-queries share with the scan matches entries on the
-    /// file's hash. The bytes come from `files`, which the scan and the
-    /// session have already read, so seeding reads nothing more.
+    /// files of every known OPTIONS_NAME, and their `options.local`, byte for
+    /// byte: make reads both, and the cache the background re-queries share
+    /// with the scan matches entries on both hashes. The bytes come from
+    /// `files`, which the scan and the session have already read, so seeding
+    /// reads nothing more. `options.local` is copied once, never rewritten:
+    /// optique does not edit it.
     pub fn create<'a>(
         staging_dir: &Path,
         files: &OptionsFiles,
@@ -29,6 +31,12 @@ impl StagingDb {
         for name in names {
             if let Some(content) = files.bytes(name) {
                 db.write(name, &content)?;
+            }
+            if let Some(content) = files.local_bytes(name) {
+                let path = db.root.join(name).join("options.local");
+                fs::create_dir_all(db.root.join(name))
+                    .and_then(|()| fs::write(&path, &content))
+                    .with_context(|| format!("writing {}", path.display()))?;
             }
         }
         Ok(db)
@@ -63,27 +71,39 @@ mod tests {
             fs::create_dir_all(real.join(name)).unwrap();
             fs::write(real.join(name).join("options"), content).unwrap();
         }
+        // An options.local beside a file, and one with no options file.
+        fs::write(real.join("cat_odd/options.local"), "OPTIONS_FILE_SET+=B\n").unwrap();
+        fs::create_dir_all(real.join("cat_local")).unwrap();
+        fs::write(real.join("cat_local/options.local"), "OPTIONS_FILE_SET+=C\n").unwrap();
         let files = OptionsFiles::new(&real);
-        let names: Vec<String> =
-            ["cat_odd", "cat_plain", "cat_absent"].iter().map(|s| s.to_string()).collect();
+        let names: Vec<String> = ["cat_odd", "cat_plain", "cat_absent", "cat_local"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         // What the scan did: hash every file for the cache.
-        let hashes: Vec<String> = names.iter().map(|n| files.hash(n)).collect();
-        let reads = files.disk_reads();
+        let both = |f: &OptionsFiles, n: &String| (f.hash(n), f.local_hash(n));
+        let hashes: Vec<(String, String)> = names.iter().map(|n| both(&files, n)).collect();
+        let reads = (files.disk_reads(), files.local_reads());
         // An edit behind optique's back after the scan is not what the scan
         // judged, so it is not what staging gets either.
         fs::write(real.join("cat_plain/options"), "edited later\n").unwrap();
 
         let db = StagingDb::create(tmp.path(), &files, names.iter()).unwrap();
-        assert_eq!(files.disk_reads(), reads, "seeding read nothing");
+        assert_eq!((files.disk_reads(), files.local_reads()), reads, "seeding read nothing");
         assert_eq!(fs::read(db.path().join("cat_odd/options")).unwrap(), odd);
         assert_eq!(
             fs::read(db.path().join("cat_plain/options")).unwrap(),
             b"OPTIONS_FILE_SET+=A\n"
         );
         assert!(!db.path().join("cat_absent").exists());
+        assert_eq!(
+            fs::read(db.path().join("cat_odd/options.local")).unwrap(),
+            b"OPTIONS_FILE_SET+=B\n"
+        );
+        assert!(!db.path().join("cat_local/options").exists());
         // The invariant the shared cache rests on.
         let staged = OptionsFiles::new(db.path());
-        let staged_hashes: Vec<String> = names.iter().map(|n| staged.hash(n)).collect();
+        let staged_hashes: Vec<(String, String)> = names.iter().map(|n| both(&staged, n)).collect();
         assert_eq!(staged_hashes, hashes);
     }
 

@@ -108,7 +108,9 @@ keyed on the ports tree revision, the hash of the merged
 .Pa make.conf
 layers
 .Pq their own text, not the files they include; see Sx CAVEATS
-and the content of the port's own options file, so subsequent runs
+and the content of the port's own options file and of the
+.Pa options.local
+beside it, so subsequent runs
 re-invoke
 .Nm make
 only for ports whose inputs actually changed and typically finish in well

@@ -62,7 +62,8 @@ HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
 `UPDATING`) and every overlay's (the count and newest mtime of its files,
 even in a git checkout, since overlay ports are edited before any commit),
 the hash of the layered make.conf, and the content of the
-port's options file. A local or synth build also keys on pkg's database
+port's options file and of the `options.local` beside it, which make reads
+after it. A local or synth build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
 install or delete starts a new generation. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;

@@ -293,6 +293,44 @@ mod tests {
         assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
     }
 
+    /// make reads `options.local` after the options file (bsd.options.mk's
+    /// `.sinclude`), so adding, changing or removing one answers anew,
+    /// never from the entry cached without it.
+    #[test]
+    fn options_local_is_part_of_the_cache_key() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let tmp = fake_tree(&[(
+            "cat/a",
+            "OPTIONS_NAME=cat_a\nPKGNAME=a-1.0\n.sinclude \"${PORT_DBDIR}/cat_a/options.local\"\n",
+        )]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+        };
+        let roots = vec![PortKey::parse("cat/a").unwrap()];
+        let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
+        let moved = Moved::parse("");
+        let local = ctx.port_dbdir.join("cat_a/options.local");
+        let pkgname = |cache: &mut Cache| {
+            let files = OptionsFiles::new(&ctx.port_dbdir);
+            let r = scan(&roots, &ctx, &files, 1, cache, &moved, |_| {});
+            assert!(r.errors.is_empty(), "{:?}", r.errors);
+            (r.queried, r.ports.values().next().unwrap().pkgname.clone())
+        };
+        assert_eq!(pkgname(&mut cache), (1, "a-1.0".to_string()));
+        assert_eq!(pkgname(&mut cache), (0, "a-1.0".to_string()), "cached");
+
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "PKGNAME=a-2.0\n").unwrap();
+        assert_eq!(pkgname(&mut cache), (1, "a-2.0".to_string()), "added");
+        std::fs::write(&local, "PKGNAME=a-3.0\n").unwrap();
+        assert_eq!(pkgname(&mut cache), (1, "a-3.0".to_string()), "changed");
+        std::fs::remove_file(&local).unwrap();
+        assert_eq!(pkgname(&mut cache), (1, "a-1.0".to_string()), "removed");
+    }
+
     /// An options file that is there but cannot be read: make fails on it,
     /// and the port is reported with the file and the reason, never taken
     /// from a cache entry made while the file was missing. That entry, read
