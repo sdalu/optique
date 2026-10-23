@@ -147,6 +147,10 @@ attention, and never trip `scan`'s exit-status gate, whatever their
 status — poudriere will not build them, so their options cannot hold a
 build up. A dependency loop trips the gate unless every one of its
 members is blacklisted (see [Dependency loops](dependency-loops.md)).
+A blacklisted port's own dependencies are not walked, as poudriere
+gathers none for it, so a port reached only through one is left out of
+the closure. An `IGNORE`d port is still walked: its `IGNORE` may depend
+on the very options being configured.
 
 ## Synth
 

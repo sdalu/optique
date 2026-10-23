@@ -164,7 +164,7 @@ impl Settings {
 
 /// Compiled blacklist: patterns from every existing poudriere(8)
 /// blacklist layer for this jail/tree/set.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Blacklist {
     patterns: Vec<String>,
     pub sources: Vec<PathBuf>,

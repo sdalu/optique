@@ -1,6 +1,7 @@
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::cache::Cache;
+use crate::config::Blacklist;
 use crate::model::origin::PortKey;
 use crate::moved::Moved;
 use crate::optfiles::OptionsFiles;
@@ -22,7 +23,7 @@ pub struct Refresher {
     pub rx: Receiver<RefreshEvent>,
 }
 
-pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved) -> Refresher {
+pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved, blacklist: Blacklist) -> Refresher {
     let (req_tx, req_rx) = crossbeam_channel::unbounded::<Vec<PortKey>>();
     let (ev_tx, ev_rx) = crossbeam_channel::unbounded::<RefreshEvent>();
     std::thread::spawn(move || {
@@ -38,7 +39,7 @@ pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved) -> Refr
             // A store per scan: the staging dir changes between scans as the
             // user edits, and within one it spares flavors re-reading a file.
             let files = OptionsFiles::new(&ctx.port_dbdir);
-            let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, move |p| {
+            let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &blacklist, move |p| {
                 let _ = ev_progress
                     .send(RefreshEvent::Progress { done: p.done, discovered: p.discovered });
             });

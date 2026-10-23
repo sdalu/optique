@@ -54,6 +54,11 @@ The host's release leaks the same way: bsd.port.mk takes `OSREL` from
 derived from its version), plus poudriere's own cross-build lines when
 its arch is not the host's; being in the staged text, they key the cache.
 
+poudriere gathers no dependency of an IGNOREd port, blacklisted ones
+included; optique stops its walk only at blacklisted ones, and keeps
+walking through an IGNOREd port, on purpose, because its IGNORE can
+depend on the options the user is configuring.
+
 Rejected: re-querying only ports that come out IGNORE/BROKEN, which misses
 leaks into dependencies and defaults; running `make` inside poudriere's
 reference jail, which needs root and mounts and only exists during a build;

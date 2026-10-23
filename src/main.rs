@@ -731,7 +731,13 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         session.states.keys(),
     )?;
     let ctx = query_ctx(&scanned.settings, db.path().to_path_buf());
-    let refresher = query::refresher::spawn(ctx, scanned.jobs, scanned.cache, scanned.moved);
+    let refresher = query::refresher::spawn(
+        ctx,
+        scanned.jobs,
+        scanned.cache,
+        scanned.moved,
+        scanned.settings.blacklist.clone(),
+    );
     let blacklist = scanned.settings.blacklist;
     let overlays = scanned.settings.overlays;
     let files = scanned.files;
@@ -892,7 +898,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let t0 = Instant::now();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
-    let result = scanner::scan(&rs.roots, &ctx, &files, jobs, &mut cache, &moved, move |p| {
+    let result = scanner::scan(&rs.roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();

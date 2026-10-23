@@ -2356,6 +2356,7 @@ mod tests {
             1,
             crate::cache::Cache::disabled(),
             crate::moved::Moved::parse(""),
+            Default::default(),
         );
         build_app(session, files, db, refresher, Default::default(), Vec::new(), false)
     }
