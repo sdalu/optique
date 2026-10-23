@@ -314,3 +314,21 @@ fn options_local_without_an_options_file_is_read() {
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
 }
+
+/// make joins a line ending in `\` with the next before parsing it. The
+/// file sets AUDIO and, on a continued line, NAS: make has AUDIO and NAS
+/// on and nothing new; optique too, and the port is not stale.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_continued_line_is_read_as_make_reads_it() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    f.write_file("misc_cond", "OPTIONS_FILE_SET+=AUDIO \\\n\tNAS\nOPTIONS_FILE_UNSET+=DOCS SOX\n");
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["AUDIO", "NAS"]);
+    assert_eq!(f.make_v(origin, "NEW_OPTIONS"), Vec::<String>::new());
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
+    assert_eq!(port["status"], "ok", "{port}");
+}

@@ -53,14 +53,40 @@ fn assignment(line: &str) -> Option<(&str, Op, &str)> {
     Some((name.trim(), op, value))
 }
 
+/// The lines make parses, each with the number (from 1) of the first line
+/// it starts on: a line ending in an odd number of backslashes goes on
+/// over the next, the backslash, the newline and the next line's leading
+/// blanks becoming one space. Make joins them before it looks for a
+/// comment, so a comment ending in `\` swallows the next line too; an
+/// even number of backslashes ends the line and stays in it.
+fn logical_lines(text: &str) -> Vec<(usize, String)> {
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut open = false;
+    for (n, line) in text.lines().enumerate() {
+        let line = if open { line.trim_start_matches([' ', '\t']) } else { line };
+        let trailing = line.len() - line.trim_end_matches('\\').len();
+        let (body, more) = if trailing % 2 == 1 { (&line[..line.len() - 1], true) } else { (line, false) };
+        match out.last_mut() {
+            Some((_, joined)) if open => {
+                joined.push(' ');
+                joined.push_str(body);
+            }
+            _ => out.push((n + 1, body.to_string())),
+        }
+        open = more;
+    }
+    out
+}
+
 impl SavedOptionsFile {
     /// The file read as the makefile bsd.options.mk includes (line 341):
     /// a value is the whitespace-separated words after the operator, with
     /// or without spaces around it. `+=` appends to the variable; `=` and
     /// `:=` assign it afresh, as `OPTIONS_FILE_SET=X` resets the list; `?=`
     /// assigns only a variable no earlier line assigned; `!=` (a shell
-    /// command) is ignored and recorded in `shell`. Lines that assign
-    /// nothing optique reads are skipped.
+    /// command) is ignored and recorded in `shell`. A line ending in `\`
+    /// goes on over the next (`logical_lines`). Lines that assign nothing
+    /// optique reads are skipped.
     pub fn parse(text: &str) -> Self {
         let mut out = SavedOptionsFile::default();
         out.read(text, false);
@@ -83,7 +109,7 @@ impl SavedOptionsFile {
     /// takes nothing but the SET and UNSET lines.
     fn read(&mut self, text: &str, lists_only: bool) {
         let file = if lists_only { "options.local" } else { "options" };
-        for (n, line) in text.lines().enumerate() {
+        for (n, line) in logical_lines(text) {
             // A `#` starts a comment, at the head of a line or after a value.
             let line = line.split('#').next().unwrap_or_default().trim();
             let Some((name, op, value)) = assignment(line) else { continue };
@@ -103,7 +129,7 @@ impl SavedOptionsFile {
                 Op::IfUnset if first => false,
                 Op::IfUnset => continue,
                 Op::Shell => {
-                    self.shell.push((file, n + 1));
+                    self.shell.push((file, n));
                     continue;
                 }
             };
@@ -380,6 +406,26 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(v, [Some(false), Some(false), None, Some(true), None]);
         let settled: Vec<_> = ["A2", "B", "C", "E"].iter().map(|o| f.decides(o)).collect();
         assert_eq!(settled, [true, true, true, false]);
+    }
+
+    /// make joins a line ending in an odd number of backslashes with the
+    /// next before parsing it, as this host's make does: a value goes on
+    /// over a tab-indented line, a comment ending in `\` swallows the next
+    /// line, an empty line ends the run, and `\\` ends the line. A `!=` is
+    /// placed on the line it starts on.
+    #[test]
+    fn backslash_newline_goes_on_over_the_next_line() {
+        let f = SavedOptionsFile::parse(
+            "OPTIONS_FILE_SET+=A \\\n\tB\nOPTIONS_FILE_UNSET+=C # x \\\nOPTIONS_FILE_UNSET+=D\n\
+             OPTIONS_FILE_SET+=E\\\n   F\\\n\nOPTIONS_FILE_SET+=G\nOPTIONS_FILE_UNSET+=H\\\\\n\
+             OPTIONS_FILE_UNSET+=I\n_FILE_COMPLETE_OPTIONS_LIST!=echo \\\n J\n",
+        );
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(f.set, words(&["A", "B", "E", "F", "G"]));
+        assert_eq!(f.unset, words(&["C", "H\\\\", "I"]));
+        assert_eq!(f.shell, [("options", 11)]);
+        let lines = logical_lines("A \\\n\tB\nC\\\\\\\nD\n");
+        assert_eq!(lines, [(1, "A  B".to_string()), (3, "C\\\\ D".to_string())]);
     }
 
     #[test]

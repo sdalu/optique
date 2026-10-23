@@ -1499,6 +1499,9 @@ does not run, is ignored with a warning naming the file and line;
 reads it so, and writes it back the way
 .Nm make Cm config
 does.
+A line ending in a backslash goes on over the next, as
+.Xr make 1
+joins them, a comment included.
 An
 .Pa options.local
 beside the file is read after it, as
