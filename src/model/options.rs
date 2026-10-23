@@ -20,6 +20,131 @@ pub fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
 
+/// Whether `word` matches the make pattern `pat`, as bmake's `:M` and
+/// `:N` modifiers test it (Str_Match in bmake's str.c, ported as is): `*`
+/// any run of characters, `?` any one, `[...]` one of a list with `a-z`
+/// ranges either way round and `^` negating it, `\\` taking the next
+/// character literally. bsd.options.mk removes an UNSET entry with
+/// `${PORT_OPTIONS:N${opt}}` and every mention with `${NEW_OPTIONS:N${opt}}`,
+/// so `A*` takes out every option starting with A.
+pub fn str_match(word: &str, pat: &str) -> bool {
+    let (s, p) = (word.as_bytes(), pat.as_bytes());
+    // C strings: past the end reads as NUL.
+    let at = |b: &[u8], i: usize| b.get(i).copied().unwrap_or(0);
+    let mut asterisk = false;
+    let (mut fixed_s, mut fixed_p) = (0usize, 0usize);
+    'fixed: loop {
+        let (mut si, mut pi) = (fixed_s, fixed_p);
+        let mut no_match = false;
+        while at(p, pi) != 0 && at(p, pi) != b'*' {
+            if at(s, si) == 0 {
+                return false;
+            }
+            let c = at(p, pi);
+            if c == b'?' {
+                si += 1;
+                pi += 1;
+                continue;
+            }
+            if c == b'[' {
+                let neg = at(p, pi + 1) == b'^';
+                pi += if neg { 2 } else { 1 };
+                let sc = at(s, si);
+                // Whether the list ends in end_of_char_list (else no_match).
+                let listed = loop {
+                    let pc = at(p, pi);
+                    if pc == b']' || pc == 0 {
+                        break neg;
+                    }
+                    if pc == sc {
+                        break true;
+                    }
+                    if at(p, pi + 1) == b'-' && at(p, pi + 2) == 0 {
+                        return neg;
+                    }
+                    if at(p, pi + 1) == b'-' {
+                        let (e1, e2) = (pc, at(p, pi + 2));
+                        if (e1 <= sc && sc <= e2) || (e2 <= sc && sc <= e1) {
+                            break true;
+                        }
+                        pi += 2;
+                    }
+                    pi += 1;
+                };
+                if !listed || (neg && at(p, pi) != b']' && at(p, pi) != 0) {
+                    no_match = true;
+                    break;
+                }
+                while at(p, pi) != b']' && at(p, pi) != 0 {
+                    pi += 1;
+                }
+                if at(p, pi) == 0 {
+                    pi -= 1;
+                }
+                si += 1;
+                pi += 1;
+                continue;
+            }
+            let mut pc = c;
+            if c == b'\\' {
+                pi += 1;
+                pc = at(p, pi);
+            }
+            if pc != at(s, si) {
+                if asterisk && si == fixed_s {
+                    while at(s, si) != 0 && at(s, si) != pc {
+                        si += 1;
+                    }
+                    fixed_s = si;
+                    continue 'fixed;
+                }
+                no_match = true;
+                break;
+            }
+            si += 1;
+            pi += 1;
+        }
+        if no_match {
+            if !asterisk {
+                return false;
+            }
+            fixed_s += 1;
+            continue 'fixed;
+        }
+        if at(p, pi) == b'*' {
+            asterisk = true;
+            while at(p, pi) == b'*' {
+                pi += 1;
+            }
+            if at(p, pi) == 0 {
+                return true;
+            }
+            fixed_s = si;
+            fixed_p = pi;
+            continue 'fixed;
+        }
+        if asterisk && at(s, si) != 0 {
+            fixed_s += s.len() - si;
+            continue 'fixed;
+        }
+        return at(s, si) == 0;
+    }
+}
+
+/// Whether an UNSET entry of `list` takes `opt` out: any entry matching it
+/// as a make pattern (`${PORT_OPTIONS:N${entry}}`).
+pub fn unsets(list: &BTreeSet<String>, opt: &str) -> bool {
+    list.iter().any(|entry| str_match(opt, entry))
+}
+
+/// Whether an entry of `list` takes `opt` out of NEW_OPTIONS, SET and
+/// UNSET alike (`${NEW_OPTIONS:N${entry}}`): the same pattern test. A SET
+/// entry does so only when it matches some option of the port, which one
+/// matching `opt`, an option of the port, does.
+pub fn mentions(list: &BTreeSet<String>, opt: &str) -> bool {
+    unsets(list, opt)
+}
+
 impl GroupKind {
     pub fn label(self) -> &'static str {
         match self {
@@ -144,12 +269,21 @@ impl PortOptions {
     }
 
     /// Whether make.conf names the option, globally or for this port,
-    /// FORCE knobs aside.
+    /// FORCE knobs aside: whether one of those lists takes it out of
+    /// NEW_OPTIONS, an entry naming it or matching it as a pattern.
     pub fn mc_mentions(&self, opt: &str) -> bool {
-        self.mc_set.contains(opt)
-            || self.mc_unset.contains(opt)
-            || self.port_set.contains(opt)
-            || self.port_unset.contains(opt)
+        [&self.mc_set, &self.mc_unset, &self.port_set, &self.port_unset]
+            .into_iter()
+            .any(|list| mentions(list, opt))
+    }
+
+    /// Whether any make.conf layer, FORCE knobs included, takes the option
+    /// out of NEW_OPTIONS: make counts it as decided.
+    pub fn mc_decides(&self, opt: &str) -> bool {
+        self.mc_mentions(opt)
+            || [&self.force_set, &self.force_unset, &self.port_force_set, &self.port_force_unset]
+                .into_iter()
+                .any(|list| mentions(list, opt))
     }
 
     /// Whether toggling this option in the options file can have any effect.
@@ -159,7 +293,9 @@ impl PortOptions {
 
     /// The value a *_FORCE knob pins the option to, None when none does.
     /// The four knobs are applied in the framework's order, last one wins:
-    /// global SET, global UNSET, per-port SET, per-port UNSET.
+    /// global SET, global UNSET, per-port SET, per-port UNSET. A SET entry
+    /// adds itself, word for word, so only one naming the option turns it
+    /// on; an UNSET entry turns off every option it matches as a pattern.
     pub fn forced_value(&self, opt: &str) -> Option<bool> {
         let mut value = None;
         for (v, list) in [
@@ -168,7 +304,7 @@ impl PortOptions {
             (true, &self.port_force_set),
             (false, &self.port_force_unset),
         ] {
-            if list.contains(opt) {
+            if layer_hits(v, list, opt) {
                 value = Some(v);
             }
         }
@@ -178,7 +314,9 @@ impl PortOptions {
     /// What make.conf says of the option, whatever decides its value now:
     /// the value of the last layer naming it in the framework's order
     /// (global SET, UNSET, per-port SET, UNSET, then the four *_FORCE knobs;
-    /// later wins), with that layer. None when no layer names it.
+    /// later wins), with that layer. None when no layer names it. A SET
+    /// entry names the option word for word, an UNSET one as a pattern, as
+    /// `forced_value` reads them.
     pub fn mc_value(&self, opt: &str) -> Option<(bool, McLayer)> {
         let mut value = None;
         for (v, layer, list) in [
@@ -191,7 +329,7 @@ impl PortOptions {
             (true, McLayer::Force, &self.port_force_set),
             (false, McLayer::Force, &self.port_force_unset),
         ] {
-            if list.contains(opt) {
+            if layer_hits(v, list, opt) {
                 value = Some((v, layer));
             }
         }
@@ -205,12 +343,80 @@ impl PortOptions {
             Provenance::Forced
         } else if file_state.is_some() {
             Provenance::File
-        } else if self.port_set.contains(opt) || self.port_unset.contains(opt) {
+        } else if layer_hits(true, &self.port_set, opt) || unsets(&self.port_unset, opt) {
             Provenance::MakeConfPort
-        } else if self.mc_set.contains(opt) || self.mc_unset.contains(opt) {
+        } else if layer_hits(true, &self.mc_set, opt) || unsets(&self.mc_unset, opt) {
             Provenance::MakeConfGlobal
         } else {
             Provenance::Default
         }
+    }
+}
+
+/// Whether a layer's list sets (`adds`) or unsets the option: a SET entry
+/// adds itself to PORT_OPTIONS word for word, an UNSET entry takes out
+/// every option it matches.
+fn layer_hits(adds: bool, list: &BTreeSet<String>, opt: &str) -> bool {
+    if adds { list.contains(opt) } else { unsets(list, opt) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What bmake's :M answers (checked against make(1) 20251111), word by
+    /// word: `*`, `?`, lists, negated lists, ranges either way, escapes,
+    /// and a range swallowing the list's end.
+    #[test]
+    fn str_match_is_bmakes() {
+        let words = [
+            "A", "A2", "B", "C", "b", "x", "xy", "abc", "abcd", "ab*", "abx", "aXbYc", "a-b", "]x", "^", "ac",
+        ];
+        let cases: [(&str, &[&str]); 17] = [
+            ("A*", &["A", "A2"]),
+            ("[AB]", &["A", "B"]),
+            ("[^AB]", &["C", "b", "x", "^"]),
+            ("[a-c]", &["b"]),
+            ("[c-a]", &["b"]),
+            ("?", &["A", "B", "C", "b", "x", "^"]),
+            ("*c", &["abc", "aXbYc", "ac"]),
+            ("a*c", &["abc", "aXbYc", "ac"]),
+            ("ab\\*", &["ab*"]),
+            ("a*b*c", &["abc", "aXbYc"]),
+            ("[!A]", &["A"]),
+            ("[a-]", &["^"]),
+            ("[]x]", &[]),
+            ("*a*c*", &["abc", "abcd", "aXbYc", "ac"]),
+            ("a?c", &["abc"]),
+            ("[a-c]?", &["ac"]),
+            ("A", &["A"]),
+        ];
+        for (pat, want) in cases {
+            let got: Vec<&str> = words.iter().copied().filter(|w| str_match(w, pat)).collect();
+            assert_eq!(got, want, "{pat}");
+        }
+        assert!(str_match("", "*") && str_match("", "") && !str_match("a", ""));
+    }
+
+    /// bsd.options.mk:321-394: an UNSET entry takes out every option it
+    /// matches, in make.conf and FORCE alike; a SET entry adds itself word
+    /// for word, but takes what it matches out of NEW_OPTIONS.
+    #[test]
+    fn unset_entries_are_patterns() {
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let o = PortOptions {
+            complete: ["A", "A2", "B", "C"].iter().map(|s| s.to_string()).collect(),
+            mc_unset: words(&["A*"]),
+            port_set: words(&["C*"]),
+            force_unset: words(&["[B]"]),
+            ..Default::default()
+        };
+        let mentioned: Vec<bool> = ["A", "A2", "B", "C"].iter().map(|x| o.mc_mentions(x)).collect();
+        assert_eq!(mentioned, [true, true, false, true]);
+        assert!(o.mc_decides("B"));
+        assert_eq!(o.mc_value("A2"), Some((false, McLayer::Global)));
+        assert_eq!(o.mc_value("C"), None, "C* turns no C on");
+        assert_eq!(o.forced_value("B"), Some(false));
+        assert!(!o.is_forced("A"));
     }
 }

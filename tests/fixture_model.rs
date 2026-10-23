@@ -88,3 +88,23 @@ fn options_local_is_read_after_the_file() {
     assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
 }
+
+/// bsd.options.mk:321: an UNSET entry is a make pattern. make.conf's
+/// `OPTIONS_UNSET=A*` takes A and A2 out of PORT_OPTIONS and NEW_OPTIONS:
+/// optique reports both off by make.conf and leaves undecided what make
+/// still counts new.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn make_conf_unset_entries_are_patterns() {
+    let f = Fixture::new();
+    std::fs::write(&f.make_conf, "OPTIONS_UNSET=A*\n").unwrap();
+    assert_eq!(f.make_v("misc/model-globs", "PORT_OPTIONS"), ["B"]);
+    let new = f.make_v("misc/model-globs", "NEW_OPTIONS");
+    assert_eq!(new, ["B", "C"]);
+    let port = f.scan_port(&["misc/model-globs"], "misc/model-globs");
+    assert_eq!(port["undecided"], serde_json::json!(new), "{port}");
+    for opt in ["A", "A2"] {
+        let o = common::option(&port, opt);
+        assert_eq!(o["makeconf"], serde_json::json!({"value": false, "scope": "global"}), "{o}");
+    }
+}

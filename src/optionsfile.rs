@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use crate::model::options::{mentions, unsets};
+
 /// Parsed form of a `${PORT_DBDIR}/<OPTIONS_NAME>/options` file as written
 /// by `make config`, or by hand.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -87,8 +89,12 @@ impl SavedOptionsFile {
     /// `OPTIONS_FILE_SET`, then `OPTIONS_FILE_UNSET`, so UNSET wins; an option
     /// with neither line (only in the complete list, or absent) has none,
     /// and make leaves it at its default.
+    ///
+    /// An UNSET entry takes out every option it matches as a make pattern
+    /// (`${PORT_OPTIONS:N${opt}}`); a SET entry goes in word for word, so
+    /// only one naming the option turns it on.
     pub fn value(&self, opt: &str) -> Option<bool> {
-        if self.unset.contains(opt) {
+        if unsets(&self.unset, opt) {
             Some(false)
         } else if self.set.contains(opt) {
             Some(true)
@@ -118,8 +124,12 @@ impl SavedOptionsFile {
     /// is settled, listed or not. Apply rewrites a file whose list differs
     /// all the same (`apply::up_to_date`): that is the rewrite rule, not
     /// newness.
+    ///
+    /// Every entry, SET or UNSET, takes what it matches as a make pattern
+    /// out of NEW_OPTIONS: `OPTIONS_FILE_SET+=A*` settles A2, though it
+    /// turns no A2 on.
     pub fn decides(&self, opt: &str) -> bool {
-        self.value(opt).is_some()
+        mentions(&self.set, opt) || mentions(&self.unset, opt)
     }
 }
 
@@ -228,6 +238,18 @@ OPTIONS_FILE_UNSET+=FLITE
         let names: Vec<String> =
             SavedOptionsFile::local_names("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n").into_iter().collect();
         assert_eq!(names, ["A", "B"]);
+    }
+
+    /// bsd.options.mk:354-363: an UNSET entry takes out every option it
+    /// matches as a pattern; a SET entry adds itself word for word, yet
+    /// settles what it matches.
+    #[test]
+    fn file_entries_are_make_patterns() {
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=[BC] D\n");
+        let v: Vec<_> = ["A", "A2", "B", "D", "E"].iter().map(|o| f.value(o)).collect();
+        assert_eq!(v, [Some(false), Some(false), None, Some(true), None]);
+        let settled: Vec<_> = ["A2", "B", "C", "E"].iter().map(|o| f.decides(o)).collect();
+        assert_eq!(settled, [true, true, true, false]);
     }
 
     #[test]

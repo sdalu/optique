@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::apply;
-use crate::model::options::{GroupKind, McLayer, PortOptions};
+use crate::model::options::{str_match, GroupKind, McLayer, PortOptions};
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
@@ -471,7 +471,8 @@ impl Session {
         };
         Some((
             cur.iter().filter(|o| !saved.decides(o)).cloned().collect(),
-            mentioned.into_iter().filter(|o| !cur.iter().any(|c| c == o)).map(String::from).collect(),
+            // An entry that is a pattern is obsolete once it matches none.
+            mentioned.into_iter().filter(|o| !cur.iter().any(|c| str_match(c, o))).map(String::from).collect(),
         ))
     }
 
@@ -792,19 +793,17 @@ pub fn undecided_options(
     if minimal {
         return Vec::new();
     }
-    // Recorded means a SET or UNSET line, as `apply::sync_enabled_set` reads
-    // the file: an option only in `_FILE_COMPLETE_OPTIONS_LIST` is left by
-    // make at its default, which nobody decided.
-    let known: BTreeSet<&str> =
-        saved.into_iter().flat_map(|s| s.recorded()).map(String::as_str).collect();
+    // Recorded means a SET or UNSET line names it (SavedOptionsFile::decides,
+    // patterns included): an option only in `_FILE_COMPLETE_OPTIONS_LIST`
+    // is left by make at its default, which nobody decided.
+    let known = |opt: &str| saved.is_some_and(|s| s.decides(opt));
     let o = &info.options;
     // IMPLIES runs after FORCE (bsd.options.mk:411): what a forced-on option
     // implies is on whatever the file says.
     let forced_on: BTreeSet<String> =
         o.complete.iter().filter(|opt| o.forced_value(opt) == Some(true)).cloned().collect();
     let forced_implied = close_implies(info, forced_on);
-    let mc_decided =
-        |opt: &str| o.mc_mentions(opt) || o.is_forced(opt) || forced_implied.contains(opt);
+    let mc_decided = |opt: &str| o.mc_decides(opt) || forced_implied.contains(opt);
     // Selected means make.conf ENDS UP enabling it, not merely that some layer
     // names it: a later layer can undo an earlier one, and then the member
     // actually in force was picked by the port default — nobody's decision.
@@ -821,7 +820,7 @@ pub fn undecided_options(
         .collect();
     o.complete
         .iter()
-        .filter(|opt| !known.contains(opt.as_str()))
+        .filter(|opt| !known(opt))
         .filter(|opt| !mc_decided(opt) && !group_decided.contains(opt.as_str()))
         .cloned()
         .collect()
@@ -844,7 +843,7 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// and OPTIONS_OVERRIDE.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
-    let complete: BTreeSet<&str> = o.complete.iter().map(String::as_str).collect();
+    let complete = &o.complete;
     let mut set = port_defaults(o);
     let empty = BTreeSet::new();
     let (file_set, file_unset) = file.map_or((&empty, &empty), |f| (&f.set, &f.unset));
@@ -866,13 +865,16 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
         (true, &o.port_force_set),
         (false, &o.port_force_unset),
     ] {
-        for opt in list.iter() {
+        // A SET entry goes in word for word when it matches an option of
+        // the port (`COMPLETE_OPTIONS_LIST:M${opt}`); an UNSET entry takes
+        // out every option it matches (`PORT_OPTIONS:N${opt}`).
+        for entry in list.iter() {
             if adds {
-                if complete.contains(opt.as_str()) {
-                    set.insert(opt.clone());
+                if complete.iter().any(|c| str_match(c, entry)) {
+                    set.insert(entry.clone());
                 }
             } else {
-                set.remove(opt);
+                set.retain(|o| !str_match(o, entry));
             }
         }
     }
@@ -1343,6 +1345,23 @@ mod tests {
             .map(|o| o.name)
             .collect();
         assert_eq!(new, ["MQTT", "POP3"]);
+    }
+
+    /// bsd.options.mk:321: make.conf's `OPTIONS_UNSET=A*` takes A and A2
+    /// out of PORT_OPTIONS and NEW_OPTIONS alike: both are off and decided,
+    /// B and C stay undecided. `OPTIONS_SET=C*` adds the word `C*`, no C,
+    /// yet decides C.
+    #[test]
+    fn make_conf_entries_are_patterns() {
+        let (mut ports, key) = mk_port(&["A", "A2", "B", "C"], &["A", "A2", "B"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.mc_unset.insert("A*".into());
+        let info = &ports[&key];
+        assert_eq!(nofile_effective(info), set(&["B"]));
+        assert_eq!(undecided_options(info, None, false), ["B", "C"]);
+        ports.get_mut(&key).unwrap().options.mc_set.insert("C*".into());
+        let info = &ports[&key];
+        assert_eq!(nofile_effective(info), set(&["B", "C*"]));
+        assert_eq!(undecided_options(info, None, false), ["B"]);
     }
 
     #[test]

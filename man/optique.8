@@ -1848,6 +1848,22 @@ knobs, which is what the
 and
 .Ql FORCED
 badges report.
+As in
+.Pa bsd.options.mk ,
+an entry of an UNSET list, in
+.Pa make.conf
+or an options file, is a
+.Xr make 1
+pattern
+.Po
+.Ql * ,
+.Ql \&? ,
+.Ql [...]
+.Pc
+turning off every option it matches, so
+.Ql OPTIONS_UNSET=A*
+turns off A and A2; a SET entry turns on only the option it names, though
+every entry, SET or UNSET, counts as a decision for each option it matches.
 .Pp
 The layers are concatenated into one staged file, as poudriere concatenates
 them into the jail's

@@ -71,6 +71,11 @@ including `DEFAULT_VERSIONS` (which can change a port's default
 options, its option list and its dependencies), `OPTIONS_SET`,
 `OPTIONS_UNSET`, the per-port `<PORT>_SET`/`<PORT>_UNSET`, and `*_FORCE`
 knobs.
+As in `bsd.options.mk`, an UNSET entry, in make.conf or an options file,
+is a make pattern (`*`, `?`, `[...]`) that turns off every option it
+matches: `OPTIONS_UNSET=A*` turns off A and A2. A SET entry turns on only
+the option it names, though any entry counts as a decision for every
+option it matches.
 
 The layers are concatenated into one staged file, as poudriere itself
 concatenates them into the jail's make.conf, so an `.include` with a
