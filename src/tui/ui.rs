@@ -960,15 +960,17 @@ fn option_line(
     // A description with only a few columns left would show as a word
     // fragment: it goes instead — the panel under the rows gives it in
     // full, wrapped — and one too long ends in `…` at a word, or goes when
-    // not even its first word fits.
+    // not even its first two words fit: `Install…` says nothing the name
+    // did not.
     let desc = opts.defs.get(opt).map_or("", |d| d.desc.as_str());
     let room = avail.saturating_sub(line.width() + 2);
     if !desc.is_empty() && room >= DESC_MIN_WIDTH {
         let mut text = Line::from(desc.to_string());
         let cut = ellipsize(&mut text, room);
         let kept = text.spans.first().map_or("", |s| s.content.as_ref()).to_string();
-        // A cut that kept only part of the first word drops the description.
-        let whole = !cut || desc[kept.len()..].starts_with(' ');
+        // A cut that kept only part of a word, or a single word, drops the
+        // description.
+        let whole = !cut || (desc[kept.len()..].starts_with(' ') && kept.trim().contains(' '));
         if whole && !kept.is_empty() {
             let shown = if cut { format!("  {kept}…") } else { format!("  {kept}") };
             line.spans.push(Span::styled(shown, Style::default().fg(Color::DarkGray)));

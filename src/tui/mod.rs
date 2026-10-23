@@ -2244,6 +2244,31 @@ mod tests {
 
     /// An option row keeps every column before its description: on a narrow
     /// pane the last one has its own text cut, never a `…` after a whole one.
+    /// A description cut down to its first word goes: `Install…` says
+    /// nothing the option's name did not. Two words or more stay.
+    #[test]
+    fn a_cut_description_keeps_two_words_or_goes() {
+        use crate::model::options::OptionDef;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["DOCS".into()];
+        info.options.defs.insert(
+            "DOCS".into(),
+            OptionDef { desc: "Installation documentation and examples".into(), ..Default::default() },
+        );
+        app.rebuild_editor();
+        let mut two = false;
+        for width in 60..=140 {
+            let shown = screen_at(&mut app, width, 24);
+            let row = shown.lines().find(|l| l.contains("[ ] DOCS")).unwrap_or_else(|| panic!("{shown}"));
+            assert!(!row.contains("Installation…"), "width {width}: {row}");
+            two |= row.contains("Installation documentation…");
+        }
+        assert!(two, "two words shown at some width");
+    }
+
     #[test]
     fn a_narrow_row_keeps_its_columns_and_cuts_the_last() {
         use crate::model::options::OptionDef;
