@@ -1072,13 +1072,18 @@ fn option_line(
     // global knob, bright green for the per-port one, red bold for a *_FORCE
     // knob the options file cannot override. Blank only when no make.conf
     // layer names the option.
-    let (mc, mc_style) = match opts.mc_value(opt) {
-        Some((v, McLayer::Force | McLayer::With)) => {
-            (on_off(v), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-        }
-        Some((v, McLayer::Port)) => (on_off(v), Style::default().fg(Color::LightGreen)),
-        Some((v, McLayer::Global)) => (on_off(v), Style::default().fg(Color::Green)),
-        None => ("", Style::default()),
+    // An OPTIONS_OVERRIDE decides the option as a FORCE knob would, below
+    // FORCE and WITH themselves (bsd.options.mk:300-304): locked, red.
+    let locked = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+    let overridden = opts.r#override.as_ref().map(|o| o.contains(opt));
+    let (mc, mc_style) = match (opts.mc_value(opt), overridden) {
+        (Some((v, McLayer::Force | McLayer::With)), _) => (on_off(v), locked),
+        (_, Some(v)) => (on_off(v), locked),
+        (value, None) => match value {
+            Some((v, McLayer::Port)) => (on_off(v), Style::default().fg(Color::LightGreen)),
+            Some((v, McLayer::Global)) => (on_off(v), Style::default().fg(Color::Green)),
+            _ => ("", Style::default()),
+        },
     };
     spans.push(Span::styled(format!(" {mc:<3}"), mc_style));
 
@@ -1703,7 +1708,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                 (
                     "on | off",
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                    "*_FORCE knob — locked, the file cannot override",
+                    "*_FORCE, WITH or OPTIONS_OVERRIDE — locked, the file cannot override",
                 ),
                 (
                     "implied by X",
@@ -2042,6 +2047,7 @@ fn provenance_label(p: Provenance) -> &'static str {
         Provenance::MakeConfGlobal => "make.conf (mc)",
         Provenance::MakeConfPort => "make.conf (mc:port)",
         Provenance::File => "options file",
+        Provenance::Override => "make.conf OPTIONS_OVERRIDE (locked)",
         Provenance::Forced => "make.conf *_FORCE (locked)",
     }
 }

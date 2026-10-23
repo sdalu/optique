@@ -253,6 +253,8 @@ pub enum Provenance {
     MakeConfPort,
     File,
     Forced,
+    /// make.conf's OPTIONS_OVERRIDE: the file is not read at all.
+    Override,
 }
 
 /// The make.conf layer that names an option last: the global
@@ -370,6 +372,9 @@ impl PortOptions {
     pub fn provenance(&self, opt: &str, file_state: Option<bool>) -> Provenance {
         if self.is_forced(opt) {
             Provenance::Forced
+        } else if self.r#override.is_some() {
+            // bsd.options.mk:300-304: nothing but FORCE and WITH comes after it.
+            Provenance::Override
         } else if file_state.is_some() {
             Provenance::File
         } else if layer_hits(true, &self.port_set, opt) || unsets(&self.port_unset, opt) {

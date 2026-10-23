@@ -6147,6 +6147,24 @@ mod tests {
         (text.trim().to_string(), cell.style())
     }
 
+    /// Under make.conf's OPTIONS_OVERRIDE every option shows locked, in the
+    /// FORCE knob's red: on where the override names it, off elsewhere.
+    #[test]
+    fn an_overridden_port_shows_every_option_locked() {
+        use ratatui::style::{Color, Modifier};
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A", "B"], &["B"]);
+        let mut app = alpha_app(tmp.path(), &["A", "B"]);
+        alpha_mut(&mut app).options.r#override = Some(["A".to_string()].into());
+        for (opt, want) in [("A", "on"), ("B", "off")] {
+            let (text, style) = mc_column(&mut app, opt);
+            assert_eq!(text, want, "{opt}");
+            assert!(style.fg == Some(Color::Red) && style.add_modifier.contains(Modifier::BOLD), "{opt}: {style:?}");
+        }
+        let info = info_of(&app, "cat/alpha");
+        assert_eq!(info.options.provenance("B", Some(true)), crate::model::options::Provenance::Override);
+    }
+
     /// The make.conf column says what make.conf says whenever a layer names
     /// the option, the options file deciding or not: the last layer wins,
     /// in its colour; blank only when no layer names it.

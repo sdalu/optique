@@ -217,7 +217,9 @@ framework's order (the global knob, then the per-port one, then the
 the option and otherwise coloured by that layer — green for the
 global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
 `${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob or a
-make.conf `WITH`/`WITHOUT`, which also locks the toggle; then `implied by X` when an `IMPLIES` chain locked the
+make.conf `WITH`/`WITHOUT`, which also locks the toggle — and, under
+make.conf's `OPTIONS_OVERRIDE`, red bold for every option, on where the
+override names it; then `implied by X` when an `IMPLIES` chain locked the
 option on, and a `⚠broken`/`⚠ignored` badge on an option whose enabling
 marks the port `BROKEN` or `IGNORE` (`<OPT>_BROKEN`/`<OPT>_IGNORE`). An
 option the port no longer has
