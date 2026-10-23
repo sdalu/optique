@@ -154,6 +154,12 @@ blacklist
 <jail>-<tree>-<set>-blacklist
 ```
 
+Under `-j`, when this host's kernel cannot run the jail's architecture
+natively (`kern.supported_archs`, an armv6 jail excepted on an
+armv7-capable kernel) and poudriere would therefore build it under
+qemu, the `qemu-blacklist` layer is loaded last, as poudriere always
+loads it then, whatever poudriere.d itself says.
+
 Each line holds one or more whitespace-separated port origins, and `#`
 starts a comment running to the end of the line. There are no globs —
 entries are matched literally, exactly as poudriere matches them: a

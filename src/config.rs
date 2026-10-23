@@ -205,19 +205,28 @@ pub struct Blacklist {
 }
 
 impl Blacklist {
-    /// Read every existing layer, in poudriere(8) order. Unlike the options
-    /// dir (first match wins) all files contribute entries. Each line has
-    /// its comment (`#` to end) stripped and is then split on whitespace,
-    /// one entry per word — a line may hold several origins
-    /// (`load_blacklist` in common.sh).
-    pub fn load(
+    /// As [`Blacklist::load_emulating`] with `emulating` false — every
+    /// production call site now knows whether -j's jail is emulated, so
+    /// this convenience is a test-only shorthand for the common case.
+    #[cfg(test)]
+    pub(crate) fn load(poudriere_d: &Path, jail: Option<&str>, tree: &str, set: Option<&str>) -> Self {
+        Self::load_emulating(poudriere_d, jail, tree, set, false)
+    }
+
+    /// As [`Blacklist::load`], also loading the `qemu-blacklist` layer last
+    /// when `emulating` (poudriere would run this -j jail under qemu):
+    /// `load_blacklist` in common.sh (~4248-4285) appends `qemu` to its own
+    /// list of names after every jail/tree/set combination, right before
+    /// reading them all in order, so it is always loaded last, if at all.
+    pub fn load_emulating(
         poudriere_d: &Path,
         jail: Option<&str>,
         tree: &str,
         set: Option<&str>,
+        emulating: bool,
     ) -> Self {
         let mut bl = Blacklist::default();
-        for name in blacklist_layers(jail, tree, set) {
+        for name in blacklist_layers(jail, tree, set, emulating) {
             let path = poudriere_d.join(&name);
             let Ok(text) = fs::read_to_string(&path) else { continue };
             for line in text.lines() {
@@ -283,10 +292,13 @@ fn layer_stems(jail: Option<&str>, tree: Option<&str>, set: Option<&str>) -> Vec
 ///
 ///   blacklist, <set>-blacklist, <tree>-blacklist, <jail>-blacklist,
 ///   <tree>-<set>-blacklist, <jail>-<tree>-blacklist, <jail>-<set>-blacklist,
-///   <jail>-<tree>-<set>-blacklist
-fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<String> {
+///   <jail>-<tree>-<set>-blacklist, [qemu-blacklist, only when `emulating`]
+fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>, emulating: bool) -> Vec<String> {
     let mut v = vec!["blacklist".to_string()];
     v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-blacklist")));
+    if emulating {
+        v.push("qemu-blacklist".to_string());
+    }
     v
 }
 
@@ -344,7 +356,11 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     let (ports, db) = if local { make_defaults() } else { (None, None) };
     // make's own default, which the environment may move as for any make.
     let make_conf = env_path_or("__MAKE_CONF", "/etc/make.conf");
-    let arch = if !local && req.jail.is_some() { host_arch() } else { Default::default() };
+    let (arch, supported_archs) = if !local && req.jail.is_some() {
+        (host_arch(), supported_archs())
+    } else {
+        Default::default()
+    };
     let host = HostPaths {
         poudriere_conf: Path::new(POUDRIERE_CONF),
         poudriere_d,
@@ -356,25 +372,37 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         pkg_db: &pkg_db,
         env_overlays: &env_overlays(),
         arch: &arch,
+        supported_archs: &supported_archs,
     };
     resolve_host(&host, req, staging_dir)
+}
+
+/// Run `cmd`, trimmed stdout on success, empty on any failure.
+fn run_capture(cmd: &str, args: &[&str]) -> String {
+    std::process::Command::new(cmd)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default()
 }
 
 /// This host's architecture, as poudriere's `get_host_arch` writes it
 /// (`uname -m`.`uname -p`, just the one when both agree).
 fn host_arch() -> String {
-    let run = |cmd: &str, args: &[&str]| {
-        std::process::Command::new(cmd)
-            .args(args)
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
-    };
-    let (m, p) = (run("uname", &["-m"]), run("uname", &["-p"]));
+    let (m, p) = (run_capture("uname", &["-m"]), run_capture("uname", &["-p"]));
     if m == p { p } else { format!("{m}.{p}") }
+}
+
+/// The archs this host's kernel can run natively, as poudriere's
+/// `need_emulation` reads them (common.sh:3552-3573): `kern.supported_archs`,
+/// falling back to `uname -m` where the sysctl does not answer, as on
+/// DragonFly.
+fn supported_archs() -> String {
+    let s = run_capture("sysctl", &["-n", "kern.supported_archs"]);
+    if s.is_empty() { run_capture("uname", &["-m"]) } else { s }
 }
 
 /// `OVERLAYS` from the environment, each made absolute against optique's
@@ -433,6 +461,12 @@ struct HostPaths<'a> {
     /// against a jail's own arch to decide the cross-build lines; asked
     /// only when -j names a jail.
     arch: &'a str,
+    /// The archs this host's kernel can run natively (`kern.supported_archs`,
+    /// poudriere's `need_emulation`): whether -j's jail is run under qemu,
+    /// loading the `qemu-blacklist` layer. Asked only when -j names a jail,
+    /// like `arch`, but unlike it never bears on the cross-build lines
+    /// (`jail_system`'s own doc comment says why).
+    supported_archs: &'a str,
 }
 
 /// A poudriere build when poudriere.d exists and -l was not given, a local
@@ -696,7 +730,8 @@ fn resolve_poudriere(
         staging_dir,
     )?;
 
-    let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
+    let emulating = jail.is_some_and(|j| jail_emulating(poudriere_d, j, host.supported_archs));
+    let blacklist = Blacklist::load_emulating(poudriere_d, jail, tree_name, set, emulating);
 
     let default_all = flavor_default_all(host.poudriere_conf, poudriere_d, jail, tree, set);
     if default_all {
@@ -796,6 +831,32 @@ fn freebsd_version(param_h: &Path) -> Option<String> {
 /// jail's whenever it differs from the host's, cross-buildable or not.
 fn machine_arch(arch: &str) -> &str {
     arch.split_once('.').map_or(arch, |(_, a)| a)
+}
+
+/// Does poudriere run a jail whose poudriere `arch` string is `arch` under
+/// qemu on a host whose kernel natively runs `supported_archs`
+/// (`need_emulation` in common.sh:3552-3573)? Only the MACHINE_ARCH half is
+/// asked, as there (`${wanted_arch#*.}`); an armv6 jail counts as native
+/// when the kernel lists armv7 too (it runs armv6 code), matching
+/// `need_emulation`'s own `grep -qw "armv[67]"`.
+fn need_emulation(arch: &str, supported_archs: &str) -> bool {
+    let target = machine_arch(arch);
+    !supported_archs
+        .split_whitespace()
+        .any(|a| a == target || (target == "armv6" && a == "armv7"))
+}
+
+/// Whether poudriere would run jail `name` under qemu
+/// (`check_emulation`/`need_emulation`, common.sh:3531-3573, called from
+/// `jail_start` at common.sh:3992, well before `load_blacklist` reads
+/// `QEMU_EMULATING` at common.sh:4264): read the same `arch` file
+/// `jail_system` does; a jail poudriere.d holds no arch for is never
+/// emulated here either.
+fn jail_emulating(poudriere_d: &Path, name: &str, supported_archs: &str) -> bool {
+    let arch = fs::read_to_string(poudriere_d.join("jails").join(name).join("arch"))
+        .ok()
+        .map(|s| s.trim().to_string());
+    arch.is_some_and(|arch| need_emulation(&arch, supported_archs))
 }
 
 /// A directory is a usable ports tree when it carries the ports framework.
@@ -1409,6 +1470,7 @@ mod tests {
             pkg_db: Path::new("/nonexistent/local.sqlite"),
             env_overlays: &[],
             arch: "amd64",
+            supported_archs: "amd64 i386",
         }
     }
 
@@ -2541,6 +2603,41 @@ not a key value line
         PortKey::new(origin, Some(fl.to_string()))
     }
 
+    /// Under `-j`, poudriere always loads `qemu-blacklist` too when it
+    /// would run the jail under qemu (`load_blacklist`, common.sh
+    /// ~4248-4285: `if [ ${QEMU_EMULATING} -eq 1 ]; then bl="${bl} qemu"`) —
+    /// a check this host's `kern.supported_archs` answers
+    /// (`check_emulation`/`need_emulation`, common.sh:3531-3573), never
+    /// poudriere.d's own setting.
+    #[test]
+    fn qemu_blacklist_loads_only_when_the_jail_is_emulated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let req = Request { jail: Some("j"), ..Request::default() };
+        let host = HostPaths {
+            arch: "amd64",
+            supported_archs: "amd64 i386",
+            ..host(tmp.path(), tmp.path(), &ports, tmp.path())
+        };
+        let pd = fake_jail(tmp.path(), "arm64.aarch64", "14.3-RELEASE", Some("1403000"));
+        fs::write(pd.join("qemu-blacklist"), "lang/ghc\n").unwrap();
+        let key = PortKey::new("lang/ghc", None);
+
+        // This host's kernel runs only amd64/i386 natively: aarch64 is
+        // emulated, so qemu-blacklist applies.
+        let s = resolve_host(&HostPaths { poudriere_d: &pd, ..host }, &req, &stage).unwrap();
+        assert!(s.blacklist.matches(&key, false), "{:?}", s.blacklist);
+
+        // A host whose kernel also runs aarch64 natively: no emulation, so
+        // qemu-blacklist is never even looked at.
+        let native = HostPaths { supported_archs: "amd64 i386 aarch64", ..host };
+        let s = resolve_host(&HostPaths { poudriere_d: &pd, ..native }, &req, &stage).unwrap();
+        assert!(!s.blacklist.matches(&key, false), "{:?}", s.blacklist);
+    }
+
     #[test]
     fn blacklist_layers_and_matching() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2615,7 +2712,7 @@ not a key value line
     #[test]
     fn blacklist_layer_order_matches_manpage() {
         assert_eq!(
-            blacklist_layers(Some("j"), "t", Some("s")),
+            blacklist_layers(Some("j"), "t", Some("s"), false),
             vec![
                 "blacklist",
                 "s-blacklist",
@@ -2627,6 +2724,11 @@ not a key value line
                 "j-t-s-blacklist"
             ]
         );
-        assert_eq!(blacklist_layers(None, "t", None), vec!["blacklist", "t-blacklist"]);
+        assert_eq!(blacklist_layers(None, "t", None, false), vec!["blacklist", "t-blacklist"]);
+        // Emulating always loads qemu-blacklist too, and last.
+        assert_eq!(
+            blacklist_layers(None, "t", None, true),
+            vec!["blacklist", "t-blacklist", "qemu-blacklist"]
+        );
     }
 }
