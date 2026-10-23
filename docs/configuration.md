@@ -116,6 +116,10 @@ a bare origin listed stand for every flavor of its port, as `origin@all`
 does, as poudriere builds them; a flavor given (`origin@-` included)
 still names that flavor alone. The banner notes it.
 
+When `CCACHE_DIR`, read the same way, names an existing directory,
+`WITH_CCACHE_BUILD=yes` and `CCACHE_DIR=/root/.ccache` are appended after
+the layers, as poudriere's `setup_ccache` does.
+
 Given `-j jail`, queries also see the jail's system rather than the
 host's, from poudriere.d's `jails/<jail>/arch`, `version` and `mnt`: the
 prelude sets `_OSRELEASE`, `OSREL` and `OSVERSION` for the jail

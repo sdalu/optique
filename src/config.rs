@@ -48,6 +48,18 @@ const POUDRIERE_JAIL_TRAILER: &str = "\
 LOCALBASE=/nonexistent
 ";
 
+/// What poudriere(8) appends to the jail's make.conf after every other
+/// layer: `setup_ccache` (common.sh:3591-3600), called from `jail_start`
+/// (common.sh:4195) well after `setup_makeconf`'s own call there
+/// (common.sh:4121) has already written the poudriere.d layers. Its heredoc
+/// is unquoted, so `${HOME}` is expanded where it runs, not in the jail:
+/// `jail_start` sets `export HOME=/root` (common.sh:4000) earlier in that
+/// same function, no subshell between, so it is always `/root` here.
+const POUDRIERE_JAIL_CCACHE: &str = "\
+WITH_CCACHE_BUILD=yes
+CCACHE_DIR=/root/.ccache
+";
+
 /// What synth(1) writes at the top of its scan slave's make.conf, ahead of
 /// `<profile>-make.conf` (`create_make_conf` in its replicant.adb), as far as
 /// it bears on evaluating a Makefile: the slave's PORTSDIR, PORT_DBDIR and
@@ -604,7 +616,7 @@ fn resolve_local(
         }
     };
     let (staged, mut conf_hash, make_conf_sources) =
-        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], "", staging_dir)?;
+        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], "", false, staging_dir)?;
     // Queries run with a cleared environment, so make would fall back to
     // /etc/make.conf, unhashed, when the one it was given cannot be read:
     // /dev/null stands for "none", as an unreadable __MAKE_CONF is for make.
@@ -670,6 +682,8 @@ fn resolve_poudriere(
     let env = QueryEnv::Jail { package_building: !off };
     let mut notes = Vec::new();
     let jail_lines = jail.map_or_else(String::new, |j| jail_system(poudriere_d, j, host, &mut notes));
+    let ccache = ccache_dir(host.poudriere_conf, poudriere_d, jail, tree, set)
+        .is_some_and(|dir| Path::new(&dir).is_dir());
     let (make_conf, conf_hash, make_conf_sources) = layer_make_conf(
         poudriere_d,
         jail,
@@ -678,6 +692,7 @@ fn resolve_poudriere(
         env,
         overlays,
         &jail_lines,
+        ccache,
         staging_dir,
     )?;
 
@@ -1117,6 +1132,36 @@ fn flavor_default_all(
     value == "yes"
 }
 
+/// poudriere.conf's `CCACHE_DIR`, read the same files in the same order as
+/// [`no_package_building`] (plain assignments only; the last one read wins,
+/// an empty value unsets): what `setup_ccache` (common.sh:3591-3600) checks
+/// with `[ -d "${CCACHE_DIR:-/nonexistent}" ]` before appending its two
+/// lines to the jail's make.conf.
+fn ccache_dir(
+    poudriere_conf: &Path,
+    poudriere_d: &Path,
+    jail: Option<&str>,
+    tree: Option<&str>,
+    set: Option<&str>,
+) -> Option<String> {
+    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
+    files.extend(
+        poudriere_conf_layers(jail, tree, set)
+            .into_iter()
+            .map(|name| poudriere_d.join(format!("{name}-poudriere.conf"))),
+    );
+    let mut value: Option<String> = None;
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else { continue };
+        for line in text.lines() {
+            if let Some(v) = shell_assignment(line, "CCACHE_DIR") {
+                value = (!v.is_empty()).then(|| v.to_string());
+            }
+        }
+    }
+    value
+}
+
 /// The per-name poudriere.conf layers, in poudriere(8)'s reading order:
 /// `<set>`, `<tree>`, `<jail>`, `<tree>-<set>`, `<jail>-<tree>`,
 /// `<jail>-<set>`, `<jail>-<tree>-<set>`, each only when its names are given.
@@ -1153,12 +1198,13 @@ fn layer_make_conf(
     env: QueryEnv,
     overlays: &[Overlay],
     jail_lines: &str,
+    ccache: bool,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
     paths.extend(plugin_make_confs(poudriere_d));
-    concat_make_conf(&paths, env, overlays, jail_lines, staging_dir)
+    concat_make_conf(&paths, env, overlays, jail_lines, ccache, staging_dir)
 }
 
 /// The hook plugins' make.conf files poudriere appends after the layers
@@ -1183,7 +1229,7 @@ fn plugin_make_confs(poudriere_d: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
     let (path, _, _) =
-        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], "", staging_dir)?;
+        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], "", false, staging_dir)?;
     Ok(path.expect("the jail environment is never empty"))
 }
 
@@ -1209,7 +1255,10 @@ pub(crate) fn stage_synth_make_conf(
 /// make.conf: after the prelude, before the layers (host paths, as the
 /// jail's `/overlays/<name>` does not exist here), and the jail's system
 /// (`jail_system`) last, before the layers, which may still override it as
-/// they can in the jail. The
+/// they can in the jail. `ccache` adds `POUDRIERE_JAIL_CCACHE` after the
+/// layers too, as poudriere's own `setup_ccache` runs after `setup_makeconf`
+/// (common.sh:4121, 4195) — ahead of the hidden `LOCALBASE`, which stays
+/// last so no layer, and now no ccache line either, can undo it. The
 /// hash covers the combined text (so an empty layering hashes too, and the
 /// jail environment keys a cache generation of its own); nothing is written
 /// when there is nothing to write.
@@ -1218,10 +1267,11 @@ fn concat_make_conf(
     env: QueryEnv,
     overlays: &[Overlay],
     jail_lines: &str,
+    ccache: bool,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut prelude = String::new();
-    let mut trailer = "";
+    let mut trailer = String::new();
     if let QueryEnv::Jail { package_building } = env {
         prelude.push_str(POUDRIERE_JAIL_PRELUDE);
         prelude.push_str(&overlay_lines(overlays));
@@ -1229,9 +1279,12 @@ fn concat_make_conf(
             prelude.push_str(PACKAGE_BUILDING_LINES);
         }
         prelude.push_str(jail_lines);
-        trailer = POUDRIERE_JAIL_TRAILER;
+        if ccache {
+            trailer.push_str(POUDRIERE_JAIL_CCACHE);
+        }
+        trailer.push_str(POUDRIERE_JAIL_TRAILER);
     }
-    stage_make_conf(prelude, candidates, trailer, staging_dir)
+    stage_make_conf(prelude, candidates, &trailer, staging_dir)
 }
 
 /// Stage `prelude`, every existing candidate in order, then `trailer`, as one
@@ -1377,7 +1430,7 @@ mod tests {
         let none = Request::default();
         let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
 
-        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", &stage).unwrap();
+        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert_eq!(hash(&host), bare, "no database, nothing to key");
         fs::write(&pkg_db, "one package").unwrap();
         let one = hash(&host);
@@ -1850,7 +1903,7 @@ mod tests {
         assert_eq!(s.make_conf_sources, vec![etc.clone()]);
         // Read in place, for its relative .includes, and keyed all the same.
         assert_eq!(s.make_conf.as_ref(), Some(&etc));
-        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", &stage).unwrap();
+        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert_ne!(s.conf_hash, empty_hash);
         // A make.conf make reads whatever its bytes, a Latin-1 comment
         // included, is read and keyed, not taken for none; one that exists
@@ -2059,7 +2112,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], "", &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
@@ -2082,7 +2135,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert_eq!(sources, vec![pd.join("make.conf")], "{sources:?}");
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert_eq!(text.matches("OVERLAYS+=/x").count(), 1, "{text}");
@@ -2098,7 +2151,7 @@ mod tests {
         fs::write(pd.join("s1-make.conf"), "B=2\n").unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], "", &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], "", false, &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert!(text.lines().any(|l| l == "A=1"), "{text}");
         assert!(text.lines().any(|l| l == "B=2"), "{text}");
@@ -2113,7 +2166,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, jail_hash, _) =
-            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", &stage).unwrap();
+            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", false, &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         // poudriere's own lines come before the layers, as in a jail...
         assert!(text.find("PACKAGE_BUILDING=yes").unwrap() < text.find("/opt/local").unwrap());
@@ -2121,16 +2174,16 @@ mod tests {
         assert!(text.trim_end().ends_with("LOCALBASE=/nonexistent"), "{text}");
 
         // The environment keys its own cache generation.
-        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
+        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert_ne!(jail_hash, host_hash);
 
         // An empty layering still stages a make.conf in a jail's environment.
         let empty = tmp.path().join("empty.d");
         fs::create_dir_all(&empty).unwrap();
-        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", false, &stage).unwrap();
         assert!(sources.is_empty());
         assert!(path.is_some());
-        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
         assert!(path.is_none());
     }
 
@@ -2365,6 +2418,51 @@ not a key value line
         // Unset is synth's "disabled", never a path looked up.
         assert!(!synth_ccache(None));
         assert!(!synth_ccache(Some("disabled")));
+    }
+
+    /// poudriere.conf's `CCACHE_DIR`, when it is a directory, adds
+    /// `WITH_CCACHE_BUILD=yes` and `CCACHE_DIR=/root/.ccache` after the
+    /// make.conf layers, as poudriere's `setup_ccache` does after
+    /// `setup_makeconf` (common.sh:3591-3600, 4121, 4195); unset, or naming
+    /// something that is not a directory, adds neither.
+    #[test]
+    fn poudriere_ccache_follows_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        let conf = tmp.path().join("poudriere.conf");
+        let ccache = tmp.path().join("ccache");
+
+        let host = host(&conf, &pd, &ports, &db);
+        let req = Request::default();
+        let staged = || {
+            let s = resolve_host(&host, &req, &stage).unwrap();
+            fs::read_to_string(s.make_conf.unwrap()).unwrap()
+        };
+
+        // No CCACHE_DIR at all: neither line.
+        let absent = staged();
+        assert!(!absent.contains("CCACHE"), "{absent}");
+
+        // CCACHE_DIR set but not (yet) a directory: still neither line.
+        fs::write(&conf, format!("CCACHE_DIR={}\n", ccache.display())).unwrap();
+        let missing = staged();
+        assert!(!missing.contains("CCACHE"), "{missing}");
+
+        // CCACHE_DIR a real directory: both lines, after the layers.
+        fs::create_dir_all(&ccache).unwrap();
+        let present = staged();
+        let at = |needle: &str| present.find(needle).unwrap_or_else(|| panic!("{needle}: {present}"));
+        assert!(
+            at("PACKAGE_BUILDING=yes") < at("WITH_CCACHE_BUILD=yes\nCCACHE_DIR=/root/.ccache\n"),
+            "{present}"
+        );
+        assert!(at("CCACHE_DIR=/root/.ccache\n") < at("LOCALBASE=/nonexistent"), "{present}");
     }
 
     #[test]

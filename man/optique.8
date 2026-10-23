@@ -2088,6 +2088,15 @@ for every flavor of its port, as
 does; a flavor given,
 .Ar origin Ns @-
 included, still names that flavor alone.
+When
+.Va CCACHE_DIR ,
+read the same way, names an existing directory,
+.Va WITH_CCACHE_BUILD Ns = Ns Ql yes
+and
+.Va CCACHE_DIR Ns = Ns Pa /root/.ccache
+are appended after the layers, as
+.Xr poudriere 8
+itself does.
 A
 .Pa MOVED
 entry on that origin is applied first, as
