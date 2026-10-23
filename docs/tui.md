@@ -213,11 +213,11 @@ magenta when it contradicts make.conf; the port's own default (`on`/`off`);
 what make.conf says of the option, whatever decides its value now — the
 options file included: the value of the last layer naming it, in the
 framework's order (the global knob, then the per-port one, then the
-`*_FORCE` knobs, the later winning), left blank only when no layer names
+`*_FORCE` knobs, then `WITH`/`WITHOUT`, the later winning), left blank only when no layer names
 the option and otherwise coloured by that layer — green for the
 global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
-`${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob, which also
-locks the toggle; then `implied by X` when an `IMPLIES` chain locked the
+`${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob or a
+make.conf `WITH`/`WITHOUT`, which also locks the toggle; then `implied by X` when an `IMPLIES` chain locked the
 option on, and a `⚠broken`/`⚠ignored` badge on an option whose enabling
 marks the port `BROKEN` or `IGNORE` (`<OPT>_BROKEN`/`<OPT>_IGNORE`). An
 option the port no longer has

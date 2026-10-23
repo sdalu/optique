@@ -257,7 +257,9 @@ impl Session {
         let opts = &info.options;
 
         if opts.is_forced(opt) {
-            return Err(format!("{opt} is forced by make.conf (*_FORCE); the options file cannot override it"));
+            return Err(format!(
+                "{opt} is forced by make.conf (*_FORCE or WITH/WITHOUT); the options file cannot override it"
+            ));
         }
 
         if state.staged.contains(opt) {
@@ -687,7 +689,7 @@ fn on_cause(
     let mut forced: Vec<&str> = Vec::new();
     for m in members.iter().filter(|m| staged.contains(*m)) {
         match o.mc_value(m) {
-            Some((true, McLayer::Force)) => forced.push(m),
+            Some((true, McLayer::Force | McLayer::With)) => forced.push(m),
             Some((true, layer)) if file_silent(saved, m) => {
                 let knob = set_knob(info, layer);
                 match by_knob.iter_mut().find(|(k, _)| *k == knob) {
@@ -724,7 +726,7 @@ fn pick_cause(
         .iter()
         .filter(|m| !staged.contains(*m))
         .filter(|m| match o.mc_value(m) {
-            Some((false, McLayer::Force)) => true,
+            Some((false, McLayer::Force | McLayer::With)) => true,
             Some((false, _)) => file_silent(saved, m),
             _ => false,
         })
@@ -839,8 +841,8 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// queried `effective`, which in the TUI already holds staged edits once a
 /// refresh has run. `file` is the options file with its `options.local`
 /// read after it (`OptionsFiles::saved`), when it comes from disk; with
-/// no file, an `options.local` alone is not modelled, nor are WITH/WITHOUT
-/// and OPTIONS_OVERRIDE.
+/// no file, an `options.local` alone is not modelled, nor is
+/// OPTIONS_OVERRIDE.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete = &o.complete;
@@ -848,7 +850,8 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
     let empty = BTreeSet::new();
     let (file_set, file_unset) = file.map_or((&empty, &empty), |f| (&f.set, &f.unset));
     // One pass per layer, in the framework's own order (bsd.options.mk:312,
-    // 320, 326, 334, the file at 354 and 361, then 370, 378, 384, 392):
+    // 320, 326, 334, the file at 354 and 361, then 370, 378, 384, 392, and
+    // make.conf's WITH and WITHOUT at 399 and 406):
     // each scope's UNSET runs before the next scope's SET, which is what lets
     // the per-port knob override the global one. Applying all the SETs and
     // then all the UNSETs instead would let a global UNSET erase a per-port
@@ -864,6 +867,8 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
         (false, &o.force_unset),
         (true, &o.port_force_set),
         (false, &o.port_force_unset),
+        (true, &o.with),
+        (false, &o.without),
     ] {
         // A SET entry goes in word for word when it matches an option of
         // the port (`COMPLETE_OPTIONS_LIST:M${opt}`); an UNSET entry takes
@@ -1381,6 +1386,28 @@ mod tests {
         let info = &ports[&key];
         assert_eq!(nofile_effective(info), set(&["B", "C*"]));
         assert_eq!(undecided_options(info, None, false), ["B"]);
+    }
+
+    /// bsd.options.mk:399-409: make.conf's WITH and WITHOUT apply after the
+    /// FORCE knobs and before IMPLIES, and decide what they name: WITH=C
+    /// beats OPTIONS_UNSET_FORCE=C and its IMPLIES turns D on, WITHOUT=A*
+    /// takes A and A2 off; only B stays undecided.
+    #[test]
+    fn with_and_without_come_after_force() {
+        let defs = vec![("C", OptionDef { implies: vec!["D".into()], ..Default::default() })];
+        let (mut ports, key) = mk_port(&["A", "A2", "B", "C", "D"], &["A", "A2"], vec![], defs);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.force_unset.insert("C".into());
+            o.with.insert("C".into());
+            o.without.insert("A*".into());
+        }
+        let info = &ports[&key];
+        assert_eq!(nofile_effective(info), set(&["C", "D"]));
+        assert_eq!(undecided_options(info, None, false), ["B"]);
+        // The options file cannot change what they pin.
+        let mut s = session_for(ports);
+        assert!(s.toggle(&key, "A2").unwrap_err().contains("WITH/WITHOUT"));
     }
 
     #[test]

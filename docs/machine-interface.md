@@ -76,9 +76,9 @@ re-running `make`:
 | `default`           | the port's own default                           |
 | `saved`             | file's value; `null` = no entry (`undecided`)    |
 | `new`               | added since the file was written[^4]             |
-| `makeconf`          | `{value, scope}`: `global`/`port`/`force`[^1]    |
+| `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`[^1] |
 | `locked`            | the file cannot change this value                |
-| `locked_by`         | why: a `*_FORCE` knob, or an implying option     |
+| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, or an implying option |
 | `deviates_makeconf` | staged value contradicts `makeconf`              |
 | `group`             | `{name, kind, members}`[^2]                      |
 | `implies`           | options this one turns on                        |
@@ -90,7 +90,9 @@ re-running `make`:
 | `adds_deps`         | dependency origins the option declares, sorted   |
 | `uses`              | `USES` frameworks it activates                   |
 
-[^1]: absent when no layer mentions the option.
+[^1]: absent when no layer mentions the option. `with` is make.conf's
+    `WITH`/`WITHOUT`, applied after the `*_FORCE` knobs and pinning the
+    option as they do.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
     `NEW_OPTIONS`; a line settles the option even when the file's

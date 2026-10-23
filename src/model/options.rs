@@ -227,6 +227,14 @@ pub struct PortOptions {
     /// (bsd.options.mk adds them to PORT_OPTIONS last, after IMPLIES).
     #[serde(default)]
     pub slave: BTreeSet<String>,
+    /// make.conf's WITH / WITHOUT, which bsd.options.mk:399-409 applies
+    /// after the FORCE knobs and before IMPLIES ("Cmdline always win"); the
+    /// queries run with a cleared environment, so make.conf is their only
+    /// source. They pin an option as FORCE does.
+    #[serde(default)]
+    pub with: BTreeSet<String>,
+    #[serde(default)]
+    pub without: BTreeSet<String>,
 }
 
 /// Where an option's current value comes from, following the
@@ -241,13 +249,15 @@ pub enum Provenance {
 }
 
 /// The make.conf layer that names an option last: the global
-/// OPTIONS_SET/UNSET, the per-port ${OPTIONS_NAME}_SET/_UNSET, or one of the
-/// *_FORCE knobs (global or per-port).
+/// OPTIONS_SET/UNSET, the per-port ${OPTIONS_NAME}_SET/_UNSET, one of the
+/// *_FORCE knobs (global or per-port), or WITH/WITHOUT.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum McLayer {
     Global,
     Port,
     Force,
+    /// WITH / WITHOUT: applied after FORCE, pinning the option likewise.
+    With,
 }
 
 impl PortOptions {
@@ -281,9 +291,16 @@ impl PortOptions {
     /// out of NEW_OPTIONS: make counts it as decided.
     pub fn mc_decides(&self, opt: &str) -> bool {
         self.mc_mentions(opt)
-            || [&self.force_set, &self.force_unset, &self.port_force_set, &self.port_force_unset]
-                .into_iter()
-                .any(|list| mentions(list, opt))
+            || [
+                &self.force_set,
+                &self.force_unset,
+                &self.port_force_set,
+                &self.port_force_unset,
+                &self.with,
+                &self.without,
+            ]
+            .into_iter()
+            .any(|list| mentions(list, opt))
     }
 
     /// Whether toggling this option in the options file can have any effect.
@@ -291,9 +308,10 @@ impl PortOptions {
         self.forced_value(opt).is_some()
     }
 
-    /// The value a *_FORCE knob pins the option to, None when none does.
-    /// The four knobs are applied in the framework's order, last one wins:
-    /// global SET, global UNSET, per-port SET, per-port UNSET. A SET entry
+    /// The value a *_FORCE knob or WITH/WITHOUT pins the option to, None
+    /// when none does. They are applied in the framework's order, last one
+    /// wins: global SET, global UNSET, per-port SET, per-port UNSET, WITH,
+    /// WITHOUT (bsd.options.mk:368-409). A SET or WITH entry
     /// adds itself, word for word, so only one naming the option turns it
     /// on; an UNSET entry turns off every option it matches as a pattern.
     pub fn forced_value(&self, opt: &str) -> Option<bool> {
@@ -303,6 +321,8 @@ impl PortOptions {
             (false, &self.force_unset),
             (true, &self.port_force_set),
             (false, &self.port_force_unset),
+            (true, &self.with),
+            (false, &self.without),
         ] {
             if layer_hits(v, list, opt) {
                 value = Some(v);
@@ -313,8 +333,8 @@ impl PortOptions {
 
     /// What make.conf says of the option, whatever decides its value now:
     /// the value of the last layer naming it in the framework's order
-    /// (global SET, UNSET, per-port SET, UNSET, then the four *_FORCE knobs;
-    /// later wins), with that layer. None when no layer names it. A SET
+    /// (global SET, UNSET, per-port SET, UNSET, then the four *_FORCE knobs,
+    /// then WITH and WITHOUT; later wins), with that layer. None when no layer names it. A SET
     /// entry names the option word for word, an UNSET one as a pattern, as
     /// `forced_value` reads them.
     pub fn mc_value(&self, opt: &str) -> Option<(bool, McLayer)> {
@@ -328,6 +348,8 @@ impl PortOptions {
             (false, McLayer::Force, &self.force_unset),
             (true, McLayer::Force, &self.port_force_set),
             (false, McLayer::Force, &self.port_force_unset),
+            (true, McLayer::With, &self.with),
+            (false, McLayer::With, &self.without),
         ] {
             if layer_hits(v, list, opt) {
                 value = Some((v, layer));
@@ -418,5 +440,25 @@ mod tests {
         assert_eq!(o.mc_value("C"), None, "C* turns no C on");
         assert_eq!(o.forced_value("B"), Some(false));
         assert!(!o.is_forced("A"));
+    }
+
+    /// bsd.options.mk:399-409: WITH and WITHOUT come after the FORCE knobs
+    /// and pin the option as they do; WITHOUT entries are patterns.
+    #[test]
+    fn with_and_without_pin_after_force() {
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let o = PortOptions {
+            complete: ["A", "A2", "B", "C"].iter().map(|s| s.to_string()).collect(),
+            force_unset: words(&["C"]),
+            port_force_set: words(&["A"]),
+            with: words(&["C"]),
+            without: words(&["A*"]),
+            ..Default::default()
+        };
+        assert_eq!(o.forced_value("C"), Some(true), "WITH after UNSET_FORCE");
+        assert_eq!(o.forced_value("A"), Some(false), "WITHOUT after SET_FORCE");
+        assert_eq!(o.mc_value("A2"), Some((false, McLayer::With)));
+        assert!(o.mc_decides("A2") && !o.mc_decides("B"));
+        assert_eq!(o.forced_value("B"), None);
     }
 }

@@ -299,11 +299,16 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                     McLayer::Global => "global",
                     McLayer::Port => "port",
                     McLayer::Force => "force",
+                    McLayer::With => "with",
                 },
             });
             let implier = sess.implied_by(owner, name).filter(|_| staged);
             let locked_by = if opts.is_forced(name) {
-                Some("make.conf *_FORCE".to_string())
+                // The last pinning layer decides: WITH/WITHOUT come after FORCE.
+                Some(match opts.mc_value(name) {
+                    Some((_, McLayer::With)) => "make.conf WITH/WITHOUT".to_string(),
+                    _ => "make.conf *_FORCE".to_string(),
+                })
             } else {
                 implier.map(|by| format!("implied by {by}"))
             };

@@ -616,7 +616,11 @@ says of the option, whatever decides its value now, the options file
 included \(em the value of the last layer naming it, in the framework's
 order: the global knob, then the per-port one, then the
 .Va *_FORCE
-knobs, the later winning \(em in the colour of that layer: green for a global
+knobs, then
+.Va WITH
+and
+.Va WITHOUT ,
+the later winning \(em in the colour of that layer: green for a global
 .Va OPTIONS_SET
 or
 .Va OPTIONS_UNSET ,
@@ -626,7 +630,12 @@ or
 .Va _UNSET ,
 and red bold for a
 .Va *_FORCE
-knob that the options file cannot override, which also locks the toggle.
+knob or a
+.Pa make.conf
+.Va WITH
+or
+.Va WITHOUT ,
+which the options file cannot override and which also locks the toggle.
 That column is empty only when no
 .Pa make.conf
 layer names the option.
@@ -1354,9 +1363,22 @@ is
 .Bro Va value , Va scope Brc
 with the scope
 .Ql global ,
-.Ql port
+.Ql port ,
+.Ql force
 or
-.Ql force ,
+.Ql with
+.Po
+.Pa make.conf Ns 's
+.Va WITH
+or
+.Va WITHOUT ,
+which bsd.options.mk applies after the
+.Va *_FORCE
+knobs and which pin the option as they do; the
+.Va locked_by
+of an option they pin is
+.Ql make.conf WITH/WITHOUT
+.Pc ,
 and is absent when no layer mentions the option;
 .Va group
 is
@@ -1840,9 +1862,14 @@ per-port
 .Va <PORT>_SET
 and
 .Va <PORT>_UNSET
-and the
+the
 .Va *_FORCE
-knobs, which is what the
+knobs and
+.Va WITH
+and
+.Va WITHOUT
+.Pq applied after them, pinning the option likewise ,
+which is what the
 .Ql mc ,
 .Ql mc:port
 and

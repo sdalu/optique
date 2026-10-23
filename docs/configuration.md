@@ -69,8 +69,9 @@ lists them among the `make.conf:` sources.
 Port queries therefore see exactly what a poudriere build would see,
 including `DEFAULT_VERSIONS` (which can change a port's default
 options, its option list and its dependencies), `OPTIONS_SET`,
-`OPTIONS_UNSET`, the per-port `<PORT>_SET`/`<PORT>_UNSET`, and `*_FORCE`
-knobs.
+`OPTIONS_UNSET`, the per-port `<PORT>_SET`/`<PORT>_UNSET`, the `*_FORCE`
+knobs, and `WITH`/`WITHOUT`, which bsd.options.mk applies after them and
+which pin an option as they do.
 As in `bsd.options.mk`, an UNSET entry, in make.conf or an options file,
 is a make pattern (`*`, `?`, `[...]`) that turns off every option it
 matches: `OPTIONS_UNSET=A*` turns off A and A2. A SET entry turns on only

@@ -58,6 +58,8 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "PORT_FORCE_SET" => opts.port_force_set = words(value),
             "PORT_FORCE_UNSET" => opts.port_force_unset = words(value),
             "SLAVE" => opts.slave = words(value),
+            "WITH" => opts.with = words(value),
+            "WITHOUT" => opts.without = words(value),
             "DEFAULT_VERSIONS" => default_versions = words(value),
             "BROKEN" => broken = value.trim().to_string(),
             "IGNORE" => ignore = value.trim().to_string(),
@@ -345,6 +347,8 @@ OPTIQUE|FORCE_UNSET|H
 OPTIQUE|PORT_FORCE_SET|I
 OPTIQUE|PORT_FORCE_UNSET|J
 OPTIQUE|SLAVE|K
+OPTIQUE|WITH|B
+OPTIQUE|WITHOUT|C*
 OPTIQUE|DEFAULT_VERSIONS|ssl=base python=3.12
 OPTIQUE|GROUP|FREE|A B
 OPTIQUE|SINGLE|ONE|C D
@@ -366,6 +370,8 @@ OPTIQUE|MULTI|SOME|G H
         assert_eq!(o.port_force_set, set(&["I"]));
         assert_eq!(o.port_force_unset, set(&["J"]));
         assert_eq!(o.slave, set(&["K"]));
+        assert_eq!(o.with, set(&["B"]));
+        assert_eq!(o.without, set(&["C*"]));
         assert_eq!(info.default_versions, ["ssl=base", "python=3.12"]);
         let groups: Vec<(GroupKind, &str, Vec<String>)> =
             o.groups.iter().map(|g| (g.kind, g.name.as_str(), g.members.clone())).collect();

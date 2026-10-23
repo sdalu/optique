@@ -1073,7 +1073,7 @@ fn option_line(
     // knob the options file cannot override. Blank only when no make.conf
     // layer names the option.
     let (mc, mc_style) = match opts.mc_value(opt) {
-        Some((v, McLayer::Force)) => {
+        Some((v, McLayer::Force | McLayer::With)) => {
             (on_off(v), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
         }
         Some((v, McLayer::Port)) => (on_off(v), Style::default().fg(Color::LightGreen)),

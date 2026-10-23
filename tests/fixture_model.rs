@@ -127,3 +127,25 @@ fn an_options_slave_options_prevents_are_checked() {
     assert_eq!(port["violations"], serde_json::json!(["X conflicts with Y: mutually exclusive"]), "{port}");
     assert_eq!(flagged(&port, "staged"), ["Y"], "{port}");
 }
+
+/// bsd.options.mk:399-409: make.conf's WITH and WITHOUT apply after FORCE
+/// and take what they name out of NEW_OPTIONS. With WITH=C and WITHOUT=A*,
+/// make leaves only B new; optique leaves only B undecided, and reports C
+/// and A2 pinned by them, whatever the options file says.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn with_and_without_pin_like_force() {
+    let f = Fixture::new();
+    let origin = "misc/model-globs";
+    std::fs::write(&f.make_conf, "WITH=C\nWITHOUT=A*\n").unwrap();
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["B", "C"]);
+    let new = f.make_v(origin, "NEW_OPTIONS");
+    assert_eq!(new, ["B"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["undecided"], serde_json::json!(new), "{port}");
+    for (opt, on) in [("C", true), ("A2", false)] {
+        let o = common::option(&port, opt);
+        assert_eq!(o["makeconf"], serde_json::json!({"value": on, "scope": "with"}), "{o}");
+        assert_eq!(o["locked_by"], "make.conf WITH/WITHOUT", "{o}");
+    }
+}
