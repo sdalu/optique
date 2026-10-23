@@ -299,6 +299,10 @@ pub struct App {
     pub warn_mc: bool,
     /// Ports with options matching the filter, before hide_ok is applied.
     pub listable: usize,
+    /// The selected port as a background refresh found it: listed whatever
+    /// t or L say until the selection moves to another port or a view key
+    /// is pressed, so a fix that makes it ok does not swap the pane's port.
+    pub held: Option<PortKey>,
     pub staging_db: StagingDb,
     pub refresher: Refresher,
     /// Help overlay visible?
@@ -429,6 +433,7 @@ pub(crate) fn build_app(
         mc_relax: false,
         warn_mc: false,
         listable: 0,
+        held: None,
         staging_db,
         refresher,
         help_tab: None,
@@ -769,15 +774,10 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             if !app.only_loops && app.loops.is_empty() {
                 app.flash("no dependency loop in this closure", false);
             } else {
-                app.only_loops = !app.only_loops;
-                app.refresh_view();
-                app.flash(
-                    if app.only_loops {
-                        "showing only ports caught in a dependency loop (L to show all)"
-                    } else {
-                        "showing all ports"
-                    },
-                    false,
+                app.toggle_view(
+                    |a| &mut a.only_loops,
+                    "showing only ports caught in a dependency loop (L to show all)",
+                    "showing all ports",
                 );
             }
         }
@@ -1021,8 +1021,9 @@ fn commit_apply(app: &mut App, skip_conflicting: bool) {
             draft::discard(&app.options_dir);
         }
         // Statuses changed: the list, its divider and its order are
-        // rebuilt now, under the result box.
-        app.refresh_view();
+        // rebuilt now, under the result box, as the view says — the
+        // result box says what became of the ports it lets go.
+        app.change_view();
     }
     if let Some(modal) = app.modal.as_mut() {
         modal.done = Some(result);
@@ -1068,12 +1069,46 @@ impl App {
         }
     }
 
-    /// Rebuild the list and the editor after a change to what is listed or
-    /// how, keeping the selection on the same port when it is still there.
+    /// Rebuild the list and the editor after a change to what is listed (a
+    /// refresh, an edit, an apply), keeping the selection on the same port:
+    /// the selected port stays listed, whatever t or L say, until the
+    /// selection moves to another one.
     fn refresh_view(&mut self) {
+        self.held = self.selected_key();
+        if let Some(why) = self.relist() {
+            self.flash(&why, false);
+        }
+    }
+
+    /// Rebuild the list and the editor after a view key changed how it is
+    /// listed, or an apply what needs attention: the selected port stays
+    /// only if the view lists it.
+    fn change_view(&mut self) -> Option<String> {
+        self.held = None;
+        self.relist()
+    }
+
+    /// Rebuild the list and the editor, keeping the selection on the same
+    /// port when it is still listed. When it is not, and the option pane
+    /// had the focus, the focus goes back to the list rather than leave the
+    /// pane on another port: what is returned says why, for the line.
+    fn relist(&mut self) -> Option<String> {
         let keep = self.selected_key();
-        self.rebuild_visible(keep);
+        self.rebuild_visible(keep.clone());
+        let mut why = None;
+        if let Some(key) = keep.filter(|k| Some(k) != self.selected_key().as_ref()) {
+            if self.focus == Focus::Editor {
+                self.focus = Focus::List;
+                let reason = match self.session.ports.get(&key) {
+                    None => "left the closure",
+                    Some(info) if !info.options.has_options() => "has no options any more",
+                    Some(_) => "is not in this view",
+                };
+                why = Some(format!("{key} {reason}: back to the list"));
+            }
+        }
         self.rebuild_editor();
+        why
     }
 
     /// Flip one of the list's view flags, refresh, and say which way it went.
@@ -1081,8 +1116,12 @@ impl App {
         let flag = flag(self);
         *flag = !*flag;
         let now = *flag;
-        self.refresh_view();
-        self.flash(if now { on } else { off }, false);
+        let why = self.change_view();
+        let said = if now { on } else { off };
+        match why {
+            Some(why) => self.flash(&format!("{said} — {why}"), false),
+            None => self.flash(said, false),
+        }
     }
 
     /// Open the help overlay on tab `idx`, scrolled to its top.
@@ -1152,6 +1191,10 @@ impl App {
         } else {
             self.list_state.select(Some(idx.min(self.visible.len() - 1)));
         }
+        // Moved away: the port a refresh held goes at the next rebuild.
+        if self.held.is_some() && self.selected_key() != self.held {
+            self.held = None;
+        }
         self.rebuild_editor();
     }
 
@@ -1189,7 +1232,9 @@ impl App {
                     || key.to_string().to_lowercase().contains(&filter)
                     || info.pkgname.to_lowercase().contains(&filter)
             })
-            .filter(|(key, _)| !self.only_loops || self.loop_of(key).is_some())
+            .filter(|(key, _)| {
+                !self.only_loops || self.loop_of(key).is_some() || self.held.as_ref() == Some(*key)
+            })
             .map(|(key, info)| (self.effective_status(info), key.clone()))
             .collect();
         if self.sort_problems_first {
@@ -1199,7 +1244,8 @@ impl App {
         }
         self.listable = items.len();
         if self.hide_ok {
-            items.retain(|(status, _)| *status != UiStatus::Ok);
+            let held = self.held.clone();
+            items.retain(|(status, key)| *status != UiStatus::Ok || held.as_ref() == Some(key));
         }
         // Ok sorts last, so the ok ports (≈ and ✓) are the tail.
         let first_ok = items.iter().position(|(status, _)| *status == UiStatus::Ok);
@@ -1212,6 +1258,10 @@ impl App {
             self.list_state.select(None);
         } else {
             self.list_state.select(Some(idx));
+        }
+        // Held only while selected.
+        if self.held.is_some() && self.selected_key() != self.held {
+            self.held = None;
         }
     }
 
@@ -3474,6 +3524,66 @@ mod tests {
         ev.send(done(vec![alpha], vec![])).unwrap();
         app.drain_refresh_events();
         assert!(app.message.is_none(), "nothing changed: {:?}", app.message);
+    }
+
+    /// Under t, a re-query that makes the edited port ok keeps it listed and
+    /// in the pane, so Space still edits it; it goes once the selection
+    /// moves to another port.
+    #[test]
+    fn a_rescan_keeps_the_selected_port_listed_until_the_selection_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["DOCS"], &[]);
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        alpha_mut(&mut app).options.complete = vec!["DOCS".into(), "NEW".into()];
+        app.rebuild_visible(None);
+        press(&mut app, 't');
+        let at = app.visible.iter().position(|k| k.origin == "cat/alpha").unwrap();
+        app.select_index(at);
+        hit(&mut app, KeyCode::Enter);
+        assert!(app.focus == Focus::Editor);
+        let (ev, _req) = fake_refresher(&mut app);
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.options.complete = vec!["DOCS".into()];
+        app.refreshing = 1;
+        ev.send(done(vec![alpha], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert!(app.effective_status(&info_of(&app, "cat/alpha")) == UiStatus::Ok);
+        assert!(app.hide_ok, "t still on");
+        assert_eq!(selected(&app), "cat/alpha");
+        assert!(app.focus == Focus::Editor, "the pane keeps the focus");
+        assert_eq!(app.editor_port.as_ref().map(|k| k.to_string()).as_deref(), Some("cat/alpha"));
+        hit(&mut app, KeyCode::Char(' '));
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
+        assert!(staged(&app, "cat/beta").is_empty(), "the port the pane did not show");
+        // Moved away, the ok port goes at the next rebuild.
+        hit(&mut app, KeyCode::Esc);
+        let at = app.visible.iter().position(|k| k.origin == "cat/beta").unwrap();
+        app.select_index(at);
+        app.refresh_view();
+        assert_eq!(visible(&app), ["cat/beta"]);
+    }
+
+    /// A re-query that takes the edited port out of the closure cannot keep
+    /// it: the focus goes back to the list, and the line says why.
+    #[test]
+    fn a_rescan_that_drops_the_edited_port_returns_to_the_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/gamma"]), ("cat/gamma", &[])]);
+        app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
+        let at = app.visible.iter().position(|k| k.origin == "cat/gamma").unwrap();
+        app.select_index(at);
+        hit(&mut app, KeyCode::Enter);
+        assert!(app.focus == Focus::Editor);
+        let (ev, _req) = fake_refresher(&mut app);
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.deps.clear();
+        app.refreshing = 1;
+        ev.send(done(vec![alpha], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(visible(&app), ["cat/alpha"]);
+        assert!(app.focus == Focus::List, "the pane would show another port");
+        let (msg, _) = app.message.clone().unwrap();
+        assert_eq!(msg, "cat/gamma left the closure: back to the list");
     }
 
     /// Progress shows while a scan runs and goes with it; a dependency that
