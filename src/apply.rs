@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+use crate::model::options::str_match;
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
@@ -60,35 +61,38 @@ impl PendingWrite {
                 ..Default::default()
             };
         };
-        // Read as make reads it (SavedOptionsFile::value): a value only for an
-        // option with a SET or UNSET line, UNSET winning.
-        let file_known: BTreeSet<&str> = old.recorded().map(String::as_str).collect();
-        let was: BTreeSet<&str> =
-            file_known.iter().copied().filter(|o| old.value(o) == Some(true)).collect();
+        // Read as make reads it, as scan does: an option the file decides
+        // has a SET or UNSET entry matching it, patterns included
+        // (SavedOptionsFile::decides), and is on only when a SET entry
+        // names it and no UNSET entry matches it (SavedOptionsFile::value).
+        let was_on = |o: &str| old.value(o) == Some(true);
         let mentioned: BTreeSet<&str> =
-            old.complete.iter().map(String::as_str).chain(file_known.iter().copied()).collect();
+            old.complete.iter().chain(old.recorded()).map(String::as_str).collect();
         Changes {
-            turned_on: cur
-                .difference(&was)
-                .filter(|o| file_known.contains(**o))
+            turned_on: now_known
+                .iter()
+                .filter(|o| old.decides(o) && cur.contains(**o) && !was_on(o))
                 .map(|o| o.to_string())
                 .collect(),
-            turned_off: was
+            turned_off: now_known
                 .iter()
-                .filter(|o| now_known.contains(**o) && !cur.contains(**o))
+                .filter(|o| old.decides(o) && was_on(o) && !cur.contains(**o))
                 .map(|o| o.to_string())
                 .collect(),
             // Kept in the port's own option order, like the file itself.
             adopted: self
                 .complete
                 .iter()
-                .filter(|o| !file_known.contains(o.as_str()))
+                .filter(|o| !old.decides(o))
                 .map(|o| (o.clone(), cur.contains(o.as_str())))
                 .collect(),
+            // An entry is dropped once it matches no option of the port,
+            // as scan judges an obsolete one (Session::stale_delta).
             dropped: mentioned
                 .iter()
-                .filter(|o| !now_known.contains(**o) && !self.kept.iter().any(|k| k == *o))
-                .map(|o| o.to_string())
+                .filter(|e| !now_known.iter().any(|c| str_match(c, e)))
+                .filter(|e| !self.kept.iter().any(|k| k == *e))
+                .map(|e| e.to_string())
                 .collect(),
         }
     }
@@ -678,6 +682,23 @@ mod tests {
         assert_eq!(c.turned_on, ["A"], "A was off for make");
         assert_eq!(c.adopted, [("B".to_string(), true)], "B had no value in the file");
         assert!(c.turned_off.is_empty() && c.dropped.is_empty(), "{c:?}");
+    }
+
+    /// bsd.options.mk:354-363: an UNSET entry is a pattern, deciding every
+    /// option it matches. A file unsetting `A*` and B, rewritten with A on,
+    /// turns A on; A2, which `A*` settles, is not new, and `A*`, matching
+    /// options the port has, is not dropped.
+    #[test]
+    fn changes_read_pattern_entries_as_make_does() {
+        let old = "_FILE_COMPLETE_OPTIONS_LIST=A A2 B\nOPTIONS_FILE_UNSET+=A* B\n";
+        let p = pending(Some(old), &["A", "A2", "B"], &["A"]);
+        let c = p.changes();
+        assert_eq!(c, Changes { turned_on: vec!["A".into()], ..Default::default() });
+        assert_eq!(p.describe(), "+A");
+        // Once the port has no option `A*` matches, the entry goes.
+        let c = pending(Some("OPTIONS_FILE_UNSET+=A* B\n"), &["B", "C"], &["C"]).changes();
+        assert_eq!(c.dropped, ["A*"]);
+        assert_eq!(c.adopted, [("C".to_string(), true)]);
     }
 
     /// A brand-new file adopts every option, at the value it is written with.

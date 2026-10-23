@@ -178,7 +178,10 @@ Each `writes` entry has `port`, `options_name`, `file` (its absolute path),
 `adopted` (options the port gained since, each `{name, on}`; empty for a new
 file, whose whole state is `enabled`), `dropped` (options the port no longer
 has), `enabled` (the complete set the file will record) and `new_deps`
-(origins the newly enabled options declare as dependencies).
+(origins the newly enabled options declare as dependencies). The old file is
+read as `scan` reads it: an option a SET or UNSET entry matches, `A*`
+included, is one it knew (in `diff`, not `adopted`), and a pattern entry is
+`dropped` only once it matches no option of the port.
 
 `clean --json` reports a different shape: `options_dir`, `dry_run`, `removals`
 (each `{options_name, reason}`), `kept` (only under `-v`, each `{options_name,

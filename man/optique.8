@@ -1858,6 +1858,11 @@ has
 and
 .Va new_deps
 .Pq origins the newly enabled options declare as dependencies .
+The old file is read as
+.Cm scan
+reads it: an option a SET or UNSET entry matches as a pattern is one it
+knew, and a pattern entry is dropped only once it matches no option of the
+port.
 .Pp
 For driving the interface itself \(em to reproduce a rendering bug, or to test
 it in CI \(em
