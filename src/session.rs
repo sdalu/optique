@@ -1941,6 +1941,31 @@ mod tests {
         }
     }
 
+    /// bsd.options.mk applies each scope's UNSET after its SET, so an
+    /// option one scope both sets and unsets ends up off: the JSON verdict
+    /// says so, with the scope that has the last word.
+    #[test]
+    fn makeconf_verdict_follows_the_framework_layering() {
+        let (mut ports, key) = mk_port(&["A", "B"], &[], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.mc_set.insert("A".into());
+            o.mc_unset.insert("A".into());
+            o.mc_unset.insert("B".into());
+            o.port_set.insert("B".into());
+            o.port_unset.insert("B".into());
+        }
+        let s = session_for(ports);
+        let verdicts: Vec<(String, bool, &str)> = crate::report::option_reports(&s, &s.ports[&key])
+            .into_iter()
+            .map(|r| {
+                let m = r.makeconf.expect("make.conf names both");
+                (r.name, m.value, m.scope)
+            })
+            .collect();
+        assert_eq!(verdicts, [("A".to_string(), false, "global"), ("B".to_string(), false, "port")]);
+    }
+
     fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
         crate::draft::Draft {
             options_dir: std::path::PathBuf::from("/nonexistent"),

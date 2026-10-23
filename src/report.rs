@@ -8,12 +8,10 @@
 //! Everything an agent needs to choose an option value is in
 //! [`OptionReport`], which `scan --json --options` fills in.
 
-use std::collections::BTreeSet;
-
 use serde::Serialize;
 
 use crate::apply::PendingWrite;
-use crate::model::options::{GroupKind, OptionDef};
+use crate::model::options::{GroupKind, McLayer, OptionDef};
 use crate::model::port::PortInfo;
 use crate::session::Session;
 
@@ -289,17 +287,17 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
             // What the file says about the option: Some(value) when it has an
             // entry, None when the option is new to it (or there is no file).
             let file_value = saved.and_then(|s| s.value(name));
-            // What make.conf asks for, regardless of what the file says —
-            // the *_FORCE knobs first, since they win over the file too.
-            let scoped = |set: &BTreeSet<String>, unset: &BTreeSet<String>, scope| {
-                (set.contains(name) || unset.contains(name))
-                    .then(|| MakeConfVerdict { value: set.contains(name), scope })
-            };
-            let makeconf = opts
-                .forced_value(name)
-                .map(|value| MakeConfVerdict { value, scope: "force" })
-                .or_else(|| scoped(&opts.port_set, &opts.port_unset, "port"))
-                .or_else(|| scoped(&opts.mc_set, &opts.mc_unset, "global"));
+            // What make.conf asks for, regardless of what the file says: the
+            // last layer naming the option, in the framework's order (each
+            // scope's UNSET after its SET, the *_FORCE knobs last).
+            let makeconf = opts.mc_value(name).map(|(value, layer)| MakeConfVerdict {
+                value,
+                scope: match layer {
+                    McLayer::Global => "global",
+                    McLayer::Port => "port",
+                    McLayer::Force => "force",
+                },
+            });
             let implier = sess.implied_by(owner, name).filter(|_| staged);
             let locked_by = if opts.is_forced(name) {
                 Some("make.conf *_FORCE".to_string())
