@@ -434,13 +434,17 @@ mod tests {
     #[test]
     fn kill_active_makes_reaches_grandchildren() {
         let _lock = make_test_lock();
-        let (_tmp, ctx) = slow_port_running("sh -c 'sleep 37; true'");
+        // A sleep this test process alone runs: pgrep sees the whole host,
+        // where another run of the suite has a grandchild of its own.
+        let nap = format!("37.{:06}", std::process::id() % 1_000_000);
+        let (_tmp, ctx) = slow_port_running(&format!("sh -c 'sleep {nap}; true'"));
         let runner = MakeRunner::new(ctx, 1);
         runner.submit(PortKey::parse("cat/slow").unwrap());
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let pattern = format!("^sleep {}$", nap.replace('.', "\\."));
         let sleeping = || {
             std::process::Command::new("pgrep")
-                .args(["-f", "^sleep 37$"])
+                .args(["-f", &pattern])
                 .output()
                 .map(|o| !o.stdout.is_empty())
                 .unwrap_or(false)
