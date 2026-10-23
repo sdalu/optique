@@ -331,6 +331,16 @@ per line,
 .Ql #
 starting a comment
 .Pq the Xr poudriere 8 pkglist format .
+As
+.Xr poudriere 8
+reads them, here and on the command line,
+.Ar origin Ns @all
+names every flavor in the port's
+.Va FLAVORS
+.Pq the bare origin for a port without any
+and
+.Ar origin Ns @-
+its default flavor, the bare origin, whatever the build.
 Repeatable; duplicates across files and command line arguments are dropped.
 .It Fl J Ar jobs , Fl -jobs Ar jobs
 Number of parallel

@@ -13,6 +13,9 @@ origins with no subcommand and it opens the interface (see [tui.md](tui.md)).
 Ports are named as positional `category/name[@flavor]` arguments, read from
 one or more `-f`/`--file` pkglists (one origin per line, `#` starting a
 comment, the poudriere pkglist format), or both at once; `-f` is repeatable.
+As poudriere reads them, `origin@all` names every flavor of the port (its
+`FLAVORS`, queried first; the bare origin for a port without any) and
+`origin@-` its default flavor, the bare origin, whatever the build.
 Across arguments and files, duplicates are dropped and first-seen order is
 kept. With neither, every subcommand but `clean`
 refuses — "no port origins given (arguments or -f pkglist)"

@@ -22,6 +22,7 @@ mod optfiles;
 mod optionsfile;
 mod query;
 mod report;
+mod roots;
 mod session;
 mod staging;
 mod tui;
@@ -718,7 +719,7 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     let session = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        &rs.roots,
+        &scanned.roots,
         &scanned.files,
         cli.minimal,
     );
@@ -752,6 +753,9 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
 /// Shared setup + closure scan used by every subcommand.
 struct Scanned {
     settings: config::Settings,
+    /// The roots the scan started from: the given ones, each `origin@all`
+    /// expanded to its port's flavors.
+    roots: Vec<model::origin::PortKey>,
     result: ScanResult,
     /// Dependency loops found in the scanned closure (already reported on
     /// stderr by `run_scan`; kept for the table, the JSON and the gate).
@@ -898,7 +902,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let t0 = Instant::now();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
-    let result = scanner::scan(&rs.roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
+    let roots = roots::resolve(&rs.roots, &ctx, &files, jobs, &mut cache);
+    let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();
@@ -945,6 +950,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     Ok(Scanned {
         settings,
+        roots,
         result,
         dep_loops,
         elapsed: t0.elapsed().as_secs_f32(),
@@ -1025,7 +1031,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     let sess = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        &rs.roots,
+        &scanned.roots,
         &scanned.files,
         cli.minimal,
     );
@@ -1540,7 +1546,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     let mut sess = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
-        &rs.roots,
+        &scanned.roots,
         &scanned.files,
         cli.minimal,
     );
