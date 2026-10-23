@@ -1316,7 +1316,7 @@ impl App {
                     .stale_delta(info)
                     .is_some_and(|(added, removed)| !added.is_empty() || !removed.is_empty());
                 let saved = self.session.state(info)?.saved.as_ref()?;
-                stale.then(|| row_of(&self.editor_rows, &|o| !saved.mentions(o))).flatten()
+                stale.then(|| row_of(&self.editor_rows, &|o| !saved.decides(o))).flatten()
             })
         });
         self.editor_idx = attention.or(first).unwrap_or(0);
@@ -5334,7 +5334,8 @@ mod tests {
         for name in ["cat_alpha", "cat_beta"] {
             let dir = tmp.path().join("options").join(name);
             std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\n").unwrap();
+            std::fs::write(dir.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n")
+                .unwrap();
         }
         let app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
         assert_eq!(app.message, Some(("all 2 ports are configured — ?: help".to_string(), false)));
@@ -5917,6 +5918,30 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = alpha_app(tmp.path(), &["A", "B"]);
         assert!(!row(&mut app).contains('+'), "{}", row(&mut app));
+    }
+
+    /// The list's +N, the STALE line and the pane's N count the same
+    /// options, on a hand-edited file too: IMAP has a line but no place in
+    /// the list, MQTT neither; both are new.
+    #[test]
+    fn plus_n_and_the_panes_n_marks_agree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("options/cat_alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("options"),
+            "_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=IMAP\n",
+        )
+        .unwrap();
+        let mut app = alpha_app(tmp.path(), &["A", "IMAP", "MQTT"]);
+        let shown = screen(&mut app);
+        assert!(shown.contains("cat/alpha +2 "), "{shown}");
+        assert!(shown.contains("STALE: new IMAP MQTT"), "{shown}");
+        let marked: Vec<&str> = ["A", "IMAP", "MQTT"]
+            .into_iter()
+            .filter(|o| shown.lines().any(|l| l.contains("│N [") && l.contains(&format!("] {o} "))))
+            .collect();
+        assert_eq!(marked, ["IMAP", "MQTT"], "{shown}");
     }
 
     /// A STALE line too long for the pane wraps to a second, under its

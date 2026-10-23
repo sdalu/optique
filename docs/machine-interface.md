@@ -74,7 +74,7 @@ re-running `make`:
 | `staged`            | value that would be written now                  |
 | `default`           | the port's own default                           |
 | `saved`             | file's value; `null` = no entry (`undecided`)    |
-| `new`               | added since the file was written                 |
+| `new`               | added since the file was written[^4]             |
 | `makeconf`          | `{value, scope}`: `global`/`port`/`force`[^1]    |
 | `locked`            | the file cannot change this value                |
 | `locked_by`         | why: a `*_FORCE` knob, or an implying option     |
@@ -91,6 +91,9 @@ re-running `make`:
 
 [^1]: absent when no layer mentions the option.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
+[^4]: or not settled by it: missing from its `_FILE_COMPLETE_OPTIONS_LIST`
+    or without a SET/UNSET line, which only a hand edit leaves and which
+    `sync` rewrites.
 
 ## Plans for `decide`
 

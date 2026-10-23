@@ -318,7 +318,7 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                 staged,
                 default: opts.defaults.contains(name),
                 saved: file_value,
-                new: saved.is_some() && file_value.is_none(),
+                new: saved.is_some_and(|s| !s.decides(name)),
                 makeconf,
                 locked: locked_by.is_some(),
                 locked_by,

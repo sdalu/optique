@@ -431,12 +431,14 @@ impl Session {
     /// must not read the owner-written file as stale.
     pub fn stale_delta(&self, info: &PortInfo) -> Option<(Vec<String>, Vec<String>)> {
         let saved = self.state(info)?.saved.as_ref()?;
-        let cur: BTreeSet<&str> =
-            self.owner_info(info).options.complete.iter().map(String::as_str).collect();
-        let was: BTreeSet<&str> = saved.complete.iter().map(String::as_str).collect();
+        let cur = &self.owner_info(info).options.complete;
+        // New: what the file does not settle (SavedOptionsFile::decides).
+        // Obsolete: whatever it mentions, list or line, that the tree lost.
+        let mentioned: BTreeSet<&str> =
+            saved.complete.iter().chain(saved.recorded()).map(String::as_str).collect();
         Some((
-            cur.difference(&was).map(|o| o.to_string()).collect(),
-            was.difference(&cur).map(|o| o.to_string()).collect(),
+            cur.iter().filter(|o| !saved.decides(o)).cloned().collect(),
+            mentioned.into_iter().filter(|o| !cur.iter().any(|c| c == o)).map(String::from).collect(),
         ))
     }
 
@@ -1150,6 +1152,37 @@ mod tests {
         // Same port without minimal: X11 and DOCS are undecided.
         let s2 = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
         assert!(!s2.covered_by_makeconf(&s2.ports[&key]));
+    }
+
+    /// New is what the file does not settle, list and line both, as apply
+    /// judges it; obsolete is whatever it mentions that the tree lost. A
+    /// hand-edited file with a line but no list entry (IMAP), a list entry
+    /// but no line (POP3), or neither (MQTT) is behind on each; a gone
+    /// option with a line only (OLD) is obsolete.
+    #[test]
+    fn stale_delta_follows_what_the_file_settles() {
+        let (ports, key) = mk_port(&["A", "IMAP", "MQTT", "POP3"], &["A"], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp.path().join("cat_port/options"),
+            "_OPTIONS_READ=port-0.9\n_FILE_COMPLETE_OPTIONS_LIST=A POP3\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=IMAP\nOPTIONS_FILE_SET+=OLD\n",
+        )
+        .unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        let (added, removed) = s.stale_delta(&s.ports[&key]).unwrap();
+        assert_eq!(added, ["IMAP", "MQTT", "POP3"]);
+        assert_eq!(removed, ["OLD"]);
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Stale);
+        // scan --json's per-option `new` says the same.
+        let new: Vec<String> = crate::report::option_reports(&s, &s.ports[&key])
+            .into_iter()
+            .filter(|o| o.new)
+            .map(|o| o.name)
+            .collect();
+        assert_eq!(new, ["IMAP", "MQTT", "POP3"]);
     }
 
     #[test]

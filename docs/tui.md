@@ -199,8 +199,10 @@ Options are listed in framework order under group headers such as
 `HTTPGRP` above; a group's kind is enforced on every toggle — `SINGLE`
 needs exactly one member on, `RADIO` at most one, `MULTI` at least one.
 Each row carries, in order: an `N` in the first column when the option was
-added to the port since its options file was written (so every new option
-is findable down the pane's left edge); the checkbox — `[x]`/`[ ]` for a
+added to the port since its options file was written, or the file does not
+settle it (missing from its `_FILE_COMPLETE_OPTIONS_LIST`, or without a
+SET/UNSET line: only a hand edit leaves either, and apply rewrites it), so
+every new option is findable down the pane's left edge; the checkbox — `[x]`/`[ ]` for a
 plain option, `(o)`/`( )` for a `SINGLE`/`RADIO` member; the option's name,
 coloured yellow when the staged value deviates from the port's default and
 magenta when it contradicts make.conf; the port's own default (`on`/`off`);

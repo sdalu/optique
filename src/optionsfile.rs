@@ -60,10 +60,13 @@ impl SavedOptionsFile {
         self.complete.iter().map(String::as_str).filter(|o| self.value(o).is_none()).collect()
     }
 
-    /// Whether the file knows the option at all: a line for it, or a place
-    /// in its complete list.
-    pub fn mentions(&self, opt: &str) -> bool {
-        self.value(opt).is_some() || self.complete.iter().any(|o| o == opt)
+    /// Whether the file settles the option as `make config` writes it: in
+    /// its complete list and with a SET or UNSET line. An option short of
+    /// either is new to it: make's `config-conditional` asks again about
+    /// one missing from the list, an unlined one sits at its defaults, and
+    /// apply rewrites the file for both.
+    pub fn decides(&self, opt: &str) -> bool {
+        self.value(opt).is_some() && self.complete.iter().any(|o| o == opt)
     }
 }
 

@@ -1033,10 +1033,11 @@ fn option_line(
         (false, false) => "[ ]",
     };
 
-    // 'N' in the first column: the option is unknown to the saved file, i.e.
-    // the tree added it since. A column of its own rather than a badge, so the
-    // eye finds every new option down the left edge of the pane.
-    let is_new = state.and_then(|s| s.saved.as_ref()).is_some_and(|saved| !saved.mentions(opt));
+    // 'N' in the first column: the saved file does not settle the option,
+    // as the STALE line and the list's +N count it (Session::stale_delta).
+    // A column of its own rather than a badge, so the eye finds every new
+    // option down the left edge of the pane.
+    let is_new = state.and_then(|s| s.saved.as_ref()).is_some_and(|saved| !saved.decides(opt));
     let mut spans: Vec<Span> = vec![Span::styled(
         if is_new { "N" } else { " " },
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),

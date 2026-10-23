@@ -570,8 +570,15 @@ at least one.
 .Pp
 Each option row starts with
 .Ql N
-when the option was added to the port since its options file was written, so
-every such option can be found down the pane's left edge, and carries the
+when the option was added to the port since its options file was written, or
+the file does not settle it
+.Po
+missing from its
+.Va _FILE_COMPLETE_OPTIONS_LIST
+or without a SET or UNSET line, which only a hand edit leaves and apply
+rewrites
+.Pc ,
+so every such option can be found down the pane's left edge, and carries the
 staged value, the port default
 .Pq Ql on No or Ql off ,
 and then a second
