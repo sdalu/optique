@@ -27,11 +27,13 @@ PACKAGE_BUILDING_FLAVORS=yes
 /// The environment queries evaluate Makefiles in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueryEnv {
-    /// The host's own, for a build on the host (plain /var/db/ports, synth).
+    /// The host's own, for a build on the host (plain /var/db/ports).
     Host,
     /// A poudriere jail's: nothing installed, poudriere's make.conf prelude,
     /// `PACKAGE_BUILDING` unless poudriere.conf turns it off.
     Jail { package_building: bool },
+    /// synth's scan slave's: nothing installed, synth's make.conf header.
+    Synth,
 }
 
 /// A jail's LOCALBASE is empty when poudriere gathers ports, while the host
@@ -43,6 +45,32 @@ const POUDRIERE_JAIL_TRAILER: &str = "\
 # --- poudriere jail environment (optique) ---
 LOCALBASE=/nonexistent
 ";
+
+/// What synth(1) writes at the top of its scan slave's make.conf, ahead of
+/// `<profile>-make.conf` (`create_make_conf` in its replicant.adb), as far as
+/// it bears on evaluating a Makefile: the slave's PORTSDIR, PORT_DBDIR and
+/// friends are chroot paths optique sets its own way. synth gives
+/// `PACKAGE_BUILDING` alone, never `PACKAGE_BUILDING_FLAVORS`. The profile
+/// line comes first, from [`synth_prelude`].
+const SYNTH_SCAN_PRELUDE: &str = "\
+USE_PACKAGE_DEPENDS_ONLY=yes
+PACKAGE_BUILDING=yes
+BATCH=yes
+";
+
+/// synth reads ports in a chroot whose /usr/local is an empty tmpfs or
+/// nullfs (replicant.adb), so the host's packages answer no `exists()`
+/// probe there: Mk/Uses/php.mk's php.conf and httpd checks, iconv.mk.
+const SYNTH_SCAN_TRAILER: &str = "\
+# --- synth scan environment (optique) ---
+LOCALBASE=/nonexistent
+";
+
+/// synth's header for `profile`, as its scan slave's make.conf starts.
+fn synth_prelude(profile: &str) -> String {
+    format!("# --- synth scan environment (optique) ---\nSYNTHPROFILE={profile}\n{SYNTH_SCAN_PRELUDE}")
+}
+
 const SYNTH_DIR: &str = "/usr/local/etc/synth";
 /// Section of synth.ini whose settings apply to every profile.
 const SYNTH_GLOBAL_SECTION: &str = "Global Configuration";
@@ -726,18 +754,15 @@ fn resolve_synth(
         );
     }
 
-    // synth builds on the host it configures, so the host's view is the
-    // right one: no jail environment, as for a plain /var/db/ports.
-    let (make_conf, conf_hash, make_conf_sources) = concat_make_conf(
+    // synth reads ports in a chroot with nothing installed, under its own
+    // header and the profile's make.conf alone: never the host's
+    // /etc/make.conf, whose absence the always non-empty staged file keeps.
+    let (make_conf, conf_hash, make_conf_sources) = stage_make_conf(
+        synth_prelude(profile),
         &[synth_dir.join(format!("{profile}-make.conf"))],
-        QueryEnv::Host,
-        &[],
+        SYNTH_SCAN_TRAILER,
         staging_dir,
     )?;
-    // A profile without a make.conf still names one: left unset, make would
-    // read the host's (/etc/make.conf or the environment's __MAKE_CONF),
-    // which a synth builder never sees and the empty hash does not key.
-    let make_conf = make_conf.or_else(|| Some(PathBuf::from("/dev/null")));
 
     Ok(Settings {
         portsdir,
@@ -745,7 +770,7 @@ fn resolve_synth(
         make_conf,
         make_conf_sources,
         conf_hash,
-        env: QueryEnv::Host,
+        env: QueryEnv::Synth,
         blacklist: Blacklist::default(),
         notes,
         overlays: Vec::new(),
@@ -950,6 +975,22 @@ pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
     Ok(path.expect("the jail environment is never empty"))
 }
 
+/// Stage synth's scan make.conf for `profile` over `profile_make_conf`.
+#[cfg(test)]
+pub(crate) fn stage_synth_make_conf(
+    staging_dir: &Path,
+    profile: &str,
+    profile_make_conf: &Path,
+) -> Result<PathBuf> {
+    let (path, _, _) = stage_make_conf(
+        synth_prelude(profile),
+        &[profile_make_conf.to_path_buf()],
+        SYNTH_SCAN_TRAILER,
+        staging_dir,
+    )?;
+    Ok(path.expect("the synth environment is never empty"))
+}
+
 /// Concatenate every existing candidate, in order, into one staged
 /// `make.conf`, between the jail prelude and trailer in a jail's `env`, the
 /// overlays' `OVERLAYS+=` lines where poudriere writes them in the jail's
@@ -964,15 +1005,30 @@ fn concat_make_conf(
     overlays: &[Overlay],
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
-    let mut combined = String::new();
-    let mut sources = Vec::new();
+    let mut prelude = String::new();
+    let mut trailer = "";
     if let QueryEnv::Jail { package_building } = env {
-        combined.push_str(POUDRIERE_JAIL_PRELUDE);
-        combined.push_str(&overlay_lines(overlays));
+        prelude.push_str(POUDRIERE_JAIL_PRELUDE);
+        prelude.push_str(&overlay_lines(overlays));
         if package_building {
-            combined.push_str(PACKAGE_BUILDING_LINES);
+            prelude.push_str(PACKAGE_BUILDING_LINES);
         }
+        trailer = POUDRIERE_JAIL_TRAILER;
     }
+    stage_make_conf(prelude, candidates, trailer, staging_dir)
+}
+
+/// Stage `prelude`, every existing candidate in order, then `trailer`, as one
+/// make.conf, returning it (None when there is nothing to write), the hash of
+/// the combined text, and the candidates read.
+fn stage_make_conf(
+    prelude: String,
+    candidates: &[PathBuf],
+    trailer: &str,
+    staging_dir: &Path,
+) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
+    let mut combined = prelude;
+    let mut sources = Vec::new();
     for path in candidates {
         if let Ok(text) = fs::read_to_string(path) {
             combined.push_str(&format!("# --- {} ---\n", path.display()));
@@ -983,9 +1039,7 @@ fn concat_make_conf(
             sources.push(path.clone());
         }
     }
-    if env != QueryEnv::Host {
-        combined.push_str(POUDRIERE_JAIL_TRAILER);
-    }
+    combined.push_str(trailer);
 
     let conf_hash = crate::cache::sha256_hex(combined.as_bytes());
     if combined.is_empty() {
@@ -1106,6 +1160,29 @@ mod tests {
         let before = hash(&jail);
         fs::remove_file(&pkg_db).unwrap();
         assert_eq!(hash(&jail), before, "a jail does not see the host's packages");
+    }
+
+    /// synth sees no host package, so the pkg database keys nothing for it;
+    /// its profile names a cache generation of its own.
+    #[test]
+    fn synth_generation_ignores_the_pkg_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let tree = tmp.path().join("ports");
+        fake_tree(&tree);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
+            .unwrap();
+        let resolve = |profile| resolve_synth(&synth, profile, None, None, &stage).unwrap();
+
+        let pkg_db = tmp.path().join("local.sqlite");
+        fs::write(&pkg_db, "one package").unwrap();
+        let s = resolve("A");
+        let before = s.conf_hash.clone();
+        assert_eq!(key_installed_packages(s, &pkg_db).conf_hash, before);
+        assert_ne!(resolve("B").conf_hash, before, "SYNTHPROFILE differs");
     }
 
     /// Resolution with and without a poudriere.d, against a fake host.
@@ -1731,9 +1808,19 @@ not a key value line
         assert_eq!(s.options_dir, opts);
         assert!(s.options_dir.is_dir());
         assert_eq!(s.make_conf_sources, vec![synth.join("LiveSystem-make.conf")]);
+        assert_eq!(s.env, QueryEnv::Synth);
         let staged = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
         assert!(staged.contains("ssl=openssl"), "{staged}");
         assert!(!staged.contains("A=1"), "other profile leaked in: {staged}");
+        // synth's scan slave: its header before the profile's make.conf,
+        // PACKAGE_BUILDING without _FLAVORS, and an empty LOCALBASE after it
+        // so the profile cannot undo it.
+        let at = |needle: &str| staged.find(needle).unwrap_or_else(|| panic!("{needle}: {staged}"));
+        assert!(at("SYNTHPROFILE=LiveSystem\n") < at("ssl=openssl"), "{staged}");
+        assert!(at("PACKAGE_BUILDING=yes\n") < at("ssl=openssl"), "{staged}");
+        assert!(!staged.contains("PACKAGE_BUILDING_FLAVORS"), "{staged}");
+        assert!(at("ssl=openssl") < at("LOCALBASE=/nonexistent\n"), "{staged}");
+        assert!(staged.ends_with("LOCALBASE=/nonexistent\n"), "{staged}");
         // synth has no blacklist, and nothing to note.
         assert!(s.blacklist.is_empty());
         assert!(s.notes.is_empty());
@@ -1775,12 +1862,13 @@ not a key value line
         // Nonexistent Directory_options is still the target, not created yet.
         assert_eq!(s.options_dir, opts);
         assert!(!s.options_dir.is_dir());
-        // No make.conf is still one: left unset, make would read the host's
-        // (/etc/make.conf or the environment's __MAKE_CONF), which a synth
-        // builder never does, and which the empty hash would not key.
-        assert_eq!(s.make_conf.as_deref(), Some(Path::new("/dev/null")));
+        // No profile make.conf still stages synth's header: left unset, make
+        // would read the host's (/etc/make.conf or the environment's
+        // __MAKE_CONF), which a synth builder never does.
+        assert_eq!(s.make_conf.as_deref(), Some(stage.join("make.conf").as_path()));
         assert!(s.make_conf_sources.is_empty());
-        assert!(!stage.join("make.conf").exists(), "nothing to stage");
+        let staged = fs::read_to_string(stage.join("make.conf")).unwrap();
+        assert_eq!(staged, format!("{}{SYNTH_SCAN_TRAILER}", synth_prelude("LiveSystem")));
 
         // Directory_portsdir naming a non-tree is an error, not a fallback.
         fs::write(

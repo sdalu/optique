@@ -54,13 +54,31 @@ poudriere.conf files in poudriere's own order (`include_poudriere_confs`):
 plain assignment lines only, since sourcing them as shell would run
 whatever they hold, so a value set by shell logic is missed. Probes that
 spell `/usr/local` literally still see the host (one in the tree,
-`math/primecount`, affecting only a CMake flag). synth keeps the host's
-view on purpose: it builds on the host it configures, so what that host has
-installed is part of the truth, as it is for a plain `/var/db/ports`.
-That truth changes with every `pkg install` or `pkg delete`, so for these
-host builds the size and mtime of pkg's `local.sqlite` (under `PKG_DBDIR`,
-else `/var/db/pkg`) are folded into the make.conf hash: a package change
-starts a new cache generation, and a missing database adds nothing.
+`math/primecount`, affecting only a CMake flag).
+
+synth is wrapped the same way. It reads each port in a scan chroot whose
+`/usr/local` is an empty tmpfs or nullfs, under a make.conf it writes
+itself (`create_make_conf` in its `replicant.adb`) followed by the
+profile's file, never the host's `/etc/make.conf`. So the staged make.conf
+starts with synth's own lines that bear on a Makefile (`SYNTHPROFILE`,
+`PACKAGE_BUILDING` without `_FLAVORS`, `BATCH`,
+`USE_PACKAGE_DEPENDS_ONLY`) and ends with `LOCALBASE=/nonexistent`.
+optique 0.3.0 gave synth the host's view instead, on the belief that synth
+builds against what its host has installed: on a host with php82 and
+`DEFAULT_VERSIONS+= php=8.4`, `Mk/Uses/php.mk` read the installed
+`php.conf` and resolved every `php84-*` extension to `lang/php82`, and
+an httpd probe picked the `-zts` extension directory, where synth itself
+resolved `lang/php84`. synth's `varcache.conf` (host values like
+`OSVERSION` and `ARCH` it precomputes) is not copied: make on the same
+host computes them alike.
+
+A plain `/var/db/ports` build does keep the host's view: it builds on the
+host it configures, so what that host has installed is part of the truth.
+That truth changes with every `pkg install` or `pkg delete`, so for a
+local build the size and mtime of pkg's `local.sqlite` (under
+`PKG_DBDIR`, else `/var/db/pkg`) are folded into the make.conf hash: a
+package change starts a new cache generation, and a missing database adds
+nothing.
 
 ## Which build is configured: poudriere.d, unless `-l` says otherwise
 

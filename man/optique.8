@@ -1821,6 +1821,26 @@ still override the options directory and the ports tree;
 names a poudriere tree and is refused with
 .Fl s .
 .Pp
+synth reads each port in a chroot whose
+.Pa /usr/local
+is empty, so the queries do too: the profile's file comes after the lines
+synth puts at the top of that chroot's
+.Pa make.conf
+.Po
+.Va SYNTHPROFILE , PACKAGE_BUILDING , BATCH , USE_PACKAGE_DEPENDS_ONLY ,
+but not
+.Va PACKAGE_BUILDING_FLAVORS
+.Pc
+and is followed by
+.Ql LOCALBASE=/nonexistent .
+Port Makefiles that probe installed files would otherwise answer for the
+host: with php82 installed,
+.Pa Mk/Uses/php.mk
+reads its
+.Pa php.conf
+and every php84 extension builds against
+.Pa lang/php82 .
+.Pp
 When no ports are given at all, synth mode uses the installed packages as
 the list, mirroring how synth builds what is installed: one root per
 installed package, its origin from
@@ -1908,8 +1928,7 @@ in
 .Ev PKG_DBDIR ,
 else
 .Pa /var/db/pkg ,
-are part of the cache key, as they are for
-.Fl s ;
+are part of the cache key;
 .It
 there is no blacklist.
 .El
@@ -1949,7 +1968,7 @@ see
 .Sx LOCAL BUILDS .
 Poudriere and synth builds always pass their own.
 .It Ev PKG_DBDIR
-Where a local or synth build finds pkg's database, whose changes start a
+Where a local build finds pkg's database, whose changes start a
 new cache generation; see
 .Sx LOCAL BUILDS .
 .It Ev NO_COLOR

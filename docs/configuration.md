@@ -147,9 +147,18 @@ file's `[Global Configuration]` section and then to `/usr/ports` and
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
 each builder's make.conf — or none at all when the profile has none (the
 host's `/etc/make.conf` is never read), so there is no layering and no
-blacklist under `-s`. There is no jail environment either: synth builds on the host
-it configures, so the host's installed packages are part of what it
-builds against.
+blacklist under `-s`.
+
+synth reads each port in a chroot whose `/usr/local` is empty, so the
+queries do too: the profile's file comes after the lines synth puts at
+the top of that chroot's make.conf (`SYNTHPROFILE`, `PACKAGE_BUILDING`,
+`BATCH`, `USE_PACKAGE_DEPENDS_ONLY`; no `PACKAGE_BUILDING_FLAVORS`) and
+is followed by `LOCALBASE=/nonexistent`. Without it a port Makefile
+that probes installed files would answer for the host: with php82
+installed, `Mk/Uses/php.mk` reads its `php.conf` and every `php84-*`
+extension builds against `lang/php82`. The startup banner's
+`environment:` line reads
+`synth scan slave (host packages under /usr/local not seen)`.
 
 `-o dir` and `-P dir` still override the options directory and the
 ports tree.

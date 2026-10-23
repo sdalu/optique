@@ -548,4 +548,49 @@ mod tests {
         assert!(after.options.effective.contains("LDAP"));
         assert_eq!(after.ignore, None, "the host's apr-util leaked into www/apache24");
     }
+
+    /// synth reads ports in a chroot with an empty /usr/local, so an
+    /// installed PHP must not pick the PHP a port builds against: php.mk
+    /// includes ${PHPBASE}/etc/php.conf when it exists, PHPBASE defaulting
+    /// to LOCALBASE. A fake LOCALBASE with a php82 php.conf, set by the
+    /// profile's make.conf, stands for the host's packages on any host.
+    /// Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_synth_env_hides_host_packages() {
+        let _lock = make_test_lock();
+        let staging = tempfile::tempdir().unwrap();
+        let localbase = staging.path().join("localbase");
+        std::fs::create_dir_all(localbase.join("etc")).unwrap();
+        std::fs::write(localbase.join("etc/php.conf"), "PHP_VER=82\nPHP_EXT_DIR=20220829\n")
+            .unwrap();
+        let profile = staging.path().join("Live-make.conf");
+        std::fs::write(&profile, format!("LOCALBASE={}\n", localbase.display())).unwrap();
+        let make_conf =
+            crate::config::stage_synth_make_conf(staging.path(), "Live", &profile).unwrap();
+        let db = crate::staging::StagingDb::create(
+            staging.path(),
+            &crate::optfiles::OptionsFiles::new(staging.path()), // nothing to seed
+            std::iter::empty(),
+        )
+        .unwrap();
+        let ctx = QueryCtx {
+            portsdir: "/usr/ports".into(),
+            make_conf: Some(make_conf),
+            port_dbdir: db.path().to_path_buf(),
+            overlays: Vec::new(),
+        };
+
+        let xml = run_query(&ctx, &PortKey::parse("textproc/php84-xml").unwrap()).unwrap();
+        assert!(
+            xml.deps.iter().any(|d| d.target.origin == "lang/php84"),
+            "textproc/php84-xml must build against lang/php84: {:?}",
+            xml.deps
+        );
+        assert!(
+            !xml.deps.iter().any(|d| d.target.origin == "lang/php82"),
+            "the host's php.conf leaked into textproc/php84-xml: {:?}",
+            xml.deps
+        );
+    }
 }

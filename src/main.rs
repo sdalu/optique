@@ -745,12 +745,17 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
-        if let config::QueryEnv::Jail { package_building } = settings.env {
-            eprintln!(
+        match settings.env {
+            config::QueryEnv::Jail { package_building } => eprintln!(
                 "  {} poudriere jail (host packages under /usr/local not seen{})",
                 tint(paint, ansi::CYAN, "environment:"),
                 if package_building { "" } else { "; NO_PACKAGE_BUILDING set" }
-            );
+            ),
+            config::QueryEnv::Synth => eprintln!(
+                "  {} synth scan slave (host packages under /usr/local not seen)",
+                tint(paint, ansi::CYAN, "environment:")
+            ),
+            config::QueryEnv::Host => {}
         }
         if !settings.blacklist.is_empty() {
             for (i, src) in settings.blacklist.sources.iter().enumerate() {
