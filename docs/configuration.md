@@ -206,11 +206,20 @@ annotation, so several flavors of one origin installed side by side
 against its flavor index, a package whose origin is not in the tree, or
 a flavored port's package with no flavor annotation or a flavor the port
 no longer has, is skipped, all of them named in one note; a port without
-flavors is rooted as its bare origin whatever the annotation. This applies to the TUI, `scan`, `sync`
-and `clean --unused` (see [Commands](commands.md)). `--repo name` is
-repeatable and restricts that implicit list to packages installed from
-the named pkg repositories, e.g. `--repo Synth` to consider only
-synth-built packages; the names are listed by `pkg query -a %R`.
+flavors is rooted as its bare origin whatever the annotation. This
+applies to the TUI, `scan`, `sync` and `clean --unused` (see
+[Commands](commands.md)). `--repo name` is repeatable and restricts that
+implicit list to packages installed from the named pkg repositories,
+e.g. `--repo Synth` to consider only synth-built packages; the names are
+listed by `pkg query -a %R`.
+
+synth refuses a build when the saved options file of a port without
+flavors, `<category>_<name>/options`, names an option the port lacks or
+has more or fewer `OPTIONS_FILE_SET`/`OPTIONS_FILE_UNSET` entries than
+the port has options, every line counted. Under `-s`, `scan` marks such
+a port `[synth refuses the file: reason]` and counts it as needing
+attention in its exit status, whatever its status; `sync` rewrites the
+file.
 
 When `Directory_options` is the live `/var/db/ports`, minimal and
 redundancy cleanups also affect plain make config workflows.

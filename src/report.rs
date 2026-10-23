@@ -51,6 +51,9 @@ pub struct PortReport {
     pub options_file: String,
     /// The overlay the port is taken from; null when the ports tree answers.
     pub overlay: Option<String>,
+    /// Under -s, why synth would refuse to build with the saved options
+    /// file; null when it would not.
+    pub synth_refuses: Option<String>,
     /// Why the status is `conflict`; empty otherwise. Only with `--options`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub violations: Option<Vec<String>>,

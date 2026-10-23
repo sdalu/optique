@@ -60,8 +60,9 @@ unconfigured one.
 Each element of `ports` has `port`, `pkgname`, `status` (`ok`, `unconfigured`,
 `stale` or `conflict`), `undecided`, `added` and `removed` (both only
 meaningful for `stale`), `mc_covered`, `blacklisted`, `in_loop`,
-`options_file` and `overlay` (the overlay the port is taken from; `null`
-for the ports tree). With `--options`, two more keys appear: `violations` (why the
+`options_file`, `overlay` (the overlay the port is taken from; `null`
+for the ports tree) and `synth_refuses` (under `-s`, why synth would
+refuse to build with the saved file; `null` otherwise). With `--options`, two more keys appear: `violations` (why the
 status is `conflict`) and `options`, an array in the framework's own option
 order.
 

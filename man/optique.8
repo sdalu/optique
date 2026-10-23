@@ -1266,10 +1266,17 @@ and
 .Va blacklisted ,
 .Va in_loop ,
 .Va options_file
-.Pq the options-dir entry it reads
-and
+.Pq the options-dir entry it reads ,
 .Va overlay
-.Pq the overlay the port is taken from, null for the ports tree .
+.Pq the overlay the port is taken from, null for the ports tree
+and
+.Va synth_refuses
+.Po
+under
+.Fl s ,
+why synth would refuse to build with the saved file, null otherwise; see
+.Sx SYNTH
+.Pc .
 Non-ok ports come first, then alphabetical order.
 Each element of
 .Va loops
@@ -2119,6 +2126,23 @@ This applies to the TUI,
 .Cm sync
 and
 .Cm clean Fl -unused .
+.Pp
+synth refuses a build when the saved options file of a port without
+flavors,
+.Pa <category>_<name>/options ,
+names an option the port lacks or has more or fewer
+.Li OPTIONS_FILE_SET
+and
+.Li OPTIONS_FILE_UNSET
+entries than the port has options, every line counted.
+Under
+.Fl s ,
+.Cm scan
+marks such a port
+.Ql [synth refuses the file: Ar reason ]
+and counts it as needing attention in its exit status, whatever its status;
+.Cm sync
+rewrites the file.
 .Fl -repo Ar name
 is repeatable and restricts that implicit list to packages installed from
 the named pkg repositories, e.g.
@@ -2372,7 +2396,9 @@ is fully decided by
 or is blacklisted, and no dependency loop is left to untangle.
 .It 1
 A human decision is pending: at least one port is unconfigured or stale with
-undecided options, or has a conflict, or the closure holds a dependency loop
+undecided options, or has a conflict, or, under
+.Fl s ,
+has a saved file synth would refuse to build with, or the closure holds a dependency loop
 not all of whose members are blacklisted, or a port could not be checked
 because its query failed (it, and what it depends on, are missing from the
 report).

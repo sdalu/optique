@@ -814,6 +814,73 @@ fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     moved
 }
 
+/// Why synth would refuse to build with the saved options of a port whose
+/// options are `options`, `text` being the file synth reads for it; None
+/// when it would not. synth's check (portscan-packages.adb ~808-916,
+/// `passed_options_cache_check`, run before every build by
+/// portscan-pilot.adb ~418-424) counts every line with `+=` right after
+/// `OPTIONS_FILE_SET` or `OPTIONS_FILE_UNSET`'s length, and fails the file
+/// when an entry names an option the port lacks or when the count is not
+/// the port's number of options, more or fewer.
+fn synth_refuses(text: &[u8], options: &[String]) -> Option<String> {
+    let options: std::collections::BTreeSet<&str> = options.iter().map(String::as_str).collect();
+    let mut count = 0usize;
+    for line in text.split(|&b| b == b'\n') {
+        let name = if line.get(16..18) == Some(b"+=") {
+            &line[18..]
+        } else if line.get(18..20) == Some(b"+=") {
+            &line[20..]
+        } else {
+            continue;
+        };
+        count += 1;
+        let name = String::from_utf8_lossy(name);
+        if !options.contains(name.as_ref()) {
+            return Some(format!("saved {name} is no option of the port"));
+        }
+    }
+    (count != options.len())
+        .then(|| format!("{count} saved entries for the port's {} options", options.len()))
+}
+
+/// The file synth checks for `info` under `files`' options dir, and what it
+/// says of it ([`synth_refuses`]): `<category>_<name>/options` by origin,
+/// for a port without flavors; a flavored port's name carries its
+/// `@flavor` there, a file that never exists, so it is never refused.
+fn synth_refuses_port(files: &optfiles::OptionsFiles, info: &PortInfo) -> Option<String> {
+    if !info.flavors.is_empty() {
+        return None;
+    }
+    let bytes = files.bytes(&info.key.origin.replace('/', "_"))?;
+    synth_refuses(&bytes, &info.options.complete)
+}
+
+/// Does a scan row make `scan` exit 1? A conflict always does (saved
+/// options violate the port's own constraints), and so does a file synth
+/// would refuse (`synth_refuses`, under -s), whatever the status; missing
+/// or outdated configuration only does when make.conf leaves something
+/// open (`mc_covered` false). Blacklisted ports never do — they are never
+/// built here.
+fn needs_attention(
+    status: &session::UiStatus,
+    blacklisted: bool,
+    mc_covered: bool,
+    synth_refuses: bool,
+) -> bool {
+    use session::UiStatus;
+    if blacklisted {
+        return false;
+    }
+    if synth_refuses {
+        return true;
+    }
+    match status {
+        UiStatus::Conflict => true,
+        UiStatus::Unconfigured | UiStatus::Stale => !mc_covered,
+        _ => false,
+    }
+}
+
 /// Whether scan shows a row as ok: its status is, or -m makes the defaults
 /// and make.conf the decision and they leave nothing open for this
 /// unconfigured or stale port. Rows sort on it, so the ones shown as
@@ -1089,6 +1156,8 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         overlay: Option<&'a config::Overlay>,
         /// Only under `--options`: what a caller needs to decide a value.
         detail: Option<PortDetail>,
+        /// Under -s: why synth would refuse to build with the saved file.
+        synth_refuses: Option<String>,
     }
     /// The `--options` payload of one port.
     struct PortDetail {
@@ -1105,19 +1174,14 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         fn mc_covered(&self) -> bool {
             self.undecided.is_empty()
         }
-        /// Does this row make `scan` exit 1? A conflict always does (saved
-        /// options violate the port's own constraints); missing or outdated
-        /// configuration only does when make.conf leaves something open.
-        /// Blacklisted ports never do — they are never built here.
+        /// Does this row make `scan` exit 1? See [`needs_attention`].
         fn needs_attention(&self) -> bool {
-            if self.blacklisted {
-                return false;
-            }
-            match self.status {
-                UiStatus::Conflict => true,
-                UiStatus::Unconfigured | UiStatus::Stale => !self.mc_covered(),
-                _ => false,
-            }
+            needs_attention(
+                &self.status,
+                self.blacklisted,
+                self.mc_covered(),
+                self.synth_refuses.is_some(),
+            )
         }
         fn status_str(&self) -> &'static str {
             match self.status {
@@ -1143,7 +1207,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     let mut rows: Vec<Row> = Vec::new();
     let mut hidden = 0usize;
     for (key, info) in &sess.ports {
-        if !info.options.has_options() {
+        // synth refuses the whole build over one such file, options or not.
+        let synth_refuses = (settings.env == config::QueryEnv::Synth)
+            .then(|| synth_refuses_port(&scanned.files, info))
+            .flatten();
+        if !info.options.has_options() && synth_refuses.is_none() {
             hidden += 1;
             continue;
         }
@@ -1177,6 +1245,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 violations: sess.violations(info),
                 options: report::option_reports(&sess, info),
             }),
+            synth_refuses,
         });
     }
     rows.sort_by(|a, b| {
@@ -1226,6 +1295,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                     in_loop: r.in_loop,
                     options_file: format!("{}/options", r.options_name),
                     overlay: r.overlay.map(|o| o.path.display().to_string()),
+                    synth_refuses: r.synth_refuses.clone(),
                     violations: r.detail.as_ref().map(|d| d.violations.clone()),
                     options: r.detail.as_ref().map(|d| d.options.clone()),
                 })
@@ -1298,6 +1368,9 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 tail.push_str(" [dependency loop]");
             }
             // Only where an overlay, not the main tree, answers for it.
+            if let Some(why) = &row.synth_refuses {
+                tail.push_str(&format!(" [synth refuses the file: {why}]"));
+            }
             if let Some(o) = row.overlay {
                 tail.push_str(&format!(" [overlay {}]", o.label()));
             }
@@ -1664,6 +1737,48 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::split_raw_origins;
+
+    /// synth refuses a file with an entry the port lacks, or with more or
+    /// fewer entries than the port has options, every SET or UNSET line
+    /// counted; such a file trips scan's gate whatever its status.
+    #[test]
+    fn a_file_synth_refuses_trips_the_gate() {
+        use super::{needs_attention, synth_refuses};
+        use crate::session::UiStatus;
+        let opts: Vec<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
+        let file = |body: &str| {
+            format!("# This file is auto-generated by 'make config'.\n_OPTIONS_READ=x-1.0\n{body}")
+        };
+        let both = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
+        assert_eq!(synth_refuses(both.as_bytes(), &opts), None);
+        let gone = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=GONE\n");
+        assert_eq!(
+            synth_refuses(gone.as_bytes(), &opts).as_deref(),
+            Some("saved GONE is no option of the port")
+        );
+        let short = file("OPTIONS_FILE_SET+=A\n");
+        assert_eq!(
+            synth_refuses(short.as_bytes(), &opts).as_deref(),
+            Some("1 saved entries for the port's 2 options")
+        );
+        // A repeated line is one more entry, as synth counts it.
+        let twice = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
+        assert_eq!(
+            synth_refuses(twice.as_bytes(), &opts).as_deref(),
+            Some("3 saved entries for the port's 2 options")
+        );
+        // A port with no options at all and a stray entry.
+        assert!(synth_refuses(both.as_bytes(), &[]).is_some());
+
+        // The gate: a refused file trips it even when the port is ok or
+        // make.conf covers what is open; a blacklisted port never does.
+        assert!(needs_attention(&UiStatus::Ok, false, true, true));
+        assert!(needs_attention(&UiStatus::Stale, false, true, true));
+        assert!(!needs_attention(&UiStatus::Ok, false, true, false));
+        assert!(!needs_attention(&UiStatus::Stale, false, true, false));
+        assert!(needs_attention(&UiStatus::Conflict, false, true, false));
+        assert!(!needs_attention(&UiStatus::Conflict, true, true, true));
+    }
 
     /// A shared file is redundant only when no flavor reading it deviates:
     /// www/sogo@pgsql defaults to PGSQL, the file turns MYSQL on instead.
