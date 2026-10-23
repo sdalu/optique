@@ -234,7 +234,9 @@ Whatever room is left on the row, after the badges, carries the option's
 own description — the one thing the row usually has no space for; a row
 with less than about sixteen columns of room drops the description
 instead of showing a word fragment, and one too long ends in `…` at a
-word — or goes, when not even its first two words fit. A two-line panel below the rows,
+word — or goes, when not even its first two words fit. A panel below the rows —
+one line when the pane is 56 columns wide or more (a terminal of about 100
+columns), two on a narrower one, so it never changes with the option —
 titled with the option's name, follows the cursor and gives the selected
 option's description, wrapped, marking with `…` what does not fit; an
 option the ports framework describes nowhere reads `(no description)`.

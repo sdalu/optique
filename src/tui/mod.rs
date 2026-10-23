@@ -3155,7 +3155,8 @@ mod tests {
         app.rebuild_editor();
         hit(&mut app, KeyCode::Enter);
         screen(&mut app);
-        assert_eq!(app.page.options, 32 - 3 - 6, "detail 2 + rule, description 5 + rule");
+        // At 100 columns the pane is wide enough for a one-line detail.
+        assert_eq!(app.page.options, 32 - 2 - 6, "detail 1 + rule, description 5 + rule");
         let page = page_step(app.page.options);
         ctrl(&mut app, 'f');
         assert_eq!(app.editor_idx, page);

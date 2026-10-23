@@ -447,9 +447,20 @@ const MIN_ROWS: u16 = 4;
 /// keeps the option rows where they are from one port to the next.
 const ABOUT_LINES: u16 = 5;
 
-/// Height of the option detail panel, whichever option the cursor is on (or
-/// none): a description longer than that is cut, and `i` has it all.
-const DETAIL_LINES: u16 = 2;
+/// Width of the option pane's text from which the detail panel takes one line
+/// rather than two: 97% of the ports' option descriptions fit one line there
+/// (13683 surveyed in /usr/ports, 2026-10-23), against 86% at an 80-column
+/// terminal's 44.
+const DETAIL_ONE_LINE_WIDTH: u16 = 56;
+
+/// Height of the option detail panel in a pane `width` columns wide,
+/// whichever option the cursor is on (or none): one line on a wide pane, two
+/// on a narrow one. It follows the terminal's size, never the option, so
+/// nothing moves as the cursor does; a description longer than the panel is
+/// cut, and `i` has it all.
+fn detail_lines(width: u16) -> u16 {
+    if width >= DETAIL_ONE_LINE_WIDTH { 1 } else { 2 }
+}
 
 /// Where the editor's parts go inside the pane's border: the description
 /// panel on top, the option rows, the detail panel at the bottom. A panel is
@@ -462,15 +473,16 @@ struct EditorLayout {
 
 /// Lay the editor out in `inner`, the pane without its border, from its size
 /// alone, so nothing moves as the cursor or the port changes: the option rows
-/// scroll under whatever is left. The detail panel is DETAIL_LINES, and goes
+/// scroll under whatever is left. The detail panel is `detail_lines`, and goes
 /// when the rows would keep fewer than MIN_ROWS. The description panel, when
 /// `about`, takes ABOUT_LINES out of what is then left above MIN_ROWS: it
 /// shrinks only on a short pane, and goes when not even a line fits.
 fn editor_layout(inner: Rect, about: bool) -> EditorLayout {
     let mut rows = inner;
-    let detail = (inner.height >= DETAIL_LINES + 1 + MIN_ROWS).then(|| {
-        rows.height -= DETAIL_LINES + 1;
-        Rect { y: inner.y + inner.height - DETAIL_LINES, height: DETAIL_LINES, ..inner }
+    let lines = detail_lines(inner.width);
+    let detail = (inner.height >= lines + 1 + MIN_ROWS).then(|| {
+        rows.height -= lines + 1;
+        Rect { y: inner.y + inner.height - lines, height: lines, ..inner }
     });
     let room = rows.height.saturating_sub(1 + MIN_ROWS);
     let n = if about { room.min(ABOUT_LINES) } else { 0 };
@@ -1543,7 +1555,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                     "the description of the option under the cursor, in",
                 ),
                 // Aligned on the legend's text column (2 + 14 + " = ").
-                Line::from(Span::raw("                   two lines — i on it shows it all")),
+                Line::from(Span::raw("                   1–2 lines — i on it shows it all")),
             ]);
         }
         2 => lines.extend([
@@ -2116,10 +2128,10 @@ mod tests {
         let about = l.about.expect("room for the description");
         let detail = l.detail.expect("room for the detail");
         assert_eq!(about, Rect::new(1, 1, 38, ABOUT_LINES));
-        assert_eq!(detail, Rect::new(1, 27, 38, DETAIL_LINES));
+        assert_eq!(detail, Rect::new(1, 27, 38, 2), "two lines on a narrow pane");
         assert_eq!(l.rows.y, about.y + about.height + 1, "a rule between");
         assert_eq!(l.rows.y + l.rows.height + 1, detail.y, "a rule between");
-        assert_eq!(l.rows.height, 28 - ABOUT_LINES - 1 - DETAIL_LINES - 1);
+        assert_eq!(l.rows.height, 28 - ABOUT_LINES - 1 - 2 - 1);
         assert!(editor_layout(inner, false).about.is_none());
 
         // A short pane: the description shrinks to keep the rows MIN_ROWS,
@@ -2131,6 +2143,12 @@ mod tests {
         assert!(l.about.is_none());
         assert!(l.detail.is_some(), "8 rows keep 4 beside 2 lines and a rule");
         assert!(editor_layout(Rect::new(1, 1, 38, 6), false).detail.is_none());
+
+        // A wide pane gives the detail one line, whatever the option.
+        let wide = Rect::new(1, 1, DETAIL_ONE_LINE_WIDTH, 28);
+        assert_eq!(editor_layout(wide, false).detail.map(|d| d.height), Some(1));
+        let narrower = Rect { width: DETAIL_ONE_LINE_WIDTH - 1, ..wide };
+        assert_eq!(editor_layout(narrower, false).detail.map(|d| d.height), Some(2));
     }
 
     /// A box too short for a thumb between the arrows keeps the arrows.
