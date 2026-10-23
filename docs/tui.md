@@ -398,6 +398,11 @@ option (`N`); else its first option. Never on a group header. `f` keeps the
 option the cursor is on, to compare it across flavors, and lands the same
 way only when the other flavor lacks it.
 
+`Space` and `d` leave alone what the options file cannot decide, and say
+why in the status bar: an option `*_FORCE`, `WITH`/`WITHOUT` or the port's
+`options.local` decides, and every option of a port under make.conf's
+`OPTIONS_OVERRIDE` or whose `options.local` resets the file's lists.
+
 `B` asks for `OPTION=on`, `OPTION=off`, `OPTION+` or `OPTION-`, prefilled
 with `OPTION=` when the cursor is on an option, and sets it on every
 listed port that has it. The prompt's title says which ports those are —
