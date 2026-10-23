@@ -259,7 +259,7 @@ impl Session {
                 return Err(format!("{opt} is implied by {by}; disable {by} first"));
             }
             // A conditional group whose option is off is not checked.
-            let (unchecked, _) = unchecked_groups(opts, state.staged.clone());
+            let (unchecked, _) = unchecked_groups(opts, staged_effective(info, &state.staged));
             if let Some(g) = opts.group_of(opt).filter(|g| !unchecked.contains(g.name.as_str())) {
                 let on = g.count_on(&state.staged);
                 match g.kind {
@@ -358,7 +358,9 @@ impl Session {
         let staged = &state.staged;
         let saved = state.saved.as_ref();
         let o = &info.options;
-        let (unchecked, checked) = unchecked_groups(o, staged.clone());
+        // Judged on what make computes from the staged set as the options
+        // file: *_FORCE overrides it, IMPLIES closes it.
+        let (unchecked, checked) = unchecked_groups(o, staged_effective(info, staged));
         let staged = &checked;
         let mut out = Vec::new();
         for opt in staged {
@@ -586,6 +588,18 @@ pub struct Conflict {
     pub members: Vec<String>,
     /// What make.conf did to it, when it had a hand in it.
     pub cause: Option<String>,
+}
+
+/// What make computes with the staged set written as the options file.
+fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<String> {
+    let complete = &info.options.complete;
+    let file = SavedOptionsFile {
+        complete: complete.clone(),
+        set: staged.clone(),
+        unset: complete.iter().filter(|o| !staged.contains(*o)).cloned().collect(),
+        ..Default::default()
+    };
+    effective_with(info, Some(&file))
 }
 
 /// The SINGLE and MULTI groups make's pre-check-config (bsd.port.mk) leaves
@@ -1148,6 +1162,36 @@ mod tests {
     /// then the member actually in force is the port's default, which nobody
     /// decided. Counting the group as covered kept `scan` at exit 0 for a
     /// port that still owed an answer.
+    /// check-config judges PORT_OPTIONS, which *_FORCE has rewritten after
+    /// the options file: a forced-off option conflicts with nothing, and a
+    /// forced-on one conflicts though the staged set leaves it off.
+    #[test]
+    fn conflicts_are_judged_on_what_force_leaves() {
+        let defs = vec![(
+            "A",
+            OptionDef { prevents: vec!["B".into()], ..Default::default() },
+        )];
+        let (mut ports, key) = mk_port(&["A", "B"], &["A", "B"], vec![], defs);
+        ports.get_mut(&key).unwrap().options.force_unset.insert("A".into());
+        let s = session_for(ports);
+        assert_eq!(s.state(&s.ports[&key]).unwrap().staged, set(&["A", "B"]));
+        assert!(s.violations(&s.ports[&key]).is_empty(), "{:?}", s.violations(&s.ports[&key]));
+
+        let defs = vec![(
+            "A",
+            OptionDef { prevents: vec!["B".into()], ..Default::default() },
+        )];
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], defs);
+        ports.get_mut(&key).unwrap().options.force_set.insert("B".into());
+        let mut s = session_for(ports);
+        let name = s.ports[&key].options_name.clone();
+        s.states.get_mut(&name).unwrap().staged = set(&["A"]);
+        let c = s.conflicts(&s.ports[&key]);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0].members, ["A", "B"]);
+        assert_eq!(c[0].cause.as_deref(), Some("B forced on by make.conf; fix it there"));
+    }
+
     #[test]
     fn a_group_is_decided_only_when_makeconf_really_selects_a_member() {
         let group = || OptionGroup {
