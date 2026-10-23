@@ -136,6 +136,8 @@ Every command takes the same global options after its name (`-z set`,
 - [Dependency loops](docs/dependency-loops.md): how they are found and
   broken
 - [How it works](docs/how-it-works.md): the query pipeline and the cache
+- [Conformance](docs/conformance.md): how optique was checked against the
+  ports framework, poudriere and synth, and what it does not model
 - [The FreeBSD port](docs/port.md): updating `ports-mgmt/optique` for a
   release, and test-building it
 - `optique(8)`, the man page: every flag, key, JSON key and exit status
