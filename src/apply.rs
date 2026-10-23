@@ -408,8 +408,13 @@ pub fn plan_stale_removals(
         .filter(|i| i.options.has_options())
         .map(|i| i.options_name.as_str())
         .collect();
+    // Only the view that owns a shared file can say it has no options: a
+    // non-default flavor lacking them (glib20@bootstrap, gobject-introspection
+    // @bootstrap) says nothing of the default flavor, which may still read
+    // the file when it is not in the closure.
     let optionless: BTreeSet<&str> = ports
         .values()
+        .filter(|i| crate::session::is_preferred(i))
         .map(|i| i.options_name.as_str())
         .filter(|name| !with_options.contains(name))
         .collect();
@@ -941,6 +946,32 @@ mod tests {
         let removals = plan_stale_removals(&ports, &OptionsFiles::new(tmp.path()));
         let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
         assert_eq!(names, vec!["print_indexinfo"], "glib20's shared file must survive");
+    }
+
+    /// A closure holding only an optionless non-default flavor of a port
+    /// (gobject-introspection@bootstrap, reached from editors/emacs@nox)
+    /// proves nothing about the shared file its default flavor reads: kept.
+    /// With the default flavor itself optionless, the file goes.
+    #[test]
+    fn stale_removal_needs_the_default_flavors_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("devel_gi")).unwrap();
+        std::fs::write(tmp.path().join("devel_gi/options"), "x\n").unwrap();
+        let flavored = |flavor: &str| {
+            let mut i = mk_info(&[], &[]);
+            i.key = PortKey::parse(&format!("devel/gi@{flavor}")).unwrap();
+            i.canonical = i.key.clone();
+            i.flavors = vec!["default".into(), "bootstrap".into()];
+            i.options_name = "devel_gi".into();
+            i
+        };
+        let plan = |infos: Vec<PortInfo>| {
+            let ports: std::collections::BTreeMap<_, _> =
+                infos.into_iter().map(|i| (i.key.clone(), i)).collect();
+            plan_stale_removals(&ports, &OptionsFiles::new(tmp.path())).len()
+        };
+        assert_eq!(plan(vec![flavored("bootstrap")]), 0, "@bootstrap alone keeps the file");
+        assert_eq!(plan(vec![flavored("default"), flavored("bootstrap")]), 1);
     }
 
     /// Planning a whole closure reads nothing the session already read, and
