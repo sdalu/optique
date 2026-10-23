@@ -16,24 +16,24 @@ tty — unless `--drive` is given (see
 <!-- screen main -->
 ```text
 ┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││  [ ] DEBUG                     off        │
-│? devel/gmake                  ││  [x] DEBUGLOG                  off        │
-│! ports-mgmt/pkg               ││  [x] DSO                       on         │
-│✓ converters/libiconv          ││  [x] FILE_AIO                  on         │
-│✓ devel/cmake-core             ││  [x] IPV6                      on         │
-│✓ devel/gettext-runtime        ││  [ ] NJS                       off        │
-│✓ devel/gettext-tools          ││  [ ] NJS_QJS                   off        │
-│✓ devel/libtextstyle           ││  [ ] NJS_XML                   off        │
-│✓ devel/libunistring           ││  [ ] OTEL                      off        │
-│✓ devel/ninja                  ││  [x] THREADS                   on         │
-│✓ devel/p5-Locale-libintl      ││  [x] WWW                       on         │
-│✓ devel/pcre2                  ││── HTTPGRP — group: Modules that require HT│
-│✓ devel/pkgconf                ││  [ ] GOOGLE_PERFTOOLS          off        │
-│✓ devel/readline               ││  [x] HTTP                      on      imp│
-│✓ lang/perl5.42                ││  [x] HTTP_ADDITION             on         │
-│✓ lang/python312               ││  [x] HTTP_AUTH_REQ             on         │
-│✓ misc/help2man                ││  [x] HTTP_CACHE                on         │
-│✓ print/texinfo                ││  [x] HTTP_DAV                  on         │
+│* www/nginx                    ││Robust and small WWW server                │
+│? devel/gmake                  ││NGINX is a high performance edge web server│
+│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
+│✓ converters/libiconv          ││key features to build modern and efficient │
+│✓ devel/cmake-core             ││web infrastructure.…                       │
+│✓ devel/gettext-runtime        │├────────────────────────── [v] full text ──┤
+│✓ devel/gettext-tools          ││  [ ] DEBUG                     off        │
+│✓ devel/libtextstyle           ││  [x] DEBUGLOG                  off        │
+│✓ devel/libunistring           ││  [x] DSO                       on         │
+│✓ devel/ninja                  ││  [x] FILE_AIO                  on         │
+│✓ devel/p5-Locale-libintl      ││  [x] IPV6                      on         │
+│✓ devel/pcre2                  ││  [ ] NJS                       off        │
+│✓ devel/pkgconf                ││  [ ] NJS_QJS                   off        │
+│✓ devel/readline               ││  [ ] NJS_XML                   off        │
+│✓ lang/perl5.42                ││  [ ] OTEL                      off        │
+│✓ lang/python312               ││  [x] THREADS                   on         │
+│✓ misc/help2man                ││  [x] WWW                       on         │
+│✓ print/texinfo                ││── HTTPGRP — group: Modules that require HT│
 │✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
 │✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
 │✓ textproc/libxml2             ││                                           │
@@ -85,24 +85,24 @@ Three further markers may trail the status one:
 <!-- screen options -->
 ```text
 ┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│? devel/gmake                  ││  [ ] DEBUG                     off        │
-│! ports-mgmt/pkg               ││  [ ] DEBUGLOG                  off        │
-│✓ converters/libiconv          ││  [x] DSO                       on         │
-│✓ devel/cmake-core             ││  [x] FILE_AIO                  on         │
-│✓ devel/gettext-runtime        ││  [x] IPV6                      on         │
-│✓ devel/gettext-tools          ││  [ ] NJS                       off        │
-│✓ devel/libtextstyle           ││  [ ] NJS_QJS                   off        │
-│✓ devel/libunistring           ││  [ ] NJS_XML                   off        │
-│✓ devel/ninja                  ││  [ ] OTEL                      off        │
-│✓ devel/p5-Locale-libintl      ││  [x] THREADS                   on         │
-│✓ devel/pcre2                  ││  [x] WWW                       on         │
-│✓ devel/pkgconf                ││── HTTPGRP — group: Modules that require HT│
-│✓ devel/readline               ││  [ ] GOOGLE_PERFTOOLS          off        │
-│✓ lang/perl5.42                ││  [x] HTTP                      on      imp│
-│✓ lang/python312               ││  [x] HTTP_ADDITION             on         │
-│✓ misc/help2man                ││  [x] HTTP_AUTH_REQ             on         │
-│✓ print/texinfo                ││  [x] HTTP_CACHE                on         │
-│✓ security/rhash               ││  [x] HTTP_DAV                  on         │
+│? devel/gmake                  ││Robust and small WWW server                │
+│! ports-mgmt/pkg               ││NGINX is a high performance edge web server│
+│✓ converters/libiconv          ││with the lowest memory footprint and the   │
+│✓ devel/cmake-core             ││key features to build modern and efficient │
+│✓ devel/gettext-runtime        ││web infrastructure.…                       │
+│✓ devel/gettext-tools          │├────────────────────────── [v] full text ──┤
+│✓ devel/libtextstyle           ││  [ ] DEBUG                     off        │
+│✓ devel/libunistring           ││  [ ] DEBUGLOG                  off        │
+│✓ devel/ninja                  ││  [x] DSO                       on         │
+│✓ devel/p5-Locale-libintl      ││  [x] FILE_AIO                  on         │
+│✓ devel/pcre2                  ││  [x] IPV6                      on         │
+│✓ devel/pkgconf                ││  [ ] NJS                       off        │
+│✓ devel/readline               ││  [ ] NJS_QJS                   off        │
+│✓ lang/perl5.42                ││  [ ] NJS_XML                   off        │
+│✓ lang/python312               ││  [ ] OTEL                      off        │
+│✓ misc/help2man                ││  [x] THREADS                   on         │
+│✓ print/texinfo                ││  [x] WWW                       on         │
+│✓ security/rhash               ││── HTTPGRP — group: Modules that require HT│
 │✓ textproc/expat2              │├ FILE_AIO ─────────────────────────────────┤
 │✓ textproc/libxml2             ││  Enable file aio                          │
 │✓ www/nginx                    ││                                           │
@@ -179,12 +179,12 @@ own Ports Collection help, not the port's.
 │                               ││  Enter: edit the options                  │
 │                               ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- port description shown (I: hide · v: full text)
+ 0✗ 0* 0? 0! 1✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-o
 ```
 <!-- /screen -->
 
-`I` shows or hides the port's description above the options pane — it
-starts hidden. It is the port's `COMMENT` and as much of its `pkg-descr`
+The port's description sits above the options pane — shown at start, `I`
+hides it and brings it back. It is the port's `COMMENT` and as much of its `pkg-descr`
 as fits in five lines, a bulleted line keeping a line of its own. The
 panel keeps that height from one port to the next, so the option rows do
 not move; it shrinks only on a pane too short to leave the options four
@@ -247,12 +247,12 @@ gained, and to unconfigured ones when it decides all of them.
 <!-- screen why -->
 ```text
 ┌ Ports (1) — filter: libunistri┐┌ devel/libunistring — libunistring-1.4.2 ──┐
-│✓ devel/libunistring           ││  [x] DOCS         on                      │
-│                               ││                                           │
-│                               ││                                           │
-│                               ││                                           │
-│           ┌ why devel/libunistring? ───────────────────────────┐           │
-│           │www/nginx  (root)                                   │           │
+│✓ devel/libunistring           ││Unicode string library                     │
+│                               ││GNU LIBUNISTRING - Unicode string library  │
+│                               ││This library provides functions for        │
+│                               ││manipulating Unicode strings and for       │
+│           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
+│           │www/nginx  (root)                                   │ull text ──┤
 │           │ └─ devel/pcre2                                     │           │
 │           │  └─ devel/cmake-core                               │           │
 │           │   └─ dns/libidn2                                   │           │
@@ -286,24 +286,24 @@ walked port by port.
 <!-- screen apply -->
 ```text
 ┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││  [ ] DEBUG                     off        │
-│? devel/gmake                  ││  [x] DEBUGLOG                  off        │
-│! ports-mgmt/pkg               ││  [x] DSO                       on         │
-│✓ conve┌ apply? y/n (j/k scroll) ───────────────────────────────────┐       │
+│* www/nginx                    ││Robust and small WWW server                │
+│? devel/gmake                  ││NGINX is a high performance edge web server│
+│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
+│✓ conve┌ apply? y/n (j/k scroll) ───────────────────────────────────┐icient │
 │✓ devel│3 options file(s) will be written to                        │       │
-│✓ devel│/tmp/optique-screens/poudriere.d/server-options:            │       │
+│✓ devel│/tmp/optique-screens/poudriere.d/server-options:            │text ──┤
 │✓ devel│                                                            │       │
 │✓ devel│devel/gmake                             new file (1 of 1 on)│       │
 │✓ devel│ports-mgmt/pkg                          dropped: OLDOPT     │       │
 │✓ devel│www/nginx                               +DEBUGLOG           │       │
 │✓ devel│                                                            │       │
-│✓ devel│                                                            │uire HT│
 │✓ devel│                                                            │       │
-│✓ devel│                                                            │    imp│
+│✓ devel│                                                            │       │
+│✓ devel│                                                            │       │
 │✓ lang/│                                                            │       │
 │✓ lang/│                                                            │       │
 │✓ misc/│                                                            │       │
-│✓ print│                                                            │       │
+│✓ print│                                                            │uire HT│
 │✓ secur└────────────────────────────────────────────────────────────┘───────┤
 │✓ textproc/expat2              ││  Enter: edit the options                  │
 │✓ textproc/libxml2             ││                                           │

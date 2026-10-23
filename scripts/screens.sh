@@ -69,8 +69,8 @@ capture main 'key G' 'key enter' 'key j' 'key space' 'settle'
 capture options 'key G' 'key enter' 'key j' 'key j' 'key j'
 # Why is this port here: the dependency chain up to a root.
 capture why 'key /' 'keys libunistring' 'key enter' 'key r'
-# The port's own description, above its options (I).
-capture about 'key /' 'keys pcre2' 'key enter' 'key I'
+# The port's own description, above its options (shown at start; I hides it).
+capture about 'key /' 'keys pcre2' 'key enter'
 # The apply preview: every file that would change, as a diff.
 capture apply 'key G' 'key enter' 'key j' 'key space' 'key esc' 'settle' 'key a'
 

@@ -17,24 +17,24 @@ when there is no poudriere at all or `-l` asks for a local build.
 <!-- screen main -->
 ```text
 ┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││  [ ] DEBUG                     off        │
-│? devel/gmake                  ││  [x] DEBUGLOG                  off        │
-│! ports-mgmt/pkg               ││  [x] DSO                       on         │
-│✓ converters/libiconv          ││  [x] FILE_AIO                  on         │
-│✓ devel/cmake-core             ││  [x] IPV6                      on         │
-│✓ devel/gettext-runtime        ││  [ ] NJS                       off        │
-│✓ devel/gettext-tools          ││  [ ] NJS_QJS                   off        │
-│✓ devel/libtextstyle           ││  [ ] NJS_XML                   off        │
-│✓ devel/libunistring           ││  [ ] OTEL                      off        │
-│✓ devel/ninja                  ││  [x] THREADS                   on         │
-│✓ devel/p5-Locale-libintl      ││  [x] WWW                       on         │
-│✓ devel/pcre2                  ││── HTTPGRP — group: Modules that require HT│
-│✓ devel/pkgconf                ││  [ ] GOOGLE_PERFTOOLS          off        │
-│✓ devel/readline               ││  [x] HTTP                      on      imp│
-│✓ lang/perl5.42                ││  [x] HTTP_ADDITION             on         │
-│✓ lang/python312               ││  [x] HTTP_AUTH_REQ             on         │
-│✓ misc/help2man                ││  [x] HTTP_CACHE                on         │
-│✓ print/texinfo                ││  [x] HTTP_DAV                  on         │
+│* www/nginx                    ││Robust and small WWW server                │
+│? devel/gmake                  ││NGINX is a high performance edge web server│
+│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
+│✓ converters/libiconv          ││key features to build modern and efficient │
+│✓ devel/cmake-core             ││web infrastructure.…                       │
+│✓ devel/gettext-runtime        │├────────────────────────── [v] full text ──┤
+│✓ devel/gettext-tools          ││  [ ] DEBUG                     off        │
+│✓ devel/libtextstyle           ││  [x] DEBUGLOG                  off        │
+│✓ devel/libunistring           ││  [x] DSO                       on         │
+│✓ devel/ninja                  ││  [x] FILE_AIO                  on         │
+│✓ devel/p5-Locale-libintl      ││  [x] IPV6                      on         │
+│✓ devel/pcre2                  ││  [ ] NJS                       off        │
+│✓ devel/pkgconf                ││  [ ] NJS_QJS                   off        │
+│✓ devel/readline               ││  [ ] NJS_XML                   off        │
+│✓ lang/perl5.42                ││  [ ] OTEL                      off        │
+│✓ lang/python312               ││  [x] THREADS                   on         │
+│✓ misc/help2man                ││  [x] WWW                       on         │
+│✓ print/texinfo                ││── HTTPGRP — group: Modules that require HT│
 │✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
 │✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
 │✓ textproc/libxml2             ││                                           │

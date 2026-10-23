@@ -1019,7 +1019,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                 legend(
                     "port panel",
                     Style::default().add_modifier(Modifier::BOLD),
-                    "with I, the port's comment and pkg-descr, in five",
+                    "the port's comment and pkg-descr (I hides it), in five",
                 ),
                 Line::from(Span::raw("                   lines — v shows it all, from either pane")),
                 Line::default(),

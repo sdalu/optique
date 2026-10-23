@@ -177,8 +177,8 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
-    /// The option pane opens with the port's description when there is room.
-    /// Off at start; 'I' turns it on and off.
+    /// The option pane opens with the port's description. On at start; 'I'
+    /// turns it off and on.
     pub show_about: bool,
     /// pkg-descr text per port, read when the panel first shows that port
     /// (on a change of selection or of the panel, never from the draw path:
@@ -299,7 +299,7 @@ pub(crate) fn build_app(
         loops,
         hidden,
         hide_ok: false,
-        show_about: false,
+        show_about: true,
         about_text: HashMap::new(),
         only_loops: false,
         sort_problems_first: true,
@@ -1731,7 +1731,6 @@ mod tests {
             info.about.comment = "The alpha port".to_string();
             app.about_text.insert(key.clone(), "word ".repeat(400));
             app.rebuild_editor();
-            dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
             app.focus = Focus::Editor;
             app.editor_idx = app.editor_rows.len() - 1;
             let shown = screen(&mut app);
@@ -1788,6 +1787,8 @@ mod tests {
         app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
         app.about_text.insert(key.clone(), "word ".repeat(400));
         press(&mut app, 'I');
+        assert!(!screen(&mut app).contains("The alpha port"), "I hides it");
+        press(&mut app, 'I');
         assert!(app.message.is_some());
         assert!(screen(&mut app).contains("[v] full text ──┤"), "a hint, at the right");
         press(&mut app, 'l');
@@ -1824,7 +1825,9 @@ mod tests {
         std::fs::write(&descr, "Alpha does things.\n").unwrap();
         let key = PortKey::parse("cat/alpha").unwrap();
         app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        // Built with the panel on, the app has read the port already.
+        app.about_text.clear();
+        app.rebuild_editor();
         assert!(screen(&mut app).contains("Alpha does things."));
         std::fs::remove_file(&descr).unwrap();
         assert!(screen(&mut app).contains("Alpha does things."), "read again at redraw");
@@ -1839,7 +1842,9 @@ mod tests {
         let descr = tmp.path().join("pkg-descr");
         let key = PortKey::parse("cat/alpha").unwrap();
         app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        // Built with the panel on, the app has read the port already.
+        app.about_text.clear();
+        app.rebuild_editor();
         let msg = app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
         assert!(msg.starts_with("cannot read"), "{msg}");
         assert!(screen(&mut app).contains("No description available"));
@@ -2629,8 +2634,8 @@ mod tests {
         assert!(app.session.state(&app.session.ports[&alpha]).unwrap().saved.is_some());
     }
 
-    /// 'I' opens the option pane with what the port is (off at start), and
-    /// 'i' on the list shows all of it, WWW included.
+    /// The option pane opens with what the port is (on at start, 'I' toggles
+    /// it), and 'i' on the list shows all of it, WWW included.
     #[test]
     fn port_description_panel_and_i_overlay() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2643,8 +2648,8 @@ mod tests {
         about.www = "https://alpha.example/".to_string();
         about.pkg_descr = Some(descr.display().to_string());
 
-        assert!(!screen(&mut app).contains("The alpha port"), "the panel starts off");
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        app.about_text.clear();
+        app.rebuild_editor();
         let shown = screen(&mut app);
         assert!(shown.contains("The alpha port"), "{shown}");
         assert!(shown.contains("Alpha does things."), "paragraph re-wrapped: {shown}");
