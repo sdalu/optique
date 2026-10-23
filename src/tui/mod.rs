@@ -2141,9 +2141,154 @@ mod tests {
         std::fs::create_dir_all(ov.join("cat/beta")).unwrap();
         std::fs::write(ov.join("cat/beta/Makefile"), "").unwrap();
         app.overlays = vec![crate::config::Overlay { name: Some("mine".into()), path: ov }];
-        assert!(!screen(&mut app).contains("overlay"), "cat/alpha is the tree's");
+        let shown = screen(&mut app);
+        assert!(!shown.contains("overlay"), "cat/alpha is the tree's");
+        assert!(pane_bottom(&shown).chars().skip(1).all(|c| c == '─' || c == '┘'), "{shown}");
         press(&mut app, 'j');
-        assert!(screen(&mut app).contains("cat/beta — beta-1.0 · overlay mine"), "{}", screen(&mut app));
+        let shown = screen(&mut app);
+        assert!(pane_bottom(&shown).starts_with("└ overlay: mine ─"), "{shown}");
+        assert!(shown.lines().next().unwrap().contains("┌ beta-1.0 ─"), "the title is the package:\n{shown}");
+    }
+
+    /// The option pane's title is the versioned package, the flavors after
+    /// it for a flavored port, cut at a word when it does not fit.
+    #[test]
+    fn the_pane_title_is_the_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha@py311", &[])]);
+        let key = PortKey::parse("cat/alpha@py311").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.flavors = vec!["py311".into(), "py312".into()];
+        let shown = screen(&mut app);
+        let top = shown.lines().next().unwrap();
+        assert!(top.contains("┌ alpha-1.0 · flavors: py311*‹ py312 ─"), "{top}");
+        assert!(!top.contains("cat/alpha"), "{top}");
+
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.pkgname = "alpha-with-a-long-package-name-1.0.0_1,1".into();
+        let shown = screen_at(&mut app, 80, 24);
+        let top = shown.lines().next().unwrap();
+        let title = top.split('┌').nth(1).unwrap().split(" ─").next().unwrap();
+        assert!(title.ends_with('…'), "{top}");
+        let body = title.trim_start().trim_end_matches('…');
+        let full = "alpha-with-a-long-package-name-1.0.0_1,1 · flavors: py311*‹ py312";
+        assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+    }
+
+    /// A port of two options, NAME_A and NAME_B, under an overlay named
+    /// `mine` when `overlay`.
+    fn footer_app(tmp: &std::path::Path, overlay: bool) -> App {
+        let mut app = app_for(tmp, &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["NAME_A".into(), "NAME_B".into()];
+        if overlay {
+            let ov = tmp.join("ov");
+            std::fs::create_dir_all(ov.join("cat/alpha")).unwrap();
+            std::fs::write(ov.join("cat/alpha/Makefile"), "").unwrap();
+            app.overlays = vec![crate::config::Overlay { name: Some("mine".into()), path: ov }];
+        }
+        app.rebuild_editor();
+        app
+    }
+
+    /// The option pane's bottom border: the overlay on the left; on the
+    /// right the staged changes, and the cursor's place among the options
+    /// while the pane has the focus; a plain border when there is neither.
+    #[test]
+    fn the_pane_bottom_border_says_overlay_changes_and_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = footer_app(tmp.path(), false);
+        let plain = pane_bottom(&screen(&mut app));
+        assert!(plain.trim_start_matches('└').trim_end_matches('┘').chars().all(|c| c == '─'), "{plain}");
+        hit(&mut app, KeyCode::Enter);
+        assert!(pane_bottom(&screen(&mut app)).ends_with("═ 1/2 ╝"), "place only:\n{}", screen(&mut app));
+        press(&mut app, 'j');
+        press(&mut app, ' ');
+        assert!(pane_bottom(&screen(&mut app)).ends_with("═ +NAME_B · 2/2 ╝"), "{}", screen(&mut app));
+        press(&mut app, 'k');
+        press(&mut app, ' ');
+        assert!(pane_bottom(&screen(&mut app)).ends_with("═ +NAME_A +NAME_B · 1/2 ╝"));
+        hit(&mut app, KeyCode::Esc);
+        let shown = screen(&mut app);
+        assert!(pane_bottom(&shown).ends_with("─ +NAME_A +NAME_B ┘"), "changes only:\n{shown}");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = footer_app(tmp.path(), true);
+        let shown = screen(&mut app);
+        let bottom = pane_bottom(&shown);
+        assert!(bottom.starts_with("└ overlay: mine ─") && bottom.ends_with("──┘"), "overlay only:\n{shown}");
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        let bottom = pane_bottom(&screen(&mut app));
+        assert!(bottom.starts_with("╚ overlay: mine ═") && bottom.ends_with("═ +NAME_A · 1/2 ╝"), "{bottom}");
+    }
+
+    /// Changes too long for the border lose their start, the place stays.
+    #[test]
+    fn long_changes_lose_their_start_and_keep_the_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = (1..=12).map(|i| format!("OPTION_{i:02}")).collect();
+        app.rebuild_editor();
+        hit(&mut app, KeyCode::Enter);
+        for _ in 0..12 {
+            press(&mut app, ' ');
+            press(&mut app, 'j');
+        }
+        let bottom = pane_bottom(&screen_at(&mut app, 80, 24));
+        assert!(bottom.starts_with("╚ …") && bottom.ends_with(" +OPTION_12 · 12/12 ╝"), "{bottom}");
+    }
+
+    /// An option row keeps every column before its description: on a narrow
+    /// pane the last one has its own text cut, never a `…` after a whole one.
+    #[test]
+    fn a_narrow_row_keeps_its_columns_and_cuts_the_last() {
+        use crate::model::options::OptionDef;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["HTTP".into(), "HTTP_AUTH_REQUEST_MODULE".into()];
+        info.options.defs.insert(
+            "HTTP".into(),
+            OptionDef { desc: "Enable the HTTP module".into(), ..Default::default() },
+        );
+        info.options.defs.insert(
+            "HTTP_AUTH_REQUEST_MODULE".into(),
+            OptionDef {
+                implies: vec!["HTTP".into()],
+                ignore: Some("no".into()),
+                desc: "Authentication by subrequest".into(),
+                ..Default::default()
+            },
+        );
+        let name = info.options_name.clone();
+        let staged = &mut app.session.states.get_mut(&name).unwrap().staged;
+        staged.insert("HTTP".into());
+        staged.insert("HTTP_AUTH_REQUEST_MODULE".into());
+        app.rebuild_editor();
+        let shown = screen_at(&mut app, 80, 24);
+        let row = shown.lines().find(|l| l.contains("[x] HTTP ")).unwrap_or_else(|| panic!("{shown}"));
+        let pane = row.split('│').nth(1).unwrap().trim_end();
+        assert!(pane.contains(" off ") && pane.contains(" impl"), "{pane}");
+        assert!(pane.ends_with('…') && !pane.contains("Enable"), "{pane}");
+        assert!(!pane.contains(" …"), "never a `…` after a whole column: {pane}");
+        // The implier's badge is its last column, cut in its own text.
+        let row = shown.lines().find(|l| l.contains("[x] HTTP_AUTH")).unwrap();
+        let pane = row.split('│').nth(1).unwrap().trim_end();
+        assert!(pane.ends_with(" off     ⚠ign…"), "{pane}");
+        // On a wide screen the description shows whole again.
+        let shown = screen_at(&mut app, 180, 24);
+        assert!(shown.contains("implied by HTTP_AUTH_REQUEST_MODULE  Enable the HTTP module"), "{shown}");
+        // Narrower still, the badge itself is cut, the columns kept.
+        let shown = screen_at(&mut app, 70, 24);
+        for row in shown.lines().filter(|l| l.contains("[x] ")) {
+            let pane = row.split('│').nth(1).unwrap().trim_end();
+            assert!(!pane.ends_with("on…") && !pane.ends_with("off…") && !pane.ends_with(" …"), "{pane}");
+        }
     }
 
     /// The panel shows by the pane's size alone, however many options the
@@ -2664,14 +2809,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = three_ports(tmp.path());
         press(&mut app, '/');
-        assert!(screen(&mut app).contains("Ports (3) — filter: ▏"), "{}", screen(&mut app));
+        assert!(list_bottom(&screen(&mut app)).ends_with(" filter: ▏ ╝"), "{}", screen(&mut app));
         for c in "gam".chars() {
             press(&mut app, c);
         }
-        assert!(screen(&mut app).contains("— filter: gam▏"));
+        assert!(list_bottom(&screen(&mut app)).ends_with(" filter: gam▏ ╝"), "{}", screen(&mut app));
         hit(&mut app, KeyCode::Enter);
         let shown = screen(&mut app);
-        assert!(shown.contains("— filter: gam ") && !shown.contains('▏'), "no cursor once left:\n{shown}");
+        assert!(list_bottom(&shown).ends_with(" filter: gam ╝"), "{shown}");
+        assert!(!shown.contains('▏'), "no cursor once left:\n{shown}");
         assert_eq!(selected(&app), "cat/gamma");
 
         press(&mut app, '/');
@@ -2687,6 +2833,48 @@ mod tests {
         assert_eq!(visible(&app).len(), 3);
         assert_eq!(selected(&app), "cat/gamma", "the selection kept");
         assert!(!screen(&mut app).contains("filter:"));
+        assert!(list_bottom(&screen(&mut app)).trim_start_matches('╚').trim_end_matches('╝').chars().all(|c| c == '═'));
+    }
+
+    /// The bottom border of the port list, corners included.
+    fn list_bottom(shown: &str) -> String {
+        let lines: Vec<&str> = shown.lines().collect();
+        let row = lines[lines.len() - 2];
+        let end = row.find(['┘', '╝']).expect("the list's bottom corner");
+        row[..end + row[end..].chars().next().unwrap().len_utf8()].to_string()
+    }
+
+    /// The bottom border of the option pane, corners included.
+    fn pane_bottom(shown: &str) -> String {
+        let lines: Vec<&str> = shown.lines().collect();
+        let row = lines[lines.len() - 2];
+        let list = list_bottom(shown);
+        row[list.len()..].to_string()
+    }
+
+    /// The filter sits on the list's bottom border, at its right, never in
+    /// its title; too long, it loses its start, the end being typed in view.
+    #[test]
+    fn the_filter_is_on_the_bottom_border() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, '/');
+        for c in "a-very-long-filter-that-ends-in-ginx-module".chars() {
+            press(&mut app, c);
+        }
+        let shown = screen_at(&mut app, 80, 24);
+        let top = shown.lines().next().unwrap();
+        assert!(top.starts_with("╔ Ports (0) ═") && !top.contains("filter"), "{top}");
+        let bottom = list_bottom(&shown);
+        assert!(bottom.starts_with("╚ filter: …") && bottom.ends_with("-ginx-module▏ ╝"), "{bottom}");
+        assert!(!bottom.contains("a-very"), "{bottom}");
+        hit(&mut app, KeyCode::Enter);
+        let bottom = list_bottom(&screen_at(&mut app, 80, 24));
+        assert!(bottom.ends_with("ginx-module ╝") && bottom.contains(" filter: …"), "{bottom}");
+        // A short one is whole.
+        press(&mut app, '/');
+        press(&mut app, 'x');
+        assert!(list_bottom(&screen_at(&mut app, 80, 24)).ends_with("═ filter: x▏ ╝"));
     }
 
     #[test]
@@ -4423,7 +4611,7 @@ mod tests {
         app.rebuild_editor();
         let on_list = screen(&mut app);
         assert!(on_list.contains("╔ Ports"), "{on_list}");
-        assert!(on_list.contains("┌ cat/alpha"), "{on_list}");
+        assert!(on_list.contains("┌ alpha-1.0"), "{on_list}");
         assert!(!on_list.contains(['╟', '╢']), "{on_list}");
         assert_eq!(rule_rows(&on_list).len(), 2, "{on_list}");
         for y in rule_rows(&on_list) {
@@ -4433,7 +4621,7 @@ mod tests {
         hit(&mut app, KeyCode::Enter);
         let on_options = screen(&mut app);
         assert!(on_options.contains("┌ Ports"), "{on_options}");
-        assert!(on_options.contains("╔ cat/alpha"), "{on_options}");
+        assert!(on_options.contains("╔ alpha-1.0"), "{on_options}");
         assert!(!on_options.contains(['├', '┤']), "{on_options}");
         assert_eq!(rule_rows(&on_options), rule_rows(&on_list));
         for y in rule_rows(&on_options) {
@@ -4768,14 +4956,16 @@ mod tests {
             press(&mut app, c);
         }
         hit(&mut app, KeyCode::Enter);
-        let shown = screen_at(&mut app, 80, 24);
+        press(&mut app, 't');
+        let shown = screen_at(&mut app, 60, 24);
         let top = shown.lines().next().unwrap();
         let title = top.split('╔').nth(1).unwrap().split(" ═").next().unwrap();
         assert!(title.ends_with('…'), "{top}");
         let body = title.trim_start().trim_end_matches('…');
         assert!(!body.ends_with(' '));
-        let full = "Ports (0) — filter: a long filter text that cannot fit";
+        let full = "Ports (0/0) — needs attention";
         assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+        assert!(!top.contains("filter"), "{top}");
     }
 
     /// The bulk prompt's title says which ports it works on and what

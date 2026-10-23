@@ -16,29 +16,29 @@ when there is no poudriere at all or `-l` asks for a local build.
 
 <!-- screen main -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
-│!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
-│── 19 ok ──────────────────────│║  [x] DEBUGLOG                  off        ║
-│✓  converters/libiconv         │║  [x] DSO                       on         ║
-│✓  devel/cmake-core            │║  [x] FILE_AIO                  on         ║
-│✓  devel/gettext-runtime       │║  [x] IPV6                      on         ║
-│✓  devel/gettext-tools         │║  [ ] NJS                       off        ║
-│✓  devel/libtextstyle          │║  [ ] NJS_QJS                   off        ║
-│✓  devel/libunistring          │║  [ ] NJS_XML                   off        ║
-│✓  devel/ninja                 │║  [ ] OTEL                      off        ║
-│✓  devel/p5-Locale-libintl     │║  [x] THREADS                   on         ║
-│✓  devel/pcre2                 │║  [x] WWW                       on         ║
-│✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
-│✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
-│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
-│✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
-│✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
-│✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
-│✓  security/rhash              │║  [x] HTTP_DAV                  on         ║
-│✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
-│✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
-│✓* www/nginx                   │║                                           ║
-└───────────────────────────────┘╚═══════════════════════════════════════════╝
+┌ Ports (21 · 20 optionless) ───┐╔ pkg-2.8.4 ════════════════════════════════╗
+│?  devel/gmake                 │║  [ ] DOCS         on                      ║
+│!* ports-mgmt/pkg              │║── obsolete (no longer exist; dropped on…  ║
+│── 19 ok ──────────────────────│║  [x] OLDOPT                               ║
+│✓  converters/libiconv         │║                                           ║
+│✓  devel/cmake-core            │║                                           ║
+│✓  devel/gettext-runtime       │║                                           ║
+│✓  devel/gettext-tools         │║                                           ║
+│✓  devel/libtextstyle          │║                                           ║
+│✓  devel/libunistring          │║                                           ║
+│✓  devel/ninja                 │║                                           ║
+│✓  devel/p5-Locale-libintl     │║                                           ║
+│✓  devel/pcre2                 │║                                           ║
+│✓  devel/pkgconf               │║                                           ║
+│✓  devel/readline              │║                                           ║
+│✓  lang/perl5.42               │║                                           ║
+│✓  lang/python312              │║                                           ║
+│✓  misc/help2man               │║                                           ║
+│✓  print/texinfo               │║                                           ║
+│✓  security/rhash              │╟ DOCS ─────────────────────────────────────╢
+│✓  textproc/expat2             │║  Build and/or install documentation       ║
+│✓  textproc/libxml2            │║                                           ║
+└───────────────────────────────┘╚══════════════════════════════ -DOCS · 1/1 ╝
  0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->

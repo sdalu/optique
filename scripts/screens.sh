@@ -62,9 +62,13 @@ capture() {
 	[ -s "$work/$name.txt" ] || { echo "screens: $name came out empty" >&2; exit 1; }
 }
 
-# Main view: problems first (one unconfigured, one stale), nginx, last in
-# the list, under edit with one option toggled.
-capture main 'key G' 'key enter' 'key j' 'key space' 'settle'
+# Main view: problems first (one unconfigured, one stale), both in view
+# above the divider, the cursor on the stale one, ports-mgmt/pkg, under
+# edit with its option toggled: its pane shows the option the tree dropped
+# and, on its bottom border, the staged change and the cursor's place.
+# (Selecting www/nginx, the list's last row, would scroll the first problem
+# out of a 24-row screen.)
+capture main 'key j' 'key enter' 'key space' 'settle'
 # The option pane, the cursor on an option: its description below.
 capture options 'key G' 'key enter' 'key j' 'key j' 'key j'
 # Why is this port here: the dependency chain up to a root.

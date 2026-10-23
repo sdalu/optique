@@ -148,25 +148,27 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
     if app.hide_ok {
         title.push_str(" — needs attention");
     }
-    // The cursor only while the filter is being typed; a filter left on
-    // the list shows as text.
-    if app.focus == Focus::Filter {
-        title.push_str(&format!(" — filter: {}▏", app.filter));
-    } else if !app.filter.is_empty() {
-        title.push_str(&format!(" — filter: {}", app.filter));
-    }
     title.push(' ');
-    let title = fit_title(&title, area.width.saturating_sub(2) as usize);
+    let room = area.width.saturating_sub(2) as usize;
+    let title = fit_title(&title, room);
     let (border_style, border_type) =
         pane_border(app.focus == Focus::List || app.focus == Focus::Filter);
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .title(title)
+        .border_style(border_style);
+    // The filter on the bottom border, at its right: with the cursor only
+    // while it is being typed, as text once left on the list. Too long, it
+    // loses its start, so the end being typed stays in view.
+    let typing = app.focus == Focus::Filter;
+    if typing || !app.filter.is_empty() {
+        let cursor = if typing { "▏" } else { "" };
+        let label = fit_start(" filter: ", &format!("{}{cursor}", app.filter), " ", room);
+        block = block.title_bottom(Line::from(label).right_aligned());
+    }
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .title(title)
-                .border_style(border_style),
-        )
+        .block(block)
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     // The selection is an index among the ports; the widget counts rows,
     // the divider among them. Its scroll offset is in rows and kept.
@@ -192,14 +194,11 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         return 0;
     };
     let info = &app.session.ports[&key];
-    let mut title = match flavor_summary(app, info) {
-        Some(flavors) => format!(" {} — {} · flavors: {} ", key, info.pkgname, flavors),
-        None => format!(" {} — {} ", key, info.pkgname),
+    // The versioned package names the port; its origin is the list's row.
+    let title = match flavor_summary(app, info) {
+        Some(flavors) => format!(" {} · flavors: {} ", info.pkgname, flavors),
+        None => format!(" {} ", info.pkgname),
     };
-    // Only where an overlay, not the ports tree, answers for the port.
-    if let Some(o) = crate::config::overlay_of(&app.overlays, &key.origin) {
-        title.push_str(&format!("· overlay {} ", o.label()));
-    }
 
     // Text width of the pane: the rows are cut at it, so the row builder needs
     // it to decide whether a description still fits (the detail panel splits
@@ -224,6 +223,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         .clamp(12, 28);
 
     let state = app.session.state(info);
+    let mut option_rows: Vec<usize> = Vec::new();
     for (i, row) in app.editor_rows.iter().enumerate() {
         let selected = app.focus == Focus::Editor && i == app.editor_idx;
         match row {
@@ -238,7 +238,9 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
                     Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
                 )));
             }
+            // A row cuts itself: its columns stay, its description goes first.
             EditorRow::Option(opt) => {
+                option_rows.push(lines.len());
                 lines.push(option_line(app, info, opt, selected, name_width, inner_width));
             }
             EditorRow::ExcludedHeader => {
@@ -279,9 +281,11 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     }
 
     // A row wider than the pane ends in `…` at a word, not cut mid-word at
-    // the border.
-    for line in &mut lines {
-        ellipsize(line, inner_width);
+    // the border; option rows are laid out to the width already.
+    for (i, line) in lines.iter_mut().enumerate() {
+        if !option_rows.contains(&i) {
+            ellipsize(line, inner_width);
+        }
     }
 
     // One box for the pane; inside it, what the port is on top and the
@@ -323,7 +327,17 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
             Line::from(Span::styled(marker, key_hint())).right_aligned(),
         );
     }
-    f.render_widget(block.title(fit_title(&title, room)), area);
+    block = block.title(fit_title(&title, room));
+    let (left, right) = editor_footer(app, info, &key.origin, (area.width as usize).saturating_sub(2));
+    if let Some(left) = left {
+        block = block.title_bottom(Line::from(left));
+    }
+    if let Some(right) = right {
+        block = block.title_bottom(
+            Line::from(Span::styled(right, Style::default().fg(Color::Cyan))).right_aligned(),
+        );
+    }
+    f.render_widget(block, area);
     if let Some(panel) = layout.about {
         // A cut description says where the rest is.
         let cut = mark_if_clipped(&mut about, panel.height as usize, inner_width);
@@ -341,6 +355,83 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         f.render_widget(Paragraph::new(detail), panel);
     }
     layout.rows.height
+}
+
+/// The option pane's bottom border in `room` columns: on the left the
+/// overlay answering for the port, on the right its staged changes against
+/// the saved baseline and, while the pane has the focus and the cursor is on
+/// an option, its place among the port's options. When they do not fit, the
+/// overlay is cut first, then the changes lose their start: the place stays.
+fn editor_footer(
+    app: &App,
+    info: &PortInfo,
+    origin: &str,
+    room: usize,
+) -> (Option<String>, Option<String>) {
+    let label = crate::config::overlay_of(&app.overlays, origin).map(|o| o.label());
+    let changes = app
+        .session
+        .state(info)
+        .map(|s| crate::session::staged_diff(&s.baseline, &s.staged))
+        .filter(|d| !d.is_empty());
+    let options = || app.editor_rows.iter().filter(|r| matches!(r, EditorRow::Option(_)));
+    let place = match app.editor_rows.get(app.editor_idx) {
+        Some(EditorRow::Option(_)) if app.focus == Focus::Editor => {
+            let at = app.editor_rows[..=app.editor_idx]
+                .iter()
+                .filter(|r| matches!(r, EditorRow::Option(_)))
+                .count();
+            Some(format!("{at}/{}", options().count()))
+        }
+        _ => None,
+    };
+    footer_parts(label.as_deref(), changes.as_deref(), place.as_deref(), room)
+}
+
+/// The parts of the option pane's bottom border, fitted to `room` columns
+/// with at least one column of border between them: ` overlay: LABEL ` and
+/// ` CHANGES · I/N `. The label is cut first, down to ` overlay: X… `; then
+/// the changes lose their start to a `…`; the left part goes last, when not
+/// even that leaves it room.
+fn footer_parts(
+    label: Option<&str>,
+    changes: Option<&str>,
+    place: Option<&str>,
+    room: usize,
+) -> (Option<String>, Option<String>) {
+    let width = |s: &str| Line::from(s).width();
+    let right = |changes: Option<&str>, cut: usize| -> Option<String> {
+        match (changes, place) {
+            (None, None) => None,
+            (Some(c), None) => Some(fit_start(" ", c, " ", cut)),
+            (None, Some(p)) => Some(format!(" {p} ")),
+            (Some(c), Some(p)) => Some(fit_start(" ", c, &format!(" · {p} "), cut)),
+        }
+    };
+    let full_right = right(changes, usize::MAX);
+    let r = full_right.as_deref().map_or(0, width);
+    let Some(label) = label else {
+        return (None, right(changes, room));
+    };
+    let head = " overlay: ";
+    let full_left = format!("{head}{label} ");
+    let gap = usize::from(r > 0);
+    if width(&full_left) + gap + r <= room {
+        return (Some(full_left), full_right);
+    }
+    // The shortest the label is cut to: its first character and `…`.
+    let first: String = label.chars().take(1).collect();
+    let least = width(head) + width(&first) + 2;
+    if least + gap + r <= room {
+        let cut = fit_end(label, room - gap - r - width(head) - 1);
+        return (Some(format!("{head}{cut} ")), full_right);
+    }
+    let left = format!("{head}{} ", fit_end(label, width(&first) + 1));
+    let shortest = right(changes.map(|_| ""), usize::MAX).as_deref().map_or(0, width);
+    if least + gap + shortest + usize::from(changes.is_some()) <= room {
+        return (Some(left), right(changes, room - least - gap));
+    }
+    (None, right(changes, room))
 }
 
 /// How a key is advertised on the pane's borders (`[h] notes`, `[v] full text`).
@@ -579,6 +670,49 @@ fn fit_title(title: &str, room: usize) -> String {
     format!("{line} ")
 }
 
+/// `head`, `text` and `tail` in `room` columns: whole when they fit, else
+/// `text` loses its start to a `…` (` filter: …ginx-module▏ `), so its end
+/// stays in view. With not even room for `…`, the text goes.
+fn fit_start(head: &str, text: &str, tail: &str, room: usize) -> String {
+    let width = |s: &str| Line::from(s).width();
+    let full = format!("{head}{text}{tail}");
+    if width(&full) <= room {
+        return full;
+    }
+    let budget = room.saturating_sub(width(head) + width(tail) + 1);
+    // The longest end of `text` that fits the budget.
+    let mut kept = String::new();
+    for c in text.chars().rev() {
+        let mut next = c.to_string();
+        next.push_str(&kept);
+        if width(&next) > budget {
+            break;
+        }
+        kept = next;
+    }
+    if width(head) + width(tail) + 1 > room {
+        return format!("{head}{tail}");
+    }
+    format!("{head}…{kept}{tail}")
+}
+
+/// `text` in `room` columns, its end cut to a `…` when it is wider.
+fn fit_end(text: &str, room: usize) -> String {
+    let width = |s: &str| Line::from(s).width();
+    if width(text) <= room {
+        return text.to_string();
+    }
+    let mut kept = String::new();
+    for c in text.chars() {
+        kept.push(c);
+        if width(&kept) + 1 > room {
+            kept.pop();
+            break;
+        }
+    }
+    format!("{}…", kept.trim_end())
+}
+
 /// Shorten `line` so a one-column marker still fits in `width`: back to the
 /// last word boundary when that cuts a word, keeping a word cut in two only
 /// when it is the line's first; no blank is left before the marker.
@@ -815,20 +949,88 @@ fn option_line(
         if def.ignore.is_some() {
             spans.push(Span::styled(" ⚠ignored", Style::default().fg(Color::Red)));
         }
-        // The pane cuts the row at its right edge, so a description with only
-        // a few columns left would show as a word fragment. Drop it instead —
-        // the panel under the rows gives it in full, wrapped.
-        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-        let room = avail.saturating_sub(used + 2);
-        if !def.desc.is_empty() && room >= DESC_MIN_WIDTH {
-            spans.push(Span::styled(
-                format!("  {}", def.desc),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
     }
 
-    Line::from(spans)
+    // The columns always stay: a row still wider than the pane cuts the
+    // last one's own text at the edge, never leaving a `…` after a whole
+    // column.
+    let mut line = Line::from(spans);
+    cut_last_column(&mut line, avail);
+
+    // A description with only a few columns left would show as a word
+    // fragment: it goes instead — the panel under the rows gives it in
+    // full, wrapped — and one too long ends in `…` at a word, or goes when
+    // not even its first word fits.
+    let desc = opts.defs.get(opt).map_or("", |d| d.desc.as_str());
+    let room = avail.saturating_sub(line.width() + 2);
+    if !desc.is_empty() && room >= DESC_MIN_WIDTH {
+        let mut text = Line::from(desc.to_string());
+        let cut = ellipsize(&mut text, room);
+        let kept = text.spans.first().map_or("", |s| s.content.as_ref()).to_string();
+        // A cut that kept only part of the first word drops the description.
+        let whole = !cut || desc[kept.len()..].starts_with(' ');
+        if whole && !kept.is_empty() {
+            let shown = if cut { format!("  {kept}…") } else { format!("  {kept}") };
+            line.spans.push(Span::styled(shown, Style::default().fg(Color::DarkGray)));
+        }
+    }
+    line
+}
+
+/// Fit an option row's columns in `width`: the blanks padding its end go,
+/// then the column crossing the edge — the last one, unless those before it
+/// are already wider than the pane — has its own text cut, ending in `…`.
+/// The cut never leaves a column whole before the `…`: one cut down to its
+/// leading blank goes, and the column before it loses a character instead.
+fn cut_last_column(line: &mut Line<'static>, width: usize) {
+    if line.width() <= width {
+        return;
+    }
+    let mut n = line.spans.len();
+    while let Some(span) = line.spans.last_mut() {
+        let text = span.content.trim_end().to_string();
+        if text.is_empty() && n > 1 {
+            line.spans.pop();
+            n -= 1;
+            continue;
+        }
+        span.content = text.into();
+        break;
+    }
+    if line.width() <= width || width == 0 {
+        return;
+    }
+    // The span the edge falls in, with `…` kept inside the width.
+    let mut before = 0;
+    let mut at = 0;
+    while at < line.spans.len() && before + line.spans[at].width() < width {
+        before += line.spans[at].width();
+        at += 1;
+    }
+    line.spans.truncate(at + 1);
+    loop {
+        let Some(span) = line.spans.last_mut() else { return };
+        let own = span.content.trim_end().to_string();
+        // Its own text up to the edge, one column for `…`, and always at
+        // least a character short of whole.
+        let keep = Line::from(own.as_str()).width().min(width - before).saturating_sub(1);
+        let mut kept = String::new();
+        for c in own.chars() {
+            kept.push(c);
+            if Line::from(kept.as_str()).width() > keep {
+                kept.pop();
+                break;
+            }
+        }
+        if !kept.trim().is_empty() {
+            span.content = format!("{}…", kept.trim_end()).into();
+            return;
+        }
+        // Nothing of its own text would show: cut into the column before.
+        line.spans.pop();
+        let Some(prev) = line.spans.last() else { return };
+        before -= prev.width();
+    }
 }
 
 /// The keys the status bar names, whatever the pane.
@@ -1315,6 +1517,11 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                 ),
                 legend("flavor‹", Style::default(), "the flavor shown in the pane"),
                 legend("[h] notes", key_hint(), "the port ships notes (pkg-help) — h reads them"),
+                Line::default(),
+                head("On the pane's bottom border"),
+                legend("overlay: NAME", Style::default(), "the overlay the port is taken from"),
+                legend("+A -B", Style::default().fg(Color::Cyan), "staged changes, not yet applied"),
+                legend("3/12", Style::default().fg(Color::Cyan), "the cursor's option, while the pane has the focus"),
                 Line::default(),
                 head("Above the rows"),
                 legend(
@@ -2178,6 +2385,35 @@ no library.")),
 
     /// A line or a title too wide ends in `…` after a whole word, its first
     /// word kept, cut, when it is the only one; one that fits is untouched.
+    #[test]
+    fn fit_start_keeps_the_end() {
+        assert_eq!(fit_start(" filter: ", "nginx▏", " ", 40), " filter: nginx▏ ");
+        let cut = fit_start(" filter: ", "www/nginx-full-ginx-module▏", " ", 23);
+        assert_eq!(cut, " filter: …ginx-module▏ ");
+        assert_eq!(Line::from(cut.as_str()).width(), 23);
+    }
+
+    /// The overlay is cut first, then the changes lose their start; the
+    /// place always shows.
+    #[test]
+    fn the_footer_cuts_the_overlay_first_then_the_changes() {
+        let both = |room| footer_parts(Some("myoverlay"), Some("+AAA +BBB -CCC"), Some("3/12"), room);
+        assert_eq!(
+            both(60),
+            (Some(" overlay: myoverlay ".into()), Some(" +AAA +BBB -CCC · 3/12 ".into()))
+        );
+        // 20 + 1 + 23 = 44 columns whole; at 40 the label gives way.
+        assert_eq!(both(40), (Some(" overlay: myov… ".into()), Some(" +AAA +BBB -CCC · 3/12 ".into())));
+        // Down to ` overlay: m… `, then the changes are cut at their start.
+        assert_eq!(both(30), (Some(" overlay: m… ".into()), Some(" …B -CCC · 3/12 ".into())));
+        // No room for the label at all: the right part alone.
+        assert_eq!(both(18), (None, Some(" …BBB -CCC · 3/12 ".into())));
+        assert_eq!(footer_parts(None, None, None, 40), (None, None));
+        assert_eq!(footer_parts(Some("o"), None, None, 40), (Some(" overlay: o ".into()), None));
+        assert_eq!(footer_parts(None, None, Some("1/2"), 40), (None, Some(" 1/2 ".into())));
+        assert_eq!(footer_parts(None, Some("+A"), None, 40), (None, Some(" +A ".into())));
+    }
+
     #[test]
     fn ellipsize_cuts_at_a_word() {
         let cut = |spans: Vec<Span<'static>>, width: usize| {

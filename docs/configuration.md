@@ -196,7 +196,7 @@ from the main tree, as the ports framework looks dependencies up: a port
 only an overlay holds is found, as a root or a dependency, and `clean`
 counts a port as vanished only when no tree holds it. `scan` ends the row
 of a port an overlay answers for with `[overlay name]`, and the TUI's
-port pane names it. `MOVED` is the main tree's then each overlay's, read
+option pane names it on its bottom border. `MOVED` is the main tree's then each overlay's, read
 as one file: a chain may run across them, and an origin listed twice
 keeps its first entry, with a warning. The options directory, the
 make.conf layers and the blacklist do not depend on overlays.

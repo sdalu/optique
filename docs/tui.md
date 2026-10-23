@@ -15,46 +15,47 @@ tty — unless `--drive` is given (see
 
 <!-- screen main -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
-│!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
-│── 19 ok ──────────────────────│║  [x] DEBUGLOG                  off        ║
-│✓  converters/libiconv         │║  [x] DSO                       on         ║
-│✓  devel/cmake-core            │║  [x] FILE_AIO                  on         ║
-│✓  devel/gettext-runtime       │║  [x] IPV6                      on         ║
-│✓  devel/gettext-tools         │║  [ ] NJS                       off        ║
-│✓  devel/libtextstyle          │║  [ ] NJS_QJS                   off        ║
-│✓  devel/libunistring          │║  [ ] NJS_XML                   off        ║
-│✓  devel/ninja                 │║  [ ] OTEL                      off        ║
-│✓  devel/p5-Locale-libintl     │║  [x] THREADS                   on         ║
-│✓  devel/pcre2                 │║  [x] WWW                       on         ║
-│✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
-│✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
-│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
-│✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
-│✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
-│✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
-│✓  security/rhash              │║  [x] HTTP_DAV                  on         ║
-│✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
-│✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
-│✓* www/nginx                   │║                                           ║
-└───────────────────────────────┘╚═══════════════════════════════════════════╝
+┌ Ports (21 · 20 optionless) ───┐╔ pkg-2.8.4 ════════════════════════════════╗
+│?  devel/gmake                 │║  [ ] DOCS         on                      ║
+│!* ports-mgmt/pkg              │║── obsolete (no longer exist; dropped on…  ║
+│── 19 ok ──────────────────────│║  [x] OLDOPT                               ║
+│✓  converters/libiconv         │║                                           ║
+│✓  devel/cmake-core            │║                                           ║
+│✓  devel/gettext-runtime       │║                                           ║
+│✓  devel/gettext-tools         │║                                           ║
+│✓  devel/libtextstyle          │║                                           ║
+│✓  devel/libunistring          │║                                           ║
+│✓  devel/ninja                 │║                                           ║
+│✓  devel/p5-Locale-libintl     │║                                           ║
+│✓  devel/pcre2                 │║                                           ║
+│✓  devel/pkgconf               │║                                           ║
+│✓  devel/readline              │║                                           ║
+│✓  lang/perl5.42               │║                                           ║
+│✓  lang/python312              │║                                           ║
+│✓  misc/help2man               │║                                           ║
+│✓  print/texinfo               │║                                           ║
+│✓  security/rhash              │╟ DOCS ─────────────────────────────────────╢
+│✓  textproc/expat2             │║  Build and/or install documentation       ║
+│✓  textproc/libxml2            │║                                           ║
+└───────────────────────────────┘╚══════════════════════════════ -DOCS · 1/1 ╝
  0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 
 The capture shows `www/nginx` and its closure. The left pane lists every port in the closure that has options,
 problems first, two marker columns per row (see [Port markers](#port-markers)):
+`devel/gmake` is `?` because it has never been configured, and
 `ports-mgmt/pkg` is `!` because its option list changed since its file was
-written, and `devel/gmake`, scrolled out of view above it, is `?` because
-it has never been configured. A
-`── 19 ok ──` row parts them from the rest, `✓`: already consistent;
-`www/nginx` among them is `✓*`, ok with staged, unapplied edits. The
-right pane shows the selected port's options — `www/nginx` here — each as a
-row with its checkbox, its name, the port's own default (`off`/`on`), and
-the value make.conf dictates when one of its layers mentions the option
-(blank otherwise); `HTTP`'s row ends in `imp`, the pane-edge truncation of
-an `implied by` note — another enabled option implies it. A row
-introduced by `──` is a group header (`HTTPGRP` here). The list's title
+written — `!*` here, with staged, unapplied edits. A
+`── 19 ok ──` row parts them from the rest, `✓`: already consistent. The
+right pane shows the selected port's options — `ports-mgmt/pkg` here,
+titled with its package, `pkg-2.8.4` — each as a row with its checkbox,
+its name, the port's own default (`off`/`on`), and the value make.conf
+dictates when one of its layers mentions the option (blank otherwise).
+`OLDOPT`, which the port's file records but the tree no longer has, is
+listed under `── obsolete`, struck through. The pane's bottom border gives
+the port's staged change, `-DOCS`, and the cursor's place among its
+options, `1/1`. The list's title
 counts the ports listed and, after a `·`, the ports without options the
 list never shows (`Ports (21 · 20 optionless)`; the part is left out when
 there are none). The pane with the focus has a double border, the other a
@@ -150,7 +151,7 @@ Three further markers may trail the port's name:
 
 <!-- screen options -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
+┌ Ports (21 · 20 optionless) ───┐╔ nginx-1.30.6_5,3 ═════════════════════════╗
 │!  ports-mgmt/pkg              │║  [ ] DEBUG                     off        ║
 │── 19 ok ──────────────────────│║  [ ] DEBUGLOG                  off        ║
 │✓  converters/libiconv         │║  [x] DSO                       on         ║
@@ -164,7 +165,7 @@ Three further markers may trail the port's name:
 │✓  devel/pcre2                 │║  [x] WWW                       on         ║
 │✓  devel/pkgconf               │║── HTTPGRP — group: Modules that require…  ║
 │✓  devel/readline              │║  [ ] GOOGLE_PERFTOOLS          off        ║
-│✓  lang/perl5.42               │║  [x] HTTP                      on…        ║
+│✓  lang/perl5.42               │║  [x] HTTP                      on      im…║
 │✓  lang/python312              │║  [x] HTTP_ADDITION             on         ║
 │✓  misc/help2man               │║  [x] HTTP_AUTH_REQ             on         ║
 │✓  print/texinfo               │║  [x] HTTP_CACHE                on         ║
@@ -172,7 +173,7 @@ Three further markers may trail the port's name:
 │✓  textproc/expat2             │╟ FILE_AIO ─────────────────────────────────╢
 │✓  textproc/libxml2            │║  Enable file aio                          ║
 │✓  www/nginx                   │║                                           ║
-└───────────────────────────────┘╚═══════════════════════════════════════════╝
+└───────────────────────────────┘╚════════════════════════════════════ 4/118 ╝
  0✗ 0* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
@@ -205,18 +206,35 @@ rule the staged options break. A row, a group header or one of those
 lines too wide for the pane ends in `…` after its last whole word, rather
 than being cut mid-word at the border; a `CONFLICT:` line wraps first to
 a second line, under its text, and is cut only past that. The list's
-title is cut the same way.
+title is cut the same way. An option row too wide for the pane drops only
+its trailing description: its checkbox, name, default, make.conf value and
+badges always stay, and a row still too wide has the last of them cut in
+its own text at the border — `HTTP`'s `implied by` note reads `im…` in
+the capture above — never with a `…` after a whole column.
 
-The pane's title names the port and its package. A flavored port's title
+The pane's title is the port's versioned package name (`nginx-1.30.6_5,3`;
+the origin is the list's row), cut with `…` at a word when it does not
+fit. A flavored port's title
 lists its flavors after `flavors:`, marking with `*` the flavor whose view
 owns the shared options file and with `‹` the flavor shown in the pane:
 `flavors: py311* py312‹` is the `py312` view of a file the `py311` view
 owns.
 
+The pane's bottom border carries what is not a row. On its left,
+`overlay: NAME` for a port an overlay answers for rather than the ports
+tree. On its right, the port's staged changes against its saved file,
+`+OPT -OPT`, additions first — shown only while it has some — and, while
+the pane has the focus and the cursor is on an option, the cursor's place
+among the port's options, `I/N`, the two parted by `·` — `+DEBUGLOG ·
+4/118`, say, for nginx. Where they do not fit, the overlay's name is cut first, then the
+changes lose their start to a `…`: the place always shows. A port with
+none of them has a plain border.
+
 Whatever room is left on the row, after the badges, carries the option's
 own description — the one thing the row usually has no space for; a row
 with less than about sixteen columns of room drops the description
-instead of showing a word fragment. A two-line panel below the rows,
+instead of showing a word fragment, and one too long ends in `…` at a
+word. A two-line panel below the rows,
 titled with the option's name, follows the cursor and gives the selected
 option's description, wrapped, marking with `…` what does not fit; an
 option the ports framework describes nowhere reads `(no description)`.
@@ -251,7 +269,7 @@ portconfig's own Ports Collection help, not the port's.
 
 <!-- screen about -->
 ```text
-╔ Ports (1 · 20 optionless) —… ═╗┌ devel/pcre2 — pcre2-10.49 ────────────────┐
+╔ Ports (1 · 20 optionless) ════╗┌ pcre2-10.49 ──────────────────────────────┐
 ║✓  devel/pcre2                 ║│Perl Compatible Regular Expressions        │
 ║                               ║│library, version 2                         │
 ║                               ║│PCRE2 is the name used for a revised API   │
@@ -273,7 +291,7 @@ portconfig's own Ports Collection help, not the port's.
 ║                               ║├───────────────────────────────────────────┤
 ║                               ║│  Enter: edit the options                  │
 ║                               ║│                                           │
-╚═══════════════════════════════╝└───────────────────────────────────────────┘
+╚════════════════ filter: pcre2 ╝└───────────────────────────────────────────┘
  port description shown (V: hide · v: full text)
 ```
 <!-- /screen -->
@@ -352,8 +370,11 @@ parse is quoted whole in the error.
 | `Ctrl-L`      | repaint the whole screen                               |
 | `q`, `Ctrl-C` | quit; staged edits can be kept as a draft              |
 
-The filter shows in the list's title, with a `▏` cursor while it is being
-typed; `Enter` leaves it on the list, `Esc` while typing drops it.
+The filter shows on the list's bottom border, at its right — `filter:
+TEXT▏` while it is being typed, `filter: TEXT` once `Enter` leaves it on
+the list; `Esc` while typing drops it. A filter too long for the border
+loses its start to a `…` (`filter: …ginx-module▏`), so the end being
+typed stays in view; the title keeps the count and the views.
 `Ctrl-C` quits from anywhere — a popup, the filter, a prompt — and a
 Ctrl-letter is never read as its plain letter.
 
@@ -364,7 +385,7 @@ gained, and to unconfigured ones when it decides all of them.
 
 <!-- screen why -->
 ```text
-╔ Ports (1 · 20 optionless) —… ═╗┌ devel/libunistring — libunistring-1.4.2 ──┐
+╔ Ports (1 · 20 optionless) ════╗┌ libunistring-1.4.2 ───────────────────────┐
 ║✓  devel/libunistring          ║│  [x] DOCS         on                      │
 ║                               ║│                                           │
 ║                               ║│                                           │
@@ -386,7 +407,7 @@ gained, and to unconfigured ones when it decides all of them.
 ║                               ║├───────────────────────────────────────────┤
 ║                               ║│  Enter: edit the options                  │
 ║                               ║│                                           │
-╚═══════════════════════════════╝└───────────────────────────────────────────┘
+╚═════════ filter: libunistring ╝└───────────────────────────────────────────┘
  0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
@@ -404,7 +425,7 @@ walked port by port. Any other key closes it.
 
 <!-- screen apply -->
 ```text
-╔ Ports (21 · 20 optionless) ═══╗┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+╔ Ports (21 · 20 optionless) ═══╗┌ nginx-1.30.6_5,3 ─────────────────────────┐
 ║!  ports-mgmt/pkg              ║│  [ ] DEBUG                     off        │
 ║── 19 ok ──────────────────────║│  [x] DEBUGLOG                  off        │
 ║✓  converters/libiconv         ║│  [x] DSO                       on         │
@@ -418,7 +439,7 @@ walked port by port. Any other key closes it.
 ║✓  deve│                                                            │       │
 ║✓  deve│                                                            │uire…  │
 ║✓  deve│                                                            │       │
-║✓  lang│                                                            │       │
+║✓  lang│                                                            │    im…│
 ║✓  lang│                                                            │       │
 ║✓  misc│                                                            │       │
 ║✓  prin│                                                            │       │
@@ -426,7 +447,7 @@ walked port by port. Any other key closes it.
 ║✓  text└ y: write · n: cancel · j/k scroll ─────────────────────────┘───────┤
 ║✓  textproc/libxml2            ║│  Enter: edit the options                  │
 ║✓* www/nginx                   ║│                                           │
-╚═══════════════════════════════╝└───────────────────────────────────────────┘
+╚═══════════════════════════════╝└──────────────────────────────── +DEBUGLOG ┘
  0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->

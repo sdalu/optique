@@ -499,7 +499,17 @@ for a port caught in a dependency loop
 .Pq see Sx Dependency loops .
 The list's title counts the ports listed and, when there are any, the
 optionless ones it never shows, as in
-.Ql Ports (21 \[u00B7] 20 optionless) .
+.Ql Ports (21 \[u00B7] 20 optionless) ,
+then the views narrowing it
+.Pq Ql \[em] needs attention , Ql \[em] in a dependency loop ,
+cut with
+.Ql \[u2026]
+at a word when it does not fit.
+A filter shows on the list's bottom border, at its right, as
+.Ql filter: TEXT ;
+one too long for the border loses its start to a
+.Ql \[u2026] ,
+so the end being typed stays in view.
 The focused pane has a double border, the other a single one; the option
 pane's inner rules join whichever it has.
 .Pp
@@ -579,15 +589,23 @@ and the option changes likely to blame,
 the flavor owning its options file, and a
 .Ql CONFLICT:
 per rule the staged options break.
-A row, a group header or one of those lines too wide for the pane ends in
+A group header or one of those lines too wide for the pane ends in
 .Ql \[u2026]
 after its last whole word rather than being cut mid-word at the border; a
 .Ql CONFLICT:
 line first wraps to a second line, under its text, and is cut only past that.
-The port list's title is cut the same way.
+An option row too wide drops only its trailing description: the checkbox,
+the name, both values and the badges always stay, and a row still too wide
+has the last of them cut in its own text at the border, as in
+.Ql implied by AUTH\[u2026] ,
+never with a
+.Ql \[u2026]
+after a whole column.
 .Pp
-The pane's title names the port and its package; a flavored port's title
-lists its flavors after
+The pane's title is the port's versioned package name, cut at a word with
+.Ql \[u2026]
+when it does not fit; the origin is the list's row.
+A flavored port's title lists its flavors after
 .Ql flavors: ,
 marking with
 .Ql *
@@ -595,13 +613,31 @@ the flavor whose view owns the shared options file and with
 .Ql \[u2039]
 the flavor shown in the pane.
 .Pp
+The pane's bottom border names, on its left, the overlay a port is taken
+from, as
+.Ql overlay: NAME ;
+on its right, the port's staged changes against its saved file, as
+.Ql +OPT -OPT ,
+additions first, and, while the pane has the focus and the cursor is on an
+option, the cursor's place among the port's options, as
+.Ql 3/12 ,
+the two parted by
+.Ql \[u00B7] .
+Where they do not fit, the overlay's name is cut first, then the changes lose
+their start to a
+.Ql \[u2026] ;
+the place always shows.
+A port with none of them has a plain border.
+.Pp
 A two-line panel at the bottom of the pane follows the cursor: titled with the
 name of the option under it, it gives that option's description as the ports
 framework states it, wrapped to the pane instead of cut short as the rows
 are.
 Because of that panel a row keeps its trailing description only while a useful
 amount of it fits \(em under about sixteen columns of room the row drops it
-rather than show a word fragment.
+rather than show a word fragment, and one too long ends in
+.Ql \[u2026]
+at a word.
 An option the framework describes nowhere reads
 .Ql (no description) .
 The panel marks with an ellipsis anything it cannot fit, and keeps its place
@@ -745,8 +781,8 @@ With no loop in the closure there is nothing to show and the view is refused
 rather than emptying the list; a loop broken by an option edit drops the view
 again, for the same reason.
 .It Ic /
-Filter the port list, starting afresh; the list's title shows the filter, with
-a cursor while it is being typed.
+Filter the port list, starting afresh; the list's bottom border shows the
+filter, with a cursor while it is being typed.
 .Ic Enter
 leaves it on the list,
 .Ic Esc
@@ -1716,7 +1752,7 @@ counts a port as vanished only when no tree holds it.
 .Cm scan
 ends the row of a port an overlay answers for with
 .Ql [overlay Ar name Ns ] ,
-and the interface's port pane names it.
+and the interface's option pane names it on its bottom border.
 .Pa MOVED
 is the main tree's then each overlay's, read as one file: a chain may run
 across them, and an origin listed twice keeps its first entry, with a
