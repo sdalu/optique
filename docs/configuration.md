@@ -253,4 +253,5 @@ synth builds ignore `PORTSDIR` and `PORT_DBDIR`, and whatever the build,
 every query is given the ports tree and options directory optique
 resolved, so a `PORTSDIR` in the environment cannot send `make` to
 another tree. Whatever the build, a query runs with an environment of
-`PATH`, `HOME` and `TMPDIR` (those set) and no other variable.
+`PATH`, `HOME`, `TMPDIR` and `PKG_DBDIR` (those set) and no other
+variable.

@@ -105,7 +105,8 @@ make's own autodetection would, because an inherited one silently
 replaced the framework of the tree being queried.
 
 The same holds for the rest of the environment: a query runs with
-`PATH`, `HOME` and `TMPDIR` alone (`src/query/makerunner.rs`), so an
+`PATH`, `HOME`, `TMPDIR` and pkg's `PKG_DBDIR` alone
+(`src/query/makerunner.rs`), so an
 exported `OPTIONS_SET=UTF8PROC` no longer turns `sysutils/tmux`'s
 4-port closure into a 22-port one behind a cache key that does not
 see it, nor reaches a poudriere query no builder would answer that

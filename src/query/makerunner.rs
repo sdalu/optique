@@ -93,7 +93,9 @@ impl MakeRunner {
 }
 
 /// The only variables of optique's environment a query sees, when set.
-const PASSED_ENV: [&str; 3] = ["PATH", "HOME", "TMPDIR"];
+/// PKG_DBDIR is pkg's, not make's, but `pkg which` runs at parse time
+/// (Mk/bsd.default-versions.mk) and the cache key already folds it in.
+const PASSED_ENV: [&str; 4] = ["PATH", "HOME", "TMPDIR", "PKG_DBDIR"];
 
 /// Run the wrapper makefile for one port@flavor and parse the dump.
 pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {

@@ -557,7 +557,11 @@ fn resolve_local(
     };
     let (staged, mut conf_hash, make_conf_sources) =
         concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
-    let mut make_conf = staged.map(|_| host.make_conf.to_path_buf());
+    // Queries run with a cleared environment, so make would fall back to
+    // /etc/make.conf, unhashed, when the one it was given cannot be read:
+    // /dev/null stands for "none", as an unreadable __MAKE_CONF is for make.
+    let mut make_conf =
+        Some(staged.map_or_else(|| PathBuf::from("/dev/null"), |_| host.make_conf.to_path_buf()));
     // --overlay-dir, then the environment's OVERLAYS (absolute), then the
     // make.conf's own: a small make.conf including the real one first,
     // still read in place for its own .includes, then putting them in
@@ -1205,7 +1209,7 @@ mod tests {
         let s = resolve_host(&host, &none, &stage).unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
         assert!(!s.options_dir.is_dir(), "{} does not exist yet", db.display());
-        assert!(s.env == QueryEnv::Host && s.make_conf.is_none());
+        assert!(s.env == QueryEnv::Host && s.make_conf.as_deref() == Some(Path::new("/dev/null")));
         assert!(s.notes.is_empty(), "built-in defaults earn no note: {:?}", s.notes);
         fs::create_dir_all(&db).unwrap();
         assert!(resolve_host(&host, &none, &stage).unwrap().options_dir.is_dir());
@@ -1460,7 +1464,8 @@ mod tests {
         let s = resolve_host(&host, &local, &stage).unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
         assert_eq!(s.env, QueryEnv::Host);
-        assert!(s.make_conf.is_none() && s.make_conf_sources.is_empty());
+        assert_eq!(s.make_conf.as_deref(), Some(Path::new("/dev/null")), "none to read, not /etc/make.conf");
+        assert!(s.make_conf_sources.is_empty());
         assert!(s.blacklist.is_empty());
         // The host's make.conf, not poudriere.d's, staged and keyed.
         let etc = tmp.path().join("etc-make.conf");
