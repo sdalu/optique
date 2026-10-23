@@ -93,6 +93,10 @@ impl Session {
     }
 
     /// Recompute the owner (default flavor) of every shared options file.
+    /// Without the default flavor in the closure, the flavor with the most
+    /// options stands for it: flavors exclude options, so the widest view
+    /// covers the others' (editors/emacs@pgtk's holds @nox's), and an edit
+    /// to an option only it has reaches the shared staged set.
     fn rebuild_owners(&mut self) {
         let mut owners: HashMap<String, PortKey> = HashMap::new();
         for (key, info) in &self.ports {
@@ -101,9 +105,12 @@ impl Session {
             }
             match owners.get(&info.options_name) {
                 Some(existing) => {
-                    let existing_preferred =
-                        self.ports.get(existing).map(is_preferred).unwrap_or(false);
-                    if !existing_preferred && is_preferred(info) {
+                    let existing = self.ports.get(existing);
+                    let existing_preferred = existing.is_some_and(is_preferred);
+                    let wider = existing.is_some_and(|e| {
+                        info.options.complete.len() > e.options.complete.len()
+                    });
+                    if !existing_preferred && (is_preferred(info) || wider) {
                         owners.insert(info.options_name.clone(), key.clone());
                     }
                 }
@@ -450,11 +457,17 @@ impl Session {
     /// must not read the owner-written file as stale.
     pub fn stale_delta(&self, info: &PortInfo) -> Option<(Vec<String>, Vec<String>)> {
         let saved = self.state(info)?.saved.as_ref()?;
-        let cur = &self.owner_info(info).options.complete;
+        let owner = self.owner_info(info);
+        let cur = &owner.options.complete;
         // New: what the file does not settle (SavedOptionsFile::decides).
-        // Obsolete: whatever it mentions, list or line, that the tree lost.
-        let mentioned: BTreeSet<&str> =
-            saved.complete.iter().chain(saved.recorded()).map(String::as_str).collect();
+        // Obsolete: whatever it mentions, list or line, that the tree lost;
+        // a non-default flavor cannot tell that from what it merely lacks,
+        // and a write keeps those lines (apply::planned_file), so none.
+        let mentioned: BTreeSet<&str> = if is_preferred(owner) {
+            saved.complete.iter().chain(saved.recorded()).map(String::as_str).collect()
+        } else {
+            BTreeSet::new()
+        };
         Some((
             cur.iter().filter(|o| !saved.decides(o)).cloned().collect(),
             mentioned.into_iter().filter(|o| !cur.iter().any(|c| c == o)).map(String::from).collect(),
@@ -1451,6 +1464,41 @@ mod tests {
                 .collect(),
             ..PortInfo::stub(origin)
         }
+    }
+
+    /// Without the default flavor, the flavor with the most options owns the
+    /// shared file, so an edit to an option only it has reaches the staged
+    /// set; and none of the file's options reads as obsolete, a non-default
+    /// view being unable to tell them from options it merely lacks.
+    #[test]
+    fn without_the_default_flavor_the_widest_view_owns_the_file() {
+        let mk = |flavor: &str, complete: &[&str]| {
+            let key = PortKey::parse(&format!("editors/emacs@{flavor}")).unwrap();
+            let (mut p, k) = mk_port(complete, &[], vec![], vec![]);
+            let mut info = p.remove(&k).unwrap();
+            info.key = key.clone();
+            info.canonical = key;
+            info.flavors = vec!["full".into(), "nox".into(), "pgtk".into()];
+            info.options_name = "editors_emacs".into();
+            info
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("editors_emacs")).unwrap();
+        std::fs::write(
+            tmp.path().join("editors_emacs/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A X11 Y\nOPTIONS_FILE_SET+=A\n\
+             OPTIONS_FILE_UNSET+=X11\nOPTIONS_FILE_SET+=Y\n",
+        )
+        .unwrap();
+        let ports: BTreeMap<_, _> =
+            [mk("nox", &["A"]), mk("pgtk", &["A", "Y"])].into_iter().map(|i| (i.key.clone(), i)).collect();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        assert_eq!(s.owners["editors_emacs"].to_string(), "editors/emacs@pgtk");
+        let nox = &s.ports[&PortKey::parse("editors/emacs@nox").unwrap()];
+        assert!(s.state(nox).unwrap().staged.contains("Y"), "the shared set holds @pgtk's Y");
+        assert_eq!(s.stale_delta(nox), Some((vec![], vec![])), "X11 is not obsolete for them");
+        assert_eq!(s.status(nox), UiStatus::Ok);
     }
 
     /// The owner is the first flavor in FLAVORS, whatever order the keys

@@ -1418,12 +1418,13 @@ as
 does ICU, is on for that flavor with or without the file, as
 .Nm make
 has it.
-When only a non-default flavor of the origin is in the closure, it writes the
-file from its own view but never drops what it does not see: the file is up
-to date when everything that flavor has is unchanged, and a write keeps the
-list entry and
+When only non-default flavors of the origin are in the closure, the one with
+the most options stands for the default flavor, and each option goes in with
+the value of a flavor that has it; none ever drops what it does not see: the
+file is up to date when everything each of them has is unchanged, none of its
+options counts as obsolete, and a write keeps the list entry and
 .Ql SET Ns / Ns Ql UNSET
-line of every option the flavor lacks as they were, since it cannot tell an
+line of every option those flavors lack as they were, since none can tell an
 option it lacks from one the port removed; the default flavor's next write
 drops the latter.
 A flavor can set defaults of its own, which the shared file then overrides,
