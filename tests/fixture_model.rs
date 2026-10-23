@@ -352,3 +352,50 @@ fn a_group_named_after_a_defined_member_is_conditional() {
     assert_ne!(port["status"], "conflict", "{port}");
     assert_eq!(flagged(&port, "staged"), make, "{port}");
 }
+
+/// bsd.options.mk:410-430 closes PORT_OPTIONS under IMPLIES, chains
+/// included, after the options file: A implies B, B implies C. With the
+/// file setting A and unsetting the rest, and with no file at all, scan's
+/// staged set is make's PORT_OPTIONS.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_implies_chain_ends_as_make_ends_it() {
+    let f = Fixture::new();
+    let origin = "misc/model-implies";
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "no file: {port}");
+
+    f.write_file("misc_model-implies", "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C D\n");
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["A", "B", "C"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+}
+
+/// bsd.port.mk's pre-check-config fails a RADIO group with more than one
+/// member on. The options file sets one member, then both: optique
+/// reports a conflict exactly when `make check-config` fails.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_overfull_radio_group_conflicts_as_check_config_fails() {
+    let f = Fixture::new();
+    let origin = "misc/model-radio";
+    for (set, unset, overfull) in [("X", "Y", false), ("X Y", "", true)] {
+        f.write_file(
+            "misc_model-radio",
+            &format!("OPTIONS_FILE_SET+={set}\nOPTIONS_FILE_UNSET+={unset}\n"),
+        );
+        let check = f.make(origin, &["check-config"]);
+        assert_eq!(!check.status.success(), overfull, "check-config with {set}: {}", common::stdout(&check));
+        let port = f.scan_port(&[origin], origin);
+        assert_eq!(port["status"] == "conflict", overfull, "{set}: {port}");
+        if overfull {
+            assert_eq!(
+                port["violations"],
+                serde_json::json!(["group R allows at most one member enabled (2 enabled)"]),
+                "{port}"
+            );
+        }
+    }
+}
