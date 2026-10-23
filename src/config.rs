@@ -1017,8 +1017,10 @@ fn synth_selected_profile(ini: &str, env_profile: Option<&str>) -> (String, &'st
     }
 }
 
-/// The part of a synth.ini line before the first `;` or `#`: both start a
-/// comment that runs to the end of the line.
+/// The part of a synth.ini data line before the first `;` or `#`: both start
+/// a comment that runs to the end of the line (config.adb's `Get_Value`,
+/// its `Comment_Ind := Index (..., Set => To_Set ("#;"))`, read only for a
+/// line that is not itself a section header).
 fn ini_strip_comment(line: &str) -> &str {
     match line.find([';', '#']) {
         Some(i) => &line[..i],
@@ -1026,46 +1028,63 @@ fn ini_strip_comment(line: &str) -> &str {
     }
 }
 
-/// The name in a synth.ini `[name]` section header line, trimmed, if `line`
-/// (already comment-stripped) is one.
+/// A line is a synth.ini section header only when it opens with `[` in
+/// column 1 — config.adb checks `The_Line (The_Line'First)` before anything
+/// is trimmed, so an indented `[name]` is a data line instead, never a
+/// header. The name then runs, untrimmed, to the first `]`
+/// (`Sect_End := Index (..., Pattern => "]")`); anything from there to the
+/// end of the line, comment or not, is never looked at.
 fn ini_section_header(line: &str) -> Option<&str> {
-    line.strip_prefix('[').and_then(|r| r.strip_suffix(']')).map(str::trim)
+    let rest = line.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    Some(&rest[..end])
+}
+
+/// Trim spaces, and only spaces, from both ends — config.adb's
+/// `Index_Non_Blank` walks `Ada.Strings.Maps.Constants.Blank_Set`, which
+/// holds the space character alone, not a tab: a key or value preceded or
+/// followed by a tab keeps it, so `k\t=` is the key `k\t`, not `k`.
+fn ini_trim(s: &str) -> &str {
+    s.trim_matches(' ')
 }
 
 /// Does synth.ini contain a `[name]` section header?
 fn synth_ini_has_section(text: &str, name: &str) -> bool {
-    text.lines().any(|line| ini_section_header(ini_strip_comment(line).trim()) == Some(name))
+    text.lines().any(|line| ini_section_header(line) == Some(name))
 }
 
 /// Minimal INI reader for synth.ini: the value of `key` in section
 /// `[profile]` alone, as synth reads a profile's settings
-/// (parameters.adb:200-271, `load_specific_profile`): no other section,
-/// `[Global Configuration]` included, stands in for it. Keys are
-/// case-sensitive, `;` and `#` start a comment, and whitespace around both
-/// sides of `=` is stripped. First occurrence in a section wins; an empty
-/// value counts as unset.
+/// (parameters.adb:200-271, `load_specific_profile`, over config.adb's
+/// `Get_Value`): no other section, `[Global Configuration]` included,
+/// stands in for it. Keys are case-sensitive, `;` and `#` start a comment,
+/// and only spaces (never tabs) around the key and the value are trimmed.
+/// A key's first match within the section wins — `Get_Value` exits its scan
+/// of the whole file the moment one is found, matched or not, so even a
+/// bare key with no `=`, or one given an empty value, ends the search
+/// there, giving the default rather than reading on to a later, real
+/// assignment of the same key.
 fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
-    let mut section = String::new();
+    let mut section = "";
     for line in text.lines() {
-        let line = ini_strip_comment(line).trim();
-        if line.is_empty() {
-            continue;
-        }
         if let Some(name) = ini_section_header(line) {
-            section = name.to_string();
+            section = name;
             continue;
         }
-        let Some((k, v)) = line.split_once('=') else { continue };
-        if k.trim() != key {
+        if section != profile {
             continue;
         }
-        let v = v.trim();
-        if v.is_empty() {
+        let data = ini_strip_comment(line);
+        let Some((k, v)) = data.split_once('=') else {
+            // No `=` at all: config.adb still compares the whole
+            // (trimmed) line against `key`, as a bare mark with no value.
+            return if ini_trim(data) == key { None } else { continue };
+        };
+        if ini_trim(k) != key {
             continue;
         }
-        if section == profile {
-            return Some(v.to_string());
-        }
+        let v = ini_trim(v);
+        return if v.is_empty() { None } else { Some(v.to_string()) };
     }
     None
 }
@@ -2308,6 +2327,46 @@ not a key value line
         assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_options"), None);
         // Nothing at all: no panic, no value.
         assert_eq!(synth_ini_lookup("", "LiveSystem", "Directory_portsdir"), None);
+    }
+
+    /// config.adb's own syntax (`Get_Value`), each claim checked on its own:
+    /// a section header's `[` must open the line (column 1, checked before
+    /// anything is trimmed), its name runs untrimmed to the first `]`, with
+    /// anything after it, comment or not, ignored; a key and its value are
+    /// trimmed of spaces only, a tab left in place; and a key's first match
+    /// within its section ends the whole search there — `exit Read_File` —
+    /// even a bare key with no `=` or one given an empty value, so a later,
+    /// real assignment of the same key is never reached.
+    #[test]
+    fn synth_ini_follows_config_adb_syntax() {
+        assert_eq!(ini_section_header("[B] extra"), Some("B"), "anything after ] is ignored");
+        assert_eq!(ini_section_header("[ C ]"), Some(" C "), "the name is untrimmed");
+        assert_eq!(ini_section_header("   [P]"), None, "indented: not a header, column 1 only");
+
+        // "[B] extra" still opens section B.
+        let ini = "[B] extra\nDirectory_portsdir=/b\n";
+        assert_eq!(synth_ini_lookup(ini, "B", "Directory_portsdir").as_deref(), Some("/b"));
+
+        // "[ C ]" opens section " C " verbatim, not "C".
+        let ini = "[ C ]\nDirectory_portsdir=/c\n";
+        assert_eq!(synth_ini_lookup(ini, " C ", "Directory_portsdir").as_deref(), Some("/c"));
+        assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir"), None);
+
+        // A tab before `=` is part of the key: "k\t" never matches "k".
+        let ini = "[A]\nk\t= d\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "k"), None);
+
+        // An indented "[P]" opens no section: it is a data line wherever
+        // the last real header left off (here none, so key=2 answers
+        // nothing in "P"; key=1 still answers in "A").
+        let ini = "[A]\nkey=1\n   [P]\nkey=2\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "key").as_deref(), Some("1"));
+        assert_eq!(synth_ini_lookup(ini, "P", "key"), None, "indented [P] opened no section");
+
+        // Directory_portsdir= (empty) ends the search right there, even
+        // though a real assignment follows: the default, not /x.
+        let ini = "[A]\nDirectory_portsdir=\nDirectory_portsdir=/x\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "Directory_portsdir"), None);
     }
 
     #[test]

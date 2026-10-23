@@ -2316,6 +2316,13 @@ falling back to
 .Pa /usr/ports
 and
 .Pa /var/db/ports .
+A section header must open its line with
+.Ql \&[ ,
+its name running untrimmed to the first
+.Ql \&] ,
+anything after it ignored, and a key's first match within its section
+wins, a bare or empty one included, ending the search there rather than
+reading on to a later, real assignment of the same key.
 .Pa make.conf
 is the single file
 .Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,

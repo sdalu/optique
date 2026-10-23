@@ -193,7 +193,12 @@ The ports tree comes from `Directory_portsdir` and the options
 directory from `Directory_options`, both read from the profile's
 section of `/usr/local/etc/synth/synth.ini` alone, as synth reads them
 (`[Global Configuration]` never stands in for a profile), falling back
-to `/usr/ports` and `/var/db/ports`. make.conf is the single file
+to `/usr/ports` and `/var/db/ports`. A section header must open its
+line with `[`, its name running untrimmed to the first `]` with
+anything after ignored, and a key's first match within its section
+wins, a bare or empty one included, so it ends the search there rather
+than reading on to a later, real assignment of the same key.
+make.conf is the single file
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
 each builder's make.conf — or none at all when the profile has none (the
 host's `/etc/make.conf` is never read), so there is no layering and no
