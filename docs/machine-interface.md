@@ -78,7 +78,7 @@ re-running `make`:
 | `new`               | added since the file was written[^4]             |
 | `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`/`override`[^1] |
 | `locked`            | the file cannot change this value                |
-| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, or an implying option |
+| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, `options.local` (a SET or UNSET entry there decides it; `decide` refuses it), or an implying option |
 | `deviates_makeconf` | staged value contradicts `makeconf`              |
 | `group`             | `{name, kind, members}`[^2]                      |
 | `implies`           | options this one turns on                        |

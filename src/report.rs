@@ -84,7 +84,8 @@ pub struct OptionReport {
     pub makeconf: Option<MakeConfVerdict>,
     /// The options file cannot change this value.
     pub locked: bool,
-    /// Why, when it is locked: a `*_FORCE` knob or the option that implies it.
+    /// Why, when it is locked: a `*_FORCE` knob, `options.local`, or the
+    /// option that implies it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_by: Option<String>,
     /// The staged value contradicts what make.conf asks for.
@@ -320,6 +321,10 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                         Some((_, McLayer::With)) => "make.conf WITH/WITHOUT".to_string(),
                         _ => "make.conf *_FORCE".to_string(),
                     })
+                } else if sess.local_decides(owner, name) {
+                    // Read after the file (bsd.options.mk:342-363): an
+                    // edit to the file cannot change it.
+                    Some("options.local".to_string())
                 } else {
                     implier.map(|by| format!("implied by {by}"))
                 };

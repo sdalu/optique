@@ -156,6 +156,13 @@ impl SavedOptionsFile {
         }
     }
 
+    /// Whether an entry options.local contributes (`local_set`,
+    /// `local_unset`) settles the option, as `decides` judges the file's:
+    /// make reads it after the options file, so the file cannot change it.
+    pub fn local_decides(&self, opt: &str) -> bool {
+        mentions(&self.local_set, opt) || mentions(&self.local_unset, opt)
+    }
+
     /// Options with a SET or UNSET line: the ones the file gives a value.
     pub fn recorded(&self) -> impl Iterator<Item = &String> {
         self.set.iter().chain(self.unset.iter())

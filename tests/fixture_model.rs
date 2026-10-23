@@ -112,6 +112,33 @@ fn minimal_sync_keeps_a_file_options_local_needs() {
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), before);
 }
 
+/// bsd.options.mk:342-363: options.local's entries join the file's lists,
+/// UNSET winning. The file sets DOCS, options.local unsets it: make has
+/// DOCS off whatever the file says, so `decide` refuses to turn it on,
+/// naming options.local, writes nothing, and scan reports DOCS locked by it.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn decide_refuses_what_options_local_decides() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    f.run("sync", &[origin]);
+    let file = std::fs::read_to_string(f.file("misc_cond")).expect("sync writes the defaults");
+    assert!(file.contains("OPTIONS_FILE_SET+=DOCS"), "{file}");
+    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET+=DOCS\n").unwrap();
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), Vec::<String>::new());
+
+    let plan = f.decide(&[origin], r#"{"misc/cond": {"DOCS": true}}"#);
+    let rejected = &plan["rejected"];
+    assert_eq!(rejected.as_array().map(Vec::len), Some(1), "{plan}");
+    assert_eq!(rejected[0]["option"], "DOCS", "{plan}");
+    assert_eq!(rejected[0]["reason"], "options.local decides DOCS; edit it there", "{plan}");
+    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
+
+    let port = f.scan_port(&[origin], origin);
+    let docs = common::option(&port, "DOCS");
+    assert_eq!((&docs["locked"], &docs["locked_by"]), (&serde_json::json!(true), &serde_json::json!("options.local")), "{docs}");
+}
+
 /// bsd.options.mk:321: an UNSET entry is a make pattern. make.conf's
 /// `OPTIONS_UNSET=A*` takes A and A2 out of PORT_OPTIONS and NEW_OPTIONS:
 /// optique reports both off by make.conf and leaves undecided what make

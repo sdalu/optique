@@ -52,6 +52,10 @@ pub struct Session {
     /// The build's blacklist: the reachability GC does not walk through a
     /// port it matches, as the scan does not (scanner::register).
     pub blacklist: crate::config::Blacklist,
+    /// OPTIONS_NAME -> the options file (empty when absent) with its
+    /// options.local read after it (`OptionsFiles::combined`): what
+    /// options.local decides, which an edit to the file cannot change.
+    pub locals: HashMap<String, SavedOptionsFile>,
 }
 
 /// Is this port the default flavor of its origin (or unflavored)?
@@ -78,6 +82,7 @@ impl Session {
             owners: HashMap::new(),
             minimal,
             blacklist: crate::config::Blacklist::default(),
+            locals: HashMap::new(),
         };
         session.roots = requested_roots
             .iter()
@@ -162,6 +167,7 @@ impl Session {
             // The baseline follows the file OWNER's view (default flavor):
             // that's what apply will write.
             let (saved, baseline) = saved_baseline(self.owner_info(info), files);
+            self.locals.insert(info.options_name.clone(), files.combined(&info.options_name));
             self.states.insert(
                 info.options_name.clone(),
                 OptState { saved, staged: baseline.clone(), baseline },
@@ -251,12 +257,24 @@ impl Session {
                 None => effective_with(owner, Some(&files.combined(name))),
             };
             state.saved = saved;
+            // A `?=` in options.local takes effect or not by the file.
+            self.locals.insert(name.to_string(), files.combined(name));
         }
+    }
+
+    /// Whether the port's options.local has a SET or UNSET entry that
+    /// decides `opt` (patterns included): make reads it after the options
+    /// file, so an edit to the file cannot change what it says.
+    pub fn local_decides(&self, info: &PortInfo, opt: &str) -> bool {
+        self.locals.get(&info.options_name).is_some_and(|l| l.local_decides(opt))
     }
 
     /// Toggle an option; returns a user-facing error when refused.
     pub fn toggle(&mut self, key: &PortKey, opt: &str) -> Result<(), String> {
         let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
+        // Checked before `states` is borrowed mutably; refused below, after
+        // OPTIONS_OVERRIDE, which leaves options.local unread too.
+        let by_local = self.local_decides(info, opt);
         let state = self
             .states
             .get_mut(&info.options_name)
@@ -276,6 +294,13 @@ impl Session {
             return Err(format!(
                 "{opt} is forced by make.conf (*_FORCE or WITH/WITHOUT); the options file cannot override it"
             ));
+        }
+
+        // bsd.options.mk:342-363: options.local is read after the file and
+        // its entries join the file's lists; an edit to the file would be
+        // written and change nothing make sees.
+        if by_local {
+            return Err(format!("options.local decides {opt}; edit it there"));
         }
 
         if state.staged.contains(opt) {
@@ -1587,6 +1612,33 @@ mod tests {
         assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
         let err = s.toggle(&key, "B").unwrap_err();
         assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
+    }
+
+    /// bsd.options.mk:342-363: options.local is read after the file, its
+    /// entries joining the file's lists. The file sets A, options.local
+    /// unsets A*: turning A on would write a file make reads with A still
+    /// off, so toggle refuses it, and every option options.local decides,
+    /// pattern-matched (A2) or set there (B), reports locked by it.
+    #[test]
+    fn toggle_is_refused_for_what_options_local_decides() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n").unwrap();
+        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=B\n")
+            .unwrap();
+        let (ports, key) = mk_port(&["A", "A2", "B", "C"], &[], vec![], vec![]);
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        for opt in ["A", "A2", "B"] {
+            let err = s.toggle(&key, opt).unwrap_err();
+            assert_eq!(err, format!("options.local decides {opt}; edit it there"));
+        }
+        assert!(!s.edited(&s.ports[&key]));
+        s.toggle(&key, "C").expect("options.local says nothing of C");
+        let reports = crate::report::option_reports(&s, &s.ports[&key]);
+        let locked: Vec<_> = reports.iter().map(|o| (o.name.as_str(), o.locked_by.as_deref())).collect();
+        let local = Some("options.local");
+        assert_eq!(locked, [("A", local), ("A2", local), ("B", local), ("C", None)]);
     }
 
     /// scan --json --options reports every option of an overridden port

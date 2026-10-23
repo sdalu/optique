@@ -123,6 +123,7 @@ mod tests {
             owners: HashMap::new(),
             minimal: false,
             blacklist: Default::default(),
+            locals: HashMap::new(),
         }
     }
 

@@ -1422,6 +1422,14 @@ or
 whatever an options file on disk happens to say: it is not read, and
 .Cm sync
 and the TUI's apply leave it exactly as it is.
+An option a SET or UNSET entry of the port's
+.Pa options.local
+decides, pattern or name, is locked with
+.Va locked_by
+.Ql options.local
+after any
+.Va *_FORCE
+knob.
 .Va group
 is
 .Bro Va name , Va kind , Va members Brc
@@ -1500,6 +1508,11 @@ the result is the saved choice every command shows and judges.
 never writes or removes it, so what it unsets stays off whatever the options
 file says; every command that reads one says so in a note naming the options
 it sets or unsets.
+An option one of its entries decides cannot be edited through the options
+file: the TUI and
+.Cm decide
+refuse it with
+.Dq options.local decides Ar OPT ; edit it there .
 It then reports every file it changed.
 A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force
