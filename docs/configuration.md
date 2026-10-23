@@ -231,6 +231,10 @@ not, optique configures ports for a build on this host, the way
   [make.conf layers](#makeconf-layers) still applies);
 - queries see the host's installed packages under `/usr/local`, since
   they are what the build will find (no `LOCALBASE=/nonexistent`);
+- queries do not see optique's environment: a make variable exported in
+  the shell (`OPTIONS_SET`, `WITH_DEBUG`, `DEFAULT_VERSIONS`, ...) does
+  not reach them, since the cache could not key it; set it in the
+  make.conf instead;
 - there is no blacklist.
 
 `-l` is the way to configure a local build on a host that also runs
@@ -244,4 +248,5 @@ optique scan -l -f list
 synth builds ignore `PORTSDIR` and `PORT_DBDIR`, and whatever the build,
 every query is given the ports tree and options directory optique
 resolved, so a `PORTSDIR` in the environment cannot send `make` to
-another tree.
+another tree. Whatever the build, a query runs with an environment of
+`PATH`, `HOME` and `TMPDIR` (those set) and no other variable.

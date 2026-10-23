@@ -104,6 +104,18 @@ build. Every query is given `PORTSDIR` explicitly, canonicalised as
 make's own autodetection would, because an inherited one silently
 replaced the framework of the tree being queried.
 
+The same holds for the rest of the environment: a query runs with
+`PATH`, `HOME` and `TMPDIR` alone (`src/query/makerunner.rs`), so an
+exported `OPTIONS_SET=UTF8PROC` no longer turns `sysutils/tmux`'s
+4-port closure into a 22-port one behind a cache key that does not
+see it, nor reaches a poudriere query no builder would answer that
+way. What a query needs is passed on the command line or staged in
+the make.conf. Rejected: removing the variables known to matter
+(`MAKEFLAGS`, `OVERLAYS`, ...) one by one, which missed every make
+variable a user may export; keying the cache on the environment,
+which still let a poudriere or synth query see what its builder
+never does.
+
 Rejected: `-p` taking a path when there is no poudriere.d, which makes
 an argument's meaning depend on a directory that installing poudriere
 creates; guessing a local build from `-o /var/db/ports`; reading

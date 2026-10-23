@@ -92,6 +92,9 @@ impl MakeRunner {
     }
 }
 
+/// The only variables of optique's environment a query sees, when set.
+const PASSED_ENV: [&str; 3] = ["PATH", "HOME", "TMPDIR"];
+
 /// Run the wrapper makefile for one port@flavor and parse the dump.
 pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     let Some(portdir) = ctx.locate(&key.origin) else {
@@ -117,19 +120,23 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         .arg(format!("PORTSDIR={}", portsdir.display()))
         .arg(format!("PORTDIR={}", portdir.display()))
         .arg(format!("PORT_DBDIR={}", ctx.port_dbdir.display()))
-        // Don't let the caller's environment distort the query.
-        .env_remove("MAKEFLAGS")
-        .env_remove("MAKELEVEL")
-        .env_remove("MAKEOBJDIR")
-        .env_remove("MAKEOBJDIRPREFIX")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // The overlays reach make through the make.conf, never on the command
-    // line, where OVERLAYS= would replace make.conf's `+=` list, nor through
-    // the environment: a local build's has been written into its make.conf,
-    // where it keeps its place after --overlay-dir and its absolute path.
-    cmd.env_remove("OVERLAYS");
+    // Nothing of the caller's environment but what any make needs to run:
+    // an exported make variable (OPTIONS_SET, MAKEFLAGS, ...) would change
+    // the answer without changing the cache key, and no builder sees it. What
+    // a query needs is given here or staged in the make.conf: the overlays,
+    // for one, reach make through the make.conf, never on the command line,
+    // where OVERLAYS= would replace make.conf's `+=` list; a local build's
+    // environment OVERLAYS has been written into its make.conf, where it
+    // keeps its place after --overlay-dir and its absolute path.
+    cmd.env_clear();
+    for var in PASSED_ENV {
+        if let Some(value) = std::env::var_os(var) {
+            cmd.env(var, value);
+        }
+    }
     if let Some(conf) = &ctx.make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
@@ -363,6 +370,31 @@ mod tests {
             overlays: Vec::new(),
         };
         (tmp, ctx)
+    }
+
+    /// A query sees none of optique's environment but PATH, HOME and TMPDIR:
+    /// an exported make variable (OPTIONS_SET, say) is no input the cache
+    /// keys, and no builder would see it. cargo exports CARGO_MANIFEST_DIR
+    /// to every test, so it stands for any such variable here.
+    #[test]
+    fn a_query_sees_no_variable_of_the_environment_but_path_and_home() {
+        let _lock = make_test_lock();
+        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some(), "run under cargo test");
+        assert!(std::env::var_os("PATH").is_some() && std::env::var_os("HOME").is_some());
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ports/cat/env");
+        std::fs::create_dir_all(&dir).unwrap();
+        let makefile = "PKGNAME=${CARGO_MANIFEST_DIR:Dleak:Uclean}-${PATH:Dpath:Unopath}\
+                        -${HOME:Dhome:Unohome}-1.0\n";
+        std::fs::write(dir.join("Makefile"), makefile).unwrap();
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().to_path_buf(),
+            overlays: Vec::new(),
+        };
+        let info = run_query(&ctx, &PortKey::parse("cat/env").unwrap()).unwrap();
+        assert_eq!(info.pkgname, "clean-path-home-1.0");
     }
 
     #[test]

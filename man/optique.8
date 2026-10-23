@@ -2074,6 +2074,23 @@ there is no blacklist.
 is the way to configure a local build on a host that also runs poudriere:
 .Dl optique scan -l -f list
 .Sh ENVIRONMENT
+A query's
+.Xr make 1
+runs with
+.Ev PATH ,
+.Ev HOME
+and
+.Ev TMPDIR
+of
+.Nm Ns 's
+environment, those that are set, and no other variable, whatever the
+build: a make variable exported in the shell, such as
+.Ev OPTIONS_SET ,
+is not seen by the queries of a local build either; set it in the
+.Pa make.conf .
+The variables below are read by
+.Nm
+itself.
 .Bl -tag -width Ds
 .It Ev OVERLAYS
 Overlays of a local build, as
