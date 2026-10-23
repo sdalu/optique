@@ -1575,9 +1575,12 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     };
     // Name-color legend: the label rendered in its actual style, aligned on '='.
     let legend = |label: &str, style: Style, txt: &str| {
+        // The padding stays out of the style: an underline or a strike
+        // marks the label, not the blanks before it.
+        let pad = 14usize.saturating_sub(label.chars().count());
         let lead = vec![
-            Span::raw("  "),
-            Span::styled(format!("{label:>14}"), style),
+            Span::raw(" ".repeat(2 + pad)),
+            Span::styled(label.to_string(), style),
             Span::styled(" = ", Style::default().fg(Color::DarkGray)),
         ];
         hang(lead, txt, width)
@@ -2711,6 +2714,27 @@ no library.")),
         assert_eq!(fit_title(" Ports (3) — filter: abc ", 21), " Ports (3) —… ");
         assert_eq!(fit_title(" Ports (3) — filter: abc ", 22), " Ports (3) — filter:… ");
         assert!(Line::from(fit_title(" Ports (3) — filter: abc ", 20)).width() <= 20);
+    }
+
+    /// A legend's style marks its label alone: the blanks right-aligning it
+    /// are neither underlined (`flavor`) nor struck through.
+    #[test]
+    fn a_help_legend_styles_its_label_not_its_padding() {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 80)).unwrap();
+        terminal.draw(|f| { draw_help(f, 1, &mut 0); }).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = screen_rows(buffer);
+        for (label, modifier) in [
+            (" flavor = underlined", Modifier::UNDERLINED),
+            (" struck-through = ", Modifier::CROSSED_OUT),
+        ] {
+            let (y, row) = rows.iter().enumerate().find(|(_, r)| r.contains(label)).expect(label);
+            let x = row[..row.find(label).unwrap()].chars().count() as u16;
+            let styled = |dx: u16| buffer[(x + dx, y as u16)].modifier.contains(modifier);
+            assert!(!styled(0), "the blank before {label:?} is plain: {row}");
+            assert!(styled(1), "{label:?} itself is styled: {row}");
+        }
     }
 
     /// The help names the pane title's flavor glyphs and the keys as they
