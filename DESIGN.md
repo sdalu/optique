@@ -302,3 +302,24 @@ landed. Exit status answers one question: is anything still left to do.
 
 `tui --drive` speaks keystrokes to the real TUI and is a debugging tool,
 not a second way to drive optique from a script.
+
+## TUI keys: one meaning per key, vi's where it has one
+
+`u` undoes the last change, whatever port it was on, and `U` takes the
+selected port back to its saved state, from either pane: vi's own `u`/`U`
+pair, the frequent action on the plain key. `v` shows the port's full
+description and `V` toggles its panel above the options; `i` is the
+highlighted option's, so on the port list it only says where it works.
+Rejected for the description: `o` for overview; `D`, next to `d`, which
+resets the port to its defaults; `e`, which reads as edit.
+
+vi's `h`/`l` are gone, `l` from every place it moved right: `h` is the
+port's pkg-help notes, in both panes, so the pair could never be whole.
+Entering the option pane is `Enter`, `Tab` or `→`, and once there `Enter`
+does nothing: `Space` alone toggles, so a key pressed once too often
+cannot flip an option.
+
+`Ctrl-C` always quits, from any popup, prompt or the filter, asking first
+only when edits are staged; a second `Ctrl-C` at that prompt keeps them as
+a draft, the way out that loses nothing. A Ctrl-letter is never read as
+its plain letter: `Ctrl-F`/`Ctrl-B` page, the others are no key.

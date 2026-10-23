@@ -145,10 +145,11 @@ it stays, untitled, and reads `Enter: edit the options`. `i` opens a detail popu
 the selected option instead: its description, group, `IMPLIES`/`PREVENTS`,
 and the dependencies enabling it would add.
 
-A `[h] help` marker at the right of the pane's title means the port ships
+A `[h] notes` marker at the right of the pane's title means the port ships
 a `pkg-help` file — the free-form notes `make config` offers behind its
 Help button (`${PKGDIR}/pkg-help`); `h` opens it in a scrollable popup
-(`j`/`k`, arrows, `PgUp`/`PgDn`, `g`/`G`; any other key closes it), read
+(`j`/`k`, arrows, `PgUp`/`PgDn` or `Ctrl-B`/`Ctrl-F`, `g`/`G`; any other
+key closes it), read
 from disk every time it opens. Any popup too small for its text — this one,
 the help, `r`, `i`, the apply preview — shows a scrollbar on its right
 border, between `▲` and `▼`, its thumb as tall as the share in view and
@@ -159,7 +160,7 @@ own Ports Collection help, not the port's.
 
 <!-- screen about -->
 ```text
-┌ Ports (1) — filter: pcre2▏ ───┐┌ devel/pcre2 — pcre2-10.49 ────────────────┐
+┌ Ports (1) — filter: pcre2 ────┐┌ devel/pcre2 — pcre2-10.49 ────────────────┐
 │✓ devel/pcre2                  ││Perl Compatible Regular Expressions        │
 │                               ││library, version 2                         │
 │                               ││PCRE2 is the name used for a revised API   │
@@ -186,7 +187,7 @@ own Ports Collection help, not the port's.
 ```
 <!-- /screen -->
 
-The port's description sits above the options pane — shown at start, `I`
+The port's description sits above the options pane — shown at start, `V`
 hides it and brings it back. It is the port's `COMMENT` and as much of its `pkg-descr`
 as fits in five lines, a bulleted line keeping a line of its own. The
 panel keeps that height from one port to the next, so the option rows do
@@ -194,9 +195,9 @@ not move; it shrinks only on a pane too short to leave the options four
 rows, and never depends on how many options the port has, which scroll
 under it. When the text is cut, the rule under the panel says
 `[v] full text`: `v`, from either pane, shows the port's `COMMENT`, `WWW`
-and `pkg-descr` in full, in the popup `h` uses for `pkg-help` (`i` on the
-port list does the same; on the option pane `i` is the selected option's
-detail popup, see [The option pane](#the-option-pane)). A port that has
+and `pkg-descr` in full, in the popup `h` uses for `pkg-help` (`i` is the
+selected option's detail popup, in the option pane, see
+[The option pane](#the-option-pane); on the port list it only says so). A port that has
 neither a `COMMENT` nor a `pkg-descr` reads `No description available`; a
 `pkg-descr` that cannot be read says so, and is tried again the next time
 the port is selected.
@@ -207,25 +208,29 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 
 ### Navigate and edit
 
-| Key               | Effect                                              |
-| :---------------- | :-------------------------------------------------- |
-| `j`/`k`, `↑`/`↓`  | move the selection                                  |
-| `g`/`G`           | jump to the first / last entry                      |
-| `PgUp`/`PgDn`     | page                                                |
-| `Enter`, `l`      | edit the selected port                              |
-| `Esc`, `Tab`, `←` | back to the port list                               |
-| `Space`           | toggle the option, enforcing group rules            |
-| `d`               | reset the port to its defaults                      |
-| `u`               | revert the port to its saved state                  |
-| `U`               | undo the last option change, up to 100 back         |
-| `B`               | bulk-set one option across every visible port       |
-| `n`/`p`           | next / previous port needing attention              |
-| `f`               | jump to the next flavor of the same origin          |
-| `i`               | option details; on the port list, its description   |
-| `v`               | the port's full description (`COMMENT`, `WWW`, ...) |
-| `I`               | show / hide the port description above the options  |
-| `h`               | the port's pkg-help notes, when its title has `[h]` |
-| `r`               | why is this port here? (`Enter` jumps, `r` walks)   |
+| Key                              | Effect                                                    |
+| :------------------------------- | :-------------------------------------------------------- |
+| `j`/`k`, `↑`/`↓`                 | move the selection                                        |
+| `g`/`G`                          | jump to the first / last entry                            |
+| `PgUp`/`PgDn`, `Ctrl-B`/`Ctrl-F` | page: the rows shown, less one                            |
+| `Enter`, `Tab`, `→`              | edit the selected port                                    |
+| `Esc`, `Tab`, `←`                | back to the port list                                     |
+| `Space`                          | toggle the option, enforcing group rules                  |
+| `d`                              | reset the port to its defaults, from either pane          |
+| `U`                              | revert the port to its saved state, from either pane      |
+| `u`                              | undo the last option change, up to 100 back               |
+| `B`                              | bulk-set one option across every visible port             |
+| `n`/`p`                          | next / previous port needing attention                    |
+| `f`                              | jump to the next flavor of the same origin                |
+| `i`                              | the selected option's details, in the option pane         |
+| `v`                              | the port's full description (`COMMENT`, `WWW`, ...)       |
+| `V`                              | show / hide the port description above the options        |
+| `h`                              | the port's pkg-help notes, when its title has `[h] notes` |
+| `r`                              | why is this port here? (`Enter` jumps, `r` walks)         |
+
+`Space` alone toggles: `Enter` takes the list into the option pane and
+does nothing once there. From the option pane, `n` and `p` move to the
+port and put the cursor on its first option.
 
 ### Views and actions
 
@@ -236,11 +241,17 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 | `m`           | count ports make.conf fully decides as ok (marker `≈`) |
 | `w`           | flag ports contradicting make.conf's policy (`≠`)      |
 | `L`           | show only the ports in a dependency loop (`∞`)         |
-| `/`           | filter the port list                                   |
+| `/`           | filter the port list, starting afresh                  |
+| `Esc`         | on the port list, clear the filter                     |
 | `a`           | apply: preview every file diff, then write             |
 | `?`, `F1`     | the in-TUI help: markers, badges, keys                 |
 | `Ctrl-L`      | repaint the whole screen                               |
 | `q`, `Ctrl-C` | quit; staged edits can be kept as a draft              |
+
+The filter shows in the list's title, with a `▏` cursor while it is being
+typed; `Enter` leaves it on the list, `Esc` while typing drops it.
+`Ctrl-C` quits from anywhere — a popup, the filter, a prompt — and a
+Ctrl-letter is never read as its plain letter.
 
 `m` applies to stale ports when make.conf decides every option they
 gained, and to unconfigured ones when it decides all of them.
@@ -351,15 +362,17 @@ had become identical.
 after the interface is gone; the quit dialog shows how many were
 stopped, and the count is also reported on stderr.
 
-Quitting with staged, unapplied changes opens a prompt first: `s` saves
-them as a **draft** under `~/.cache/optique/drafts/`, one file per
-options directory, named after a hash of its path; `d` discards them;
-any other key cancels and returns to the interface. The next TUI launch
+Quitting with staged, unapplied changes opens a prompt first,
+`Keep staged edits as a draft?`: `y` (or a second `Ctrl-C`) keeps them
+as a **draft** under `~/.cache/optique/drafts/`, one file per options
+directory, named after a hash of its path, and quits; `n` discards them,
+an older draft included, and quits; `Esc` or any other key stays in the
+interface. The next TUI launch
 on the same options directory restores the draft's staged edits —
 options that vanished from a port meanwhile are dropped, and the
 restored ports are re-queried so their dependencies reappear. The draft
 is cleared as soon as the changes are applied (they are on disk by then)
-or discarded; `u` still reverts an individual port as usual. Quitting
+or discarded; `U` still reverts an individual port as usual. Quitting
 with nothing staged skips the prompt and clears the draft too: a
 restored draft undone by hand has nothing left to bring back.
 
@@ -384,7 +397,8 @@ their payload instead; output is flushed after each command so the
 driver can be held open on a pipe, and a malformed command is reported
 without ending the session. Pending background re-queries are merged
 before each command, exactly as the interactive event loop does on every
-tick.
+tick, and a frame is drawn before each key, as that loop draws one, so
+the page keys move by what the screen shows.
 
 - `key <spec>` — press one key: an optional `ctrl-`/`alt-` prefix, then a
   single character (case matters: `B` is the bulk key, `b` is not) or a

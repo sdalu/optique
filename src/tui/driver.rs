@@ -97,7 +97,7 @@ fn exec(
     match verb {
         "key" => match parse_key_spec(arg) {
             Some(key) => {
-                if press(app, key, out)? {
+                if press(app, terminal, key, out)? {
                     return Ok(true);
                 }
                 writeln!(out, "ok key {arg}")?;
@@ -109,7 +109,7 @@ fn exec(
                 writeln!(out, "err keys needs text to type")?;
             } else {
                 for c in raw.chars() {
-                    if press(app, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), out)? {
+                    if press(app, terminal, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), out)? {
                         return Ok(true);
                     }
                 }
@@ -131,7 +131,15 @@ fn exec(
 
 /// Feed one key to the shared keymap. Returns true when it ended the session
 /// (the acknowledgement is printed here, so the caller only has to stop).
-fn press(app: &mut App, key: KeyEvent, out: &mut impl Write) -> Result<bool> {
+/// A frame is drawn first, as the real loop draws one before every key: the
+/// page keys move by what the last frame showed.
+fn press(
+    app: &mut App,
+    terminal: &mut DriverTerminal,
+    key: KeyEvent,
+    out: &mut impl Write,
+) -> Result<bool> {
+    terminal.draw(|f| ui::draw(f, app))?;
     match dispatch_key(app, key) {
         // Ctrl-L only asks a real terminal for a repaint; nothing to clear here.
         KeyOutcome::Continue | KeyOutcome::Repaint => Ok(false),
@@ -361,6 +369,19 @@ mod tests {
         let out = run(&mut app, &["key /", "keys ab  "]);
         assert_eq!(out, "ok key /\nok keys 4\n");
         assert_eq!(app.filter, "ab  ");
+    }
+
+    /// A page key moves by the rows the screen shows, a dump or not before
+    /// it: the driver draws ahead of every key, as the real loop does.
+    #[test]
+    fn a_page_key_pages_without_a_dump_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..60).map(|i| format!("cat/p{i:02}")).collect();
+        let graph: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &[] as &[&str])).collect();
+        let mut app = super::super::tests::app_for(tmp.path(), &graph);
+        run(&mut app, &["key pgdn"]);
+        // 35 rows, less the status bar and the list's border, less one.
+        assert_eq!(app.list_state.selected(), Some(DEFAULT_ROWS as usize - 1 - 2 - 1));
     }
 
     #[test]

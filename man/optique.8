@@ -559,7 +559,7 @@ while the interface is open is left alone by apply unless its port is edited
 in the interface too.
 .Pp
 Key bindings:
-.Bl -tag -width "Enter, l" -compact
+.Bl -tag -width "Enter, Tab" -compact
 .It Ic j , k , \(ua , \(da
 Move the selection;
 .Ic g
@@ -568,9 +568,14 @@ and
 jump to the first and last entry,
 .Ic PgUp
 and
-.Ic PgDn
-page.
-.It Ic Enter , l
+.Ic PgDn ,
+or
+.Ic Ctrl-B
+and
+.Ic Ctrl-F ,
+page by the rows shown, less one.
+A Ctrl-letter is never read as its plain letter.
+.It Ic Enter , Tab , \(->
 Edit the selected port;
 .Ic Esc ,
 .Ic Tab
@@ -579,13 +584,15 @@ or
 returns to the list.
 .It Ic Space
 Toggle the selected option, enforcing group rules.
+.Ic Enter
+does nothing in the option pane.
 .It Ic d
-Reset the port to its defaults.
-.It Ic u
-Revert the port to its saved state.
+Reset the port to its defaults, from either pane.
 .It Ic U
+Revert the port to its saved state, from either pane.
+.It Ic u
 Undo the last option change, whichever port it was on and whatever made it
-.Pq a toggle, Ic d , Ic u , a bulk decision or a restored draft .
+.Pq a toggle, Ic d , Ic U , a bulk decision or a restored draft .
 Up to 100 changes back; the affected port is re-queried like any other edit.
 .It Ic B
 Bulk-set one option across all currently visible ports.
@@ -596,7 +603,8 @@ or the shorthands
 and
 .Ar OPTION Ns Cm - .
 .It Ic n , p
-Jump to the next or previous port needing attention.
+Jump to the next or previous port needing attention; from the option pane,
+onto its first option.
 .It Ic f
 Jump to the next flavor of the same origin.
 .It Ic t
@@ -632,22 +640,23 @@ With no loop in the closure there is nothing to show and the view is refused
 rather than emptying the list; a loop broken by an option edit drops the view
 again, for the same reason.
 .It Ic /
-Filter the port list.
+Filter the port list, starting afresh; the list's title shows the filter, with
+a cursor while it is being typed.
+.Ic Enter
+leaves it on the list,
+.Ic Esc
+drops it, and so does
+.Ic Esc
+on the port list once it is left there.
 .It Ic a
 Apply: preview every file diff, then write all files atomically.
 .It Ic i
-Show details for the selected option: description, group,
+In the option pane, show details for the selected option: description, group,
 .Va IMPLIES
 and
 .Va PREVENTS ,
 and the dependencies enabling it would add.
-On the port list, show what the port is instead: its
-.Va COMMENT ,
-.Va WWW
-and
-.Pa pkg-descr ,
-in the same popup as
-.Ic h .
+On the port list it only says so.
 .It Ic v
 Show what the selected port is, from either pane: its
 .Va COMMENT ,
@@ -656,7 +665,7 @@ and
 .Pa pkg-descr ,
 in the same popup as
 .Ic h .
-.It Ic I
+.It Ic V
 Hide the port description at the top of the option pane, or show it again
 .Pq it starts shown :
 the comment and as much of the
@@ -675,10 +684,10 @@ cannot be read says so.
 Show the selected port's
 .Pa pkg-help
 notes in a scrollable popup
-.Pq Ic j , k , \(ua , \(da , Ic PgUp , Ic PgDn , Ic g , Ic G ;
+.Pq Ic j , k , \(ua , \(da , Ic PgUp , Ic PgDn , Ic Ctrl-B , Ic Ctrl-F , Ic g , Ic G ;
 any other key closes it.
 Only ports that ship the file offer this, and those advertise it with a
-.Ql [h] help
+.Ql [h] notes
 marker at the right of the option pane's title; see
 .Sx PORT NOTES .
 The key works in both panes.
@@ -697,21 +706,27 @@ Colour-coded in-interface help listing markers, badges and keys.
 Force a full screen repaint.
 .It Ic q , Ctrl-C
 Quit.
+.Ic Ctrl-C
+quits from anywhere: a popup, the filter or a prompt.
 .El
 .Pp
 Quitting with staged changes opens a prompt offering to keep them:
-.Ic s
+.Ic y ,
+or a second
+.Ic Ctrl-C ,
 saves them as a draft
 .Pq see Sx FILES ,
-keyed by the options directory,
-.Ic d
-discards them, and any other key stays in the interface.
+keyed by the options directory, and quits;
+.Ic n
+discards them, an older draft included, and quits;
+.Ic Esc
+or any other key stays in the interface.
 The next session on the same options directory restores the draft's staged
 edits, dropping options that meanwhile vanished from a port and re-querying the
 restored ports so their dependencies reappear.
 The draft is cleared as soon as the changes are applied or discarded, or the
 session quits with nothing staged;
-.Ic u
+.Ic U
 still reverts an individual port.
 .Ss PORT NOTES
 A port may ship a
@@ -727,7 +742,7 @@ Roughly thirty ports in a tree have one
 .Pq Pa www/apache24 , Pa security/gnupg , Pa lang/gcc* , Pa mail/postfix No among them .
 .Pp
 Ports that have one advertise it with a
-.Ql [h] help
+.Ql [h] notes
 marker at the right of the option pane's title, and
 .Ic h
 opens it from either pane.
@@ -772,7 +787,8 @@ which print their payload instead.
 Output is flushed after each command, so the driver can be held open on a pipe.
 A malformed command is reported and never ends the session.
 Pending background re-queries are merged before each command, exactly as the
-interactive event loop does on every tick.
+interactive event loop does on every tick, and a frame is drawn before each
+key, as that loop draws one, so the page keys move by what the screen shows.
 .Bl -tag -width 16n
 .It Cm key Ar spec
 Press one key.

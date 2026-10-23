@@ -177,7 +177,7 @@ pub struct App {
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
-    /// The option pane opens with the port's description. On at start; 'I'
+    /// The option pane opens with the port's description. On at start; 'V'
     /// turns it off and on.
     pub show_about: bool,
     /// pkg-descr text per port, read when the panel first shows that port
@@ -214,7 +214,7 @@ pub struct App {
     pub port_help: Option<PortHelp>,
     /// Undo stack of (OPTIONS_NAME, staged set before the change), oldest
     /// first, capped at UNDO_MAX. Every TUI-driven mutation of a staged set
-    /// pushes one entry; 'U' pops and restores the top one.
+    /// pushes one entry; 'u' pops and restores the top one.
     pub undo: Vec<(String, BTreeSet<String>)>,
     /// Ports awaiting a debounced background re-query.
     pub pending: HashMap<PortKey, Instant>,
@@ -227,6 +227,20 @@ pub struct App {
     /// Outstanding background refresh batches.
     pub refreshing: usize,
     pub refresh_progress: Option<(usize, usize)>,
+    /// Rows the last frame showed of each view a page key moves through.
+    pub page: PageRows,
+}
+
+/// Rows of content each paged view showed on the last frame (inside its
+/// border): PgUp/PgDn and Ctrl-B/F move by one less. Kept by the drawing
+/// code, which is the one to know them; zero before the first frame.
+#[derive(Default)]
+pub struct PageRows {
+    pub list: u16,
+    /// The option rows, between the description and the detail panels.
+    pub options: u16,
+    pub help: u16,
+    pub port_help: u16,
 }
 
 pub fn ensure_terminal() -> Result<()> {
@@ -319,6 +333,7 @@ pub(crate) fn build_app(
         blame: HashMap::new(),
         refreshing: 0,
         refresh_progress: None,
+        page: PageRows::default(),
     };
     app.restore_draft_if_any();
     app.rebuild_visible(None);
@@ -360,31 +375,34 @@ pub(crate) enum KeyOutcome {
 /// caller through `KeyOutcome`, so the real event loop and the headless driver
 /// share exactly one keymap.
 fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     // Ctrl-L: full repaint to clear terminal artifacts — works in every
     // mode (modal, filter, help) without consuming any state.
-    if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if ctrl && key.code == KeyCode::Char('l') {
         return KeyOutcome::Repaint;
     }
     // A message lasts until the next key: left up, it would hide the key
     // legend for the rest of the session.
     app.message = None;
 
+    // Ctrl-C quits from anywhere, before any popup or prompt can take it as
+    // a key of its own; asked a second time, at the quit prompt, it keeps
+    // the staged edits as a draft.
+    if ctrl && key.code == KeyCode::Char('c') {
+        if app.quit_confirm {
+            return save_draft_and_quit(app);
+        }
+        return request_quit(app);
+    }
+    let code = plain_code(key);
+
     // Modal and quit-confirm grab all keys.
     if app.quit_confirm {
-        match key.code {
-            KeyCode::Char('s') | KeyCode::Char('S') => match draft::save(&app.session, &app.options_dir) {
-                // No flash on success: the terminal is about to be
-                // restored. The next launch announces the draft instead.
-                Ok(_) => return KeyOutcome::Quit,
-                Err(e) => {
-                    app.quit_confirm = false;
-                    app.flash(&format!("draft save failed: {e:#}"), true);
-                }
-            },
-            // 'y' kept as an alias for the old confirm-and-quit muscle
-            // memory. Drop any older draft too: quitting on purpose
-            // without saving must not resurrect stale intentions.
-            KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('y') | KeyCode::Char('Y') => {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => return save_draft_and_quit(app),
+            // Drop any older draft too: quitting on purpose without saving
+            // must not resurrect stale intentions.
+            KeyCode::Char('n') | KeyCode::Char('N') => {
                 draft::discard(&app.options_dir);
                 return KeyOutcome::Quit;
             }
@@ -393,30 +411,29 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         return KeyOutcome::Continue;
     }
     if app.modal.is_some() {
-        handle_modal_key(app, key.code);
+        handle_modal_key(app, code);
         return KeyOutcome::Continue;
     }
     if let Some(tab) = app.help_tab {
         let n = ui::HELP_TABS.len();
-        match key.code {
+        let page = page_step(app.page.help) as u16;
+        match code {
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c as usize - '1' as usize;
                 if idx < n {
                     app.open_help(idx);
                 }
             }
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => app.open_help((tab + 1) % n),
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                app.open_help((tab + n - 1) % n)
-            }
+            KeyCode::Tab | KeyCode::Right => app.open_help((tab + 1) % n),
+            KeyCode::BackTab | KeyCode::Left => app.open_help((tab + n - 1) % n),
             KeyCode::Down | KeyCode::Char('j') => {
                 app.help_scroll = app.help_scroll.saturating_add(1)
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 app.help_scroll = app.help_scroll.saturating_sub(1)
             }
-            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(10),
-            KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(10),
+            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(page),
+            KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(page),
             _ => {
                 app.help_tab = None;
                 app.help_scroll = 0;
@@ -425,11 +442,12 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         return KeyOutcome::Continue;
     }
     if let Some(help) = &mut app.port_help {
-        match key.code {
+        let page = page_step(app.page.port_help) as u16;
+        match code {
             KeyCode::Down | KeyCode::Char('j') => help.scroll = help.scroll.saturating_add(1),
             KeyCode::Up | KeyCode::Char('k') => help.scroll = help.scroll.saturating_sub(1),
-            KeyCode::PageDown => help.scroll = help.scroll.saturating_add(10),
-            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(10),
+            KeyCode::PageDown => help.scroll = help.scroll.saturating_add(page),
+            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(page),
             KeyCode::Home | KeyCode::Char('g') => help.scroll = 0,
             // Clamped to the real content at draw time.
             KeyCode::End | KeyCode::Char('G') => help.scroll = u16::MAX,
@@ -439,14 +457,14 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
     if let Some(why) = &mut app.why {
         let count = why.entries().len();
-        match key.code {
+        match code {
             KeyCode::Down | KeyCode::Char('j') if count > 0 => {
                 why.selected = (why.selected + 1).min(count - 1);
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 why.selected = why.selected.saturating_sub(1);
             }
-            KeyCode::Enter | KeyCode::Char('l') => {
+            KeyCode::Enter => {
                 let target = why.entries().get(why.selected).cloned().cloned();
                 app.why = None;
                 if let Some(target) = target {
@@ -468,15 +486,10 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         app.opt_info = None;
         return KeyOutcome::Continue;
     }
-    // Ctrl-C always quits (with confirm if dirty) — checked before the
-    // filter branch so it can't be swallowed as a literal 'c'.
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        return request_quit(app);
-    }
     // The bulk prompt takes text input, so it grabs the keys before the
     // filter branch and the plain command keys.
     if app.bulk.is_some() {
-        match key.code {
+        match code {
             KeyCode::Esc => app.bulk = None,
             KeyCode::Enter => {
                 if let Some(input) = app.bulk.take() {
@@ -488,7 +501,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                     input.pop();
                 }
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c) => {
                 if let Some(input) = app.bulk.as_mut() {
                     input.push(c);
                 }
@@ -498,7 +511,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         return KeyOutcome::Continue;
     }
     if app.focus == Focus::Filter {
-        match key.code {
+        match code {
             KeyCode::Esc => {
                 app.filter.clear();
                 app.focus = Focus::List;
@@ -509,7 +522,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 app.filter.pop();
                 app.rebuild_visible(None);
             }
-            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(c) => {
                 app.filter.push(c);
                 app.rebuild_visible(None);
             }
@@ -519,27 +532,36 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         return KeyOutcome::Continue;
     }
 
-    match key.code {
+    match code {
         KeyCode::Char('q') => return request_quit(app),
-        KeyCode::Char('/') => app.focus = Focus::Filter,
+        KeyCode::Char('/') => {
+            // A fresh filter: the old text goes, and the whole list with it.
+            app.focus = Focus::Filter;
+            if !app.filter.is_empty() {
+                app.filter.clear();
+                app.refresh_view();
+            }
+        }
         KeyCode::Char('?') | KeyCode::F(1) => app.open_help(0),
         KeyCode::Char('a') => app.open_apply_modal(),
         KeyCode::Char('B') => app.open_bulk(),
-        // Shift-U undoes the last option change anywhere; lowercase 'u'
-        // stays the per-port revert-to-saved in the editor.
-        KeyCode::Char('U') => app.undo_last(),
+        // vi's pair: 'u' undoes the last change, whichever port it was on;
+        // 'U' takes the selected port back to its saved state.
+        KeyCode::Char('u') => app.undo_last(),
+        KeyCode::Char('U') => app.reset_selected(Session::revert, "reverted to saved state"),
+        KeyCode::Char('d') => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
         KeyCode::Char('t') => app.toggle_view(
             |a| &mut a.hide_ok,
             "showing only ports needing attention (t to show all)",
             "showing all ports",
         ),
-        KeyCode::Char('I') => {
+        KeyCode::Char('V') => {
             app.show_about = !app.show_about;
             app.flash(
                 if app.show_about {
-                    "port description shown (I: hide · v: full text)"
+                    "port description shown (V: hide · v: full text)"
                 } else {
-                    "port description hidden (I: show · v: full text)"
+                    "port description hidden (V: show · v: full text)"
                 },
                 false,
             );
@@ -581,12 +603,34 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             "make.conf contradictions no longer flagged",
         ),
         _ => match app.focus {
-            Focus::List => handle_list_key(app, key.code),
-            Focus::Editor => handle_editor_key(app, key.code),
+            Focus::List => handle_list_key(app, code),
+            Focus::Editor => handle_editor_key(app, code),
             Focus::Filter => {}
         },
     }
     KeyOutcome::Continue
+}
+
+/// The key as the keymap reads it, its Ctrl folded in: Ctrl-F and Ctrl-B
+/// are PgDn and PgUp, and any other Ctrl-letter is no key at all, so it is
+/// never taken for the plain letter (Ctrl-F is not `f`). Ctrl-L and Ctrl-C
+/// are answered before this.
+fn plain_code(key: KeyEvent) -> KeyCode {
+    if !key.modifiers.contains(KeyModifiers::CONTROL) {
+        return key.code;
+    }
+    match key.code {
+        KeyCode::Char('f') => KeyCode::PageDown,
+        KeyCode::Char('b') => KeyCode::PageUp,
+        KeyCode::Char(_) => KeyCode::Null,
+        code => code,
+    }
+}
+
+/// How far a page key moves in a view that showed `rows` rows: one less,
+/// so the row at the edge stays in view (and at least one).
+fn page_step(rows: u16) -> usize {
+    (rows as usize).saturating_sub(1).max(1)
 }
 
 /// Quit, or ask first when there are staged edits to save as a draft or
@@ -602,6 +646,21 @@ fn request_quit(app: &mut App) -> KeyOutcome {
     KeyOutcome::Quit
 }
 
+/// The quit prompt's yes: keep the staged edits as a draft, then quit. A
+/// draft that cannot be saved says why and leaves the session open.
+fn save_draft_and_quit(app: &mut App) -> KeyOutcome {
+    match draft::save(&app.session, &app.options_dir) {
+        // No flash on success: the terminal is about to be restored. The
+        // next launch announces the draft instead.
+        Ok(_) => KeyOutcome::Quit,
+        Err(e) => {
+            app.quit_confirm = false;
+            app.flash(&format!("draft save failed: {e:#}"), true);
+            KeyOutcome::Continue
+        }
+    }
+}
+
 fn handle_list_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
@@ -610,20 +669,29 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('G') | KeyCode::End => {
             app.select_index(app.visible.len().saturating_sub(1))
         }
-        KeyCode::PageDown => app.move_selection(15),
-        KeyCode::PageUp => app.move_selection(-15),
-        KeyCode::Char('n') => app.jump_problem(1),
-        KeyCode::Char('p') => app.jump_problem(-1),
+        KeyCode::PageDown => app.move_selection(page_step(app.page.list) as isize),
+        KeyCode::PageUp => app.move_selection(-(page_step(app.page.list) as isize)),
+        KeyCode::Char('n') => {
+            app.jump_problem(1);
+        }
+        KeyCode::Char('p') => {
+            app.jump_problem(-1);
+        }
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         // Same meaning as in the option pane, whose title carries the marker.
         KeyCode::Char('h') => app.open_port_help(),
-        // The port as a whole, as 'v' from either pane; in the option pane
-        // 'i' is the option's.
-        KeyCode::Char('i') | KeyCode::Char('v') => app.open_port_about(),
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right
-            if !app.editor_rows.is_empty() =>
-        {
+        KeyCode::Char('v') => app.open_port_about(),
+        // 'i' is the highlighted option's, and the list highlights none.
+        KeyCode::Char('i') => {
+            app.flash("i: option details, in the option pane (Enter) — v: port description", false)
+        }
+        // Esc lets go of a filter left on the list.
+        KeyCode::Esc if !app.filter.is_empty() => {
+            app.filter.clear();
+            app.refresh_view();
+        }
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Right if !app.editor_rows.is_empty() => {
             app.focus = Focus::Editor;
             app.editor_select_first();
         }
@@ -641,15 +709,22 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
         KeyCode::Char('g') | KeyCode::Home => app.editor_steps(-1, usize::MAX),
         KeyCode::Char('G') | KeyCode::End => app.editor_steps(1, usize::MAX),
-        KeyCode::PageDown => app.editor_steps(1, 15),
-        KeyCode::PageUp => app.editor_steps(-1, 15),
+        KeyCode::PageDown => app.editor_page(1),
+        KeyCode::PageUp => app.editor_page(-1),
+        // The next port needing attention, its options at once: the cursor
+        // starts on its first one.
+        KeyCode::Char(c @ ('n' | 'p')) => {
+            if app.jump_problem(if c == 'n' { 1 } else { -1 }) {
+                app.editor_select_first();
+            }
+        }
         KeyCode::Char('v') => app.open_port_about(),
-        KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
+        // Space alone toggles: Enter is the list's key into the pane, and
+        // pressed once too often it must not flip an option.
+        KeyCode::Char(' ') => app.toggle_current(),
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
         KeyCode::Char('i') => app.open_opt_info(),
-        KeyCode::Char('d') => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
-        KeyCode::Char('u') => app.reset_selected(Session::revert, "reverted to saved state"),
         _ => {}
     }
 }
@@ -739,7 +814,8 @@ impl App {
     /// The overlay on screen: when several are open, the first in this order
     /// is the one drawn. `ui::draw` and the driver's `state` both use it.
     /// `dispatch_key` hands keys out in a different order on purpose (Ctrl-C
-    /// is checked before the bulk prompt), so it does not go through here.
+    /// is checked before every overlay, the bulk prompt after the popups),
+    /// so it does not go through here.
     pub(crate) fn top_overlay(&self) -> Option<OverlayKind> {
         if self.quit_confirm {
             Some(OverlayKind::QuitConfirm)
@@ -783,7 +859,7 @@ impl App {
         self.help_scroll = 0;
     }
 
-    /// Run a whole-port reset ('d', 'u') on the selected port: undoable, and
+    /// Run a whole-port reset ('d', 'U') on the selected port: undoable, and
     /// re-queried like any other change.
     fn reset_selected(&mut self, reset: fn(&mut Session, &PortKey), msg: &str) {
         if let Some(key) = self.selected_key() {
@@ -847,9 +923,11 @@ impl App {
         self.rebuild_editor();
     }
 
-    fn jump_problem(&mut self, dir: isize) {
+    /// Select the next port needing attention in direction `dir`, wrapping;
+    /// false when none does.
+    fn jump_problem(&mut self, dir: isize) -> bool {
         if self.visible.is_empty() {
-            return;
+            return false;
         }
         let len = self.visible.len() as isize;
         let start = self.list_state.selected().unwrap_or(0) as isize;
@@ -859,10 +937,11 @@ impl App {
             let info = &self.session.ports[&self.visible[i as usize]];
             if self.effective_status(info) != UiStatus::Ok {
                 self.select_index(i as usize);
-                return;
+                return true;
             }
         }
         self.flash("no ports need attention", false);
+        false
     }
 
     /// Rebuild the filtered, problems-first port list.
@@ -990,6 +1069,27 @@ impl App {
     fn editor_steps(&mut self, dir: isize, n: usize) {
         for _ in 0..n.min(self.editor_rows.len()) {
             self.editor_move(dir);
+        }
+    }
+
+    /// A page of rows in direction `dir`: the option at most a page away,
+    /// or the next one when the page holds none, stopping at the edges.
+    fn editor_page(&mut self, dir: isize) {
+        if self.editor_rows.is_empty() {
+            return;
+        }
+        let from = self.editor_idx as isize;
+        let last = self.editor_rows.len() as isize - 1;
+        let mut i = (from + dir * page_step(self.page.options) as isize).clamp(0, last);
+        // Back toward the start until an option: a header or a trailing
+        // section is no place for the cursor.
+        while i != from && !matches!(self.editor_rows[i as usize], EditorRow::Option(_)) {
+            i -= dir;
+        }
+        if i == from {
+            self.editor_move(dir);
+        } else {
+            self.editor_idx = i as usize;
         }
     }
 
@@ -1177,7 +1277,7 @@ impl App {
 
     /// A port's pkg-descr as on disk: None when it ships none, the message
     /// to flash when it cannot be read. The one reader of the file, for the
-    /// panel and the `i` overlay alike.
+    /// panel and the `v` overlay alike.
     fn read_descr(&self, key: &PortKey) -> Result<Option<String>, String> {
         let Some(path) = &self.session.ports[key].about.pkg_descr else { return Ok(None) };
         std::fs::read_to_string(path).map(Some).map_err(|e| format!("cannot read {path}: {e}"))
@@ -1265,7 +1365,7 @@ impl App {
     /// picks up the dependencies their staged options pull in.
     fn restore_draft_if_any(&mut self) {
         let Some(draft) = draft::load(&self.options_dir) else { return };
-        // Pre-images of every state the draft names, so 'U' can walk back the
+        // Pre-images of every state the draft names, so 'u' can walk back the
         // restore one port at a time.
         let before: Vec<(String, BTreeSet<String>)> = draft
             .staged
@@ -1295,14 +1395,14 @@ impl App {
         }
         self.flash(
             &format!(
-                "restored draft with {restored} staged port(s) from {} — 'u' per port reverts, draft cleared on apply",
+                "restored draft with {restored} staged port(s) from {} — 'U' per port reverts, draft cleared on apply",
                 draft::age_label(draft.age_secs())
             ),
             false,
         );
     }
 
-    /// Record `staged` as the state of `options_name` before a change, for 'U'.
+    /// Record `staged` as the state of `options_name` before a change, for 'u'.
     fn push_undo_entry(&mut self, options_name: String, staged: BTreeSet<String>) {
         push_capped(&mut self.undo, (options_name, staged));
     }
@@ -1321,7 +1421,7 @@ impl App {
     }
 
     /// Restore the staged set recorded by the most recent change, whatever
-    /// produced it (toggle, d, u, bulk, draft restore).
+    /// produced it (toggle, d, U, bulk, draft restore).
     fn undo_last(&mut self) {
         let Some((options_name, staged)) = self.undo.pop() else {
             self.flash("nothing to undo", false);
@@ -1761,7 +1861,7 @@ mod tests {
         let on_list = screen(&mut app);
         assert!(on_list.contains("Enter: edit the options"), "{on_list}");
         assert!(!on_list.contains("├ LONG"), "no option named while none is highlighted");
-        press(&mut app, 'l');
+        hit(&mut app, KeyCode::Enter);
         let long = screen(&mut app);
         assert!(long.contains("├ LONG"), "{long}");
         assert!(long.contains('…'), "a long description is cut");
@@ -1786,12 +1886,12 @@ mod tests {
         let key = PortKey::parse("cat/alpha").unwrap();
         app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
         app.about_text.insert(key.clone(), "word ".repeat(400));
-        press(&mut app, 'I');
-        assert!(!screen(&mut app).contains("The alpha port"), "I hides it");
-        press(&mut app, 'I');
+        press(&mut app, 'V');
+        assert!(!screen(&mut app).contains("The alpha port"), "V hides it");
+        press(&mut app, 'V');
         assert!(app.message.is_some());
         assert!(screen(&mut app).contains("[v] full text ──┤"), "a hint, at the right");
-        press(&mut app, 'l');
+        hit(&mut app, KeyCode::Enter);
         assert!(app.message.is_none(), "cleared by the next key");
         press(&mut app, 'v');
         assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"), "v from the option pane");
@@ -1802,7 +1902,7 @@ mod tests {
         assert!(!screen(&mut app).contains("[v] full text"));
     }
 
-    /// The [h] marker survives a title too long for the pane.
+    /// The [h] notes marker survives a title too long for the pane.
     #[test]
     fn the_help_marker_survives_a_long_title() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1812,7 +1912,7 @@ mod tests {
         info.pkgname = "alpha-with-a-very-long-package-name-1.0.0_1,1".repeat(2);
         info.pkg_help = Some("/nonexistent/pkg-help".into());
         let shown = screen(&mut app);
-        assert!(shown.contains("[h] help"), "{shown}");
+        assert!(shown.contains("[h] notes"), "{shown}");
     }
 
     /// A popup too small for its text says so on its right border: a
@@ -1997,14 +2097,92 @@ mod tests {
         assert!(!app.quit_confirm, "any other key goes back");
         ctrl(&mut app, 'c');
         assert!(app.quit_confirm, "Ctrl-C asks too");
-        assert!(matches!(press(&mut app, 's'), KeyOutcome::Quit));
-        assert!(draft::load(&app.options_dir).is_some(), "s saved a draft");
+        assert!(matches!(press(&mut app, 'y'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_some(), "y saved a draft");
 
         // That session ended there; the same one, asked again.
         app.quit_confirm = false;
         press(&mut app, 'q');
-        assert!(matches!(press(&mut app, 'd'), KeyOutcome::Quit));
-        assert!(draft::load(&app.options_dir).is_none(), "d discards it");
+        assert!(matches!(press(&mut app, 'n'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_none(), "n discards it");
+    }
+
+    /// The quit prompt answers y and n, either case, and Ctrl-C as y; Esc
+    /// and any other key stay, the old s and d included.
+    #[test]
+    fn the_quit_prompt_answers_y_n_and_ctrl_c() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        press(&mut app, 'q');
+        let shown = screen(&mut app);
+        assert!(shown.contains("Keep staged edits as a draft?"), "{shown}");
+        assert!(shown.contains("y save & quit · n discard & quit · Esc stay"), "{shown}");
+        for stay in ['s', 'S', 'd', 'D', 'x'] {
+            app.quit_confirm = true;
+            assert!(matches!(press(&mut app, stay), KeyOutcome::Continue), "{stay}");
+            assert!(!app.quit_confirm, "{stay} stays");
+        }
+        app.quit_confirm = true;
+        hit(&mut app, KeyCode::Esc);
+        assert!(!app.quit_confirm, "Esc stays");
+        app.quit_confirm = true;
+        assert!(matches!(ctrl(&mut app, 'y'), KeyOutcome::Continue), "Ctrl-Y is not y");
+        assert!(draft::load(&app.options_dir).is_none(), "nothing saved yet");
+
+        // A second Ctrl-C keeps the edits.
+        press(&mut app, 'q');
+        assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_some(), "Ctrl-C at the prompt saved a draft");
+        app.quit_confirm = false;
+        press(&mut app, 'q');
+        assert!(matches!(press(&mut app, 'N'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_none(), "N discards it");
+        app.quit_confirm = false;
+        press(&mut app, 'q');
+        assert!(matches!(press(&mut app, 'Y'), KeyOutcome::Quit));
+        assert!(draft::load(&app.options_dir).is_some(), "Y saves it");
+    }
+
+    /// Ctrl-C quits from inside any popup, the prompts and the filter: at
+    /// once with nothing staged, through the quit prompt otherwise.
+    #[test]
+    fn ctrl_c_quits_from_anywhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let help = tmp.path().join("pkg-help");
+        std::fs::write(&help, "notes\n").unwrap();
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
+        // Each opens something that takes keys of its own.
+        let openers: [&dyn Fn(&mut App); 9] = [
+            &|a| { press(a, '?'); },
+            &|a| { press(a, 'h'); },
+            &|a| { press(a, 'v'); },
+            &|a| { press(a, 'r'); },
+            &|a| { press(a, '/'); },
+            &|a| { press(a, 'B'); },
+            &|a| { hit(a, KeyCode::Enter); },
+            &|a| { hit(a, KeyCode::Enter); press(a, 'i'); },
+            &|a| { press(a, 'a'); },
+        ];
+        for (i, open) in openers.iter().enumerate() {
+            let tmp = tempfile::tempdir().unwrap();
+            let mut app = three_ports(tmp.path());
+            app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
+            open(&mut app);
+            assert!(app.top_overlay().is_some() || app.focus != Focus::List, "opener {i}");
+            assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit), "opener {i}: nothing staged");
+        }
+        // With edits staged, it asks first, over whatever is open.
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        press(&mut app, '?');
+        assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Continue));
+        assert!(app.quit_confirm && app.help_tab.is_some());
+        hit(&mut app, KeyCode::Esc);
+        assert!(!app.quit_confirm && app.help_tab.is_some(), "Esc goes back to the help");
     }
 
     #[test]
@@ -2019,18 +2197,34 @@ mod tests {
         hit(&mut app, KeyCode::BackTab);
         hit(&mut app, KeyCode::BackTab);
         assert_eq!(app.help_tab, Some(n - 1), "wraps backwards");
-        press(&mut app, 'l');
+        hit(&mut app, KeyCode::Right);
         assert_eq!(app.help_tab, Some(0), "and forwards");
+        hit(&mut app, KeyCode::Left);
+        assert_eq!(app.help_tab, Some(n - 1));
         press(&mut app, '2');
         assert_eq!(app.help_tab, Some(1));
         press(&mut app, '9');
         assert_eq!(app.help_tab, Some(1), "no ninth tab");
+        screen(&mut app);
+        let page = page_step(app.page.help) as u16;
+        assert!(page > 1, "the box's height, from the last frame");
         press(&mut app, 'j');
         hit(&mut app, KeyCode::PageDown);
-        assert_eq!(app.help_scroll, 11);
+        assert_eq!(app.help_scroll, 1 + page);
+        ctrl(&mut app, 'f');
+        assert_eq!(app.help_scroll, 1 + 2 * page, "Ctrl-F pages too");
+        ctrl(&mut app, 'b');
         press(&mut app, 'k');
         hit(&mut app, KeyCode::PageUp);
         assert_eq!(app.help_scroll, 0);
+        // vi's h and l switch no tab: they are other keys, which close.
+        press(&mut app, 'l');
+        assert_eq!(app.help_tab, None, "l closes");
+        press(&mut app, '?');
+        press(&mut app, 'h');
+        assert_eq!(app.help_tab, None, "h closes");
+        press(&mut app, '?');
+        press(&mut app, '2');
         press(&mut app, 'j');
         press(&mut app, 'x');
         assert_eq!((app.help_tab, app.help_scroll), (None, 0));
@@ -2058,9 +2252,14 @@ mod tests {
         let h = app.port_help.as_ref().expect("opened");
         assert_eq!((h.title, h.lines.len()), ("pkg-help", 2));
         assert!(screen(&mut app).contains("second line"));
+        let page = page_step(app.page.port_help) as u16;
+        assert!(page > 1, "the box's height, from the last frame");
         press(&mut app, 'j');
         hit(&mut app, KeyCode::PageDown);
-        assert_eq!(app.port_help.as_ref().unwrap().scroll, 11);
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, 1 + page);
+        ctrl(&mut app, 'f');
+        assert_eq!(app.port_help.as_ref().unwrap().scroll, 1 + 2 * page, "Ctrl-F pages too");
+        ctrl(&mut app, 'b');
         press(&mut app, 'k');
         hit(&mut app, KeyCode::PageUp);
         assert_eq!(app.port_help.as_ref().unwrap().scroll, 0);
@@ -2122,6 +2321,38 @@ mod tests {
         assert_eq!(visible(&app).len(), 3);
     }
 
+    /// `/` starts a fresh filter; Esc on the list lets go of one left there,
+    /// keeping the port; the cursor shows only while the filter is typed.
+    #[test]
+    fn a_filter_starts_fresh_and_esc_clears_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, '/');
+        assert!(screen(&mut app).contains("Ports (3) — filter: ▏"), "{}", screen(&mut app));
+        for c in "gam".chars() {
+            press(&mut app, c);
+        }
+        assert!(screen(&mut app).contains("— filter: gam▏"));
+        hit(&mut app, KeyCode::Enter);
+        let shown = screen(&mut app);
+        assert!(shown.contains("— filter: gam ") && !shown.contains('▏'), "no cursor once left:\n{shown}");
+        assert_eq!(selected(&app), "cat/gamma");
+
+        press(&mut app, '/');
+        assert!(app.focus == Focus::Filter && app.filter.is_empty(), "fresh: {:?}", app.filter);
+        assert_eq!(visible(&app).len(), 3, "the whole list again");
+        assert_eq!(selected(&app), "cat/gamma", "on the same port");
+        press(&mut app, 'a');
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(visible(&app), ["cat/alpha", "cat/gamma", "cat/beta"]);
+        press(&mut app, 'j');
+        hit(&mut app, KeyCode::Esc);
+        assert!(app.filter.is_empty() && app.focus == Focus::List);
+        assert_eq!(visible(&app).len(), 3);
+        assert_eq!(selected(&app), "cat/gamma", "the selection kept");
+        assert!(!screen(&mut app).contains("filter:"));
+    }
+
     #[test]
     fn list_keys_move_and_jump_between_problems() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2136,6 +2367,7 @@ mod tests {
         press(&mut app, 'G');
         assert_eq!(selected(&app), "cat/beta");
         press(&mut app, 'g');
+        screen(&mut app);
         hit(&mut app, KeyCode::PageDown);
         assert_eq!(selected(&app), "cat/beta", "clamped");
         hit(&mut app, KeyCode::PageUp);
@@ -2170,11 +2402,16 @@ mod tests {
         app.rebuild_editor();
 
         press(&mut app, 'l');
+        assert!(app.focus == Focus::List, "l is no key");
+        hit(&mut app, KeyCode::Enter);
         assert!(app.focus == Focus::Editor);
         press(&mut app, ' ');
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
         press(&mut app, 'j');
         hit(&mut app, KeyCode::Enter);
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "Enter does not toggle");
+        assert!(app.undo.len() == 1, "nor leaves an undo step");
+        press(&mut app, ' ');
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS", "NLS"]);
         press(&mut app, 'j');
         press(&mut app, ' ');
@@ -2183,12 +2420,12 @@ mod tests {
         press(&mut app, 'k');
         press(&mut app, ' ');
         assert!(staged(&app, "cat/alpha").is_empty(), "k stops at the first");
-        press(&mut app, 'U');
+        press(&mut app, 'u');
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
         press(&mut app, 'd');
         assert_eq!(staged(&app, "cat/alpha"), ["NLS"], "d: the port's defaults");
-        press(&mut app, 'u');
-        assert!(staged(&app, "cat/alpha").is_empty(), "u: the saved state (none)");
+        press(&mut app, 'U');
+        assert!(staged(&app, "cat/alpha").is_empty(), "U: the saved state (none)");
         press(&mut app, 'i');
         assert!(app.opt_info.is_some());
         press(&mut app, 'x');
@@ -2199,8 +2436,188 @@ mod tests {
         hit(&mut app, KeyCode::Left);
         assert!(app.focus == Focus::List);
         while app.undo.pop().is_some() {}
-        press(&mut app, 'U');
+        press(&mut app, 'u');
         assert!(app.message.as_ref().is_some_and(|(m, _)| m == "nothing to undo"));
+    }
+
+    /// From the port list too: d resets the selected port to its defaults,
+    /// U reverts it to its saved state, u undoes the last change, each one
+    /// undoable like a toggle.
+    #[test]
+    fn list_keys_reset_revert_and_undo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().options.defaults = ["DOCS".to_string()].into();
+        app.rebuild_editor();
+        assert!(app.focus == Focus::List);
+        press(&mut app, 'd');
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "d from the list");
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m == "reset to port defaults"));
+        press(&mut app, 'U');
+        assert!(staged(&app, "cat/alpha").is_empty(), "U from the list");
+        assert!(app.message.as_ref().is_some_and(|(m, _)| m == "reverted to saved state"));
+        press(&mut app, 'u');
+        assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "u undoes the revert");
+        press(&mut app, 'u');
+        assert!(staged(&app, "cat/alpha").is_empty(), "and then the reset");
+        assert!(app.undo.is_empty());
+    }
+
+    /// n and p work from the option pane: the next port needing attention,
+    /// the cursor on its first option, the pane keeping the focus.
+    #[test]
+    fn n_and_p_jump_from_the_option_pane() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        for p in ["cat/alpha", "cat/gamma"] {
+            let info = app.session.ports.get_mut(&PortKey::parse(p).unwrap()).unwrap();
+            info.options.complete = vec!["DOCS".into(), "NLS".into()];
+        }
+        app.rebuild_editor();
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'j');
+        assert_eq!(app.editor_idx, 1);
+        press(&mut app, 'n');
+        assert_eq!(selected(&app), "cat/gamma");
+        assert!(app.focus == Focus::Editor);
+        assert_eq!(app.editor_idx, 0, "on the first option");
+        press(&mut app, 'j');
+        press(&mut app, 'p');
+        assert_eq!(selected(&app), "cat/alpha");
+        assert_eq!((app.focus == Focus::Editor, app.editor_idx), (true, 0));
+    }
+
+    /// Enter only enters the pane; once there it does nothing at all.
+    #[test]
+    fn enter_in_the_option_pane_does_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        hit(&mut app, KeyCode::Enter);
+        for _ in 0..3 {
+            hit(&mut app, KeyCode::Enter);
+        }
+        assert!(app.focus == Focus::Editor);
+        assert!(!app.session.dirty() && app.undo.is_empty());
+        assert!(app.top_overlay().is_none());
+    }
+
+    /// The description keys: v opens the port's, V toggles the panel, I is
+    /// no key, and i on the list says where it works instead.
+    #[test]
+    fn description_keys_v_and_big_v() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
+        assert!(screen(&mut app).contains("The alpha port"));
+        press(&mut app, 'I');
+        assert!(app.show_about && app.message.is_none(), "I does nothing");
+        press(&mut app, 'V');
+        assert!(!app.show_about);
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("port description hidden (V: show · v: full text)")
+        );
+        press(&mut app, 'V');
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("port description shown (V: hide · v: full text)")
+        );
+        press(&mut app, 'i');
+        assert!(app.port_help.is_none() && app.opt_info.is_none(), "i on the list opens nothing");
+        assert_eq!(
+            app.message.clone(),
+            Some(("i: option details, in the option pane (Enter) — v: port description".into(), false))
+        );
+        press(&mut app, 'v');
+        assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"));
+    }
+
+    /// vi's l is no key: not into the option pane, not a jump in why.
+    #[test]
+    fn l_is_no_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = looped_app(tmp.path());
+        press(&mut app, 'l');
+        assert!(app.focus == Focus::List && app.top_overlay().is_none());
+        press(&mut app, 'r');
+        hit(&mut app, KeyCode::Down);
+        hit(&mut app, KeyCode::Down);
+        press(&mut app, 'l');
+        assert!(app.why.is_none(), "l closes why, as any other key");
+        assert_eq!(selected(&app), "cat/alpha", "and jumps nowhere");
+    }
+
+    /// PgDn/PgUp and Ctrl-F/B page the list and the option pane by the rows
+    /// the last frame showed, less one; Ctrl-F is not f.
+    #[test]
+    fn page_keys_move_by_the_visible_height() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..80).map(|i| format!("cat/p{i:02}")).collect();
+        let graph: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &[] as &[&str])).collect();
+        let mut app = app_for(tmp.path(), &graph);
+        screen(&mut app);
+        // 35 rows: the status bar and the list's border off.
+        assert_eq!(app.page.list, 32);
+        let page = page_step(app.page.list);
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.list_state.selected(), Some(page));
+        ctrl(&mut app, 'f');
+        assert_eq!(app.list_state.selected(), Some(2 * page));
+        assert!(app.message.is_none(), "Ctrl-F is not f: {:?}", app.message);
+        ctrl(&mut app, 'b');
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(app.list_state.selected(), Some(0));
+        ctrl(&mut app, 'g');
+        assert_eq!(app.list_state.selected(), Some(0), "Ctrl-G is not G");
+
+        // The option pane: its rows between the two panels.
+        let key = app.selected_key().unwrap();
+        app.session.ports.get_mut(&key).unwrap().options.complete =
+            (0..60).map(|i| format!("OPT{i:02}")).collect();
+        app.rebuild_editor();
+        hit(&mut app, KeyCode::Enter);
+        screen(&mut app);
+        assert_eq!(app.page.options, 32 - 3 - 6, "detail 2 + rule, description 5 + rule");
+        let page = page_step(app.page.options);
+        ctrl(&mut app, 'f');
+        assert_eq!(app.editor_idx, page);
+        let shown = screen(&mut app);
+        assert!(shown.contains(&format!("OPT{page:02}")) && shown.contains(&format!("OPT{:02}", page - 1)), "{shown}");
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.editor_idx, 2 * page);
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.editor_idx, 59, "stops at the last");
+        ctrl(&mut app, 'b');
+        assert_eq!(app.editor_idx, 59 - page);
+        hit(&mut app, KeyCode::PageUp);
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(app.editor_idx, 0);
+    }
+
+    /// A page that ends on a group header stops on the option before it,
+    /// never on the header.
+    #[test]
+    fn a_page_in_the_option_pane_lands_on_an_option() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        app.editor_rows = vec![
+            EditorRow::Option("A".into()),
+            EditorRow::Option("B".into()),
+            EditorRow::GroupHeader(0),
+            EditorRow::Option("C".into()),
+        ];
+        app.editor_idx = 0;
+        app.page.options = 3;
+        app.editor_page(1);
+        assert_eq!(app.editor_idx, 1, "two rows down is the header");
+        app.editor_page(1);
+        assert_eq!(app.editor_idx, 3);
+        app.page.options = 1;
+        app.editor_idx = 1;
+        app.editor_page(1);
+        assert_eq!(app.editor_idx, 3, "a page of one row skips the header");
     }
 
     #[test]
@@ -2587,14 +3004,14 @@ mod tests {
         hit(&mut app, KeyCode::Enter);
         press(&mut app, ' ');
         press(&mut app, 'q');
-        press(&mut app, 's');
+        press(&mut app, 'y');
         drop(app);
 
         let mut app = three_ports(tmp.path());
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
         assert!(app.pending.contains_key(&PortKey::parse("cat/alpha").unwrap()));
         assert!(app.message.as_ref().is_some_and(|(m, _)| m.starts_with("restored draft with 1 staged port(s)")));
-        press(&mut app, 'U');
+        press(&mut app, 'u');
         assert!(staged(&app, "cat/alpha").is_empty(), "the restore is undoable");
         drop(app);
 
@@ -2618,12 +3035,12 @@ mod tests {
             hit(&mut app, KeyCode::Enter);
             press(&mut app, ' ');
             press(&mut app, 'q');
-            press(&mut app, 's');
+            press(&mut app, 'y');
             drop(app);
 
             let mut app = three_ports(tmp.path());
             assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "restored");
-            press(&mut app, 'U');
+            press(&mut app, 'u');
             assert!(!app.session.dirty());
             let outcome = if quit == 'q' { press(&mut app, 'q') } else { ctrl(&mut app, 'c') };
             assert!(matches!(outcome, KeyOutcome::Quit), "{quit}: nothing to lose");
@@ -2669,10 +3086,10 @@ mod tests {
         assert!(app.session.state(&app.session.ports[&alpha]).unwrap().saved.is_some());
     }
 
-    /// The option pane opens with what the port is (on at start, 'I' toggles
-    /// it), and 'i' on the list shows all of it, WWW included.
+    /// The option pane opens with what the port is (on at start, 'V' toggles
+    /// it), and 'v' on the list shows all of it, WWW included.
     #[test]
-    fn port_description_panel_and_i_overlay() {
+    fn port_description_panel_and_v_overlay() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
         let descr = tmp.path().join("pkg-descr");
@@ -2690,16 +3107,16 @@ mod tests {
         assert!(shown.contains("Alpha does things."), "paragraph re-wrapped: {shown}");
         assert!(!shown.contains("old.example"), "old-style WWW: left to the overlay");
 
-        // 'I' hides it again and brings it back, from either pane.
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        // 'V' hides it again and brings it back, from either pane.
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
         assert!(!screen(&mut app).contains("Alpha does things."));
         app.focus = Focus::Editor;
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
         assert!(screen(&mut app).contains("Alpha does things."));
         app.focus = Focus::List;
 
-        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
-        let help = app.port_help.as_ref().expect("'i' on the list opens the overlay");
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
+        let help = app.port_help.as_ref().expect("'v' on the list opens the overlay");
         assert_eq!(help.title, "about");
         assert_eq!(help.lines[0], "The alpha port");
         assert_eq!(help.lines[1], "WWW: https://alpha.example/");

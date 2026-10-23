@@ -22,13 +22,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(outer[0]);
 
     draw_port_list(f, app, panes[0]);
-    draw_editor(f, app, panes[1]);
+    app.page.options = draw_editor(f, app, panes[1]);
     draw_status_bar(f, app, outer[1]);
     match app.top_overlay() {
         Some(OverlayKind::QuitConfirm) => draw_quit_confirm(f),
         Some(OverlayKind::Apply) => draw_apply_modal(f, app),
         Some(OverlayKind::Bulk) => draw_bulk(f, app),
-        Some(OverlayKind::Help(tab)) => draw_help(f, tab, &mut app.help_scroll),
+        Some(OverlayKind::Help(tab)) => app.page.help = draw_help(f, tab, &mut app.help_scroll),
         Some(OverlayKind::PortHelp) => draw_port_help(f, app),
         Some(OverlayKind::Why) => draw_why(f, app),
         Some(OverlayKind::OptInfo) => draw_opt_info(f, app),
@@ -114,8 +114,12 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
     if app.hide_ok {
         title.push_str(" — needs attention");
     }
-    if !app.filter.is_empty() || app.focus == Focus::Filter {
+    // The cursor only while the filter is being typed; a filter left on
+    // the list shows as text.
+    if app.focus == Focus::Filter {
         title.push_str(&format!(" — filter: {}▏", app.filter));
+    } else if !app.filter.is_empty() {
+        title.push_str(&format!(" — filter: {}", app.filter));
     }
     title.push(' ');
     let border_style = if app.focus == Focus::List || app.focus == Focus::Filter {
@@ -127,9 +131,11 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(title).border_style(border_style))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, area, &mut app.list_state);
+    app.page.list = area.height.saturating_sub(2);
 }
 
-fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
+/// Draw the option pane; returns how many option rows it showed.
+fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     let border_style = if app.focus == Focus::Editor {
         Style::default().fg(Color::LightBlue)
     } else {
@@ -139,7 +145,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         let p = Paragraph::new("no port selected")
             .block(Block::default().borders(Borders::ALL).border_style(border_style));
         f.render_widget(p, area);
-        return;
+        return 0;
     };
     let info = &app.session.ports[&key];
     let mut title = match flavor_summary(app, info) {
@@ -252,11 +258,11 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
     let scroll = selected_line.saturating_sub(rows_height.saturating_sub(1)) as u16;
 
     // The pane's title, and right of it the key that opens this port's
-    // pkg-help, shown only for the ports that ship one. A long title is cut
-    // short rather than drawn over the marker.
+    // pkg-help notes, shown only for the ports that ship one. A long title
+    // is cut short rather than drawn over the marker.
     let mut block = Block::default().borders(Borders::ALL).border_style(border_style);
     if info.pkg_help.is_some() {
-        let marker = " [h] help ";
+        let marker = " [h] notes ";
         let room = (area.width as usize).saturating_sub(2 + marker.len() + 1);
         if title.chars().count() > room {
             title = format!("{}… ", title.chars().take(room.saturating_sub(2)).collect::<String>());
@@ -282,9 +288,10 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         draw_rule(f, area, panel.y - 1, label, border_style);
         f.render_widget(Paragraph::new(detail), panel);
     }
+    layout.rows.height
 }
 
-/// How a key is advertised on the pane's borders (`[h] help`, `[v] full text`).
+/// How a key is advertised on the pane's borders (`[h] notes`, `[v] full text`).
 fn key_hint() -> Style {
     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
 }
@@ -334,7 +341,7 @@ fn editor_layout(inner: Rect, about: bool) -> EditorLayout {
 }
 
 /// What a rule across the pane carries: a title on the left (the option the
-/// panel under it describes), or a key hint on the right, as `[h] help` sits
+/// panel under it describes), or a key hint on the right, as `[h] notes` sits
 /// on the pane's title.
 enum RuleLabel {
     Title(Span<'static>),
@@ -367,7 +374,7 @@ fn draw_rule(f: &mut Frame, pane: Rect, y: u16, label: Option<RuleLabel>, style:
 /// What the port is: its COMMENT, then its pkg-descr `text` re-wrapped to
 /// `width`, one paragraph after the other with no blank line between them,
 /// a bulleted line starting a line of its own
-/// (the panel is short; the `i` overlay keeps the file's own layout). A
+/// (the panel is short; the `v` overlay keeps the file's own layout). A
 /// trailing `WWW:` line of an old-style pkg-descr is left to the overlay too.
 /// A port that says nothing reads "No description available".
 fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line<'static>> {
@@ -953,7 +960,8 @@ fn wrapped_height(lines: &[Line], width: u16) -> usize {
         .sum()
 }
 
-fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
+/// Draw the help on tab `tab`; returns how many rows of text it showed.
+fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     let area = centered_rect(78, 72, f.area());
     f.render_widget(Clear, area);
 
@@ -1092,7 +1100,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                 legend(
                     "port panel",
                     Style::default().add_modifier(Modifier::BOLD),
-                    "the port's comment and pkg-descr (I hides it), in five",
+                    "the port's comment and pkg-descr (V hides it), in five",
                 ),
                 Line::from(Span::raw("                   lines — v shows it all, from either pane")),
                 Line::default(),
@@ -1107,19 +1115,19 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             ]);
         }
         2 => lines.extend([
-            keyline("j/k ↑/↓", "move · g/G first/last · PgUp/PgDn page"),
-            keyline("Enter/l", "edit selected port · Esc/Tab/← back to the list"),
+            keyline("j/k ↑/↓", "move · g/G first/last"),
+            keyline("PgUp/PgDn", "page up / down · also Ctrl-B / Ctrl-F"),
+            keyline("Enter", "edit selected port · Esc/Tab/← back to the list"),
             keyline("Space", "toggle option (group rules enforced)"),
-            keyline("d / u", "reset port to defaults / revert to saved state"),
-            keyline("U", "undo the last option change"),
+            keyline("d / U", "reset port to defaults / revert to saved state"),
+            keyline("u", "undo the last option change"),
             keyline("B", "bulk: set an option on/off across all visible ports"),
             keyline("n / p", "next / previous port needing attention"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
-            keyline("", "on the list: what the port is (comment, WWW, pkg-descr)"),
-            keyline("v", "the port's full description, from either pane"),
-            keyline("I", "show / hide the port description above the options"),
-            keyline("h", "port notes (pkg-help) — marked [h] in the pane title"),
+            keyline("v", "the port's full description (comment, WWW, pkg-descr)"),
+            keyline("V", "show / hide the port description above the options"),
+            keyline("h", "port notes (pkg-help) — marked [h] notes in the pane title"),
             keyline("r", "why is this port here? — chain, loop, dependents; Enter jumps"),
         ]),
         _ => lines.extend([
@@ -1128,11 +1136,11 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("m", "make.conf-decided ports count as ok (≈)"),
             keyline("w", "flag make.conf contradictions (≠)"),
             keyline("L", "show only the ports caught in a dependency loop (∞)"),
-            keyline("/", "filter the port list"),
+            keyline("/", "filter the port list · Esc on the list clears it"),
             keyline("a", "apply: preview every file diff, then write atomically"),
             keyline("? F1", "this help"),
             keyline("Ctrl-L", "force a full screen repaint"),
-            keyline("q Ctrl-C", "quit — offers saving staged edits as a draft"),
+            keyline("q Ctrl-C", "quit — offers keeping staged edits as a draft"),
         ]),
     }
 
@@ -1158,6 +1166,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
     );
     f.render_widget(p, area);
     scroll_indicator(f, area, rows, *scroll as usize, border);
+    inner_height as u16
 }
 
 /// Cap on the dependents listed before collapsing the rest into "+ N more".
@@ -1453,11 +1462,12 @@ fn help_line(src: &str, width: usize) -> Vec<String> {
 }
 
 fn draw_port_help(f: &mut Frame, app: &mut App) {
-    let Some(help) = &mut app.port_help else { return };
     let area = centered_rect(76, 70, f.area());
-    f.render_widget(Clear, area);
     let inner_w = area.width.saturating_sub(2) as usize;
     let inner_h = area.height.saturating_sub(2) as usize;
+    app.page.port_help = inner_h as u16;
+    let Some(help) = &mut app.port_help else { return };
+    f.render_widget(Clear, area);
 
     let lines: Vec<Line> =
         help.lines.iter().flat_map(|src| help_line(src, inner_w)).map(Line::from).collect();
@@ -1506,9 +1516,11 @@ fn draw_bulk(f: &mut Frame, app: &App) {
 fn draw_quit_confirm(f: &mut Frame) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
-    let mut lines = vec![Line::from(
-        "Unsaved staged changes — [s]ave draft & quit · [d]iscard & quit · [Esc] stay",
-    )];
+    // The answers on a line of their own, so none is split by the wrap.
+    let mut lines = vec![
+        Line::from("Keep staged edits as a draft?"),
+        Line::from("y save & quit · n discard & quit · Esc stay"),
+    ];
     let active = crate::query::makerunner::active_make_count();
     if active > 0 {
         lines.push(Line::from(Span::styled(
@@ -1573,13 +1585,13 @@ mod tests {
     #[test]
     fn the_help_tabs_stay_in_view() {
         let mut scroll = u16::MAX;
-        let shown = rendered(80, 24, |f| draw_help(f, 0, &mut scroll));
+        let shown = rendered(80, 24, |f| { draw_help(f, 0, &mut scroll); });
         let top = shown.iter().find(|r| r.contains('┌')).expect("the box");
         assert!(top.contains("1:Markers") && top.contains("4:Views/Actions"), "{top}");
         assert!(scroll > 0, "scrolled");
         assert!(shown.iter().any(|r| r.contains("↑/↓ scroll")), "the keys at the bottom");
 
-        let narrow = rendered(60, 24, |f| draw_help(f, 2, &mut 0));
+        let narrow = rendered(60, 24, |f| { draw_help(f, 2, &mut 0); });
         let top = narrow.iter().find(|r| r.contains('┌')).expect("the box");
         assert!(top.contains("3:Navigate/Edit") && !top.contains("Markers"), "{top}");
         assert!(top.contains(" 1 2 ") && top.contains(" 4 "), "{top}");
@@ -1683,10 +1695,10 @@ mod tests {
     fn every_help_tab_scrolls_to_its_last_line_on_a_small_terminal() {
         for tab in 0..HELP_TABS.len() {
             // As tall as it takes to show it all, at the same width.
-            let whole = rendered(80, 200, |f| draw_help(f, tab, &mut 0));
+            let whole = rendered(80, 200, |f| { draw_help(f, tab, &mut 0); });
             let last = last_text_row(&whole);
             let mut scroll = u16::MAX;
-            let small = rendered(80, 30, |f| draw_help(f, tab, &mut scroll));
+            let small = rendered(80, 30, |f| { draw_help(f, tab, &mut scroll); });
             assert_eq!(last_text_row(&small), last, "tab {tab}:\n{}", small.join("\n"));
         }
     }
