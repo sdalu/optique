@@ -37,7 +37,7 @@ not change a result; **known gap**, with what it can change.
 | Conditional SINGLE/MULTI groups (named after an option) checked only while that option is on, their members dropped otherwise | `bsd.port.mk` pre-check-config | matches |
 | RADIO and PREVENTS always checked; SINGLE never picks a member by itself | `bsd.port.mk` pre-check-config | matches |
 | New options: no SET/UNSET line anywhere (`NEW_OPTIONS`); `_FILE_COMPLETE_OPTIONS_LIST` is written, never read | `bsd.options.mk`, `bsd.port.mk` do-config | matches for "new"; "undecided" is judged by outcome — **differs on purpose** ("make.conf decisions are judged by outcome") |
-| The options file is a makefile: several words per line, spaces around `+=`, `=` resets | `bsd.options.mk` (`.include`) | matches |
+| The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=` assigns only a list no earlier line (file, then `options.local`) assigned | `bsd.options.mk` (`.include`) | matches; a `!=` line (a shell command) is not run — **differs**: ignored, with a warning naming the file and line |
 | What `make config` writes: header, `_OPTIONS_READ`, list, one SET/UNSET line per option | `bsd.port.mk` do-config | matches |
 | `rmconfig` keeps a directory holding `options.local` | `bsd.port.mk` | matches (`clean`) |
 | `OPTIONS_NAME` ignores the flavor: flavors share one file | `bsd.options.mk` | matches; who writes it — **differs on purpose** ("Flavors sharing one options file") |

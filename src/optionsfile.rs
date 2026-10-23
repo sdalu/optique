@@ -12,14 +12,48 @@ pub struct SavedOptionsFile {
     pub complete: Vec<String>,
     pub set: BTreeSet<String>,
     pub unset: BTreeSet<String>,
+    /// The variables optique reads that some line has assigned so far, by
+    /// any operator: a later `?=` to one of them assigns nothing.
+    pub assigned: BTreeSet<String>,
+    /// `(file, line)` of each `!=` to a variable optique reads: make runs
+    /// the shell command, optique does not, and ignores the line. `file` is
+    /// `options` or `options.local`, `line` counts from 1.
+    pub shell: Vec<(&'static str, usize)>,
+}
+
+/// How a line assigns its variable: make's `=` and `:=` (afresh), `+=`,
+/// `?=` (only when the variable has no value yet) and `!=` (a shell
+/// command's output).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Op {
+    Assign,
+    Append,
+    IfUnset,
+    Shell,
+}
+
+/// The variable a line assigns, how, and the value; None for a line that
+/// assigns nothing.
+fn assignment(line: &str) -> Option<(&str, Op, &str)> {
+    let (lhs, value) = line.split_once('=')?;
+    let (name, op) = match lhs.as_bytes().last() {
+        Some(b'+') => (&lhs[..lhs.len() - 1], Op::Append),
+        Some(b':') => (&lhs[..lhs.len() - 1], Op::Assign),
+        Some(b'?') => (&lhs[..lhs.len() - 1], Op::IfUnset),
+        Some(b'!') => (&lhs[..lhs.len() - 1], Op::Shell),
+        _ => (lhs, Op::Assign),
+    };
+    Some((name.trim(), op, value))
 }
 
 impl SavedOptionsFile {
     /// The file read as the makefile bsd.options.mk includes (line 341):
-    /// a value is the whitespace-separated words after `+=` or `=`, with
-    /// or without spaces around either, `+=` appending to the variable and
-    /// `=` assigning it afresh, as `OPTIONS_FILE_SET=X` resets the list.
-    /// Lines that assign nothing optique reads are skipped.
+    /// a value is the whitespace-separated words after the operator, with
+    /// or without spaces around it. `+=` appends to the variable; `=` and
+    /// `:=` assign it afresh, as `OPTIONS_FILE_SET=X` resets the list; `?=`
+    /// assigns only a variable no earlier line assigned; `!=` (a shell
+    /// command) is ignored and recorded in `shell`. Lines that assign
+    /// nothing optique reads are skipped.
     pub fn parse(text: &str) -> Self {
         let mut out = SavedOptionsFile::default();
         out.read(text, false);
@@ -49,17 +83,34 @@ impl SavedOptionsFile {
     /// Read `text`'s assignments into `self`, in order; `lists_only`
     /// takes nothing but the SET and UNSET lines.
     fn read(&mut self, text: &str, lists_only: bool) {
-        for line in text.lines() {
+        let file = if lists_only { "options.local" } else { "options" };
+        for (n, line) in text.lines().enumerate() {
             // A `#` starts a comment, at the head of a line or after a value.
             let line = line.split('#').next().unwrap_or_default().trim();
-            let Some((lhs, value)) = line.split_once('=') else { continue };
-            let (name, append) = match lhs.strip_suffix('+') {
-                Some(name) => (name.trim(), true),
-                None => (lhs.trim(), false),
+            let Some((name, op, value)) = assignment(line) else { continue };
+            let read = match name {
+                "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => true,
+                "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST" => !lists_only,
+                _ => false,
+            };
+            if !read {
+                continue;
+            }
+            // Whatever the operator, the variable has a value from here on.
+            let first = self.assigned.insert(name.to_string());
+            let append = match op {
+                Op::Append => true,
+                Op::Assign => false,
+                Op::IfUnset if first => false,
+                Op::IfUnset => continue,
+                Op::Shell => {
+                    self.shell.push((file, n + 1));
+                    continue;
+                }
             };
             let words = value.split_whitespace().map(str::to_string);
             match name {
-                "_OPTIONS_READ" if !lists_only => {
+                "_OPTIONS_READ" => {
                     let v = value.trim();
                     if append && !self.options_read.is_empty() {
                         self.options_read = format!("{} {v}", self.options_read);
@@ -67,7 +118,7 @@ impl SavedOptionsFile {
                         self.options_read = v.to_string();
                     }
                 }
-                "_FILE_COMPLETE_OPTIONS_LIST" if !lists_only => {
+                "_FILE_COMPLETE_OPTIONS_LIST" => {
                     if !append {
                         self.complete.clear();
                     }
@@ -207,7 +258,7 @@ OPTIONS_FILE_UNSET+=FLITE
             "OPTIONS_FILE_SET+=A B\nOPTIONS_FILE_UNSET += C\tD\n\
              OPTIONS_FILE_SET+=E\nOPTIONS_FILE_SET = X\nOPTIONS_FILE_SET+=Y\n\
              _FILE_COMPLETE_OPTIONS_LIST = A B\n_FILE_COMPLETE_OPTIONS_LIST+=X\n\
-             OPTIONS_FILE_SET:=Z\n# OPTIONS_FILE_SET+=W\nOPTIONS_FILE_UNSET+=Y # not V\n",
+             # OPTIONS_FILE_SET+=W\nOPTIONS_FILE_UNSET+=Y # not V\n",
         );
         let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
         assert_eq!(f.set, words(&["X", "Y"]));
@@ -215,6 +266,33 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.complete, ["A", "B", "X"]);
         let v: Vec<_> = ["A", "C", "X", "Y"].iter().map(|o| f.value(o)).collect();
         assert_eq!(v, [None, Some(false), Some(true), Some(false)]);
+    }
+
+    /// make's other operators, as make on this host reads them: `:=`
+    /// assigns afresh like `=`; `?=` assigns only a variable no earlier
+    /// line assigned, the options file and options.local read as one
+    /// makefile; `!=` runs a shell command, which optique does not, so the
+    /// line is ignored and its place recorded.
+    #[test]
+    fn colon_question_and_shell_assignments() {
+        let f = SavedOptionsFile::parse(
+            "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET:=B C\nOPTIONS_FILE_SET?=D\n\
+             OPTIONS_FILE_UNSET ?= E\nOPTIONS_FILE_UNSET?=F\n\
+             _FILE_COMPLETE_OPTIONS_LIST!=echo G\n",
+        );
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(f.set, words(&["B", "C"]), "`:=` resets, `?=` after it assigns nothing");
+        assert_eq!(f.unset, words(&["E"]), "the first `?=` assigns, the second not");
+        assert!(f.complete.is_empty());
+        assert_eq!(f.shell, [("options", 6)]);
+        // options.local carries on: its `?=` meets a variable the file assigned.
+        let l = f.with_local("OPTIONS_FILE_SET?=H\nOPTIONS_FILE_UNSET:=I\nOPTIONS_FILE_SET != echo J\n");
+        assert_eq!(l.set, words(&["B", "C"]));
+        assert_eq!(l.unset, words(&["I"]));
+        assert_eq!(l.shell, [("options", 6), ("options.local", 3)]);
+        // With no options file, options.local's `?=` assigns.
+        let l = SavedOptionsFile::default().with_local("OPTIONS_FILE_SET?=H\n");
+        assert_eq!(l.set, words(&["H"]));
     }
 
     /// bsd.options.mk:341-363: options.local is read after the file and

@@ -1059,6 +1059,13 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 local.into_iter().collect::<Vec<_>>().join(" ")
             );
         }
+        // make runs a `!=` line's shell command; optique does not.
+        for (file, line) in files.combined(name).shell {
+            eprintln!(
+                "{} {name}/{file} line {line} assigns with != (a shell command): optique ignores it",
+                tint(paint, ansi::YELLOW, "warning:"),
+            );
+        }
         let Some(saved) = files.saved(name) else { continue };
         let unlined = saved.unlined();
         if !unlined.is_empty() {

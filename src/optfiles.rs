@@ -119,10 +119,23 @@ impl OptionsFiles {
     /// the same.
     pub fn saved(&self, options_name: &str) -> Option<SavedOptionsFile> {
         let own = self.own(options_name)?;
-        Some(match self.local_bytes(options_name) {
-            Some(local) => own.with_local(&String::from_utf8_lossy(&local)),
-            None => own,
-        })
+        Some(self.under_local(options_name, own))
+    }
+
+    /// `saved`, an absent options file read as an empty one: what make
+    /// reads for the entry, options.local included, whether or not the
+    /// file is there.
+    pub fn combined(&self, options_name: &str) -> SavedOptionsFile {
+        self.under_local(options_name, self.own(options_name).unwrap_or_default())
+    }
+
+    /// `file` with this entry's options.local read after it, as make would
+    /// read it in place of the options file.
+    pub fn under_local(&self, options_name: &str, file: SavedOptionsFile) -> SavedOptionsFile {
+        match self.local_bytes(options_name) {
+            Some(local) => file.with_local(&String::from_utf8_lossy(&local)),
+            None => file,
+        }
     }
 
     /// The options file alone, as written: what a write may carry over.

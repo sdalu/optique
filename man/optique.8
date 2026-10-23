@@ -1460,8 +1460,18 @@ put spaces around
 or
 .Ql = ,
 and assign a list afresh with
-.Ql = ,
+.Ql =
+or
+.Ql := ,
 which drops what earlier lines added to it;
+.Ql ?=
+assigns only a list no earlier line of the file or its
+.Pa options.local
+assigned, and a
+.Ql !=
+line, whose shell command
+.Nm
+does not run, is ignored with a warning naming the file and line;
 .Nm
 reads it so, and writes it back the way
 .Nm make Cm config

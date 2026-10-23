@@ -208,3 +208,29 @@ fn with_and_without_pin_like_force() {
         assert_eq!(o["locked_by"], "make.conf WITH/WITHOUT", "{o}");
     }
 }
+
+/// make reads `:=` as `=` and `?=` only for a variable no earlier line
+/// assigned, the options file and options.local read as one makefile. The
+/// file resets SET to AUDIO NAS, its `?=SOX` assigns nothing, its
+/// `?=DOCS` does (UNSET had no value); options.local's `?=NAS` meets an
+/// UNSET the file assigned. make has AUDIO and NAS on and SOX new; so does
+/// optique.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn colon_and_question_assignments_are_read_as_make_reads_them() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    f.write_file(
+        "misc_cond",
+        "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_SET?=SOX\n\
+         OPTIONS_FILE_UNSET?=DOCS\n",
+    );
+    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET ?= NAS\n").unwrap();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["AUDIO", "NAS"]);
+    let new = f.make_v(origin, "NEW_OPTIONS");
+    assert_eq!(new, ["SOX"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(flagged(&port, "new"), new, "{port}");
+}
