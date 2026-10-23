@@ -319,6 +319,10 @@ pub struct App {
     /// t or L say until the selection moves to another port or a view key
     /// is pressed, so a fix that makes it ok does not swap the pane's port.
     pub held: Option<PortKey>,
+    /// OPTIONS_NAMEs of ports a re-query brought in, whose real options
+    /// file staging does not hold yet: they were queried without it, so the
+    /// next flush copies it in and queries them again.
+    pub to_seed: BTreeSet<String>,
     pub staging_db: StagingDb,
     pub refresher: Refresher,
     /// Help overlay visible?
@@ -450,6 +454,7 @@ pub(crate) fn build_app(
         warn_mc: false,
         listable: 0,
         held: None,
+        to_seed: BTreeSet::new(),
         staging_db,
         refresher,
         help_tab: None,
@@ -1940,13 +1945,27 @@ impl App {
             let Some(state) = self.session.state(info) else { continue };
             let options_name = info.options_name.clone();
             let staged = state.staged.clone();
-            let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
-            if let Err(e) = self.staging_db.write(&options_name, content.as_bytes()) {
+            // A newcomer left as its file has it gets the file itself, byte
+            // for byte as the scan's cache knows it; an edited one, the
+            // edit.
+            let written = if self.to_seed.contains(&options_name) && staged == state.baseline {
+                self.staging_db.seed(&self.options_files, &options_name).map(|_| ())
+            } else {
+                self.to_seed.remove(&options_name);
+                let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
+                self.staging_db.write(&options_name, content.as_bytes())
+            };
+            if let Err(e) = written {
                 self.notify(&format!("staging write failed: {e:#}"), true);
                 continue;
             }
             self.record_snapshot(options_name, staged);
             batch.push(key);
+        }
+        for key in &batch {
+            if let Some(info) = self.session.ports.get(key) {
+                self.to_seed.remove(&info.options_name);
+            }
         }
         if !batch.is_empty() && self.refresher.tx.send(batch).is_ok() {
             self.refreshing += 1;
@@ -2065,6 +2084,16 @@ impl App {
             self.refresh_progress = None;
         }
         if let Some((added, removed)) = merged {
+            // A newcomer was queried without its real options file, which
+            // staging never had: it is copied in and the port queried again.
+            for key in &added {
+                let Some(info) = self.session.ports.get(key) else { continue };
+                let name = &info.options_name;
+                if !self.staging_db.has(name) && self.options_files.bytes(name).is_some() {
+                    self.to_seed.insert(name.clone());
+                    self.mark_pending(key);
+                }
+            }
             // The list's title counts the optionless ports the merge left.
             self.hidden =
                 self.session.ports.values().filter(|p| !p.options.has_options()).count();
@@ -3612,6 +3641,51 @@ mod tests {
         assert!(app.focus == Focus::List, "the pane would show another port");
         let (msg, _) = app.message.clone().unwrap();
         assert_eq!(msg, "cat/gamma left the closure: back to the list");
+    }
+
+    /// A newcomer was queried without its real options file, which staging
+    /// never held: the file is copied into staging byte for byte and the
+    /// port queried again with it. One whose file staging holds is not.
+    #[test]
+    fn a_newcomer_is_queried_again_with_its_real_options_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = b"# by hand\n_OPTIONS_READ=gamma-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n";
+        std::fs::create_dir_all(tmp.path().join("options/cat_gamma")).unwrap();
+        std::fs::write(tmp.path().join("options/cat_gamma/options"), real).unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let (ev, req) = fake_refresher(&mut app);
+        let staged = tmp.path().join("db/cat_gamma/options");
+        assert!(!staged.exists());
+        let mut alpha = info_of(&app, "cat/alpha");
+        let mut gamma = alpha.clone();
+        gamma.key = PortKey::parse("cat/gamma").unwrap();
+        gamma.canonical = gamma.key.clone();
+        gamma.options_name = "cat_gamma".into();
+        let mut delta = gamma.clone();
+        delta.key = PortKey::parse("cat/delta").unwrap();
+        delta.canonical = delta.key.clone();
+        delta.options_name = "cat_delta".into();
+        alpha.deps = [&gamma, &delta]
+            .iter()
+            .map(|p| crate::model::port::DepEdge {
+                target: p.key.clone(),
+                spec: format!("dep:{}", p.key),
+                test_only: false,
+            })
+            .collect();
+        app.refreshing = 1;
+        ev.send(done(vec![alpha, gamma, delta], vec![])).unwrap();
+        app.drain_refresh_events();
+        let gamma = PortKey::parse("cat/gamma").unwrap();
+        assert!(app.pending.contains_key(&gamma), "the newcomer is queried again");
+        assert!(
+            !app.pending.contains_key(&PortKey::parse("cat/delta").unwrap()),
+            "a newcomer with no file was queried as it is"
+        );
+        app.pending.insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
+        app.flush_due_refreshes();
+        assert_eq!(std::fs::read(&staged).unwrap(), real, "its real file, byte for byte");
+        assert_eq!(req.try_recv().unwrap(), vec![gamma]);
     }
 
     /// Progress shows while a scan runs and goes with it; a dependency that
