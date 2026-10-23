@@ -282,6 +282,47 @@ mod tests {
         assert!(err.starts_with("no such port: cat/only"), "{err}");
     }
 
+    /// An IGNORE'd port is not a blacklisted one: `register`'s own doc says
+    /// its dependencies are still queried, since its IGNORE may follow the
+    /// very options being configured (unlike a blacklisted port, gathered
+    /// without its dependencies, matching poudriere's `gather_port_vars_port`
+    /// returning on IGNORE only for a port its own blacklist already drops).
+    #[test]
+    fn an_ignored_ports_dependencies_are_still_queried() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let dep = "_UNIFIED_DEPENDS=x:cat/dep\nRUN_DEPENDS_ALL=x:cat/dep\n";
+        let tmp = fake_tree(&[
+            ("cat/root", &format!("PKGNAME=root-1.0\nIGNORE=not for this platform\n{dep}")),
+            ("cat/dep", "PKGNAME=dep-1.0\n"),
+        ]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+        };
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let roots = vec![PortKey::parse("cat/root").unwrap()];
+        let result = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &Moved::parse(""),
+            &Blacklist::default(),
+            |_| {},
+        );
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let root = &result.ports[&PortKey::parse("cat/root").unwrap()];
+        assert_eq!(root.ignore.as_deref(), Some("not for this platform"));
+        assert!(
+            result.ports.contains_key(&PortKey::parse("cat/dep").unwrap()),
+            "cat/dep must still be queried: {:?}",
+            result.ports.keys().collect::<Vec<_>>()
+        );
+    }
+
     /// poudriere gathers no dependency of a blacklisted port: the port is
     /// listed, its dependencies are not queried, as a root or deeper down.
     #[test]

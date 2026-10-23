@@ -357,6 +357,17 @@ fn leading_or_trailing_slash_on_the_command_line_is_accepted() {
     }
 }
 
+/// `~subpackage` is a documented known gap (docs/conformance.md): a bare
+/// origin on the command line with a '~' in it is refused like any other
+/// malformed origin, exit 2, pinned rather than fixed.
+#[test]
+fn subpackage_tilde_on_the_command_line_is_refused() {
+    let out = optique().args(["scan", "cat/port~sub"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("malformed port origin"), "{err}");
+}
+
 #[test]
 fn no_arguments_is_a_helpful_error() {
     // The hint names no build-specific flag: -z would be refused with -l.

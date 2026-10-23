@@ -668,6 +668,18 @@ mod tests {
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
 
+    /// `origin~subpackage` is read nowhere in optique: a documented known
+    /// gap (docs/conformance.md), pinned here rather than fixed. A bare
+    /// origin with a '~' is rejected like any malformed one; after '@' the
+    /// '~' is read as part of the flavor, whole.
+    #[test]
+    fn subpackage_tilde_is_pinned_not_handled() {
+        assert!(PortKey::parse("cat/port~sub").is_none());
+        let k = PortKey::parse("cat/port@fl~sub").unwrap();
+        assert_eq!(k.origin, "cat/port");
+        assert_eq!(k.flavor.as_deref(), Some("fl~sub"));
+    }
+
     #[test]
     fn malformed_line_names_the_file() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
