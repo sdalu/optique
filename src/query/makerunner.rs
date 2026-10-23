@@ -552,8 +552,10 @@ mod tests {
     /// synth reads ports in a chroot with an empty /usr/local, so an
     /// installed PHP must not pick the PHP a port builds against: php.mk
     /// includes ${PHPBASE}/etc/php.conf when it exists, PHPBASE defaulting
-    /// to LOCALBASE. A fake LOCALBASE with a php82 php.conf, set by the
-    /// profile's make.conf, stands for the host's packages on any host.
+    /// to LOCALBASE, and adds -zts to the extension directory when
+    /// ${LOCALBASE}/sbin/httpd -V says threaded. A fake LOCALBASE with a
+    /// php82 php.conf and a threaded httpd, set by the profile's make.conf,
+    /// stands for the host's packages on any host.
     /// Run with: cargo test -- --ignored
     #[test]
     #[ignore = "needs /usr/ports on a FreeBSD host"]
@@ -563,6 +565,12 @@ mod tests {
         let localbase = staging.path().join("localbase");
         std::fs::create_dir_all(localbase.join("etc")).unwrap();
         std::fs::write(localbase.join("etc/php.conf"), "PHP_VER=82\nPHP_EXT_DIR=20220829\n")
+            .unwrap();
+        let httpd = localbase.join("sbin/httpd");
+        std::fs::create_dir_all(httpd.parent().unwrap()).unwrap();
+        std::fs::write(&httpd, "#!/bin/sh\necho 'Server MPM:     event'\necho '  threaded:     yes'\n")
+            .unwrap();
+        std::fs::set_permissions(&httpd, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         let profile = staging.path().join("Live-make.conf");
         std::fs::write(&profile, format!("LOCALBASE={}\n", localbase.display())).unwrap();
@@ -591,6 +599,16 @@ mod tests {
             !xml.deps.iter().any(|d| d.target.origin == "lang/php82"),
             "the host's php.conf leaked into textproc/php84-xml: {:?}",
             xml.deps
+        );
+
+        // A PHP application's extensions live in the plain extension
+        // directory, not the -zts one a threaded httpd would pick.
+        let pma = run_query(&ctx, &PortKey::parse("databases/phpmyadmin5").unwrap()).unwrap();
+        assert!(pma.deps.iter().any(|d| d.spec.contains("/lib/php/")), "{:?}", pma.deps);
+        assert!(
+            !pma.deps.iter().any(|d| d.spec.contains("-zts/")),
+            "the host's threaded httpd leaked into databases/phpmyadmin5: {:?}",
+            pma.deps
         );
     }
 }
