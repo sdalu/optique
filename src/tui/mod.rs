@@ -180,8 +180,10 @@ pub struct App {
     /// The option pane opens with the port's description when there is room.
     /// Off at start; 'I' turns it on and off.
     pub show_about: bool,
-    /// pkg-descr text per port, read when the panel first shows that port:
-    /// the loop redraws every 150 ms and the ports tree may be on NFS.
+    /// pkg-descr text per port, read when the panel first shows that port
+    /// (on a change of selection or of the panel, never from the draw path:
+    /// the loop redraws every 150 ms and the ports tree may be on NFS). A
+    /// file that cannot be read is not kept, so it is tried again.
     pub about_text: HashMap<PortKey, String>,
     /// When set, only the ports caught in a dependency loop are listed.
     pub only_loops: bool,
@@ -363,6 +365,9 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return KeyOutcome::Repaint;
     }
+    // A message lasts until the next key: left up, it would hide the key
+    // legend for the rest of the session.
+    app.message = None;
 
     // Modal and quit-confirm grab all keys.
     if app.quit_confirm {
@@ -532,12 +537,14 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             app.show_about = !app.show_about;
             app.flash(
                 if app.show_about {
-                    "port description shown above the options when there is room"
+                    "port description shown (I: hide · v: full text)"
                 } else {
-                    "port description hidden (I to show, i on the list for all of it)"
+                    "port description hidden (I: show · v: full text)"
                 },
                 false,
             );
+            // After the flash: a pkg-descr that cannot be read says so.
+            app.sync_about();
         }
         KeyCode::Char('m') => app.toggle_view(
             |a| &mut a.mc_relax,
@@ -611,8 +618,9 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('r') => app.open_why(),
         // Same meaning as in the option pane, whose title carries the marker.
         KeyCode::Char('h') => app.open_port_help(),
-        // The port as a whole; in the option pane 'i' is the option's.
-        KeyCode::Char('i') => app.open_port_about(),
+        // The port as a whole, as 'v' from either pane; in the option pane
+        // 'i' is the option's.
+        KeyCode::Char('i') | KeyCode::Char('v') => app.open_port_about(),
         KeyCode::Enter | KeyCode::Char('l') | KeyCode::Tab | KeyCode::Right
             if !app.editor_rows.is_empty() =>
         {
@@ -631,6 +639,11 @@ fn handle_editor_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('h') => app.open_port_help(),
         KeyCode::Char('j') | KeyCode::Down => app.editor_move(1),
         KeyCode::Char('k') | KeyCode::Up => app.editor_move(-1),
+        KeyCode::Char('g') | KeyCode::Home => app.editor_steps(-1, usize::MAX),
+        KeyCode::Char('G') | KeyCode::End => app.editor_steps(1, usize::MAX),
+        KeyCode::PageDown => app.editor_steps(1, 15),
+        KeyCode::PageUp => app.editor_steps(-1, 15),
+        KeyCode::Char('v') => app.open_port_about(),
         KeyCode::Char(' ') | KeyCode::Enter => app.toggle_current(),
         KeyCode::Char('f') => app.jump_flavor(),
         KeyCode::Char('r') => app.open_why(),
@@ -891,6 +904,8 @@ impl App {
     /// Rebuild the editor rows for the selected port: top-level options in
     /// COMPLETE order, then each group, then obsolete saved-only options.
     pub fn rebuild_editor(&mut self) {
+        // Every change of selection comes through here.
+        self.sync_about();
         let previous = match self.editor_rows.get(self.editor_idx) {
             Some(EditorRow::Option(name)) => Some(name.clone()),
             _ => None,
@@ -969,6 +984,13 @@ impl App {
             .iter()
             .position(|r| matches!(r, EditorRow::Option(_)))
             .unwrap_or(0);
+    }
+
+    /// Up to `n` options in direction `dir`, stopping at the edges.
+    fn editor_steps(&mut self, dir: isize, n: usize) {
+        for _ in 0..n.min(self.editor_rows.len()) {
+            self.editor_move(dir);
+        }
     }
 
     fn editor_move(&mut self, dir: isize) {
@@ -1134,8 +1156,10 @@ impl App {
         }
     }
 
-    /// Read the selected port's pkg-descr for the panel, once per port.
-    pub(crate) fn load_about_text(&mut self) {
+    /// Read the selected port's pkg-descr for the panel, when the panel is
+    /// on and has not read it yet. A file that cannot be read says so and is
+    /// tried again next time.
+    fn sync_about(&mut self) {
         if !self.show_about {
             return;
         }
@@ -1143,13 +1167,20 @@ impl App {
         if self.about_text.contains_key(&key) {
             return;
         }
-        let text = self.session.ports[&key]
-            .about
-            .pkg_descr
-            .as_ref()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .unwrap_or_default();
-        self.about_text.insert(key, text);
+        match self.read_descr(&key) {
+            Ok(text) => {
+                self.about_text.insert(key, text.unwrap_or_default());
+            }
+            Err(e) => self.flash(&e, true),
+        }
+    }
+
+    /// A port's pkg-descr as on disk: None when it ships none, the message
+    /// to flash when it cannot be read. The one reader of the file, for the
+    /// panel and the `i` overlay alike.
+    fn read_descr(&self, key: &PortKey) -> Result<Option<String>, String> {
+        let Some(path) = &self.session.ports[key].about.pkg_descr else { return Ok(None) };
+        std::fs::read_to_string(path).map(Some).map_err(|e| format!("cannot read {path}: {e}"))
     }
 
     /// Open the selected port's description: its COMMENT and WWW, then its
@@ -1158,18 +1189,20 @@ impl App {
     fn open_port_about(&mut self) {
         let Some(key) = self.selected_key() else { return };
         let about = &self.session.ports[&key].about;
-        let mut lines = vec![about.comment.clone()];
+        let mut lines: Vec<String> =
+            Some(about.comment.clone()).filter(|c| !c.is_empty()).into_iter().collect();
         for url in about.www.split_whitespace() {
             lines.push(format!("WWW: {url}"));
         }
-        if let Some(path) = &about.pkg_descr {
-            match std::fs::read_to_string(path) {
-                Ok(text) => {
+        match self.read_descr(&key) {
+            Ok(Some(text)) => {
+                if !lines.is_empty() {
                     lines.push(String::new());
-                    lines.extend(text.lines().map(str::to_string));
                 }
-                Err(e) => self.flash(&format!("cannot read {path}: {e}"), true),
+                lines.extend(text.lines().map(str::to_string));
             }
+            Ok(None) => {}
+            Err(e) => self.flash(&e, true),
         }
         self.port_help = Some(PortHelp { title: "about", key, lines, scroll: 0 });
     }
@@ -1685,15 +1718,11 @@ mod tests {
         assert!(screen(&mut app).contains("cat/beta — beta-1.0 · overlay mine"), "{}", screen(&mut app));
     }
 
-    /// However many options a port has, turning the panel on never changes
-    /// which of them the pane shows: it is sized from the rows they need.
+    /// The panel shows by the pane's size alone, however many options the
+    /// port has: the rows scroll under it, and the selected one stays in view.
     #[test]
-    fn description_panel_never_hides_an_option() {
-        let visible = |shown: &str, n: usize| -> Vec<usize> {
-            (1..=n).filter(|i| shown.contains(&format!("OPT{i:02}"))).collect()
-        };
-        let mut panel_seen = false;
-        for n in 16..=32 {
+    fn description_panel_shows_whatever_the_option_count() {
+        for n in [2, 60] {
             let tmp = tempfile::tempdir().unwrap();
             let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
             let key = PortKey::parse("cat/alpha").unwrap();
@@ -1702,13 +1731,87 @@ mod tests {
             info.about.comment = "The alpha port".to_string();
             app.about_text.insert(key.clone(), "word ".repeat(400));
             app.rebuild_editor();
-            let without = visible(&screen(&mut app), n);
             dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+            app.focus = Focus::Editor;
+            app.editor_idx = app.editor_rows.len() - 1;
             let shown = screen(&mut app);
-            assert_eq!(visible(&shown, n), without, "{n} options:\n{shown}");
-            panel_seen |= shown.contains("The alpha port");
+            assert!(shown.contains("The alpha port"), "{n} options:\n{shown}");
+            assert!(shown.contains(&format!("OPT{n:02}")), "the selected row in view:\n{shown}");
         }
-        assert!(panel_seen, "the panel had room at least once");
+    }
+
+    /// The row a rule (├…┤) of the option pane sits on, counted from the top.
+    fn rule_rows(shown: &str) -> Vec<usize> {
+        shown.lines().enumerate().filter(|(_, l)| l.contains('├')).map(|(i, _)| i).collect()
+    }
+
+    /// The detail panel is one height whatever the option, and stays put,
+    /// empty, while no option is highlighted: nothing in the pane moves.
+    #[test]
+    fn the_detail_panel_never_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["LONG".into(), "SHORT".into()];
+        let def = |d: &str| crate::model::options::OptionDef { desc: d.into(), ..Default::default() };
+        info.options.defs.insert("LONG".into(), def(&"a long description ".repeat(12)));
+        info.options.defs.insert("SHORT".into(), def("short"));
+        app.rebuild_editor();
+
+        let on_list = screen(&mut app);
+        assert!(on_list.contains("Enter: edit the options"), "{on_list}");
+        assert!(!on_list.contains("├ LONG"), "no option named while none is highlighted");
+        press(&mut app, 'l');
+        let long = screen(&mut app);
+        assert!(long.contains("├ LONG"), "{long}");
+        assert!(long.contains('…'), "a long description is cut");
+        press(&mut app, 'j');
+        let short = screen(&mut app);
+        assert!(short.contains("├ SHORT"), "{short}");
+        assert_eq!(rule_rows(&on_list), rule_rows(&long));
+        assert_eq!(rule_rows(&long), rule_rows(&short));
+        // g/G work in the pane too.
+        press(&mut app, 'g');
+        assert!(screen(&mut app).contains("├ LONG"));
+        press(&mut app, 'G');
+        assert!(screen(&mut app).contains("├ SHORT"));
+    }
+
+    /// A description cut short says where the rest is, and `v` gets it from
+    /// either pane; a message lasts until the next key.
+    #[test]
+    fn a_cut_description_points_at_v() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
+        app.about_text.insert(key.clone(), "word ".repeat(400));
+        press(&mut app, 'I');
+        assert!(app.message.is_some());
+        assert!(screen(&mut app).contains("[v] full text ──┤"), "a hint, at the right");
+        press(&mut app, 'l');
+        assert!(app.message.is_none(), "cleared by the next key");
+        press(&mut app, 'v');
+        assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"), "v from the option pane");
+        hit(&mut app, KeyCode::Esc);
+
+        // A description that fits says nothing more.
+        app.about_text.insert(key, "short".into());
+        assert!(!screen(&mut app).contains("[v] full text"));
+    }
+
+    /// The [h] marker survives a title too long for the pane.
+    #[test]
+    fn the_help_marker_survives_a_long_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.pkgname = "alpha-with-a-very-long-package-name-1.0.0_1,1".repeat(2);
+        info.pkg_help = Some("/nonexistent/pkg-help".into());
+        let shown = screen(&mut app);
+        assert!(shown.contains("[h] help"), "{shown}");
     }
 
     /// The panel reads a port's pkg-descr once, not at every redraw: the loop
@@ -1725,6 +1828,26 @@ mod tests {
         assert!(screen(&mut app).contains("Alpha does things."));
         std::fs::remove_file(&descr).unwrap();
         assert!(screen(&mut app).contains("Alpha does things."), "read again at redraw");
+    }
+
+    /// A pkg-descr that cannot be read is said so, not shown as blank for
+    /// the rest of the session: the panel tries it again next time.
+    #[test]
+    fn description_panel_says_when_pkg_descr_is_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        let descr = tmp.path().join("pkg-descr");
+        let key = PortKey::parse("cat/alpha").unwrap();
+        app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
+        dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT));
+        let msg = app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(msg.starts_with("cannot read"), "{msg}");
+        assert!(screen(&mut app).contains("No description available"));
+
+        std::fs::write(&descr, "Alpha does things.\n").unwrap();
+        app.move_selection(1);
+        app.move_selection(-1);
+        assert!(screen(&mut app).contains("Alpha does things."), "read again once readable");
     }
 
     /// The staging copy is never rewritten while a re-scan may be reading it:

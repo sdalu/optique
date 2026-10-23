@@ -34,9 +34,9 @@ tty — unless `--drive` is given (see
 │✓ lang/python312               ││  [x] HTTP_AUTH_REQ             on         │
 │✓ misc/help2man                ││  [x] HTTP_CACHE                on         │
 │✓ print/texinfo                ││  [x] HTTP_DAV                  on         │
-│✓ security/rhash               ││  [ ] HTTP_DEGRADATION          off        │
-│✓ textproc/expat2              │┌ DEBUGLOG ─────────────────────────────────┐
-│✓ textproc/libxml2             ││  Enable debug log (--with-debug)          │
+│✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
+│✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
+│✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
  0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
 ```
@@ -103,9 +103,9 @@ Three further markers may trail the status one:
 │✓ misc/help2man                ││  [x] HTTP_AUTH_REQ             on         │
 │✓ print/texinfo                ││  [x] HTTP_CACHE                on         │
 │✓ security/rhash               ││  [x] HTTP_DAV                  on         │
-│✓ textproc/expat2              ││  [ ] HTTP_DEGRADATION          off        │
-│✓ textproc/libxml2             │┌ FILE_AIO ─────────────────────────────────┐
-│✓ www/nginx                    ││  Enable file aio                          │
+│✓ textproc/expat2              │├ FILE_AIO ─────────────────────────────────┤
+│✓ textproc/libxml2             ││  Enable file aio                          │
+│✓ www/nginx                    ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
  0✗ 0* 1? 1! 19✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
 ```
@@ -135,10 +135,13 @@ its own section.
 Whatever room is left on the row, after the badges, carries the option's
 own description — the one thing the row usually has no space for; a row
 with less than about sixteen columns of room drops the description
-instead of showing a word fragment. A panel below the rows follows the
-cursor and gives the selected option's description in full, wrapped,
-growing to at most a third of the pane; an option the ports framework
-describes nowhere reads `(no description)`. `i` opens a detail popup for
+instead of showing a word fragment. A two-line panel below the rows,
+titled with the option's name, follows the cursor and gives the selected
+option's description, wrapped, marking with `…` what does not fit; an
+option the ports framework describes nowhere reads `(no description)`.
+The panel keeps its place and height whatever the option, so the rows
+never move; while no option is highlighted — the port list has the focus —
+it stays, untitled, and reads `Enter: edit the options`. `i` opens a detail popup for
 the selected option instead: its description, group, `IMPLIES`/`PREVENTS`,
 and the dependencies enabling it would add.
 
@@ -158,10 +161,8 @@ own Ports Collection help, not the port's.
 │                               ││library, version 2                         │
 │                               ││PCRE2 is the name used for a revised API   │
 │                               ││for the PCRE library, which is a set of    │
-│                               ││functions, written in C, that implement    │
-│                               ││regular expression pattern matching using  │
-│                               ││the same syntax and semantics as Perl, wit…│
-│                               │┌───────────────────────────────────────────┐
+│                               ││functions, written in C, that implement…   │
+│                               │├────────────────────────── [v] full text ──┤
 │                               ││  [x] DOCS         on                      │
 │                               ││  [ ] LIBBZ2       off                     │
 │                               ││  [ ] LIBZ         off                     │
@@ -173,21 +174,29 @@ own Ports Collection help, not the port's.
 │                               ││                                           │
 │                               ││                                           │
 │                               ││                                           │
-│                               │┌ DOCS ─────────────────────────────────────┐
-│                               ││  Build and/or install documentation       │
+│                               ││                                           │
+│                               │├───────────────────────────────────────────┤
+│                               ││  Enter: edit the options                  │
+│                               ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- port description shown above the options when there is room
+ port description shown (I: hide · v: full text)
 ```
 <!-- /screen -->
 
 `I` shows or hides the port's description above the options pane — it
 starts hidden. It is the port's `COMMENT` and as much of its `pkg-descr`
-as the option rows leave room for, and it never makes the rows scroll to
-fit more. `i` on the port list shows the same information, in full,
-in a popup — the port's `COMMENT`, `WWW` and `pkg-descr` — in the same
-popup `h` uses for `pkg-help`. On the option pane, `i` instead opens the
-detail popup for the selected option (see
-[The option pane](#the-option-pane)).
+as fits in five lines, a bulleted line keeping a line of its own. The
+panel keeps that height from one port to the next, so the option rows do
+not move; it shrinks only on a pane too short to leave the options four
+rows, and never depends on how many options the port has, which scroll
+under it. When the text is cut, the rule under the panel says
+`[v] full text`: `v`, from either pane, shows the port's `COMMENT`, `WWW`
+and `pkg-descr` in full, in the popup `h` uses for `pkg-help` (`i` on the
+port list does the same; on the option pane `i` is the selected option's
+detail popup, see [The option pane](#the-option-pane)). A port that has
+neither a `COMMENT` nor a `pkg-descr` reads `No description available`; a
+`pkg-descr` that cannot be read says so, and is tried again the next time
+the port is selected.
 
 ## Keys
 
@@ -210,6 +219,7 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 | `n`/`p`           | next / previous port needing attention              |
 | `f`               | jump to the next flavor of the same origin          |
 | `i`               | option details; on the port list, its description   |
+| `v`               | the port's full description (`COMMENT`, `WWW`, ...) |
 | `I`               | show / hide the port description above the options  |
 | `h`               | the port's pkg-help notes, when its title has `[h]` |
 | `r`               | why is this port here? (`Enter` jumps, `r` walks)   |
@@ -255,9 +265,9 @@ gained, and to unconfigured ones when it decides all of them.
 │           │                                                    │           │
 │           │↑/↓ move · Enter jump to port · r why of selection ·│           │
 │           └────────────────────────────────────────────────────┘           │
+│                               │├───────────────────────────────────────────┤
+│                               ││  Enter: edit the options                  │
 │                               ││                                           │
-│                               │┌ DOCS ─────────────────────────────────────┐
-│                               ││  Build and/or install documentation       │
 └───────────────────────────────┘└───────────────────────────────────────────┘
  0✗ 0* 0? 0! 1✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-o
 ```
@@ -294,9 +304,9 @@ walked port by port.
 │✓ lang/│                                                            │       │
 │✓ misc/│                                                            │       │
 │✓ print│                                                            │       │
-│✓ secur└────────────────────────────────────────────────────────────┘       │
-│✓ textproc/expat2              │┌ DEBUGLOG ─────────────────────────────────┐
-│✓ textproc/libxml2             ││  Enable debug log (--with-debug)          │
+│✓ secur└────────────────────────────────────────────────────────────┘───────┤
+│✓ textproc/expat2              ││  Enter: edit the options                  │
+│✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
  0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
 ```

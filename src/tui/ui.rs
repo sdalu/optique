@@ -22,7 +22,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(outer[0]);
 
     draw_port_list(f, app, panes[0]);
-    app.load_about_text();
     draw_editor(f, app, panes[1]);
     draw_status_bar(f, app, outer[1]);
     match app.top_overlay() {
@@ -229,111 +228,148 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // The bottom of the pane is split off for the option under the cursor:
-    // the rows above are cut at the pane's right edge, the panel is not.
-    let (rows_area, detail_area) = split_detail(app, info, area);
-    // The top, for what the port is, out of whatever the rows leave spare.
-    let rows_needed = banner + app.editor_rows.len();
-    let about_text = if app.show_about {
+    // One box for the pane; inside it, what the port is on top and the
+    // option under the cursor at the bottom, each across a rule from the
+    // option rows.
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    let mut about = if app.show_about {
         let descr = app.about_text.get(&key).map(String::as_str).unwrap_or("");
-        about_lines(info, descr, rows_area.width.saturating_sub(2) as usize)
+        about_lines(info, descr, inner_width)
     } else {
         Vec::new()
     };
-    let (rows_area, about) = split_about(about_text, rows_area, area, rows_needed);
+    let (opt, mut detail) = option_detail(app, info, inner.width);
+    let layout = editor_layout(inner, app.show_about);
 
-    // Keep the selected row in view: scroll so it sits inside the pane.
-    let inner_height = rows_area.height.saturating_sub(2) as usize;
+    // Keep the selected row in view: scroll so it sits inside the rows.
+    let rows_height = layout.rows.height as usize;
     let selected_line = (banner + (app.editor_idx + 1).min(app.editor_rows.len())).saturating_sub(1);
-    let scroll = selected_line.saturating_sub(inner_height.saturating_sub(1)) as u16;
+    let scroll = selected_line.saturating_sub(rows_height.saturating_sub(1)) as u16;
 
     // The pane's title, and right of it the key that opens this port's
-    // pkg-help, shown only for the ports that ship one. They head the pane:
-    // the description panel when it is there, the rows otherwise.
-    let mut head =
-        Block::default().borders(Borders::ALL).title(title).border_style(border_style);
+    // pkg-help, shown only for the ports that ship one. A long title is cut
+    // short rather than drawn over the marker.
+    let mut block = Block::default().borders(Borders::ALL).border_style(border_style);
     if info.pkg_help.is_some() {
-        head = head.title_top(
-            Line::from(Span::styled(
-                " [h] help ",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ))
-            .right_aligned(),
+        let marker = " [h] help ";
+        let room = (area.width as usize).saturating_sub(2 + marker.len() + 1);
+        if title.chars().count() > room {
+            title = format!("{}… ", title.chars().take(room.saturating_sub(2)).collect::<String>());
+        }
+        block = block.title_top(
+            Line::from(Span::styled(marker, key_hint())).right_aligned(),
         );
     }
-    let block = match about {
-        Some((about_area, about_lines)) => {
-            f.render_widget(Paragraph::new(about_lines).block(head), about_area);
-            Block::default().borders(Borders::ALL).border_style(border_style)
-        }
-        None => head,
-    };
-    let p = Paragraph::new(lines).scroll((scroll, 0)).block(block);
-    f.render_widget(p, rows_area);
-
-    if let Some(detail) = detail_area {
-        draw_option_detail(f, app, info, detail, border_style);
+    f.render_widget(block.title(title), area);
+    if let Some(panel) = layout.about {
+        // A cut description says where the rest is.
+        let cut = mark_if_clipped(&mut about, panel.height as usize, inner_width);
+        f.render_widget(Paragraph::new(about), panel);
+        let hint = cut.then(|| RuleLabel::Hint(Span::styled(" [v] full text ", key_hint())));
+        draw_rule(f, area, panel.y + panel.height, hint, border_style);
+    }
+    f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), layout.rows);
+    if let Some(panel) = layout.detail {
+        mark_if_clipped(&mut detail, panel.height as usize, inner_width);
+        let label = opt.map(|o| {
+            RuleLabel::Title(Span::styled(format!(" {o} "), Style::default().add_modifier(Modifier::BOLD)))
+        });
+        draw_rule(f, area, panel.y - 1, label, border_style);
+        f.render_widget(Paragraph::new(detail), panel);
     }
 }
 
-/// How many rows the option rows must keep for the panel to be worth it
-/// (borders included) — below that the pane stays whole.
-const DETAIL_MIN_ROWS: u16 = 5;
-
-/// Content lines the detail panel may grow to: a third of the pane, never
-/// less than three. Past that it clips, marked with an ellipsis.
-fn detail_max_lines(area: Rect) -> usize {
-    (area.height / 3).max(3) as usize
+/// How a key is advertised on the pane's borders (`[h] help`, `[v] full text`).
+fn key_hint() -> Style {
+    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
 }
 
-/// Split the editor pane into (option rows, detail panel). The two boxes
-/// share the border line between them, so they read as one pane. The panel
-/// is dropped when the cursor is not on an option or the pane is too short.
-fn split_detail(app: &App, info: &PortInfo, area: Rect) -> (Rect, Option<Rect>) {
-    let inner = area.width.saturating_sub(2);
-    let Some((_, lines)) = option_detail(app, info, inner) else {
-        return (area, None);
-    };
-    let height = lines.len().clamp(1, detail_max_lines(area)) as u16 + 2;
-    if area.height < height + DETAIL_MIN_ROWS {
-        return (area, None);
-    }
-    let detail = Rect { y: area.y + area.height - height, height, ..area };
-    // +1: the rows box keeps its bottom border on the panel's top border row.
-    let rows = Rect { height: area.height - height + 1, ..area };
-    (rows, Some(detail))
-}
+/// Content rows the option rows always keep: a panel that would leave fewer
+/// shrinks, or goes.
+const MIN_ROWS: u16 = 4;
 
-/// Split the description panel holding `lines` off the top of `rows`, sized
-/// from the room the `rows_needed` lines (banner and option rows) leave
-/// spare: it never makes them scroll, shrinks to the COMMENT alone when that
-/// is all that fits, and is dropped when not even that does or the port says
-/// nothing. It is at most a third of the whole `pane`. The two boxes share a
-/// border line.
-fn split_about(
-    mut lines: Vec<Line<'static>>,
+/// Height of the description panel, whatever the port says: a fixed size
+/// keeps the option rows where they are from one port to the next.
+const ABOUT_LINES: u16 = 5;
+
+/// Height of the option detail panel, whichever option the cursor is on (or
+/// none): a description longer than that is cut, and `i` has it all.
+const DETAIL_LINES: u16 = 2;
+
+/// Where the editor's parts go inside the pane's border: the description
+/// panel on top, the option rows, the detail panel at the bottom. A panel is
+/// set off from the rows by a rule, which costs it one row.
+struct EditorLayout {
+    about: Option<Rect>,
     rows: Rect,
-    pane: Rect,
-    rows_needed: usize,
-) -> (Rect, Option<(Rect, Vec<Line<'static>>)>) {
-    let width = rows.width.saturating_sub(2) as usize;
-    // +1: the panel's bottom border is the rows' top border.
-    let spare = (rows.height as usize + 1).saturating_sub(rows_needed + 2);
-    let cap = spare.saturating_sub(2).min(detail_max_lines(pane));
-    if lines.is_empty() || cap == 0 {
-        return (rows, None);
-    }
-    mark_if_clipped(&mut lines, cap, width);
-    let height = lines.len() as u16 + 2;
-    let about = Rect { height, ..rows };
-    let rest = Rect { y: rows.y + height - 1, height: rows.height + 1 - height, ..rows };
-    (rest, Some((about, lines)))
+    detail: Option<Rect>,
+}
+
+/// Lay the editor out in `inner`, the pane without its border, from its size
+/// alone, so nothing moves as the cursor or the port changes: the option rows
+/// scroll under whatever is left. The detail panel is DETAIL_LINES, and goes
+/// when the rows would keep fewer than MIN_ROWS. The description panel, when
+/// `about`, takes ABOUT_LINES out of what is then left above MIN_ROWS: it
+/// shrinks only on a short pane, and goes when not even a line fits.
+fn editor_layout(inner: Rect, about: bool) -> EditorLayout {
+    let mut rows = inner;
+    let detail = (inner.height >= DETAIL_LINES + 1 + MIN_ROWS).then(|| {
+        rows.height -= DETAIL_LINES + 1;
+        Rect { y: inner.y + inner.height - DETAIL_LINES, height: DETAIL_LINES, ..inner }
+    });
+    let room = rows.height.saturating_sub(1 + MIN_ROWS);
+    let n = if about { room.min(ABOUT_LINES) } else { 0 };
+    let about = (n > 0).then(|| {
+        let panel = Rect { height: n, ..rows };
+        rows.y += n + 1;
+        rows.height -= n + 1;
+        panel
+    });
+    EditorLayout { about, rows, detail }
+}
+
+/// What a rule across the pane carries: a title on the left (the option the
+/// panel under it describes), or a key hint on the right, as `[h] help` sits
+/// on the pane's title.
+enum RuleLabel {
+    Title(Span<'static>),
+    Hint(Span<'static>),
+}
+
+/// A rule across the pane at row `y`, joining its side borders.
+fn draw_rule(f: &mut Frame, pane: Rect, y: u16, label: Option<RuleLabel>, style: Style) {
+    let dashes = |n: usize| Span::styled("─".repeat(n), style);
+    let inner = (pane.width as usize).saturating_sub(2);
+    let width = |s: &Span| s.content.chars().count();
+    let middle = match label {
+        None => vec![dashes(inner)],
+        Some(RuleLabel::Title(t)) => {
+            let fill = inner.saturating_sub(width(&t));
+            vec![t, dashes(fill)]
+        }
+        // Two dashes after it, as the pane's title leaves its corner.
+        Some(RuleLabel::Hint(h)) => {
+            let fill = inner.saturating_sub(width(&h) + 2);
+            vec![dashes(fill), h, dashes(2)]
+        }
+    };
+    let mut spans = vec![Span::styled("├", style)];
+    spans.extend(middle);
+    spans.push(Span::styled("┤", style));
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect { y, height: 1, ..pane });
 }
 
 /// What the port is: its COMMENT, then its pkg-descr `text` re-wrapped to
-/// `width`, one paragraph after the other with no blank line between them
+/// `width`, one paragraph after the other with no blank line between them,
+/// a bulleted line starting a line of its own
 /// (the panel is short; the `i` overlay keeps the file's own layout). A
 /// trailing `WWW:` line of an old-style pkg-descr is left to the overlay too.
+/// A port that says nothing reads "No description available".
 fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if !info.about.comment.is_empty() {
@@ -343,32 +379,52 @@ fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line<'static>> 
     }
     let style = Style::default().fg(Color::Gray);
     for para in text.split("\n\n") {
-        let para: Vec<&str> =
-            para.lines().filter(|l| !l.trim_start().starts_with("WWW:")).collect();
-        lines.extend(
-            wrap_text(&para.join(" "), width, 0)
-                .into_iter()
-                .map(|t| Line::from(Span::styled(t, style))),
-        );
+        // A bullet starts an item of its own, wrapped under its text; any
+        // other line joins the item before it.
+        let mut items: Vec<(String, usize)> = Vec::new();
+        for line in para.lines().map(str::trim).filter(|l| !l.starts_with("WWW:")) {
+            let bullet = ["- ", "* ", "• "].iter().any(|b| line.starts_with(b));
+            match items.last_mut() {
+                Some((item, _)) if !bullet => {
+                    item.push(' ');
+                    item.push_str(line);
+                }
+                _ => items.push((line.to_string(), if bullet { 2 } else { 0 })),
+            }
+        }
+        for (item, indent) in items {
+            lines.extend(
+                wrap_text(&item, width, indent)
+                    .into_iter()
+                    .map(|t| Line::from(Span::styled(t, style))),
+            );
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No description available",
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     lines
 }
 
-/// The option under the cursor and the description the ports framework gives
-/// it, wrapped to `width` so the panel's height is exactly the line count.
-/// The name titles the panel, so it is not repeated in the body; an option
-/// the framework describes nowhere says so rather than leaving a blank box.
-/// None when the cursor sits on a header or a non-selectable row.
-fn option_detail(app: &App, info: &PortInfo, width: u16) -> Option<(String, Vec<Line<'static>>)> {
+/// The option highlighted in the pane, if any, and what the detail panel
+/// says: the description the ports framework gives it, wrapped to `width`
+/// (an option it describes nowhere says so rather than leaving a blank box).
+/// With no option highlighted — the port list has the focus, or the cursor
+/// sits on a header — the panel keeps its place and says how to get one.
+fn option_detail(app: &App, info: &PortInfo, width: u16) -> (Option<String>, Vec<Line<'static>>) {
+    let dim = |t: &str| vec![Line::from(Span::styled(t.to_string(), Style::default().fg(Color::DarkGray)))];
+    if app.focus != Focus::Editor {
+        return (None, dim("  Enter: edit the options"));
+    }
     let Some(EditorRow::Option(opt)) = app.editor_rows.get(app.editor_idx) else {
-        return None;
+        return (None, dim("  no option selected"));
     };
     let desc = info.options.defs.get(opt).map(|d| d.desc.as_str()).unwrap_or("");
     let lines = if desc.is_empty() {
-        vec![Line::from(Span::styled(
-            "  (no description)",
-            Style::default().fg(Color::DarkGray),
-        ))]
+        dim("  (no description)")
     } else {
         let style = Style::default().fg(Color::Gray);
         wrap_text(&format!("  {desc}"), width as usize, 2)
@@ -376,7 +432,7 @@ fn option_detail(app: &App, info: &PortInfo, width: u16) -> Option<(String, Vec<
             .map(|t| Line::from(Span::styled(t, style)))
             .collect()
     };
-    Some((opt.clone(), lines))
+    (Some(opt.clone()), lines)
 }
 
 /// Greedy word wrap; continuation lines are indented by `indent`. A word
@@ -415,52 +471,41 @@ fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
     out
 }
 
-/// Cut `lines` to `cap` rows and mark the cut with an ellipsis. The last row
-/// is shortened first when needed: the box does not wrap, so a marker appended
-/// to a full line would be clipped off the edge and the cut would look like
-/// the whole text.
-fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) {
+/// Cut `lines` to `cap` rows and mark the cut with an ellipsis; true when
+/// something was cut. The last row is shortened first when needed, back to a
+/// word boundary: the box does not wrap, so a marker appended to a full line
+/// would be clipped off the edge and the cut would look like the whole text.
+fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) -> bool {
     if lines.len() <= cap {
-        return;
+        return false;
     }
     lines.truncate(cap);
-    let Some(last) = lines.last_mut() else { return };
+    let Some(last) = lines.last_mut() else { return true };
+    // The character the shortening stopped before, if it cut into a span.
+    let mut next: Option<char> = None;
     while last.width() + 1 > width {
         let Some(span) = last.spans.last_mut() else { break };
         let mut text = span.content.to_string();
-        if text.pop().is_none() {
+        let Some(c) = text.pop() else {
             last.spans.pop();
             continue;
-        }
+        };
+        next = Some(c);
         span.content = text.into();
     }
+    // A word cut in two goes whole, when the line has another before it.
+    if next.is_some_and(|c| !c.is_whitespace()) {
+        if let Some(span) = last.spans.last_mut() {
+            let text = span.content.as_ref();
+            if !text.ends_with(' ') {
+                if let Some(end) = text.rfind(' ').filter(|&e| !text[..e].trim().is_empty()) {
+                    span.content = text[..end].to_string().into();
+                }
+            }
+        }
+    }
     last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
-}
-
-fn draw_option_detail(
-    f: &mut Frame,
-    app: &App,
-    info: &PortInfo,
-    area: Rect,
-    border_style: Style,
-) {
-    let Some((opt, mut lines)) = option_detail(app, info, area.width.saturating_sub(2)) else {
-        return;
-    };
-    // Say so when the panel cannot show it all rather than cut in silence.
-    mark_if_clipped(
-        &mut lines,
-        area.height.saturating_sub(2) as usize,
-        area.width.saturating_sub(2) as usize,
-    );
-    let p = Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {opt} "))
-            .title_style(Style::default().add_modifier(Modifier::BOLD))
-            .border_style(border_style),
-    );
-    f.render_widget(p, area);
+    true
 }
 
 /// The flavors of this port, marking the current one (`‹`) and the one whose
@@ -974,9 +1019,9 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                 legend(
                     "port panel",
                     Style::default().add_modifier(Modifier::BOLD),
-                    "with I, the port's comment and pkg-descr, when the",
+                    "with I, the port's comment and pkg-descr, in five",
                 ),
-                Line::from(Span::raw("                   rows leave room for it — i on the list shows it all")),
+                Line::from(Span::raw("                   lines — v shows it all, from either pane")),
                 Line::default(),
                 head("Below the rows"),
                 legend(
@@ -985,7 +1030,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
                     "the description of the option under the cursor, in",
                 ),
                 // Aligned on the legend's text column (2 + 14 + " = ").
-                Line::from(Span::raw("                   full — what the rows have no room for")),
+                Line::from(Span::raw("                   two lines — i on it shows it all")),
             ]);
         }
         2 => lines.extend([
@@ -999,6 +1044,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
             keyline("", "on the list: what the port is (comment, WWW, pkg-descr)"),
+            keyline("v", "the port's full description, from either pane"),
             keyline("I", "show / hide the port description above the options"),
             keyline("h", "port notes (pkg-help) — marked [h] in the pane title"),
             keyline("r", "why is this port here? — chain, loop, dependents; Enter jumps"),
@@ -1399,37 +1445,64 @@ fn draw_quit_confirm(f: &mut Frame) {
 mod tests {
     use super::*;
 
-    /// The description panel takes only what the rows leave spare, so the
-    /// rows never scroll for it; it shrinks before it goes.
+    /// The panels are sized from the pane alone, never from the port, the
+    /// option or how many options there are, so nothing moves as the cursor
+    /// or the port changes.
     #[test]
-    fn about_panel_uses_only_spare_rows() {
-        let lines = || (0..8).map(|i| Line::from(format!("line {i}"))).collect::<Vec<_>>();
-        let pane = Rect::new(0, 0, 40, 30);
-        // 10 rows need 12 with borders; 30 leave 19 spare (+1 shared border),
-        // more than the third of the pane the panel may take: 10 lines.
-        let (rows, about) = split_about(lines(), pane, pane, 10);
-        let (area, shown) = about.expect("room for the panel");
-        assert_eq!(shown.len(), 8, "all eight lines fit under the cap");
-        assert_eq!(area.height, 10);
-        assert_eq!(rows.y, area.y + area.height - 1, "the border is shared");
-        assert_eq!(rows.y + rows.height, pane.y + pane.height, "the rows end with the pane");
-        assert!(rows.height as usize >= 10 + 2, "the rows still fit whole");
+    fn panels_are_sized_from_the_pane() {
+        let inner = Rect::new(1, 1, 38, 28);
+        let l = editor_layout(inner, true);
+        let about = l.about.expect("room for the description");
+        let detail = l.detail.expect("room for the detail");
+        assert_eq!(about, Rect::new(1, 1, 38, ABOUT_LINES));
+        assert_eq!(detail, Rect::new(1, 27, 38, DETAIL_LINES));
+        assert_eq!(l.rows.y, about.y + about.height + 1, "a rule between");
+        assert_eq!(l.rows.y + l.rows.height + 1, detail.y, "a rule between");
+        assert_eq!(l.rows.height, 28 - ABOUT_LINES - 1 - DETAIL_LINES - 1);
+        assert!(editor_layout(inner, false).about.is_none());
 
-        // 24 rows leave 30 + 1 - 26 = 5: three lines, the last one marked.
-        let (rows, about) = split_about(lines(), pane, pane, 24);
-        let (_, shown) = about.expect("room for a shrunk panel");
-        assert_eq!(shown.len(), 3);
-        assert!(shown[2].to_string().ends_with('…'));
-        assert_eq!(rows.y + rows.height, pane.y + pane.height);
-        assert!(rows.height as usize >= 24 + 2);
+        // A short pane: the description shrinks to keep the rows MIN_ROWS,
+        // and goes when not even a line fits; then the detail goes too.
+        let l = editor_layout(Rect::new(1, 1, 38, 10), true);
+        assert_eq!(l.about.expect("a shrunk description").height, 2, "10 - 3 - 1 - 4 rows");
+        assert_eq!(l.rows.height, MIN_ROWS);
+        let l = editor_layout(Rect::new(1, 1, 38, 8), true);
+        assert!(l.about.is_none());
+        assert!(l.detail.is_some(), "8 rows keep 4 beside 2 lines and a rule");
+        assert!(editor_layout(Rect::new(1, 1, 38, 6), false).detail.is_none());
+    }
 
-        // 27 rows leave 2: not even a line with its borders.
-        let (rows, about) = split_about(lines(), pane, pane, 27);
-        assert!(about.is_none());
-        assert_eq!(rows, pane);
+    /// A cut line loses the word it would split, not half of it.
+    #[test]
+    fn a_clipped_line_ends_on_a_whole_word() {
+        let mut lines: Vec<Line<'static>> =
+            vec![Line::from("one two three"), Line::from("more")];
+        assert!(mark_if_clipped(&mut lines, 1, 13));
+        assert_eq!(lines[0].to_string(), "one two…");
+        let mut lines: Vec<Line<'static>> = vec![Line::from("short"), Line::from("more")];
+        assert!(mark_if_clipped(&mut lines, 1, 20));
+        assert_eq!(lines[0].to_string(), "short…");
+        let mut lines: Vec<Line<'static>> = vec![Line::from("fits")];
+        assert!(!mark_if_clipped(&mut lines, 1, 20));
+    }
 
-        // A port that says nothing gets no panel.
-        assert!(split_about(Vec::new(), pane, pane, 1).1.is_none());
+    /// A bulleted pkg-descr keeps one bullet per line.
+    #[test]
+    fn about_lines_keeps_bullets_apart() {
+        let mut info = PortInfo::stub("cat/port");
+        info.about.comment = "A port".into();
+        let text = "Use it to:\n- avoid this\n- avoid that, a long\n  continuation\n";
+        let shown: Vec<String> = about_lines(&info, text, 40).iter().map(|l| l.to_string()).collect();
+        assert_eq!(shown, ["A port", "Use it to:", "- avoid this", "- avoid that, a long continuation"]);
+    }
+
+    /// A port that says nothing about itself says so in the panel.
+    #[test]
+    fn about_lines_says_when_there_is_no_description() {
+        let info = PortInfo::stub("cat/port");
+        let lines = about_lines(&info, "", 40);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].to_string(), "No description available");
     }
 
     #[test]

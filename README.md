@@ -35,9 +35,9 @@ when there is no poudriere at all or `-l` asks for a local build.
 │✓ lang/python312               ││  [x] HTTP_AUTH_REQ             on         │
 │✓ misc/help2man                ││  [x] HTTP_CACHE                on         │
 │✓ print/texinfo                ││  [x] HTTP_DAV                  on         │
-│✓ security/rhash               ││  [ ] HTTP_DEGRADATION          off        │
-│✓ textproc/expat2              │┌ DEBUGLOG ─────────────────────────────────┐
-│✓ textproc/libxml2             ││  Enable debug log (--with-debug)          │
+│✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
+│✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
+│✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
  0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
 ```

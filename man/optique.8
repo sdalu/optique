@@ -528,16 +528,19 @@ Options that no longer exist are struck through and dropped on apply; options
 excluded by the current flavor but managed through the default flavor are
 listed in their own section.
 .Pp
-A panel at the bottom of the pane follows the cursor: titled with the name of
-the option under it, it gives that option's description as the ports framework
-states it, wrapped to the pane instead of cut at its edge as the rows are.
+A two-line panel at the bottom of the pane follows the cursor: titled with the
+name of the option under it, it gives that option's description as the ports
+framework states it, wrapped to the pane instead of cut at its edge as the rows
+are.
 Because of that panel a row keeps its trailing description only while a useful
 amount of it fits \(em under about sixteen columns of room the row drops it
 rather than show a word fragment.
 An option the framework describes nowhere reads
 .Ql (no description) .
-The panel grows to at most a third of the pane and marks with an ellipsis
-anything it still cannot fit.
+The panel marks with an ellipsis anything it cannot fit, and keeps its place
+and height whatever the option, so the rows never move; while no option is
+highlighted it stays, untitled, and reads
+.Ql Enter: edit the options .
 .Pp
 Toggling an option re-queries the port in the background against a staging
 .Va PORT_DBDIR ,
@@ -645,12 +648,29 @@ and
 .Pa pkg-descr ,
 in the same popup as
 .Ic h .
+.It Ic v
+Show what the selected port is, from either pane: its
+.Va COMMENT ,
+.Va WWW
+and
+.Pa pkg-descr ,
+in the same popup as
+.Ic h .
 .It Ic I
 Show the port description at the top of the option pane, or hide it again
 .Pq it starts hidden :
 the comment and as much of the
 .Pa pkg-descr
-as the option rows leave room for; it never makes them scroll.
+as fits in five lines.
+The panel keeps that height from one port to the next, shrinking only on a
+pane too short to leave the options four rows; the options scroll under it.
+When the text is cut, the rule under the panel reads
+.Ql [v] full text .
+A port that has neither reads
+.Dq No description available ,
+and one whose
+.Pa pkg-descr
+cannot be read says so.
 .It Ic h
 Show the selected port's
 .Pa pkg-help
