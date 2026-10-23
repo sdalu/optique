@@ -34,6 +34,10 @@ Run in order; a red gate is answered before anything else.
 - [ ] If it moves: bump `Cargo.toml`, `cargo build` so `Cargo.lock` follows,
       commit, then `make tag` (it reads the number from `Cargo.toml` and
       pushes nothing).
+- [ ] Before `make tag`: it tags HEAD, so is HEAD still the commit the
+      gates passed on? Another session may have committed on top since;
+      `git log --oneline -3` says, and `git tag -a -m 'optique <release>'
+      v<release> <commit>` tags an earlier one.
 - [ ] After pushing the tag: update the FreeBSD port in the ports tree
       (docs/port.md, "Updating the port for a release"), then
       `make check-port` says `up to date`.
