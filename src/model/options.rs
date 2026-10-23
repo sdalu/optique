@@ -235,6 +235,13 @@ pub struct PortOptions {
     pub with: BTreeSet<String>,
     #[serde(default)]
     pub without: BTreeSet<String>,
+    /// make.conf's OPTIONS_OVERRIDE, Some only when the wrapper saw it
+    /// `defined` (bsd.options.mk:300-304): then it alone decides
+    /// PORT_OPTIONS, taken as is and not filtered by `complete` — defaults,
+    /// the SET/UNSET layers and the options file are never read. An empty
+    /// set (defined empty) is not the same as None (undefined).
+    #[serde(default)]
+    pub r#override: Option<BTreeSet<String>>,
 }
 
 /// Where an option's current value comes from, following the

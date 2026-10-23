@@ -128,6 +128,65 @@ fn an_options_slave_options_prevents_are_checked() {
     assert_eq!(flagged(&port, "staged"), ["Y"], "{port}");
 }
 
+/// bsd.options.mk:300-304: a make.conf OPTIONS_OVERRIDE replaces the whole
+/// decision — defaults, make.conf SET/UNSET and the options file are not
+/// read, PORT_OPTIONS becomes its value as given. The file here says the
+/// opposite (DOCS off, AUDIO and NAS on) and is read right past: make and
+/// optique both end up with only DOCS on, the port reads configured (not
+/// unconfigured, not stale), and sync leaves the file exactly as it was.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn options_override_decides_the_port_and_the_file_is_untouched() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    std::fs::write(&f.make_conf, "OPTIONS_OVERRIDE=DOCS\n").unwrap();
+    let file = "_OPTIONS_READ=cond-1.0\n_FILE_COMPLETE_OPTIONS_LIST=AUDIO DOCS NAS SOX\n\
+                OPTIONS_FILE_UNSET+=DOCS\nOPTIONS_FILE_SET+=AUDIO\nOPTIONS_FILE_SET+=NAS\n";
+    f.write_file("misc_cond", file);
+
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["DOCS"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(port["status"], "ok", "{port}");
+    assert_eq!(port["undecided"], serde_json::json!([]), "{port}");
+    for opt in ["DOCS", "AUDIO", "NAS", "SOX"] {
+        let o = common::option(&port, opt);
+        let on = opt == "DOCS";
+        assert_eq!(o["makeconf"], serde_json::json!({"value": on, "scope": "override"}), "{o}");
+        assert_eq!(o["locked"], true, "{o}");
+        assert_eq!(o["locked_by"], "make.conf OPTIONS_OVERRIDE", "{o}");
+    }
+
+    let out = f.run("sync", &[origin]);
+    assert!(
+        common::stderr(&out).contains("everything up to date, nothing to write"),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file, "sync must not touch it");
+}
+
+/// bsd.options.mk:300-304: an OPTIONS_OVERRIDE defined empty is still
+/// defined — PORT_OPTIONS starts empty, not at the port's defaults — so
+/// nothing ends up on even though DOCS is misc/cond's default.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_empty_options_override_turns_everything_off() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    std::fs::write(&f.make_conf, "OPTIONS_OVERRIDE=\n").unwrap();
+
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, Vec::<String>::new());
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(port["status"], "ok", "{port}");
+
+    let out = f.run("sync", &[origin]);
+    assert!(!f.file("misc_cond").exists(), "no file existed, none must appear: {}", common::stderr(&out));
+}
+
 /// bsd.options.mk:399-409: make.conf's WITH and WITHOUT apply after FORCE
 /// and take what they name out of NEW_OPTIONS. With WITH=C and WITHOUT=A*,
 /// make leaves only B new; optique leaves only B undecided, and reports C

@@ -214,6 +214,12 @@ pub fn plan_writes<'a>(
     let mut removals = Vec::new();
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
+        // bsd.options.mk:300-304: a port with an OPTIONS_OVERRIDE never
+        // reads its options file; one candidate having it is enough to
+        // leave the whole shared file alone, written or removed.
+        if cands.iter().any(|c| c.info.options.r#override.is_some()) {
+            continue;
+        }
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
         // Read with its options.local, as make reads it; what a write
         // carries over comes from the file alone, which is all it writes.
@@ -704,6 +710,58 @@ mod tests {
             false,
         );
         assert_eq!(planned.writes.len(), 1);
+    }
+
+    /// bsd.options.mk:300-304: a port with an OPTIONS_OVERRIDE never reads
+    /// its options file, so a disagreeing one already on disk must survive
+    /// untouched: no write, whatever `enabled` is handed in.
+    #[test]
+    fn plan_writes_leaves_an_overridden_ports_file_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "B"], &["A"]);
+        info.options.r#override = Some(["A".to_string()].into());
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n",
+        )
+        .unwrap();
+        // Whatever the caller computed as "enabled" (A, the override's own
+        // outcome, disagreeing with the file's B) must not trigger a write.
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled)),
+            &OptionsFiles::new(tmp.path()),
+            false,
+        );
+        assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+        assert!(planned.removals.is_empty(), "{:?}", planned.removals);
+    }
+
+    /// The same, under `-m`: without the OPTIONS_OVERRIDE guard, minimal
+    /// mode would see the override's outcome equal defaults + make.conf
+    /// (both computed the same way with the file ignored) and queue the
+    /// file for removal as redundant. It must not: the file is left alone,
+    /// not merely rewritten as absent.
+    #[test]
+    fn plan_writes_leaves_an_overridden_ports_file_alone_under_minimal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "B"], &["A"]);
+        info.options.r#override = Some(["A".to_string()].into());
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n",
+        )
+        .unwrap();
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled)),
+            &OptionsFiles::new(tmp.path()),
+            true,
+        );
+        assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+        assert!(planned.removals.is_empty(), "{:?}", planned.removals);
     }
 
     /// bsd.options.mk:341-363: options.local is read after the file and

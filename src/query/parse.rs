@@ -47,6 +47,11 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             }
             "DEFAULT" => opts.defaults = words(value),
             "PORT_OPTIONS" => opts.effective = words(value),
+            // Dumped only `.if defined(OPTIONS_OVERRIDE)` (bsd.options.mk:
+            // 300-304): an absent tag leaves `override` None (undefined), a
+            // present one with an empty value is Some(empty) (defined
+            // empty) — the two are not the same decision.
+            "OVERRIDE" => opts.r#override = Some(words(value)),
             "DEPENDS" => (deps, warnings) = parse_depends(value),
             "BUILDDEPS" => build_deps = value.to_string(),
             "MC_SET" => opts.mc_set = words(value),
@@ -349,6 +354,7 @@ OPTIQUE|PORT_FORCE_UNSET|J
 OPTIQUE|SLAVE|K
 OPTIQUE|WITH|B
 OPTIQUE|WITHOUT|C*
+OPTIQUE|OVERRIDE|A
 OPTIQUE|DEFAULT_VERSIONS|ssl=base python=3.12
 OPTIQUE|GROUP|FREE|A B
 OPTIQUE|SINGLE|ONE|C D
@@ -372,6 +378,7 @@ OPTIQUE|MULTI|SOME|G H
         assert_eq!(o.slave, set(&["K"]));
         assert_eq!(o.with, set(&["B"]));
         assert_eq!(o.without, set(&["C*"]));
+        assert_eq!(o.r#override, Some(set(&["A"])));
         assert_eq!(info.default_versions, ["ssl=base", "python=3.12"]);
         let groups: Vec<(GroupKind, &str, Vec<String>)> =
             o.groups.iter().map(|g| (g.kind, g.name.as_str(), g.members.clone())).collect();
@@ -384,6 +391,18 @@ OPTIQUE|MULTI|SOME|G H
                 (GroupKind::Multi, "SOME", vec!["G".to_string(), "H".to_string()]),
             ]
         );
+    }
+
+    /// bsd.options.mk:300-304: the wrapper dumps OVERRIDE only `.if
+    /// defined(OPTIONS_OVERRIDE)`, so an absent line (undefined) and a
+    /// present, empty one (defined empty) must parse to different values.
+    #[test]
+    fn override_undefined_differs_from_defined_empty() {
+        let key = PortKey::parse("cat/foo").unwrap();
+        let undefined = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\n").unwrap();
+        assert_eq!(undefined.options.r#override, None);
+        let defined_empty = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\nOPTIQUE|OVERRIDE|\n").unwrap();
+        assert_eq!(defined_empty.options.r#override, Some(BTreeSet::new()));
     }
 
     /// A FLAVOR on a port with no FLAVORS is no flavor of it.

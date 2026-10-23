@@ -42,7 +42,7 @@ not change a result; **known gap**, with what it can change.
 | `rmconfig` keeps a directory holding `options.local` | `bsd.port.mk` | matches (`clean`) |
 | `OPTIONS_NAME` ignores the flavor: flavors share one file | `bsd.options.mk` | matches; who writes it — **differs on purpose** ("Flavors sharing one options file") |
 | `PORT_DBDIR`, `PORTSDIR` | `bsd.port.mk` | matches: both passed explicitly on every query |
-| `OPTIONS_OVERRIDE` (replaces defaults, make.conf and the file) | `bsd.options.mk` | **known gap**: not dumped; under a make.conf setting it, what `make` enables is still read right, but optique's model (new, decided, conflicts, what a write changes) disagrees with it |
+| `OPTIONS_OVERRIDE`, defined even empty (replaces defaults, make.conf and the file; the `*_FORCE` knobs, `WITH`/`WITHOUT`, `IMPLIES` and `OPTIONS_SLAVE` still apply on top) | `bsd.options.mk:300-304` | matches: dumped only `.if defined`; the port is fully decided (`undecided` empty, never stale/unconfigured), its options file untouched by `sync`/`decide`/apply, and `scan --json --options` reports every option `scope: "override"`, locked |
 
 ## poudriere
 

@@ -1364,9 +1364,10 @@ is
 with the scope
 .Ql global ,
 .Ql port ,
-.Ql force
-or
+.Ql force ,
 .Ql with
+or
+.Ql override
 .Po
 .Pa make.conf Ns 's
 .Va WITH
@@ -1379,7 +1380,35 @@ knobs and which pin the option as they do; the
 of an option they pin is
 .Ql make.conf WITH/WITHOUT
 .Pc ,
-and is absent when no layer mentions the option;
+and is absent when no layer mentions the option.
+When
+.Pa make.conf
+defines
+.Va OPTIONS_OVERRIDE
+for the port, even empty, every one of its options reports
+.Ql override
+instead, whatever
+.Va WITH Ns / Ns Va WITHOUT
+or a
+.Va *_FORCE
+knob would otherwise say:
+.Va value
+is whether the option is named in the override,
+.Va locked
+is true and
+.Va locked_by
+is
+.Ql make.conf OPTIONS_OVERRIDE ;
+.Va undecided
+is empty for such a port and
+.Va status
+is never
+.Ql unconfigured
+or
+.Ql stale ,
+whatever an options file on disk happens to say: it is not read, and
+.Cm sync
+and the TUI's apply leave it exactly as it is.
 .Va group
 is
 .Bro Va name , Va kind , Va members Brc
@@ -1891,6 +1920,32 @@ turning off every option it matches, so
 .Ql OPTIONS_UNSET=A*
 turns off A and A2; a SET entry turns on only the option it names, though
 every entry, SET or UNSET, counts as a decision for each option it matches.
+.Pp
+.Va OPTIONS_OVERRIDE
+is different: defined for a port, even set empty, it forgets the whole
+decision above it \(em
+.Va OPTIONS_DEFAULT ,
+the global and per-port SET/UNSET pairs, the options file and its
+.Pa options.local
+\(em and the port's options become its value exactly as given, not filtered
+by its option list.
+The
+.Va *_FORCE
+knobs,
+.Va WITH
+and
+.Va WITHOUT
+still apply on top of it, as does
+.Va IMPLIES
+and
+.Va OPTIONS_SLAVE .
+.Nm
+then treats the port as fully decided
+.Pq never Ql unconfigured No or Ql stale
+and never touches its options file, written or removed, under
+.Cm sync ,
+.Cm decide
+or the TUI's apply; the startup banner names every such port once.
 .Pp
 The layers are concatenated into one staged file, as poudriere concatenates
 them into the jail's

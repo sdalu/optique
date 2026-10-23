@@ -20,6 +20,11 @@
 /// in COMPLETE_OPTIONS_LIST, yet bsd.options.mk:447 puts them in
 /// PORT_OPTIONS and pre-check-config (bsd.port.mk ~4987) checks the
 /// PREVENTS of every option there.
+///
+/// OPTIONS_OVERRIDE is dumped only when `defined`, value and all
+/// (bsd.options.mk:300-304): an absent line means undefined, an empty one
+/// means defined empty — the two make.conf can produce differ, since the
+/// latter still forgets the file.
 pub const WRAPPER: &str = "\
 .include \"${PORTDIR}/Makefile\"
 .info OPTIQUE|PKGNAME|${PKGNAME:U}
@@ -29,6 +34,9 @@ pub const WRAPPER: &str = "\
 .info OPTIQUE|COMPLETE|${COMPLETE_OPTIONS_LIST:U}
 .info OPTIQUE|DEFAULT|${OPTIONS_DEFAULT:U}
 .info OPTIQUE|PORT_OPTIONS|${PORT_OPTIONS:U}
+.if defined(OPTIONS_OVERRIDE)
+.info OPTIQUE|OVERRIDE|${OPTIONS_OVERRIDE}
+.endif
 .info OPTIQUE|DEPENDS|${_UNIFIED_DEPENDS:U}
 .info OPTIQUE|BUILDDEPS|${PKG_DEPENDS_ALL:U} ${EXTRACT_DEPENDS_ALL:U} ${PATCH_DEPENDS_ALL:U} ${FETCH_DEPENDS_ALL:U} ${BUILD_DEPENDS_ALL:U} ${LIB_DEPENDS_ALL:U} ${RUN_DEPENDS_ALL:U}
 .info OPTIQUE|MC_SET|${OPTIONS_SET:U}
@@ -116,5 +124,18 @@ mod tests {
     fn options_slave_options_get_their_records() {
         let for_line = WRAPPER.lines().find(|l| l.starts_with(".for _o in ")).unwrap();
         assert!(for_line.contains("${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} "), "{for_line}");
+    }
+
+    /// bsd.options.mk:300-304: OPTIONS_OVERRIDE must be dumped only under
+    /// `.if defined(...)`, unlike every other tag's bare `:U` expansion, so
+    /// an absent line (undefined) and an empty one (defined empty) parse
+    /// differently.
+    #[test]
+    fn override_is_dumped_only_when_defined() {
+        let i = WRAPPER.lines().position(|l| l.contains("OPTIQUE|OVERRIDE|")).unwrap();
+        let lines: Vec<&str> = WRAPPER.lines().collect();
+        assert_eq!(lines[i - 1], ".if defined(OPTIONS_OVERRIDE)", "{}", lines[i - 1]);
+        assert_eq!(lines[i], ".info OPTIQUE|OVERRIDE|${OPTIONS_OVERRIDE}");
+        assert_eq!(lines[i + 1], ".endif");
     }
 }

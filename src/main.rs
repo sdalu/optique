@@ -536,6 +536,11 @@ fn find_redundant(
 /// place): the first flavor it moves away from defaults + make.conf. None
 /// when the file changes nothing for any of them.
 fn shared_file_deviation(infos: &[model::port::PortInfo]) -> Option<String> {
+    // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
+    // the file; it is kept, not judged redundant, whatever it says.
+    if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {
+        return Some(format!("{}: make.conf OPTIONS_OVERRIDE decides it, left alone", info.key));
+    }
     infos.iter().enumerate().find_map(|(i, info)| {
         let diff = clean::redundancy_diff(info);
         if diff.is_empty() {
@@ -1013,6 +1018,24 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     }
     for (key, msg) in &result.errors {
         eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
+    }
+
+    // bsd.options.mk:300-304: make.conf may define OPTIONS_OVERRIDE for a
+    // port, which decides it outright and leaves its options file unread;
+    // named once here so it is not mistaken for one sync merely left alone.
+    let overridden: Vec<String> = result
+        .ports
+        .iter()
+        .filter(|(_, i)| i.options.r#override.is_some())
+        .map(|(key, _)| key.to_string())
+        .collect();
+    if !overridden.is_empty() {
+        eprintln!(
+            "{} make.conf OPTIONS_OVERRIDE decides {} ({} options file not read)",
+            tint(paint, ansi::YELLOW, "note:"),
+            overridden.join(", "),
+            if overridden.len() == 1 { "its" } else { "their" }
+        );
     }
 
     // A file missing lines reads as its defaults today and follows them
@@ -1809,6 +1832,24 @@ mod tests {
         assert_eq!(super::shared_file_deviation(std::slice::from_ref(&mysql)), None);
         let why = super::shared_file_deviation(&[mysql, pgsql]).expect("@pgsql reads MYSQL from the file");
         assert!(why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"), "{why}");
+    }
+
+    /// bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never
+    /// reads its options file, so `clean --redundant` must never judge it
+    /// redundant — even though its effective set, computed the override's
+    /// own way, would otherwise match defaults + make.conf exactly, which
+    /// is precisely what "redundant" means for every other port.
+    #[test]
+    fn an_overridden_flavors_file_is_never_redundant() {
+        use crate::model::port::PortInfo;
+        let mut info = PortInfo::stub("misc/cond");
+        info.options.complete = vec!["DOCS".into()];
+        info.options.defaults = ["DOCS".into()].into();
+        info.options.effective = ["DOCS".into()].into();
+        info.options.r#override = Some(["DOCS".to_string()].into());
+        let why = super::shared_file_deviation(std::slice::from_ref(&info))
+            .expect("an override must never be judged redundant");
+        assert!(why.contains("OPTIONS_OVERRIDE"), "{why}");
     }
 
     /// Under -m a settled unconfigured or stale port shows as ok and sorts

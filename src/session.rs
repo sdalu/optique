@@ -256,6 +256,15 @@ impl Session {
             .ok_or_else(|| "port has no options".to_string())?;
         let opts = &info.options;
 
+        // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
+        // itself; the options file is never read, so editing it is pointless.
+        if opts.r#override.is_some() {
+            return Err(
+                "OPTIONS_OVERRIDE in make.conf decides this port; its options file is not read"
+                    .to_string(),
+            );
+        }
+
         if opts.is_forced(opt) {
             return Err(format!(
                 "{opt} is forced by make.conf (*_FORCE or WITH/WITHOUT); the options file cannot override it"
@@ -445,6 +454,12 @@ impl Session {
         }
         if !self.violations(info).is_empty() {
             return UiStatus::Conflict;
+        }
+        // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
+        // itself, the options file unread; it can be neither unconfigured
+        // nor stale, whatever is or is not on disk.
+        if info.options.r#override.is_some() {
+            return UiStatus::Ok;
         }
         match self.stale_delta(info) {
             None => UiStatus::Unconfigured,
@@ -762,7 +777,15 @@ pub fn signed_options(complete: &[String], on: &BTreeSet<String>) -> String {
 /// gives: the file read as make reads it, IMPLIES-closed.
 fn saved_baseline(owner: &PortInfo, files: &OptionsFiles) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
     let saved = files.saved(&owner.options_name);
-    let baseline = close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()));
+    // bsd.options.mk:300-304: with an OPTIONS_OVERRIDE, the file (even one
+    // left on disk saying otherwise) is never read; the baseline is make's
+    // no-file outcome, which `effective_with` computes from the override
+    // alone, same as it would with `saved` passed in.
+    let baseline = if owner.options.r#override.is_some() {
+        nofile_effective(owner)
+    } else {
+        close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
+    };
     (saved, baseline)
 }
 
@@ -793,6 +816,11 @@ pub fn undecided_options(
     // one, so nothing is ever undecided — deviations and conflicts are the
     // only things left demanding attention.
     if minimal {
+        return Vec::new();
+    }
+    // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides every option of the
+    // port by itself; none of them is left for a human.
+    if info.options.r#override.is_some() {
         return Vec::new();
     }
     // Recorded means a SET or UNSET line names it (SavedOptionsFile::decides,
@@ -841,28 +869,47 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// queried `effective`, which in the TUI already holds staged edits once a
 /// refresh has run. `file` is the options file with its `options.local`
 /// read after it (`OptionsFiles::saved`), when it comes from disk; with
-/// no file, an `options.local` alone is not modelled, nor is
-/// OPTIONS_OVERRIDE.
+/// no file, an `options.local` alone is not modelled. `file` is ignored
+/// outright when make.conf has an OPTIONS_OVERRIDE for the port — see below.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete = &o.complete;
-    let mut set = port_defaults(o);
-    let empty = BTreeSet::new();
-    let (file_set, file_unset) = file.map_or((&empty, &empty), |f| (&f.set, &f.unset));
-    // One pass per layer, in the framework's own order (bsd.options.mk:312,
-    // 320, 326, 334, the file at 354 and 361, then 370, 378, 384, 392, and
-    // make.conf's WITH and WITHOUT at 399 and 406):
-    // each scope's UNSET runs before the next scope's SET, which is what lets
-    // the per-port knob override the global one. Applying all the SETs and
-    // then all the UNSETs instead would let a global UNSET erase a per-port
-    // SET. IMPLIES comes last (bsd.options.mk:411), after the file and FORCE.
+    // bsd.options.mk:300-304: OPTIONS_OVERRIDE, defined even empty, forgets
+    // everything the `.else` branch would have done — OPTIONS_DEFAULT, the
+    // two SET/UNSET pairs, the options file and its options.local — and
+    // starts PORT_OPTIONS as its own value, taken as is: not filtered by
+    // COMPLETE_OPTIONS_LIST, unlike every SET entry below. What follows
+    // `.endif` (the FORCE knobs, WITH/WITHOUT, IMPLIES, OPTIONS_SLAVE) still
+    // runs on top of it.
+    let mut set = match &o.r#override {
+        Some(over) => over.clone(),
+        None => {
+            let mut set = port_defaults(o);
+            let empty = BTreeSet::new();
+            let (file_set, file_unset) = file.map_or((&empty, &empty), |f| (&f.set, &f.unset));
+            // One pass per layer, in the framework's own order
+            // (bsd.options.mk:312, 320, 326, 334, the file at 354 and 361):
+            // each scope's UNSET runs before the next scope's SET, which is
+            // what lets the per-port knob override the global one. Applying
+            // all the SETs and then all the UNSETs instead would let a
+            // global UNSET erase a per-port SET.
+            for (adds, list) in [
+                (true, &o.mc_set),
+                (false, &o.mc_unset),
+                (true, &o.port_set),
+                (false, &o.port_unset),
+                (true, file_set),
+                (false, file_unset),
+            ] {
+                apply_layer(complete, &mut set, adds, list);
+            }
+            set
+        }
+    };
+    // The *_FORCE knobs and make.conf's WITH/WITHOUT (bsd.options.mk:370,
+    // 378, 384, 392, 399, 406) apply whether or not OPTIONS_OVERRIDE
+    // replaced everything above `.endif`.
     for (adds, list) in [
-        (true, &o.mc_set),
-        (false, &o.mc_unset),
-        (true, &o.port_set),
-        (false, &o.port_unset),
-        (true, file_set),
-        (false, file_unset),
         (true, &o.force_set),
         (false, &o.force_unset),
         (true, &o.port_force_set),
@@ -870,26 +917,30 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
         (true, &o.with),
         (false, &o.without),
     ] {
-        // A SET entry goes in word for word when it matches an option of
-        // the port (`COMPLETE_OPTIONS_LIST:M${opt}`); an UNSET entry takes
-        // out every option it matches (`PORT_OPTIONS:N${opt}`).
-        for entry in list.iter() {
-            if adds {
-                if complete.iter().any(|c| str_match(c, entry)) {
-                    set.insert(entry.clone());
-                }
-            } else {
-                set.retain(|o| !str_match(o, entry));
-            }
-        }
+        apply_layer(complete, &mut set, adds, list);
     }
-    // OPTIONS_SLAVE goes in after IMPLIES (bsd.options.mk:447), not in the
-    // list but on whatever the layers said. Then bsd.port.mk drops the
-    // members of a conditional group whose option is off from PORT_OPTIONS
-    // (see `unchecked_groups`).
+    // IMPLIES (bsd.options.mk:411) and OPTIONS_SLAVE (:447) come last, not in
+    // the list but on whatever the layers above said. Then bsd.port.mk drops
+    // the members of a conditional group whose option is off from
+    // PORT_OPTIONS (see `unchecked_groups`).
     let mut set = close_implies(info, set);
     set.extend(o.slave.iter().cloned());
     unchecked_groups(o, set).1
+}
+
+/// One SET/UNSET layer applied to `set`: a SET entry goes in word for word
+/// when it matches an option of the port (`COMPLETE_OPTIONS_LIST:M${opt}`);
+/// an UNSET entry takes out every option it matches (`PORT_OPTIONS:N${opt}`).
+fn apply_layer(complete: &[String], set: &mut BTreeSet<String>, adds: bool, list: &BTreeSet<String>) {
+    for entry in list.iter() {
+        if adds {
+            if complete.iter().any(|c| str_match(c, entry)) {
+                set.insert(entry.clone());
+            }
+        } else {
+            set.retain(|o| !str_match(o, entry));
+        }
+    }
 }
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
@@ -1408,6 +1459,146 @@ mod tests {
         // The options file cannot change what they pin.
         let mut s = session_for(ports);
         assert!(s.toggle(&key, "A2").unwrap_err().contains("WITH/WITHOUT"));
+    }
+
+    /// bsd.options.mk:300-304: OPTIONS_OVERRIDE, defined, replaces the whole
+    /// decision below it — OPTIONS_DEFAULT (here D, never read), the global
+    /// SET/UNSET pair and the options file are not read — but what follows
+    /// `.endif` (368-411: the *_FORCE knobs, then IMPLIES) still runs on top
+    /// of the override's own value, taken as is.
+    #[test]
+    fn effective_with_under_override_skips_defaults_mc_and_file_but_not_force_or_implies() {
+        let defs = vec![("A", OptionDef { implies: vec!["D".into()], ..Default::default() })];
+        let (mut ports, key) = mk_port(&["A", "B", "C", "D"], &["D"], vec![], defs);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.r#override = Some(set(&["A", "B"]));
+            // Unread once OPTIONS_OVERRIDE is defined: the global SET/UNSET
+            // pair.
+            o.mc_set.insert("C".into());
+            o.mc_unset.insert("A".into());
+            // Still applied on top of it: the *_FORCE knobs.
+            o.force_set.insert("C".into());
+            o.force_unset.insert("B".into());
+        }
+        let info = &ports[&key];
+        // A: from the override, FORCE leaves it. B: the override turns it
+        // on, FORCE_UNSET turns it back off. C: never in the override,
+        // FORCE_SET adds it anyway. D: not in the override or forced, but
+        // A's IMPLIES (after FORCE) turns it on regardless — OPTIONS_DEFAULT
+        // never put it there.
+        assert_eq!(nofile_effective(info), set(&["A", "C", "D"]));
+        // A hand file disagreeing with all of this changes nothing: it is
+        // never read either.
+        let file = SavedOptionsFile {
+            complete: info.options.complete.clone(),
+            set: set(&["B"]),
+            unset: set(&["A", "C", "D"]),
+            ..Default::default()
+        };
+        assert_eq!(effective_with(info, Some(&file)), set(&["A", "C", "D"]));
+    }
+
+    /// An OPTIONS_OVERRIDE defined empty is still defined: PORT_OPTIONS
+    /// starts empty, not at the port's own defaults.
+    #[test]
+    fn an_empty_override_turns_everything_off() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A", "B"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(BTreeSet::new());
+        assert_eq!(nofile_effective(&ports[&key]), BTreeSet::new());
+    }
+
+    /// OPTIONS_OVERRIDE decides every option of the port; none is left for
+    /// a human, whatever the (unread) options file says.
+    #[test]
+    fn undecided_is_always_empty_under_override() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A"]));
+        let info = &ports[&key];
+        assert!(undecided_options(info, None, false).is_empty());
+        let saved = SavedOptionsFile::parse("OPTIONS_FILE_SET+=B\n");
+        assert!(undecided_options(info, Some(&saved), false).is_empty());
+    }
+
+    /// The staged baseline follows the override's own outcome, not a
+    /// leftover file on disk that disagrees with it: the file is never read.
+    #[test]
+    fn baseline_follows_the_override_not_a_disagreeing_file() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["B"]));
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n",
+        )
+        .unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        let info = &s.ports[&key];
+        assert!(s.is_staged(info, "B"), "override says B, not the file's A");
+        assert!(!s.is_staged(info, "A"));
+    }
+
+    /// A status never `unconfigured` or `stale` for an overridden port,
+    /// even with a leftover file that disagrees with the override.
+    #[test]
+    fn status_is_ok_for_an_override_port_even_with_a_disagreeing_file() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A"]));
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_UNSET+=A\n")
+            .unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Ok);
+    }
+
+    /// bsd.port.mk pre-check-config still checks PREVENTS after
+    /// OPTIONS_OVERRIDE: naming both halves of a conflicting pair in it
+    /// fails check-config, and optique reports Conflict, same as any other
+    /// port.
+    #[test]
+    fn an_override_that_breaks_prevents_is_a_conflict() {
+        let defs = vec![("A", OptionDef { prevents: vec!["B".into()], ..Default::default() })];
+        let (mut ports, key) = mk_port(&["A", "B"], &[], vec![], defs);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A", "B"]));
+        let s = session_for(ports);
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Conflict);
+    }
+
+    /// Editing an overridden port's options is pointless: the file is
+    /// never read, so `toggle` (and so `bulk_set` and `decide`) refuses
+    /// every option of it, naming OPTIONS_OVERRIDE as the reason.
+    #[test]
+    fn toggle_is_refused_under_override() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A"]));
+        let mut s = session_for(ports);
+        let err = s.toggle(&key, "A").unwrap_err();
+        assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
+        let err = s.toggle(&key, "B").unwrap_err();
+        assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
+    }
+
+    /// scan --json --options reports every option of an overridden port
+    /// with scope "override", locked, and `locked_by` naming it — whatever
+    /// a FORCE knob or IMPLIES chain would otherwise have said.
+    #[test]
+    fn report_scope_is_override_for_every_option() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A"]));
+        let s = session_for(ports);
+        let reports = crate::report::option_reports(&s, &s.ports[&key]);
+        assert_eq!(reports.len(), 2);
+        for o in &reports {
+            let want_on = o.name == "A";
+            let m = o.makeconf.as_ref().unwrap_or_else(|| panic!("{}: no makeconf", o.name));
+            assert_eq!((m.value, m.scope), (want_on, "override"), "{}", o.name);
+            assert!(o.locked, "{}", o.name);
+            assert_eq!(o.locked_by.as_deref(), Some("make.conf OPTIONS_OVERRIDE"), "{}", o.name);
+        }
     }
 
     #[test]

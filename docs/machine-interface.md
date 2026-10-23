@@ -76,7 +76,7 @@ re-running `make`:
 | `default`           | the port's own default                           |
 | `saved`             | file's value; `null` = no entry (`undecided`)    |
 | `new`               | added since the file was written[^4]             |
-| `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`[^1] |
+| `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`/`override`[^1] |
 | `locked`            | the file cannot change this value                |
 | `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, or an implying option |
 | `deviates_makeconf` | staged value contradicts `makeconf`              |
@@ -92,7 +92,17 @@ re-running `make`:
 
 [^1]: absent when no layer mentions the option. `with` is make.conf's
     `WITH`/`WITHOUT`, applied after the `*_FORCE` knobs and pinning the
-    option as they do.
+    option as they do. `override` is make.conf's `OPTIONS_OVERRIDE`
+    (`bsd.options.mk:300-304`): defined for the port, even empty, it
+    replaces the whole decision — defaults, `OPTIONS_SET`/`UNSET`, the
+    per-port pair and the options file are not read, and `PORT_OPTIONS`
+    becomes its value as given. Every option of such a port reports
+    `value` (whether it is named in the override), `scope: "override"`,
+    `locked: true` and `locked_by: "make.conf OPTIONS_OVERRIDE"`; `undecided`
+    is always empty for it and `status` is never `stale` or `unconfigured`
+    (`conflict` still applies when the outcome breaks a group or `PREVENTS`
+    rule). `decide` refuses any value for such a port's options, and `sync`
+    never writes or removes its options file.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
     `NEW_OPTIONS`; a line settles the option even when the file's
