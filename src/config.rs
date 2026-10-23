@@ -936,14 +936,14 @@ fn synth_ini_has_section(text: &str, name: &str) -> bool {
 }
 
 /// Minimal INI reader for synth.ini: the value of `key` in section
-/// `[profile]`, falling back to the `[Global Configuration]` section. Keys are
+/// `[profile]` alone, as synth reads a profile's settings
+/// (parameters.adb:200-271, `load_specific_profile`): no other section,
+/// `[Global Configuration]` included, stands in for it. Keys are
 /// case-sensitive, `;` and `#` start a comment, and whitespace around both
 /// sides of `=` is stripped. First occurrence in a section wins; an empty
 /// value counts as unset.
 fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
     let mut section = String::new();
-    let mut in_profile = None;
-    let mut in_global = None;
     for line in text.lines() {
         let line = ini_strip_comment(line).trim();
         if line.is_empty() {
@@ -962,12 +962,10 @@ fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
             continue;
         }
         if section == profile {
-            in_profile.get_or_insert_with(|| v.to_string());
-        } else if section == SYNTH_GLOBAL_SECTION {
-            in_global.get_or_insert_with(|| v.to_string());
+            return Some(v.to_string());
         }
     }
-    in_profile.or(in_global)
+    None
 }
 
 /// Candidate options dir names, most specific first, exactly as poudriere(8)
@@ -2028,7 +2026,7 @@ mod tests {
     }
 
     #[test]
-    fn synth_ini_lookup_picks_section_then_global() {
+    fn synth_ini_lookup_reads_the_profile_section_alone() {
         let ini = "\
 ; leading comment
 [Global Configuration]
@@ -2047,22 +2045,21 @@ Directory_portsdir = /other/ports
             synth_ini_lookup(ini, "LiveSystem", "Directory_portsdir").as_deref(),
             Some("/live/ports")
         );
-        // Key absent from the profile: the global section answers.
-        assert_eq!(
-            synth_ini_lookup(ini, "LiveSystem", "Directory_options").as_deref(),
-            Some("/global/options")
-        );
+        // Key absent from the profile: unset, as synth reads it — the
+        // global section never stands in for a profile.
+        assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_options"), None);
         // Sections are not confused with each other.
         assert_eq!(
             synth_ini_lookup(ini, "Other", "Directory_portsdir").as_deref(),
             Some("/other/ports")
         );
-        // Unknown profile still sees the global fallback...
+        // Nor for an unknown profile; the global section is read by name.
+        assert_eq!(synth_ini_lookup(ini, "Nope", "Directory_portsdir"), None);
         assert_eq!(
-            synth_ini_lookup(ini, "Nope", "Directory_portsdir").as_deref(),
+            synth_ini_lookup(ini, SYNTH_GLOBAL_SECTION, "Directory_portsdir").as_deref(),
             Some("/global/ports")
         );
-        // ...but an unknown key is None, and keys are case-sensitive.
+        // An unknown key is None, and keys are case-sensitive.
         assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_packages"), None);
         assert_eq!(synth_ini_lookup(ini, "LiveSystem", "directory_portsdir"), None);
     }
@@ -2230,11 +2227,11 @@ not a key value line
         fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
         fs::create_dir_all(&synth).unwrap();
         fs::create_dir_all(&stage).unwrap();
-        // Only the global section, and no <profile>-make.conf at all.
+        // No <profile>-make.conf at all.
         fs::write(
             synth.join("synth.ini"),
             format!(
-                "[Global Configuration]\nDirectory_portsdir={}\nDirectory_options={}\n",
+                "[LiveSystem]\nDirectory_portsdir={}\nDirectory_options={}\n",
                 tree.display(),
                 opts.display()
             ),
@@ -2264,6 +2261,21 @@ not a key value line
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a ports tree"), "{err}");
+
+        // A setting in [Global Configuration] alone is no profile's: synth
+        // reads Directory_options from the profile's section only.
+        fs::write(
+            synth.join("synth.ini"),
+            format!(
+                "[Global Configuration]\nDirectory_options={}\n\
+                 [LiveSystem]\nDirectory_portsdir={}\n",
+                opts.display(),
+                tree.display()
+            ),
+        )
+        .unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
+        assert_eq!(s.options_dir, Path::new("/var/db/ports"));
 
         // No synth.ini: options dir falls back to /var/db/ports (the portsdir
         // fallback is /usr/ports, whose presence is host-dependent, so it is

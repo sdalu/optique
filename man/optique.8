@@ -2019,10 +2019,13 @@ and the options directory from
 in the
 .Bq Ar profile
 section of
-.Pa /usr/local/etc/synth/synth.ini ,
-falling back to that file's
+.Pa /usr/local/etc/synth/synth.ini
+alone, as synth reads them
+.Po
 .Bq Global Configuration
-section and then to
+never stands in for a profile
+.Pc ,
+falling back to
 .Pa /usr/ports
 and
 .Pa /var/db/ports .
