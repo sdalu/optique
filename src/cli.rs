@@ -207,7 +207,8 @@ pub struct Cli {
 
     /// Use the synth(1) layout instead of poudriere's: options dir and ports
     /// tree from /usr/local/etc/synth/synth.ini, make.conf from
-    /// <PROFILE>-make.conf [default: synth.ini's profile_selected, else
+    /// <PROFILE>-make.conf [default: $SYNTHPROFILE when synth.ini sets its
+    /// Directory_packages, else synth.ini's profile_selected, else
     /// LiveSystem]
     #[arg(
         short = 's',

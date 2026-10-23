@@ -155,8 +155,11 @@ on the very options being configured.
 ## Synth
 
 `-s [profile]` reads the `synth(1)` layout instead, so the same
-commands serve a synth host. The profile defaults to synth.ini's
-`profile_selected`, then `LiveSystem`. Because the profile name is
+commands serve a synth host. The profile defaults to the one synth
+itself would run with: the environment's `SYNTHPROFILE` when synth.ini
+has a section for it that sets `Directory_packages`, then synth.ini's
+`profile_selected`, then `LiveSystem`; the banner's note names which
+chose it. Because the profile name is
 optional, a name that could be read as something else (a subcommand, an
 option, or anything containing a slash) must be attached, as
 `--synth=name`. `-s` is mutually exclusive with `-z`, `-j`, `-p` and

@@ -311,9 +311,11 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     // pkg(8)'s own default, which the environment may move.
     let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
     if let Some(profile) = req.synth {
+        let env_profile = std::env::var("SYNTHPROFILE").ok();
         let settings = resolve_synth(
             Path::new(SYNTH_DIR),
             profile,
+            env_profile.as_deref(),
             req.portsdir,
             req.options_dir,
             staging_dir,
@@ -822,10 +824,12 @@ fn resolve_portsdir(
 /// synth(1) layout: one `synth.ini` describing every profile, the profile's
 /// own `<profile>-make.conf` (no layering), and no blacklist at all. The
 /// options dir is a documented synth setting (`Directory_options`), so unlike
-/// poudriere there is nothing to probe for.
+/// poudriere there is nothing to probe for. `env_profile` is the
+/// environment's `SYNTHPROFILE`, which a bare -s (empty `profile`) heeds.
 fn resolve_synth(
     synth_dir: &Path,
     profile: &str,
+    env_profile: Option<&str>,
     portsdir_flag: Option<&Path>,
     options_dir_flag: Option<&Path>,
     staging_dir: &Path,
@@ -836,9 +840,9 @@ fn resolve_synth(
     // A bare -s (empty profile) follows synth's own selection.
     let selected;
     let profile = if profile.is_empty() {
-        selected = synth_ini_lookup(&ini, SYNTH_GLOBAL_SECTION, "profile_selected")
-            .unwrap_or_else(|| "LiveSystem".to_string());
-        notes.push(format!("synth profile {selected} (synth.ini profile_selected)"));
+        let (name, source) = synth_selected_profile(&ini, env_profile);
+        notes.push(format!("synth profile {name} ({source})"));
+        selected = name;
         selected.as_str()
     } else {
         profile
@@ -913,6 +917,22 @@ fn resolve_synth(
         notes,
         overlays: Vec::new(),
     })
+}
+
+/// The profile synth itself runs with, and what chose it
+/// (parameters.adb:64-71, `load_configuration`): `env_profile`, the
+/// environment's `SYNTHPROFILE`, when synth.ini has a section for it with
+/// `Directory_packages` set, else `profile_selected`, else `LiveSystem`.
+fn synth_selected_profile(ini: &str, env_profile: Option<&str>) -> (String, &'static str) {
+    if let Some(env) = env_profile.filter(|p| !p.is_empty()) {
+        if synth_ini_lookup(ini, env, "Directory_packages").is_some() {
+            return (env.to_string(), "SYNTHPROFILE");
+        }
+    }
+    match synth_ini_lookup(ini, SYNTH_GLOBAL_SECTION, "profile_selected") {
+        Some(p) => (p, "synth.ini profile_selected"),
+        None => ("LiveSystem".to_string(), "synth's default"),
+    }
 }
 
 /// The part of a synth.ini line before the first `;` or `#`: both start a
@@ -1352,7 +1372,7 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
             .unwrap();
-        let resolve = |profile| resolve_synth(&synth, profile, None, None, &stage).unwrap();
+        let resolve = |profile| resolve_synth(&synth, profile, None, None, None, &stage).unwrap();
 
         let pkg_db = tmp.path().join("local.sqlite");
         fs::write(&pkg_db, "one package").unwrap();
@@ -2101,19 +2121,61 @@ not a key value line
 
         // Unknown named profile: noted, defaults still apply (/var/db/ports
         // triggers the live-dir note too). /usr/ports exists on this host.
-        let s = resolve_synth(&synth, "typo", None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "typo", None, None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("'typo' has no section")), "{:?}", s.notes);
         assert!(s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
 
         // Bare -s honours profile_selected; known section → no missing note.
-        let s = resolve_synth(&synth, "", None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "", None, None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("profile Live (synth.ini")), "{:?}", s.notes);
         assert!(!s.notes.iter().any(|n| n.contains("no section")), "{:?}", s.notes);
 
         // -o override: no live-dir note.
         let o = tmp.path().join("other");
-        let s = resolve_synth(&synth, "Live", None, Some(&o), &stage).unwrap();
+        let s = resolve_synth(&synth, "Live", None, None, Some(&o), &stage).unwrap();
         assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
+    }
+
+    /// A bare -s runs with the profile synth itself would: SYNTHPROFILE's
+    /// when its section sets Directory_packages, else profile_selected,
+    /// else LiveSystem; the banner says which chose it. A named -s wins.
+    #[test]
+    fn synth_profile_follows_synthprofile_then_the_ini() {
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let stage = tmp.path().join("stage");
+        let o = tmp.path().join("other");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(
+            synth.join("synth.ini"),
+            "[Global Configuration]\nprofile_selected= Live\n[Live]\n\
+             [Env]\nDirectory_packages=/pkgs\n[Bare]\nDirectory_options=/x\n",
+        )
+        .unwrap();
+        let picked = |profile, env| {
+            let s = resolve_synth(&synth, profile, env, None, Some(&o), &stage).unwrap();
+            let staged = fs::read_to_string(s.make_conf.unwrap()).unwrap();
+            let name = staged.lines().find_map(|l| l.strip_prefix("SYNTHPROFILE=")).unwrap().to_string();
+            (name, s.notes)
+        };
+
+        let (name, notes) = picked("", Some("Env"));
+        assert_eq!(name, "Env");
+        assert!(notes.iter().any(|n| n == "synth profile Env (SYNTHPROFILE)"), "{notes:?}");
+        // A section without Directory_packages, an unknown one, an empty
+        // value: synth ignores the variable.
+        for env in [Some("Bare"), Some("Nope"), Some(""), None] {
+            let (name, notes) = picked("", env);
+            assert_eq!(name, "Live", "{env:?}");
+            assert!(notes.iter().any(|n| n == "synth profile Live (synth.ini profile_selected)"), "{notes:?}");
+        }
+        assert_eq!(picked("Bare", Some("Env")).0, "Bare");
+
+        fs::write(synth.join("synth.ini"), "[LiveSystem]\n").unwrap();
+        let (name, notes) = picked("", None);
+        assert_eq!(name, "LiveSystem");
+        assert!(notes.iter().any(|n| n == "synth profile LiveSystem (synth's default)"), "{notes:?}");
     }
 
     #[test]
@@ -2142,7 +2204,7 @@ not a key value line
         // A second profile's make.conf must not be picked up.
         fs::write(synth.join("Other-make.conf"), "A=1\n").unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         assert_eq!(s.options_dir, opts);
         assert!(s.options_dir.is_dir());
@@ -2168,7 +2230,7 @@ not a key value line
         // -o wins over Directory_options, -P over Directory_portsdir.
         let elsewhere = tmp.path().join("elsewhere");
         fake_tree(&elsewhere);
-        let s = resolve_synth(&synth, "LiveSystem", Some(&elsewhere), Some(&elsewhere), &stage)
+        let s = resolve_synth(&synth, "LiveSystem", None, Some(&elsewhere), Some(&elsewhere), &stage)
             .unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (elsewhere.as_path(), elsewhere.as_path()));
         assert!(s.notes.is_empty(), "{:?}", s.notes);
@@ -2198,7 +2260,7 @@ not a key value line
         .unwrap();
         fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
         let staged = || {
-            let s = resolve_synth(&synth, "A", None, None, &stage).unwrap();
+            let s = resolve_synth(&synth, "A", None, None, None, &stage).unwrap();
             fs::read_to_string(s.make_conf.unwrap()).unwrap()
         };
 
@@ -2238,7 +2300,7 @@ not a key value line
         )
         .unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         // Nonexistent Directory_options is still the target, not created yet.
         assert_eq!(s.options_dir, opts);
@@ -2257,7 +2319,7 @@ not a key value line
             format!("[LiveSystem]\nDirectory_portsdir={}/nope\n", tmp.path().display()),
         )
         .unwrap();
-        let err = resolve_synth(&synth, "LiveSystem", None, Some(&opts), &stage)
+        let err = resolve_synth(&synth, "LiveSystem", None, None, Some(&opts), &stage)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a ports tree"), "{err}");
@@ -2274,7 +2336,7 @@ not a key value line
             ),
         )
         .unwrap();
-        let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
         assert_eq!(s.options_dir, Path::new("/var/db/ports"));
 
         // No synth.ini: options dir falls back to /var/db/ports (the portsdir
@@ -2282,7 +2344,7 @@ not a key value line
         // only exercised through -o here).
         fs::remove_file(synth.join("synth.ini")).unwrap();
         if is_ports_tree(Path::new("/usr/ports")) {
-            let s = resolve_synth(&synth, "LiveSystem", None, None, &stage).unwrap();
+            let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
             assert_eq!(s.options_dir, Path::new("/var/db/ports"));
         }
     }

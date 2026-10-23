@@ -290,9 +290,14 @@ Configure for
 .Xr synth 1
 instead of
 .Xr poudriere 8 ,
-using the named profile; without one, synth.ini's
-.Va profile_selected
-is honoured, falling back to
+using the named profile; without one, the profile synth itself would
+use:
+.Ev SYNTHPROFILE
+when its synth.ini section sets
+.Va Directory_packages ,
+else synth.ini's
+.Va profile_selected ,
+else
 .Ql LiveSystem .
 See
 .Sx SYNTH .
@@ -2008,10 +2013,15 @@ reads the
 .Xr synth 1
 layout instead, so the same commands serve a synth host:
 .Dl optique scan -s -f list
-The profile defaults to synth.ini's
+The profile defaults to the one synth itself would run with:
+.Ev SYNTHPROFILE
+when synth.ini has a section for it that sets
+.Va Directory_packages ,
+then synth.ini's
 .Va profile_selected ,
 then
-.Ql LiveSystem .
+.Ql LiveSystem ;
+the banner's note names which chose it.
 The ports tree is taken from
 .Va Directory_portsdir
 and the options directory from
@@ -2222,6 +2232,13 @@ Poudriere and synth builds always pass their own.
 Where a local build finds pkg's database, whose changes start a
 new cache generation; see
 .Sx LOCAL BUILDS .
+.It Ev SYNTHPROFILE
+The profile of a bare
+.Fl s ,
+as synth reads it: used when synth.ini has a section for it that sets
+.Va Directory_packages ;
+see
+.Sx SYNTH .
 .It Ev NO_COLOR
 Turns colour off under
 .Fl -color Ns = Ns Cm auto .
