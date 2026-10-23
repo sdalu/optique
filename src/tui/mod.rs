@@ -1951,9 +1951,13 @@ impl App {
             let written = if self.to_seed.contains(&options_name) && staged == state.baseline {
                 self.staging_db.seed(&self.options_files, &options_name).map(|_| ())
             } else {
-                self.to_seed.remove(&options_name);
+                let local = if self.to_seed.remove(&options_name) {
+                    self.staging_db.seed_local(&self.options_files, &options_name)
+                } else {
+                    Ok(())
+                };
                 let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
-                self.staging_db.write(&options_name, content.as_bytes())
+                local.and_then(|()| self.staging_db.write(&options_name, content.as_bytes()))
             };
             if let Err(e) = written {
                 self.notify(&format!("staging write failed: {e:#}"), true);
@@ -2089,7 +2093,9 @@ impl App {
             for key in &added {
                 let Some(info) = self.session.ports.get(key) else { continue };
                 let name = &info.options_name;
-                if !self.staging_db.has(name) && self.options_files.bytes(name).is_some() {
+                let real = self.options_files.bytes(name).is_some()
+                    || self.options_files.local_bytes(name).is_some();
+                if !self.staging_db.has(name) && real {
                     self.to_seed.insert(name.clone());
                     self.mark_pending(key);
                 }
@@ -3685,6 +3691,38 @@ mod tests {
         app.pending.insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
         app.flush_due_refreshes();
         assert_eq!(std::fs::read(&staged).unwrap(), real, "its real file, byte for byte");
+        assert_eq!(req.try_recv().unwrap(), vec![gamma]);
+    }
+
+    /// A newcomer with an options.local and no options file is queried again
+    /// with that options.local, which make reads all the same.
+    #[test]
+    fn a_newcomer_with_only_an_options_local_is_queried_again_with_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = b"OPTIONS_FILE_SET+=DOCS\n";
+        std::fs::create_dir_all(tmp.path().join("options/cat_gamma")).unwrap();
+        std::fs::write(tmp.path().join("options/cat_gamma/options.local"), local).unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let (ev, req) = fake_refresher(&mut app);
+        let mut alpha = info_of(&app, "cat/alpha");
+        let mut gamma = alpha.clone();
+        gamma.key = PortKey::parse("cat/gamma").unwrap();
+        gamma.canonical = gamma.key.clone();
+        gamma.options_name = "cat_gamma".into();
+        alpha.deps = vec![crate::model::port::DepEdge {
+            target: gamma.key.clone(),
+            spec: "dep:cat/gamma".into(),
+            test_only: false,
+        }];
+        app.refreshing = 1;
+        ev.send(done(vec![alpha, gamma], vec![])).unwrap();
+        app.drain_refresh_events();
+        let gamma = PortKey::parse("cat/gamma").unwrap();
+        assert!(app.pending.contains_key(&gamma), "the newcomer is queried again");
+        app.pending.insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
+        app.flush_due_refreshes();
+        let staged = tmp.path().join("db/cat_gamma/options.local");
+        assert_eq!(std::fs::read(&staged).unwrap(), local, "its options.local, byte for byte");
         assert_eq!(req.try_recv().unwrap(), vec![gamma]);
     }
 

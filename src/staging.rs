@@ -39,22 +39,29 @@ impl StagingDb {
     /// of goes through here, at start or as a re-query brings it in. True
     /// when there was a file to copy.
     pub fn seed(&self, files: &OptionsFiles, options_name: &str) -> Result<bool> {
-        // make reads ${OPTIONS_FILE}.local after the file: it goes along.
-        if let Some(content) = files.local_bytes(options_name) {
-            let path = self.root.join(options_name).join("options.local");
-            fs::create_dir_all(self.root.join(options_name))
-                .and_then(|()| fs::write(&path, &content))
-                .with_context(|| format!("writing {}", path.display()))?;
-        }
+        self.seed_local(files, options_name)?;
         match files.bytes(options_name) {
             Some(content) => self.write(options_name, &content).map(|()| true),
             None => Ok(false),
         }
     }
 
-    /// Does staging hold a file for this OPTIONS_NAME?
+    /// Copy the real options.local alone, which make reads after the file
+    /// whatever the file is: a staged edit goes with it too.
+    pub fn seed_local(&self, files: &OptionsFiles, options_name: &str) -> Result<()> {
+        if let Some(content) = files.local_bytes(options_name) {
+            let path = self.root.join(options_name).join("options.local");
+            fs::create_dir_all(self.root.join(options_name))
+                .and_then(|()| fs::write(&path, &content))
+                .with_context(|| format!("writing {}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// Does staging hold anything make reads for this OPTIONS_NAME?
     pub fn has(&self, options_name: &str) -> bool {
-        self.root.join(options_name).join("options").is_file()
+        let dir = self.root.join(options_name);
+        dir.join("options").is_file() || dir.join("options.local").is_file()
     }
 
     pub fn path(&self) -> &Path {
