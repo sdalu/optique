@@ -279,6 +279,13 @@ impl Session {
         } else {
             // Turning on: single/radio groups deselect siblings.
             if let Some(g) = opts.exclusive_group_of(opt) {
+                // A forced-on sibling stays on whatever the file says.
+                if let Some(m) = g.members.iter().find(|m| *m != opt && opts.forced_value(m) == Some(true)) {
+                    return Err(format!(
+                        "{}: {m} is forced on by make.conf (*_FORCE) and the group allows one option; fix it there",
+                        g.name
+                    ));
+                }
                 for m in &g.members {
                     if m != opt {
                         state.staged.remove(m);
@@ -1911,6 +1918,27 @@ mod tests {
         s.ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
         let err = s.toggle(&key, "A").unwrap_err();
         assert!(err.contains("forced"));
+    }
+
+    /// Turning on a member of a SINGLE or RADIO group drops its siblings,
+    /// but a *_FORCE knob puts a forced-on one back after the options file:
+    /// the toggle is refused rather than leave the group with two members.
+    #[test]
+    fn a_forced_on_sibling_refuses_the_switch() {
+        for kind in [GroupKind::Single, GroupKind::Radio] {
+            let g = OptionGroup {
+                kind,
+                name: "G".into(),
+                desc: String::new(),
+                members: vec!["A".into(), "B".into()],
+            };
+            let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![g], vec![]);
+            ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
+            let mut s = session_for(ports);
+            let err = s.toggle(&key, "B").unwrap_err();
+            assert!(err.contains("forced on"), "{kind:?}: {err}");
+            assert_eq!(s.state(&s.ports[&key]).unwrap().staged, set(&["A"]), "{kind:?}");
+        }
     }
 
     fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
