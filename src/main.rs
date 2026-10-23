@@ -1026,7 +1026,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let overridden: Vec<String> = result
         .ports
         .iter()
-        .filter(|(_, i)| i.options.r#override.is_some())
+        .filter(|(_, i)| i.options.has_options() && i.options.r#override.is_some())
         .map(|(key, _)| key.to_string())
         .collect();
     if !overridden.is_empty() {
