@@ -197,7 +197,9 @@ goes to a `…`; a marker never does. A row that fits is left as it is.
 
 Options are listed in framework order under group headers such as
 `HTTPGRP` above; a group's kind is enforced on every toggle — `SINGLE`
-needs exactly one member on, `RADIO` at most one, `MULTI` at least one.
+needs exactly one member on, `RADIO` at most one, `MULTI` at least one;
+as in `make check-config`, a `SINGLE` or `MULTI` group named after one of
+the port's options is enforced only while that option is on.
 Each row carries, in order: an `N` in the first column when the option was
 added to the port since its options file was written, or the file does not
 settle it (missing from its `_FILE_COMPLETE_OPTIONS_LIST`, or without a

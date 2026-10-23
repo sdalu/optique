@@ -258,7 +258,9 @@ impl Session {
             if let Some(by) = implier_of(info, &state.staged, opt) {
                 return Err(format!("{opt} is implied by {by}; disable {by} first"));
             }
-            if let Some(g) = opts.group_of(opt) {
+            // A conditional group whose option is off is not checked.
+            let (unchecked, _) = unchecked_groups(opts, state.staged.clone());
+            if let Some(g) = opts.group_of(opt).filter(|g| !unchecked.contains(g.name.as_str())) {
                 let on = g.count_on(&state.staged);
                 match g.kind {
                     GroupKind::Single if on == 1 => {
@@ -356,6 +358,8 @@ impl Session {
         let staged = &state.staged;
         let saved = state.saved.as_ref();
         let o = &info.options;
+        let (unchecked, checked) = unchecked_groups(o, staged.clone());
+        let staged = &checked;
         let mut out = Vec::new();
         for opt in staged {
             if let Some(def) = o.defs.get(opt) {
@@ -375,7 +379,7 @@ impl Session {
                 }
             }
         }
-        for g in &o.groups {
+        for g in o.groups.iter().filter(|g| !unchecked.contains(g.name.as_str())) {
             let on = g.count_on(staged);
             let members: Vec<String> =
                 g.members.iter().filter(|m| o.complete.contains(*m)).cloned().collect();
@@ -582,6 +586,30 @@ pub struct Conflict {
     pub members: Vec<String>,
     /// What make.conf did to it, when it had a hand in it.
     pub cause: Option<String>,
+}
+
+/// The SINGLE and MULTI groups make's pre-check-config (bsd.port.mk) leaves
+/// unchecked for `set`, and `set` as it leaves it. A group named after an
+/// option of the port's own (ALL_OPTIONS, modelled as an option of the port
+/// that is no group's member) is conditional: checked while that option is
+/// on; otherwise its members are dropped from PORT_OPTIONS and the group
+/// is not checked. The SINGLE groups go first, then the MULTI ones, each
+/// judged on the set the ones before left. RADIO and GROUP are never
+/// conditional, and PREVENTS is judged after all of them.
+fn unchecked_groups(o: &PortOptions, mut set: BTreeSet<String>) -> (BTreeSet<&str>, BTreeSet<String>) {
+    let mut unchecked = BTreeSet::new();
+    for kind in [GroupKind::Single, GroupKind::Multi] {
+        for g in o.groups.iter().filter(|g| g.kind == kind) {
+            let conditional = o.complete.contains(&g.name) && o.group_of(&g.name).is_none();
+            if conditional && !set.contains(&g.name) {
+                for m in &g.members {
+                    set.remove(m);
+                }
+                unchecked.insert(g.name.as_str());
+            }
+        }
+    }
+    (unchecked, set)
 }
 
 /// The make.conf variable a non-FORCE layer sets an option with.
@@ -988,6 +1016,50 @@ mod tests {
             let v = s.violations(&s.ports[&key]);
             assert_eq!(!v.is_empty(), broken, "{kind:?} with {on:?} on: {v:?}");
         }
+    }
+
+    /// bsd.port.mk's pre-check-config checks a SINGLE or MULTI group named
+    /// after one of the port's options only while that option is on; off,
+    /// it drops the members from PORT_OPTIONS and checks nothing, PREVENTS
+    /// included. RADIO is checked either way. mail/faces (OPTIONS_SINGLE=
+    /// AUDIO, AUDIO off) used to be a conflict that make never reports.
+    #[test]
+    fn a_conditional_group_is_checked_only_while_its_option_is_on() {
+        let group = |kind, name: &str| OptionGroup {
+            kind,
+            name: name.into(),
+            desc: String::new(),
+            members: vec![format!("{name}1"), format!("{name}2")],
+        };
+        let defs = vec![(
+            "M1",
+            OptionDef { prevents: vec!["M2".into()], ..Default::default() },
+        )];
+        let (ports, key) = mk_port(
+            &["AUDIO", "M", "R", "AUDIO1", "AUDIO2", "M1", "M2", "R1", "R2"],
+            &[],
+            vec![group(GroupKind::Single, "AUDIO"), group(GroupKind::Multi, "M"), group(GroupKind::Radio, "R")],
+            defs,
+        );
+        let mut s = session_for(ports);
+        assert!(s.violations(&s.ports[&key]).is_empty(), "{:?}", s.violations(&s.ports[&key]));
+        let name = s.ports[&key].options_name.clone();
+        s.states.get_mut(&name).unwrap().staged = set(&["M1", "M2", "R1", "R2"]);
+        let v = s.violations(&s.ports[&key]);
+        assert_eq!(v.len(), 1, "only the RADIO group, unconditional: {v:?}");
+        assert!(v[0].contains("group R "), "{v:?}");
+        // With its option on, the group is checked.
+        s.states.get_mut(&name).unwrap().staged = set(&["AUDIO", "M", "M1"]);
+        let v = s.violations(&s.ports[&key]);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(v[0].contains("group AUDIO "), "{v:?}");
+        // Off, its last member is let go; on, it is held.
+        s.states.get_mut(&name).unwrap().staged = set(&["AUDIO1", "M", "M1"]);
+        s.toggle(&key, "AUDIO1").unwrap();
+        s.toggle(&key, "AUDIO").unwrap();
+        s.toggle(&key, "AUDIO2").unwrap();
+        assert!(s.toggle(&key, "AUDIO2").is_err(), "the last member of a checked group stays");
+        assert!(s.toggle(&key, "M1").is_err(), "the last member of a checked group stays");
     }
 
     /// A SINGLE group with two members on (a hand-edited file, say) can be
