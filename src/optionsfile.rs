@@ -110,9 +110,10 @@ impl SavedOptionsFile {
     fn read(&mut self, text: &str, lists_only: bool) {
         let file = if lists_only { "options.local" } else { "options" };
         for (n, line) in logical_lines(text) {
-            // A `#` starts a comment, at the head of a line or after a value.
-            let line = line.split('#').next().unwrap_or_default().trim();
-            let Some((name, op, value)) = assignment(line) else { continue };
+            // A `#` starts a comment, at the head of a line or after a value;
+            // `\#` is a literal `#`, as make reads it.
+            let line = strip_comment(&line);
+            let Some((name, op, value)) = assignment(line.trim()) else { continue };
             let read = match name {
                 "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => true,
                 "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST" => !lists_only,
@@ -256,6 +257,24 @@ pub fn render(pkgname: &str, complete: &[String], enabled: &BTreeSet<String>) ->
     out
 }
 
+/// `line` up to its comment: an unescaped `#` ends it, and `\#` stands for
+/// a `#` of the value, as make reads a makefile line.
+fn strip_comment(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'#') => {
+                out.push('#');
+                chars.next();
+            }
+            '#' => break,
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +346,16 @@ OPTIONS_FILE_UNSET+=FLITE
     /// line assigned, the options file and options.local read as one
     /// makefile; `!=` runs a shell command, which optique does not, so the
     /// line is ignored and its place recorded.
+    /// An unescaped `#` starts a comment; `\#` is a `#` of the value, as
+    /// make reads `J+=k\#l m # note` as `k#l m`.
+    #[test]
+    fn an_escaped_hash_is_part_of_the_value() {
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\\#B C # note D\nOPTIONS_FILE_UNSET+=E#F\n");
+        let set: Vec<&str> = f.set.iter().map(String::as_str).collect();
+        let unset: Vec<&str> = f.unset.iter().map(String::as_str).collect();
+        assert_eq!((set, unset), (vec!["A#B", "C"], vec!["E"]));
+    }
+
     #[test]
     fn colon_question_and_shell_assignments() {
         let f = SavedOptionsFile::parse(

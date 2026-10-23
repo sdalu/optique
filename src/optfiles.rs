@@ -154,9 +154,13 @@ impl OptionsFiles {
     /// Drop what is known of these files, so the next read sees the disk:
     /// after optique itself wrote or removed them.
     pub fn forget<'a>(&self, names: impl IntoIterator<Item = &'a str>) {
+        // Both memos, so the next reading sees the entry as it now is,
+        // options.local included.
         let mut memo = self.memo.borrow_mut();
+        let mut local = self.local_memo.borrow_mut();
         for name in names {
             memo.remove(name);
+            local.remove(name);
         }
     }
 
@@ -360,5 +364,20 @@ OPTIONS_FILE_UNSET+=B
         let files = OptionsFiles::new(Path::new("/opt/db"));
         assert_eq!(files.dir(), Path::new("/opt/db"));
         assert_eq!(files.path("www_nginx"), Path::new("/opt/db/www_nginx/options"));
+    }
+
+    /// After optique writes or removes an entry, `forget` makes the next
+    /// reading go to disk again, options.local included.
+    #[test]
+    fn forget_clears_the_options_local_reading_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A\n").unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        assert!(files.local_bytes("cat_port").is_some());
+        std::fs::remove_file(tmp.path().join("cat_port/options.local")).unwrap();
+        files.forget(["cat_port"]);
+        assert!(files.local_bytes("cat_port").is_none(), "read again after forget");
+        assert_eq!(files.local_reads(), 2);
     }
 }
