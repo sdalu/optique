@@ -55,7 +55,12 @@ pub struct ApplyModal {
     pub removals: Vec<crate::clean::Removal>,
     pub warnings: Vec<String>,
     pub scroll: usize,
+    /// Ports in conflict whose options files the pass would change: `Y`
+    /// writes them anyway, `s` leaves them out.
     pub conflicted: Vec<PortKey>,
+    /// Their options files; a file flavors share conflicts when any of
+    /// them does.
+    pub conflicting_files: BTreeSet<String>,
     /// Result text once applied.
     pub done: Option<String>,
 }
@@ -740,57 +745,15 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
         app.refresh_view();
         return;
     }
+    let conflicts = app.modal.as_ref().is_some_and(|m| !m.conflicted.is_empty());
     match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') => {
-            // Recompute the plan at confirmation time: a background refresh
-            // may have merged new ports since the modal was opened.
-            let planned = app.compute_writes();
-            let done = apply::commit(&planned.writes, &planned.removals);
-            // apply is all-or-nothing: after a failed write nothing is on
-            // disk, so nothing is removed either, and the edits stay staged
-            // (and in the draft) to be applied again.
-            if !done.summary.failed.is_empty() {
-                let mut text = format!("nothing written to {}", app.options_dir.display());
-                for (key, msg) in &done.summary.failed {
-                    text.push_str(&format!("\nFAILED {key}: {msg}"));
-                }
-                if let Some(modal) = app.modal.as_mut() {
-                    modal.done = Some(text);
-                }
-                return;
-            }
-            let mut text =
-                format!("{} file(s) written to {}", done.summary.written, app.options_dir.display());
-            for (name, e) in &done.removed.failed {
-                text.push_str(&format!("\nFAILED rm {name}: {e}"));
-            }
-            if done.removed.count > 0 {
-                text.push_str(&format!(
-                    "\n{} redundant file(s) removed (--minimal)",
-                    done.removed.count
-                ));
-            }
-            for note in &done.removed.notes {
-                text.push_str(&format!("\nnote: {note}"));
-            }
-            // Only the files apply touched are read again; the rest are as
-            // the scan read them.
-            let touched: Vec<&str> = planned
-                .writes
-                .iter()
-                .map(|w| w.options_name.as_str())
-                .chain(planned.removals.iter().map(|r| r.options_name.as_str()))
-                .collect();
-            app.options_files.forget(touched.iter().copied());
-            app.session.reload_saved(&app.options_files, touched.iter().copied());
-            // The files on disk changed: attributions built on the pre-apply
-            // staged history would now point at the wrong changes.
-            app.blame.clear();
-            // The edits are on disk now; the draft has served its purpose.
-            draft::discard(&app.options_dir);
-            if let Some(modal) = app.modal.as_mut() {
-                modal.done = Some(text);
-            }
+        KeyCode::Char('Y') => commit_apply(app, false),
+        KeyCode::Char('y') if !conflicts => commit_apply(app, false),
+        KeyCode::Char('s') if conflicts => commit_apply(app, true),
+        // With conflicts a lowercase y is too easy to type by habit: it
+        // writes nothing and leaves the choice open.
+        KeyCode::Char('y') => {
+            app.flash("conflicts remain: Y writes anyway · s skips them · n cancels", false)
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if let Some(modal) = app.modal.as_mut() {
@@ -803,6 +766,63 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
             }
         }
         _ => app.modal = None,
+    }
+}
+
+/// Write the apply plan, recomputed now: a background refresh may have
+/// merged new ports since the preview was opened. `skip_conflicting` leaves
+/// the files of ports in conflict as they are on disk, their edits staged.
+fn commit_apply(app: &mut App, skip_conflicting: bool) {
+    let mut planned = app.compute_writes();
+    let (conflicted, files) = app.conflicting(&planned);
+    let skipped = if skip_conflicting && !conflicted.is_empty() {
+        planned = planned.without(&files);
+        conflicted.len()
+    } else {
+        0
+    };
+    let done = apply::commit(&planned.writes, &planned.removals);
+    // apply is all-or-nothing: after a failed write nothing is on disk, so
+    // nothing is removed either, and the edits stay staged (and in the
+    // draft) to be applied again.
+    if !done.summary.failed.is_empty() {
+        let mut text = format!("nothing written to {}", app.options_dir.display());
+        for (key, msg) in &done.summary.failed {
+            text.push_str(&format!("\nFAILED {key}: {msg}"));
+        }
+        if let Some(modal) = app.modal.as_mut() {
+            modal.done = Some(text);
+        }
+        return;
+    }
+    let mut text = format!("{} file(s) written to {}", done.summary.written, app.options_dir.display());
+    if skipped > 0 {
+        text.push_str(&format!("\n{skipped} port(s) skipped: conflicting options"));
+    }
+    for (name, e) in &done.removed.failed {
+        text.push_str(&format!("\nFAILED rm {name}: {e}"));
+    }
+    if done.removed.count > 0 {
+        text.push_str(&format!("\n{} redundant file(s) removed (--minimal)", done.removed.count));
+    }
+    for note in &done.removed.notes {
+        text.push_str(&format!("\nnote: {note}"));
+    }
+    // Only the files apply touched are read again; the rest are as the scan
+    // read them, and a skipped port keeps its edits staged.
+    let touched: Vec<&str> = planned.touched().collect();
+    app.options_files.forget(touched.iter().copied());
+    app.session.reload_saved(&app.options_files, touched.iter().copied());
+    // The files on disk changed: attributions built on the pre-apply staged
+    // history would now point at the wrong changes.
+    app.blame.clear();
+    // The edits are on disk now, and the draft has served its purpose —
+    // unless some were skipped and are still to be applied.
+    if skipped == 0 {
+        draft::discard(&app.options_dir);
+    }
+    if let Some(modal) = app.modal.as_mut() {
+        modal.done = Some(text);
     }
 }
 
@@ -1634,26 +1654,40 @@ impl App {
         apply::plan_writes(staged, &self.options_files, self.minimal)
     }
 
-    fn open_apply_modal(&mut self) {
-        // Every port, not just the listed ones: apply writes them all, and a
-        // conflict the filter or a view hides is written all the same.
-        let conflicted: Vec<PortKey> = self
+    /// The ports in conflict whose options files `planned` changes, and
+    /// those files. Every port counts, not just the listed ones: apply
+    /// writes them all, and a conflict the filter or a view hides is written
+    /// all the same. A port whose file the pass leaves alone does not count.
+    fn conflicting(&self, planned: &apply::PlannedWrites) -> (Vec<PortKey>, BTreeSet<String>) {
+        let touched: BTreeSet<&str> = planned.touched().collect();
+        let mut files = BTreeSet::new();
+        let ports = self
             .session
             .ports
             .iter()
+            .filter(|(_, info)| touched.contains(info.options_name.as_str()))
             .filter(|(_, info)| self.session.status(info) == UiStatus::Conflict)
-            .map(|(key, _)| key.clone())
+            .map(|(key, info)| {
+                files.insert(info.options_name.clone());
+                key.clone()
+            })
             .collect();
+        (ports, files)
+    }
+
+    fn open_apply_modal(&mut self) {
         let planned = self.compute_writes();
         if planned.writes.is_empty() && planned.removals.is_empty() {
             self.flash("nothing to write — everything is up to date", false);
         } else {
+            let (conflicted, conflicting_files) = self.conflicting(&planned);
             self.modal = Some(ApplyModal {
                 writes: planned.writes,
                 removals: planned.removals,
                 warnings: planned.warnings,
                 scroll: 0,
                 conflicted,
+                conflicting_files,
                 done: None,
             });
         }
@@ -2938,7 +2972,151 @@ mod tests {
         press(&mut app, 'a');
         let modal = app.modal.as_ref().expect("the apply preview opened");
         assert_eq!(modal.conflicted, [key]);
-        assert!(screen(&mut app).contains("1 port(s) still have conflicting options: cat/alpha"));
+        let shown = screen(&mut app);
+        assert!(shown.contains(" apply with 1 conflicting? "), "{shown}");
+        assert!(shown.contains("conflicting (Y writes them, s skips them):"), "{shown}");
+    }
+
+    /// Put `origin` in conflict: two members of a SINGLE group staged on.
+    fn make_conflict(app: &mut App, origin: &str) {
+        use crate::model::options::{GroupKind, OptionGroup};
+        let key = PortKey::parse(origin).unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.options.complete = vec!["DOCS".into(), "X11".into(), "WAYLAND".into()];
+        info.options.groups = vec![OptionGroup {
+            kind: GroupKind::Single,
+            name: "GUI".into(),
+            desc: String::new(),
+            members: vec!["X11".into(), "WAYLAND".into()],
+        }];
+        let name = info.options_name.clone();
+        app.session.states.get_mut(&name).unwrap().staged = ["X11".to_string(), "WAYLAND".to_string()].into();
+        assert_eq!(app.session.status(&info_of(app, origin)), UiStatus::Conflict);
+    }
+
+    const BETA_FILE: &[u8] =
+        b"_OPTIONS_READ=beta-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n";
+
+    /// Nothing in conflict: the preview asks y or n, and y writes.
+    #[test]
+    fn a_clean_apply_is_confirmed_with_y() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'a');
+        let shown = screen(&mut app);
+        assert!(shown.contains(" apply? "), "{shown}");
+        assert!(shown.contains(" y: write · n: cancel · j/k scroll "), "{shown}");
+        assert!(!shown.contains("conflicting"), "{shown}");
+        press(&mut app, 'y');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("2 file(s) written"), "{done}");
+        assert!(!done.contains("skipped"), "{done}");
+        let shown = screen(&mut app);
+        assert!(shown.contains(" apply — done "), "{shown}");
+        assert!(shown.contains(" any key closes "), "{shown}");
+        assert!(tmp.path().join("options/cat_alpha/options").is_file());
+    }
+
+    /// With a port in conflict, y is no answer: the preview stays open,
+    /// nothing is written, and the line says what the keys are.
+    #[test]
+    fn a_conflicting_apply_ignores_y() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        make_conflict(&mut app, "cat/beta");
+        press(&mut app, 'a');
+        let shown = screen(&mut app);
+        assert!(shown.contains(" apply with 1 conflicting? "), "{shown}");
+        assert!(shown.contains(" Y: write anyway · s: skip conflicting · n: cancel · j/k scroll "), "{shown}");
+        // The conflicting port heads the list, under its own heading.
+        let rows: Vec<&str> = shown.lines().collect();
+        let heading = rows.iter().position(|r| r.contains("conflicting (Y writes them, s skips them):"));
+        let heading = heading.expect("the conflicting heading");
+        assert!(rows[heading + 1].contains("cat/beta"), "{shown}");
+        assert!(!shown.contains('⚠'), "the heading replaces the warning: {shown}");
+        press(&mut app, 'y');
+        let modal = app.modal.as_ref().expect("y leaves the preview open");
+        assert!(modal.done.is_none());
+        assert_eq!(
+            app.message,
+            Some(("conflicts remain: Y writes anyway · s skips them · n cancels".to_string(), false))
+        );
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "y writes nothing");
+        assert_eq!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
+        press(&mut app, 'n');
+        assert!(app.modal.is_none(), "n cancels");
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "n writes nothing");
+    }
+
+    /// Y writes every file, the conflicting one included, and the draft has
+    /// served its purpose.
+    #[test]
+    fn a_conflicting_apply_writes_all_with_capital_y() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        make_conflict(&mut app, "cat/beta");
+        draft::save(&app.session, &app.options_dir).unwrap();
+        press(&mut app, 'a');
+        press(&mut app, 'Y');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("3 file(s) written"), "{done}");
+        assert!(!done.contains("skipped"), "{done}");
+        assert_ne!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
+        assert!(draft::load(&app.options_dir).is_none(), "the draft is discarded");
+    }
+
+    /// s writes every file but the conflicting port's, which stays as it is
+    /// on disk with its edits staged, still in conflict, still in the draft.
+    #[test]
+    fn a_conflicting_apply_skips_the_conflict_with_s() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        make_conflict(&mut app, "cat/beta");
+        draft::save(&app.session, &app.options_dir).unwrap();
+        press(&mut app, 'a');
+        press(&mut app, 's');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("2 file(s) written"), "{done}");
+        assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
+        assert!(tmp.path().join("options/cat_alpha/options").is_file());
+        assert!(tmp.path().join("options/cat_gamma/options").is_file());
+        assert_eq!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
+        assert_eq!(app.session.status(&info_of(&app, "cat/beta")), UiStatus::Conflict);
+        assert_eq!(staged(&app, "cat/beta"), ["WAYLAND", "X11"], "the edit stays staged");
+        assert!(app.session.dirty());
+        assert!(draft::load(&app.options_dir).is_some(), "the draft is kept");
+        press(&mut app, 'x');
+        assert!(app.modal.is_none());
+        // Applied again, only the conflict is left to write.
+        press(&mut app, 'a');
+        assert_eq!(app.modal.as_ref().unwrap().writes.len(), 1);
+    }
+
+    /// Flavors share one options file: a conflict in any of them makes the
+    /// file conflicting, and s skips it, written from the default flavor or
+    /// not.
+    #[test]
+    fn a_conflicting_flavor_skips_the_shared_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[]), ("cat/beta", &[])]);
+        for k in ["cat/alpha@a", "cat/alpha@b"] {
+            let info = app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap();
+            info.flavors = vec!["a".into(), "b".into()];
+            info.options.complete = vec!["DOCS".into(), "X11".into(), "WAYLAND".into()];
+        }
+        // Only the non-default flavor has the group the staged set breaks.
+        make_conflict(&mut app, "cat/alpha@b");
+        assert_ne!(app.session.status(&info_of(&app, "cat/alpha@a")), UiStatus::Conflict);
+        press(&mut app, 'a');
+        let modal = app.modal.as_ref().unwrap();
+        assert_eq!(modal.conflicted, [PortKey::parse("cat/alpha@b").unwrap()]);
+        assert_eq!(modal.conflicting_files, ["cat_alpha".to_string()].into());
+        press(&mut app, 's');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("1 file(s) written"), "{done}");
+        assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "the shared file is skipped");
+        assert!(tmp.path().join("options/cat_beta/options").is_file());
     }
 
     /// Under -m the defaults are the decision: a port with no options file

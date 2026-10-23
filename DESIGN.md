@@ -130,6 +130,15 @@ defaults instead of recording a choice, and `make config-conditional`
 counts it as new, so it is warned about and completed. Quitting without applying
 therefore always leaves the options dir as it was.
 
+A port still in conflict is not written on a plain `y`: a file recording
+options that violate their constraints makes the build's `check-config`
+fail on it. The TUI asks instead for `Y`, writing it
+anyway, or `s`, writing the rest and leaving the conflicting files as
+they are on disk with their edits staged and kept in the draft. It does
+not refuse outright as `decide` does: some conflicts come from make.conf,
+which the interface cannot edit, and refusing would block every apply
+until make.conf changed.
+
 ## Options files are read once
 
 Every options file of the closure has several readers: the scan checks each

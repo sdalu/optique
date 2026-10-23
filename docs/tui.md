@@ -243,7 +243,7 @@ port and put the cursor on its first option.
 | `L`           | show only the ports in a dependency loop (`∞`)         |
 | `/`           | filter the port list, starting afresh                  |
 | `Esc`         | on the port list, clear the filter                     |
-| `a`           | apply: preview every file diff, then write             |
+| `a`           | apply: preview, then write; `Y`/`s` on a conflict      |
 | `?`, `F1`     | the in-TUI help: markers, badges, keys                 |
 | `Ctrl-L`      | repaint the whole screen                               |
 | `q`, `Ctrl-C` | quit; staged edits can be kept as a draft              |
@@ -303,13 +303,13 @@ walked port by port.
 │* www/nginx                    ││Robust and small WWW server                │
 │? devel/gmake                  ││NGINX is a high performance edge web server│
 │! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
-│✓ conve┌ apply? y/n (j/k scroll) ───────────────────────────────────┐icient │
-│✓ devel│3 options file(s) will be written to                        │       │
-│✓ devel│/tmp/optique-screens/poudriere.d/server-options:            │text ──┤
-│✓ devel│                                                            │       │
+│✓ conve┌ apply? ────────────────────────────────────────────────────┐icient │
+│✓ devel│3 options file(s) will be written to …/server-options:      │       │
+│✓ devel│                                                            │text ──┤
 │✓ devel│devel/gmake                             new file (1 of 1 on)│       │
 │✓ devel│ports-mgmt/pkg                          dropped: OLDOPT     │       │
 │✓ devel│www/nginx                               +DEBUGLOG           │       │
+│✓ devel│                                                            │       │
 │✓ devel│                                                            │       │
 │✓ devel│                                                            │       │
 │✓ devel│                                                            │       │
@@ -318,7 +318,7 @@ walked port by port.
 │✓ lang/│                                                            │       │
 │✓ misc/│                                                            │       │
 │✓ print│                                                            │uire HT│
-│✓ secur└────────────────────────────────────────────────────────────┘───────┤
+│✓ secur└ y: write · n: cancel · j/k scroll ─────────────────────────┘───────┤
 │✓ textproc/expat2              ││  Enter: edit the options                  │
 │✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
@@ -336,10 +336,27 @@ directory until `a` is pressed. That previews every file that would
 change as a diff — `+OPT`/`-OPT` for a changed option, `new file` for a
 port gaining an options file, `dropped: OPT` for an option the port no
 longer has — as the capture shows for `devel/gmake`,
-`ports-mgmt/pkg` and `www/nginx`, then writes every file atomically in
-one pass (temporary file, `fsync`, `rename`) to the set's options
-directory. If any file cannot be written, none is and nothing is
-removed: the result names the failure, and the edits stay staged.
+`ports-mgmt/pkg` and `www/nginx`, then, on `y`, writes every file
+atomically in one pass (temporary file, `fsync`, `rename`) to the set's
+options directory. The keys sit on the preview's bottom border, and the
+`written to` line shortens a directory too long for it to `…` and its
+last two components; the result after the apply shows it whole. If any
+file cannot be written, none is and nothing is removed: the result names
+the failure, and the edits stay staged.
+
+A port whose staged options still violate their constraints (`✗`) makes
+its file conflicting: the build's `check-config` would fail on it. When
+the pass would write one, the preview reads `apply with N conflicting?`,
+lists those ports first under `conflicting (Y writes them, s skips
+them):`, and `y` writes nothing, leaving the preview open with a line
+naming the keys. `Y` writes every file, conflicting ones included; `s`
+writes every file but the conflicting ports' (and removes, under `-m`,
+every planned file but theirs), and the result adds `N port(s) skipped:
+conflicting options`. A skipped port's file stays as it is on disk; its
+edits stay staged, still marked `✗`, and still in the draft a quit
+offers to keep. Flavors share one options file, so the file conflicts
+when any of them does. `n` or any other key but `j`/`k`/`↑`/`↓`
+cancels.
 
 Each options file is read once, when the TUI starts, and judged as it
 was then: a file edited outside optique while the interface is open is

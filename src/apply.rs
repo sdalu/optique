@@ -155,6 +155,24 @@ pub struct PlannedWrites {
     pub warnings: Vec<String>,
 }
 
+impl PlannedWrites {
+    /// The options files the plan changes on disk, written or removed.
+    pub fn touched(&self) -> impl Iterator<Item = &str> {
+        self.writes
+            .iter()
+            .map(|w| w.options_name.as_str())
+            .chain(self.removals.iter().map(|r| r.options_name.as_str()))
+    }
+
+    /// The plan without the files named in `skip`: neither written nor
+    /// removed, they stay on disk as they are.
+    pub fn without(mut self, skip: &BTreeSet<String>) -> PlannedWrites {
+        self.writes.retain(|w| !skip.contains(&w.options_name));
+        self.removals.retain(|r| !skip.contains(&r.options_name));
+        self
+    }
+}
+
 /// Build the list of files that actually need (re)writing.
 ///
 /// A file is skipped when it is semantically identical: same complete option
@@ -941,5 +959,40 @@ mod tests {
         let saved = OptionsFiles::new(tmp.path()).saved("cat_port").unwrap();
         assert!(saved.set.contains("A"));
         assert_eq!(saved.options_read, "port-1.0");
+    }
+
+    /// Skipping a file drops its write and its removal, and nothing else.
+    #[test]
+    fn a_plan_without_skipped_files_keeps_the_others() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Defaults {A}: {A} repeats them (a removal under -m), {A, B} does not.
+        let mk = |origin: &str| {
+            let mut options = mk_info(&["A", "B"], &["A"]).options;
+            options.defaults = ["A".to_string()].into();
+            PortInfo { options, ..PortInfo::stub(origin) }
+        };
+        let ports = [mk("cat/one"), mk("cat/two"), mk("cat/three")];
+        for name in ["cat_one", "cat_three"] {
+            fs::create_dir_all(tmp.path().join(name)).unwrap();
+            fs::write(tmp.path().join(name).join("options"), "x\n").unwrap();
+        }
+        let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+        let enabled = [set(&["A", "B"]), set(&["A", "B"]), set(&["A"])];
+        let plan = || {
+            plan_writes(
+                ports.iter().zip(&enabled).map(|(i, e)| (&i.key, i, e.clone())),
+                &OptionsFiles::new(tmp.path()),
+                true,
+            )
+        };
+        let all = plan();
+        assert_eq!(all.writes.len(), 2);
+        assert_eq!(all.removals.len(), 1);
+        assert_eq!(all.touched().collect::<BTreeSet<_>>(), ["cat_one", "cat_three", "cat_two"].into());
+        let kept = all.without(&set(&["cat_one", "cat_three"]));
+        assert_eq!(kept.touched().collect::<Vec<_>>(), ["cat_two"]);
+        let kept = plan().without(&set(&["cat_two"]));
+        assert_eq!(kept.writes.iter().map(|w| w.options_name.as_str()).collect::<Vec<_>>(), ["cat_one"]);
+        assert_eq!(kept.removals[0].options_name, "cat_three");
     }
 }

@@ -5,6 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget as _, Wrap};
 use ratatui::Frame;
 
+use crate::apply::PendingWrite;
 use crate::model::options::{on_off, Provenance};
 use crate::model::port::PortInfo;
 use crate::session::UiStatus;
@@ -817,18 +818,15 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
     let Some(modal) = &app.modal else { return };
     let area = centered_rect(80, 70, f.area());
     f.render_widget(Clear, area);
+    let width = area.width.saturating_sub(2);
 
     let mut lines: Vec<Line> = Vec::new();
-    // Rows of the files scrolled past (j/k skip whole files).
+    // Rows of the entries scrolled past (j/k skip whole entries).
     let mut skipped = 0;
     if let Some(done) = &modal.done {
         for l in done.lines() {
             lines.push(Line::from(l.to_string()));
         }
-        lines.push(Line::from(Span::styled(
-            "press any key to close",
-            Style::default().fg(Color::DarkGray),
-        )));
     } else {
         for w in &modal.warnings {
             lines.push(Line::from(Span::styled(
@@ -836,63 +834,90 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::Magenta),
             )));
         }
-        if !modal.conflicted.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "⚠ {} port(s) still have conflicting options: {}",
-                    modal.conflicted.len(),
-                    modal
-                        .conflicted
-                        .iter()
-                        .take(5)
-                        .map(|k| k.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )));
-        }
-        lines.push(Line::from(format!(
-            "{} options file(s) will be written to {}{}:",
-            modal.writes.len(),
-            app.options_dir.display(),
-            if modal.removals.is_empty() {
-                String::new()
-            } else {
-                format!(", {} removed (--minimal)", modal.removals.len())
-            }
-        )));
+        let removed = if modal.removals.is_empty() {
+            String::new()
+        } else {
+            format!(", {} removed (--minimal)", modal.removals.len())
+        };
+        let head = |dir: &str| format!("{} options file(s) will be written to {dir}{removed}:", modal.writes.len());
+        let dir = app.options_dir.display().to_string();
+        // One row: the directory gives way, its last two components kept.
+        let room = (width as usize).saturating_sub(head("").chars().count());
+        lines.push(Line::from(head(&elide_dir(&dir, room))));
         lines.push(Line::default());
-        for r in &modal.removals {
-            lines.push(Line::from(vec![
+
+        let conflicting = |name: &str| modal.conflicting_files.contains(name);
+        let write_line = |w: &PendingWrite| {
+            Line::from(vec![
+                Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
+                Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
+            ])
+        };
+        let removal_line = |r: &crate::clean::Removal| {
+            Line::from(vec![
                 Span::styled(format!("rm {:<37}", r.options_name), Style::default().fg(Color::Yellow)),
                 Span::styled(r.reason.clone(), Style::default().fg(Color::DarkGray)),
-            ]));
+            ])
+        };
+        let mut entries: Vec<Line> = Vec::new();
+        if !modal.conflicting_files.is_empty() {
+            entries.push(Line::from(Span::styled(
+                "conflicting (Y writes them, s skips them):",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            entries.extend(modal.removals.iter().filter(|r| conflicting(&r.options_name)).map(removal_line));
+            entries.extend(modal.writes.iter().filter(|w| conflicting(&w.options_name)).map(write_line));
+            entries.push(Line::default());
         }
-        let writes: Vec<Line> = modal
-            .writes
-            .iter()
-            .map(|w| {
-                Line::from(vec![
-                    Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
-                    Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
-                ])
-            })
-            .collect();
-        let skip = modal.scroll.min(writes.len());
-        skipped = wrapped_height(&writes[..skip], area.width.saturating_sub(2));
-        lines.extend(writes.into_iter().skip(skip));
+        entries.extend(modal.removals.iter().filter(|r| !conflicting(&r.options_name)).map(removal_line));
+        entries.extend(modal.writes.iter().filter(|w| !conflicting(&w.options_name)).map(write_line));
+        let skip = modal.scroll.min(entries.len());
+        skipped = wrapped_height(&entries[..skip], width);
+        lines.extend(entries.into_iter().skip(skip));
     }
 
-    let title = if modal.done.is_some() { " apply — done " } else { " apply? y/n (j/k scroll) " };
-    // j/k scroll by whole files, skipped from the list: count their rows in.
-    let rows = skipped + wrapped_height(&lines, area.width.saturating_sub(2));
+    let (title, keys) = match (&modal.done, modal.conflicted.len()) {
+        (Some(_), _) => (" apply — done ".to_string(), " any key closes ".to_string()),
+        (None, 0) => (" apply? ".to_string(), " y: write · n: cancel · j/k scroll ".to_string()),
+        (None, n) => (
+            format!(" apply with {n} conflicting? "),
+            " Y: write anyway · s: skip conflicting · n: cancel · j/k scroll ".to_string(),
+        ),
+    };
+    // j/k scroll by whole entries, skipped from the list: count their rows in.
+    let rows = skipped + wrapped_height(&lines, width);
     let border = Style::default().fg(Color::LightYellow);
-    let p = Paragraph::new(lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title(title).border_style(border));
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .title_bottom(Line::from(Span::styled(keys, Style::default().fg(Color::DarkGray))))
+            .border_style(border),
+    );
     f.render_widget(p, area);
     scroll_indicator(f, area, rows, skipped, border);
+}
+
+/// `dir` in at most `room` columns: whole when it fits, else its leading
+/// components elided (`…/poudriere.d/server-options`, then
+/// `…/server-options`), keeping as many as fit. The last component is kept
+/// even when it alone does not fit.
+fn elide_dir(dir: &str, room: usize) -> String {
+    if dir.chars().count() <= room {
+        return dir.to_string();
+    }
+    let parts: Vec<&str> = dir.trim_end_matches('/').split('/').collect();
+    // `…/` and the components kept, from the most to the last alone.
+    let elided = |keep: usize| format!("…/{}", parts[parts.len() - keep..].join("/"));
+    let most = parts.len().saturating_sub(2);
+    if most == 0 {
+        return dir.to_string(); // nothing to elide
+    }
+    (1..=most)
+        .rev()
+        .map(elided)
+        .find(|e| e.chars().count() <= room)
+        .unwrap_or_else(|| elided(1))
 }
 
 /// Help overlay tab titles; indices match `App.help_tab`.
@@ -1137,7 +1162,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("w", "flag make.conf contradictions (≠)"),
             keyline("L", "show only the ports caught in a dependency loop (∞)"),
             keyline("/", "filter the port list · Esc on the list clears it"),
-            keyline("a", "apply: preview every file diff, then write atomically"),
+            keyline("a", "apply: preview, then y writes · conflicts: Y anyway, s skips them"),
             keyline("? F1", "this help"),
             keyline("Ctrl-L", "force a full screen repaint"),
             keyline("q Ctrl-C", "quit — offers keeping staged edits as a draft"),
@@ -1537,6 +1562,20 @@ fn draw_quit_confirm(f: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A directory too long for its row keeps its last two components.
+    #[test]
+    fn a_long_options_dir_keeps_its_last_components() {
+        let dir = "/usr/local/etc/poudriere.d/server-options";
+        assert_eq!(elide_dir(dir, 80), dir, "it fits");
+        assert_eq!(elide_dir(dir, dir.len()), dir);
+        assert_eq!(elide_dir(dir, 30), "…/poudriere.d/server-options");
+        assert_eq!(elide_dir(dir, 20), "…/server-options", "down to the last");
+        assert_eq!(elide_dir(dir, 5), "…/server-options", "never shorter");
+        assert_eq!(elide_dir("/var/db/ports/", 10), "…/db/ports");
+        assert_eq!(elide_dir("/db/ports", 4), "…/ports");
+        assert_eq!(elide_dir("/ports", 3), "/ports", "nothing to elide");
+    }
 
     /// The panels are sized from the pane alone, never from the port, the
     /// option or how many options there are, so nothing moves as the cursor

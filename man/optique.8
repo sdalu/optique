@@ -548,8 +548,25 @@ so dependencies that the option adds or removes appear or disappear within a
 second or two.
 Nothing touches the real options directory until
 .Ic a
-is pressed, which previews every file as a diff and then writes atomically
+is pressed, which previews every file as a diff and then writes every file,
+or with
+.Ic s
+every file but the conflicting ports', atomically
 .Pq temporary file, Xr fsync 2 , Xr rename 2 .
+A port whose staged options violate their constraints makes its options file
+conflicting, and so does any flavor sharing it; when the pass would write
+one, the preview reads
+.Ql apply with N conflicting? ,
+lists those ports first, and
+.Ic y
+writes nothing.
+.Ic Y
+writes every file, conflicting ones included;
+.Ic s
+leaves the conflicting files as they are on disk, neither written nor removed,
+and their ports' edits staged, still marked
+.Ql \[u2717] ,
+and kept in the draft a quit offers to save.
 If any file cannot be written, none is and nothing is removed: the result
 names the failure and the edits stay staged.
 Each options file is read once, at start, and judged as it was then: a file
@@ -649,7 +666,18 @@ drops it, and so does
 .Ic Esc
 on the port list once it is left there.
 .It Ic a
-Apply: preview every file diff, then write all files atomically.
+Apply: preview every file diff;
+.Ic y
+writes every file atomically,
+.Ic n
+or any other key but the scroll keys cancels.
+When ports in conflict would be written, the preview lists them first and
+.Ic y
+writes nothing:
+.Ic Y
+writes every file anyway, and
+.Ic s
+every file but the conflicting ports'.
 .It Ic i
 In the option pane, show details for the selected option: description, group,
 .Va IMPLIES
