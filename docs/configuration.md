@@ -193,11 +193,14 @@ The ports tree comes from `Directory_portsdir` and the options
 directory from `Directory_options`, both read from the profile's
 section of `/usr/local/etc/synth/synth.ini` alone, as synth reads them
 (`[Global Configuration]` never stands in for a profile), falling back
-to `/usr/ports` and `/var/db/ports`. A section header must open its
-line with `[`, its name running untrimmed to the first `]` with
-anything after ignored, and a key's first match within its section
-wins, a bare or empty one included, so it ends the search there rather
-than reading on to a later, real assignment of the same key.
+to `/usr/ports` and `/var/db/ports`. A section header is `[name]`,
+anything after it ignored; keys and values are trimmed of white space;
+and a key's first match within its section wins, a bare or empty one
+included, so it ends the search there rather than reading on to a
+later, real assignment of the same key. synth's own reader keeps a tab
+around a key or value, keeps the spaces of `[ name ]` and takes no
+indented header: optique reads such lines as meant and names each in a
+note, since synth will read them otherwise.
 make.conf is the single file
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
 each builder's make.conf — or none at all when the profile has none (the

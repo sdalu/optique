@@ -95,6 +95,20 @@ local build the size and mtime of pkg's `local.sqlite` (under
 package change starts a new cache generation, and a missing database adds
 nothing.
 
+## Upstream's behaviour, not its bugs
+
+optique follows what the ports framework, poudriere and synth mean to do,
+read from their source, and docs/conformance.md records each behaviour.
+Where an upstream behaviour is a defect rather than a rule — synth
+aborting on an options-file line shorter than its fixed-offset probe
+reaches, its INI reader keeping a tab around a key, or the spaces of
+`[ name ]` — optique does the sane thing and says where it differs: a
+note naming the synth.ini line synth will misread, a row marked "differs
+on purpose" in the conformance table. Rejected: copying the defect so
+that optique and the tool always agree, which makes optique wrong in the
+same way and hides the fault from the user who could fix the file or
+report the bug.
+
 ## Which build is configured: poudriere.d, unless `-l` says otherwise
 
 The existence of `/usr/local/etc/poudriere.d` selects a poudriere build;

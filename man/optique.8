@@ -2316,13 +2316,16 @@ falling back to
 .Pa /usr/ports
 and
 .Pa /var/db/ports .
-A section header must open its line with
-.Ql \&[ ,
-its name running untrimmed to the first
-.Ql \&] ,
-anything after it ignored, and a key's first match within its section
-wins, a bare or empty one included, ending the search there rather than
-reading on to a later, real assignment of the same key.
+A section header is
+.Ql \&[ Ns Ar name Ns \&] ,
+anything after it ignored; keys and values are trimmed of white space; and
+a key's first match within its section wins, a bare or empty one
+included, ending the search there rather than reading on to a later, real
+assignment of the same key.
+synth's own reader keeps a tab around a key or value, keeps the spaces of
+.Ql "[ name ]"
+and takes no indented header; such lines are read as meant and named in a
+note, since synth will read them otherwise.
 .Pa make.conf
 is the single file
 .Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,

@@ -929,6 +929,7 @@ fn resolve_synth(
         profile
     };
     let setting = |key: &str| synth_ini_lookup(&ini, profile, key);
+    notes.extend(synth_ini_misreads(&ini));
     // A named profile that synth.ini doesn't know silently gets built-in
     // defaults — say so, it is usually a typo.
     if !ini.is_empty() && !synth_ini_has_section(&ini, profile) {
@@ -1028,24 +1029,49 @@ fn ini_strip_comment(line: &str) -> &str {
     }
 }
 
-/// A line is a synth.ini section header only when it opens with `[` in
-/// column 1 — config.adb checks `The_Line (The_Line'First)` before anything
-/// is trimmed, so an indented `[name]` is a data line instead, never a
-/// header. The name then runs, untrimmed, to the first `]`
-/// (`Sect_End := Index (..., Pattern => "]")`); anything from there to the
-/// end of the line, comment or not, is never looked at.
+/// A synth.ini section header: `[name]`, its name trimmed, anything after
+/// the first `]` ignored. synth's INI reader (ini-files' config.adb) only
+/// takes a `[` in column 1 and keeps the name untrimmed; that sloppiness is
+/// not copied — `synth_ini_misreads` names such lines instead.
 fn ini_section_header(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix('[')?;
+    let rest = line.trim_start().strip_prefix('[')?;
     let end = rest.find(']')?;
-    Some(&rest[..end])
+    Some(rest[..end].trim())
 }
 
-/// Trim spaces, and only spaces, from both ends — config.adb's
-/// `Index_Non_Blank` walks `Ada.Strings.Maps.Constants.Blank_Set`, which
-/// holds the space character alone, not a tab: a key or value preceded or
-/// followed by a tab keeps it, so `k\t=` is the key `k\t`, not `k`.
+/// Trim whitespace from both ends of a key or value. config.adb trims spaces
+/// alone and keeps a tab as part of the key or value, which is not copied:
+/// `synth_ini_misreads` names such lines instead.
 fn ini_trim(s: &str) -> &str {
-    s.trim_matches(' ')
+    s.trim()
+}
+
+/// The synth.ini lines synth itself reads differently from optique, each as
+/// a note: synth's INI reader (ini-files' config.adb) keeps a tab around a
+/// key or value as part of it, keeps the spaces of `[ name ]`, and takes no
+/// indented `[name]` for a header. optique reads them as meant; synth will
+/// not, so the file wants fixing.
+fn synth_ini_misreads(text: &str) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let n = n + 1;
+        if let Some(rest) = line.trim_start().strip_prefix('[') {
+            let name = rest.find(']').map(|end| &rest[..end]);
+            if line.starts_with(|c: char| c.is_whitespace()) {
+                notes.push(format!("synth.ini line {n}: synth reads no indented section header"));
+            } else if name.is_some_and(|name| name.trim() != name) {
+                notes.push(format!("synth.ini line {n}: synth keeps the spaces around a section name"));
+            }
+            continue;
+        }
+        let data = ini_strip_comment(line);
+        let (k, v) = data.split_once('=').unwrap_or((data, ""));
+        let tabbed = |s: &str| s.trim_matches(' ') != s.trim();
+        if tabbed(k) || tabbed(v) {
+            notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value"));
+        }
+    }
+    notes
 }
 
 /// Does synth.ini contain a `[name]` section header?
@@ -1058,7 +1084,7 @@ fn synth_ini_has_section(text: &str, name: &str) -> bool {
 /// (parameters.adb:200-271, `load_specific_profile`, over config.adb's
 /// `Get_Value`): no other section, `[Global Configuration]` included,
 /// stands in for it. Keys are case-sensitive, `;` and `#` start a comment,
-/// and only spaces (never tabs) around the key and the value are trimmed.
+/// and whitespace around the key and the value is trimmed.
 /// A key's first match within the section wins — `Get_Value` exits its scan
 /// of the whole file the moment one is found, matched or not, so even a
 /// bare key with no `=`, or one given an empty value, ends the search
@@ -2375,33 +2401,28 @@ not a key value line
     /// even a bare key with no `=` or one given an empty value, so a later,
     /// real assignment of the same key is never reached.
     #[test]
-    fn synth_ini_follows_config_adb_syntax() {
+    fn synth_ini_reads_sanely_and_names_what_synth_misreads() {
         assert_eq!(ini_section_header("[B] extra"), Some("B"), "anything after ] is ignored");
-        assert_eq!(ini_section_header("[ C ]"), Some(" C "), "the name is untrimmed");
-        assert_eq!(ini_section_header("   [P]"), None, "indented: not a header, column 1 only");
+        assert_eq!(ini_section_header("[ C ]"), Some("C"), "the name is trimmed");
+        assert_eq!(ini_section_header("   [P]"), Some("P"), "an indented header is one");
 
-        // "[B] extra" still opens section B.
-        let ini = "[B] extra\nDirectory_portsdir=/b\n";
-        assert_eq!(synth_ini_lookup(ini, "B", "Directory_portsdir").as_deref(), Some("/b"));
+        let ini = "[A]\nk\t= d\n[ C ]\nDirectory_portsdir=/c\n  [P]\nkey=2\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("d"));
+        assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir").as_deref(), Some("/c"));
+        assert_eq!(synth_ini_lookup(ini, "P", "key").as_deref(), Some("2"));
+        // Each line synth reads otherwise is named, for the user to fix.
+        assert_eq!(
+            synth_ini_misreads(ini),
+            [
+                "synth.ini line 2: synth keeps a tab around the key or value",
+                "synth.ini line 3: synth keeps the spaces around a section name",
+                "synth.ini line 5: synth reads no indented section header",
+            ]
+        );
+        assert!(synth_ini_misreads("[A]\nk = v\n").is_empty(), "spaces are fine");
 
-        // "[ C ]" opens section " C " verbatim, not "C".
-        let ini = "[ C ]\nDirectory_portsdir=/c\n";
-        assert_eq!(synth_ini_lookup(ini, " C ", "Directory_portsdir").as_deref(), Some("/c"));
-        assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir"), None);
-
-        // A tab before `=` is part of the key: "k\t" never matches "k".
-        let ini = "[A]\nk\t= d\n";
-        assert_eq!(synth_ini_lookup(ini, "A", "k"), None);
-
-        // An indented "[P]" opens no section: it is a data line wherever
-        // the last real header left off (here none, so key=2 answers
-        // nothing in "P"; key=1 still answers in "A").
-        let ini = "[A]\nkey=1\n   [P]\nkey=2\n";
-        assert_eq!(synth_ini_lookup(ini, "A", "key").as_deref(), Some("1"));
-        assert_eq!(synth_ini_lookup(ini, "P", "key"), None, "indented [P] opened no section");
-
-        // Directory_portsdir= (empty) ends the search right there, even
-        // though a real assignment follows: the default, not /x.
+        // The format's own rule, kept: the first match ends the search, an
+        // empty value giving the default rather than a later assignment.
         let ini = "[A]\nDirectory_portsdir=\nDirectory_portsdir=/x\n";
         assert_eq!(synth_ini_lookup(ini, "A", "Directory_portsdir"), None);
     }

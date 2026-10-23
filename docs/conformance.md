@@ -19,7 +19,8 @@ Checked against, in October 2026:
 
 Upstream line numbers drift; the functions named below are the stable
 reference. Verdicts: **matches**; **differs on purpose**, with the
-reason in [DESIGN.md](../DESIGN.md); **not modelled**, with why it does
+reason in [DESIGN.md](../DESIGN.md), or because the upstream behaviour
+is a bug optique does not replicate; **not modelled**, with why it does
 not change a result; **known gap**, with what it can change.
 
 ## The ports framework
@@ -78,7 +79,8 @@ not change a result; **known gap**, with what it can change.
 | :-- | :-- | :-- |
 | Profile: `-s name`, else `$SYNTHPROFILE` (when its section has `Directory_packages`), else `profile_selected`, else LiveSystem | `parameters.adb` | matches |
 | Profile keys from the profile's own section, never `[Global Configuration]` | `parameters.adb` | matches |
-| INI syntax: `;`/`#` comments, case-sensitive keys and sections, a header is a `[` in column 1 named up to the first `]` untrimmed, keys and values trimmed of spaces only, the first match (a bare or empty one included) ends the search, no quoting | ini-files `config.adb` | matches |
+| INI syntax: `;`/`#` comments, case-sensitive keys and sections, the first match (a bare or empty one included) ends the search, no quoting | ini-files `config.adb` | matches |
+| synth's INI reader keeps a tab around a key or value, keeps the spaces of `[ name ]`, and takes no indented `[name]` for a header | ini-files `config.adb` | **differs on purpose**: a reader bug not replicated; optique reads such lines as meant and names each in a note, since synth reads them otherwise |
 | `Directory_options` (default `/var/db/ports`) as `PORT_DBDIR`, `options.local` included | `parameters.adb`, `replicant.adb` | matches |
 | Missing `Directory_portsdir`: synth tries `$PORTSDIR`, `make -V PORTSDIR`, then `/usr/dports`, `/usr/ports` | `parameters.adb` | not modelled (`/usr/ports`): synth writes every key back into synth.ini on first use |
 | Scan make.conf: `SYNTHPROFILE`, `USE_PACKAGE_DEPENDS_ONLY`, `PACKAGE_BUILDING`, `BATCH`, the ccache lines when `Directory_ccache` exists, then `<profile>-make.conf` | `replicant.adb` `create_make_conf` | matches; synth's test mode adds `DEVELOPER=1` (not modelled: `-s` configures builds), and an unreadable `<profile>-make.conf` is skipped by synth where optique stops with an error |
@@ -87,7 +89,8 @@ not change a result; **known gap**, with what it can change.
 | Scan environment `env -i PATH=… TERM=dumb USER=root HOME=/root LANG=C` | `portscan.adb` | not modelled: queries get `PATH`, `HOME`, `TMPDIR`, `PKG_DBDIR`; nothing in the options or dependency paths reads the others |
 | No blacklist | — | matches |
 | Implicit list: every installed package, its flavor from the `flavor` annotation, kept only where synth's index (the categories' `SUBDIR` lines, each port's flavors) has it | `portscan-pilot.adb`, `portscan.adb` `prescan_ports_tree` | matches |
-| A build refused when an options file's entries differ in number from the port's options, or name one it lacks; aborted outright on a line shorter than 18 bytes, or of 18–19 without `+=` at 17–18 (an Ada range error, by reading) | `portscan-packages.adb` | matches: such a port trips `scan`'s gate under `-s`, with the reason |
+| A build refused when an options file's entries differ in number from the port's options, or name one it lacks | `portscan-packages.adb` | matches: such a port trips `scan`'s gate under `-s`, with the reason |
+| synth aborts on an options-file line shorter than 18 bytes, or of 18–19 without `+=` at 17–18 (an unhandled Ada range error, by reading) | `portscan-packages.adb` `passed_options_cache_check` | **differs on purpose**: a crash, not replicated; optique writes no such line, and does not refuse a hand-written file for one |
 | Prebuilt packages: their options compared with the port's selected options | `portscan-packages.adb` | consistent: synth compares outcomes, so a minimal or redundant file causes no rebuild |
 
 ## How it is checked
