@@ -82,10 +82,14 @@ fn run() -> Result<()> {
                 None => false,
             };
         if explicit {
-            anyhow::bail!(
-                "--repo filters the installed-package list, which is only used when \
-                 no ports are given"
-            );
+            use clap::CommandFactory as _;
+            Cli::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--repo filters the installed-package list, which is only used when \
+                     no ports are given",
+                )
+                .exit();
         }
     }
     if cli.clear_cache {
@@ -125,7 +129,7 @@ fn run() -> Result<()> {
         Some(Command::Origins(raw)) => {
             // Bare origins (default TUI). Tolerate -f/--file mixed in after
             // the first origin, where clap no longer parses flags.
-            let (origins, files) = split_raw_origins(raw)?;
+            let (origins, files) = split_raw_origins(raw).unwrap_or_else(|e| e.exit());
             let mut all_files = cli.files.clone();
             all_files.extend(files);
             let rs = RootSet { roots: cli::collect_roots(&origins, &all_files)?, notes: Vec::new() };
@@ -180,16 +184,24 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     let has_list = !args.origins.is_empty() || !cli.files.is_empty();
     // In synth mode the installed packages are the implicit list.
     if args.unused && !has_list && cli.synth.is_none() {
-        anyhow::bail!(
-            "clean --unused needs a package list to compare against: \
-             give port origins or -f pkglist"
-        );
+        use clap::CommandFactory as _;
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "clean --unused needs a package list to compare against: \
+                 give port origins or -f pkglist",
+            )
+            .exit();
     }
     if !args.unused && has_list {
-        anyhow::bail!(
-            "clean walks the whole options dir; port origins and -f pkglist \
-             only mean something together with --unused"
-        );
+        use clap::CommandFactory as _;
+        Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "clean walks the whole options dir; port origins and -f pkglist \
+                 only mean something together with --unused",
+            )
+            .exit();
     }
 
     if !args.unused {
@@ -657,22 +669,35 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
 
 /// Split an external-subcommand argument vector into origins and -f/--file
 /// values (clap stops parsing flags once the first bare origin appears).
+/// Usage errors here are returned, not raised through clap's own `.exit()`,
+/// so a caller testing this in-process (unit tests) sees a plain `Err`
+/// rather than the process vanishing; `run()` calls `.exit()` on it, which
+/// is where the exit-2 contract actually takes effect.
 pub(crate) fn split_raw_origins(
     raw: &[String],
-) -> Result<(Vec<String>, Vec<std::path::PathBuf>)> {
+) -> std::result::Result<(Vec<String>, Vec<std::path::PathBuf>), clap::Error> {
+    use clap::CommandFactory as _;
     let mut origins = Vec::new();
     let mut files = Vec::new();
     let mut it = raw.iter();
     while let Some(arg) = it.next() {
         if arg == "-f" || arg == "--file" {
-            let path = it
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("{arg} needs a pkglist file argument"))?;
+            let Some(path) = it.next() else {
+                return Err(Cli::command().error(
+                    clap::error::ErrorKind::MissingRequiredArgument,
+                    format!("{arg} needs a pkglist file argument"),
+                ));
+            };
             files.push(path.into());
         } else if let Some(path) = arg.strip_prefix("--file=") {
             files.push(path.into());
         } else if arg.starts_with('-') {
-            anyhow::bail!("unexpected flag {arg} after port origins; put flags before the first origin");
+            return Err(Cli::command().error(
+                clap::error::ErrorKind::UnknownArgument,
+                format!(
+                    "unexpected flag {arg} after port origins; put flags before the first origin"
+                ),
+            ));
         } else {
             origins.push(arg.clone());
         }

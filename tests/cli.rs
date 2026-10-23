@@ -100,7 +100,7 @@ fn clean_unused_requires_a_list() {
     // No origins, no -f: there is nothing to compute a closure from, and the
     // check must fire before any ports tree is touched.
     let out = optique().args(["clean", "--unused"]).output().unwrap();
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2), "a usage error, not a run-time failure");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("package list"), "{err}");
 }
@@ -110,7 +110,7 @@ fn clean_origins_require_unused() {
     // Plain clean walks the whole options dir; a list would be silently
     // ignored, so it is an error instead.
     let out = optique().args(["clean", "ports-mgmt/pkg"]).output().unwrap();
-    assert!(!out.status.success());
+    assert_eq!(out.status.code(), Some(2), "a usage error, not a run-time failure");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--unused"), "{err}");
 }
@@ -261,7 +261,9 @@ fn repo_with_explicit_ports_is_refused_everywhere() {
             .stdin(std::process::Stdio::null())
             .output()
             .unwrap();
-        assert_eq!(out.status.code(), Some(3), "{sub:?}");
+        // Caught before any tree is touched: a command-line usage error,
+        // exit 2, not the run-time 3 a scan/sync/decide/clean failure gets.
+        assert_eq!(out.status.code(), Some(2), "{sub:?}");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains("only used when no ports are given"), "{sub:?}: {err}");
     }
@@ -453,6 +455,36 @@ fn errors_exit_3_not_the_gates_1() {
     }
     let out = optique().args(["scan", "--no-such-flag"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
+}
+
+/// A malformed origin or a stray flag typed directly on the command line is
+/// bad command-line usage (man/optique.8: "Invalid command line usage exits
+/// 2"), whether clap itself catches it or optique does further down (a bare
+/// word read as an origin, a flag after the origins split_raw_origins has to
+/// parse by hand). The same malformed text inside a -f pkglist file is bad
+/// input, not bad usage, and keeps the ordinary 3.
+#[test]
+fn malformed_cmdline_origins_exit_2_file_contents_exit_3() {
+    // A bare unknown word, read as an origin by the no-subcommand path.
+    let out = optique().args(["scna"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("malformed port origin"), "{err}");
+
+    // A flag given after the origins, where clap no longer parses flags.
+    let out = optique().args(["www/nginx", "-q"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("unexpected flag -q"), "{err}");
+
+    // Same malformed text, but read from a -f pkglist file: input, not usage.
+    let mut f = tempfile::NamedTempFile::new().unwrap();
+    use std::io::Write as _;
+    writeln!(f, "not-an-origin").unwrap();
+    let out = optique().args(["scan", "-f"]).arg(f.path()).output().unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("not-an-origin"), "{err}");
 }
 
 /// A reader that goes away (`optique clean -n | head -0`) ends the run with

@@ -516,7 +516,17 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
                 }
                 Ok(())
             }
-            None => anyhow::bail!("malformed port origin {spec:?} in {source}"),
+            None => {
+                let msg = format!("malformed port origin {spec:?} in {source}");
+                if from_pkglist {
+                    // Bad data inside a -f pkglist file, not bad usage of
+                    // the command line itself: man/optique.8's "Invalid
+                    // command line usage exits 2" does not cover it.
+                    anyhow::bail!(msg);
+                }
+                use clap::CommandFactory as _;
+                Cli::command().error(clap::error::ErrorKind::ValueValidation, msg).exit()
+            }
         }
     };
     for o in origins {
