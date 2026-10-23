@@ -258,18 +258,24 @@ impl Session {
             if let Some(by) = implier_of(info, &state.staged, opt) {
                 return Err(format!("{opt} is implied by {by}; disable {by} first"));
             }
-            // A conditional group whose option is off is not checked.
-            let (unchecked, _) = unchecked_groups(opts, staged_effective(info, &state.staged));
+            // Judged on what make ends up with once it is off, FORCE and
+            // OPTIONS_SLAVE included: a forced-on member keeps the group
+            // satisfied, and a conditional group whose option is off is not
+            // checked.
+            let mut after = state.staged.clone();
+            after.remove(opt);
+            let outcome = staged_effective(info, &after);
+            let (unchecked, _) = unchecked_groups(opts, outcome.clone());
             if let Some(g) = opts.group_of(opt).filter(|g| !unchecked.contains(g.name.as_str())) {
-                let on = g.count_on(&state.staged);
+                let on = g.count_on(&outcome);
                 match g.kind {
-                    GroupKind::Single if on == 1 => {
+                    GroupKind::Single if on == 0 => {
                         return Err(format!(
                             "{}: single-choice group needs exactly one option; select another member instead",
                             g.name
                         ));
                     }
-                    GroupKind::Multi if on == 1 => {
+                    GroupKind::Multi if on == 0 => {
                         return Err(format!("{}: multi group needs at least one option enabled", g.name));
                     }
                     _ => {}
@@ -1951,6 +1957,26 @@ mod tests {
             let err = s.toggle(&key, "B").unwrap_err();
             assert!(err.contains("forced on"), "{kind:?}: {err}");
             assert_eq!(s.state(&s.ports[&key]).unwrap().staged, set(&["A"]), "{kind:?}");
+        }
+    }
+
+    /// A member turned off while a sibling is forced on leaves the group as
+    /// make sees it satisfied: the toggle is allowed, and it is the way out
+    /// of the conflict a forced-on sibling and a chosen one make together.
+    #[test]
+    fn a_forced_on_sibling_lets_the_chosen_member_go() {
+        for (kind, staged) in [(GroupKind::Single, &["B"][..]), (GroupKind::Multi, &["A", "B"][..])] {
+            let g = OptionGroup {
+                kind,
+                name: "G".into(),
+                desc: String::new(),
+                members: vec!["A".into(), "B".into()],
+            };
+            let (mut ports, key) = mk_port(&["A", "B"], staged, vec![g], vec![]);
+            ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
+            let mut s = session_for(ports);
+            assert_eq!(s.toggle(&key, "B"), Ok(()), "{kind:?}");
+            assert!(s.violations(&s.ports[&key]).is_empty(), "{kind:?}");
         }
     }
 
