@@ -17,10 +17,10 @@ when there is no poudriere at all or `-l` asks for a local build.
 <!-- screen main -->
 ```text
 ┌ Ports (21 · 20 optionless) ───┐╔ pkg-2.8.4 ════════════════════════════════╗
-│?  devel/gmake                 │║  [ ] DOCS         on                      ║
-│!* ports-mgmt/pkg              │║── obsolete (no longer exist; dropped on…  ║
-│── 19 ok ──────────────────────│║  [x] OLDOPT                               ║
-│✓  converters/libiconv         │║                                           ║
+│?  devel/gmake                 │║STALE: obsolete OLDOPT                     ║
+│!* ports-mgmt/pkg              │║  [ ] DOCS         on                      ║
+│── 19 ok ──────────────────────│║── obsolete (no longer exist; dropped on…  ║
+│✓  converters/libiconv         │║  [x] OLDOPT                               ║
 │✓  devel/cmake-core            │║                                           ║
 │✓  devel/gettext-runtime       │║                                           ║
 │✓  devel/gettext-tools         │║                                           ║

@@ -16,10 +16,10 @@ tty — unless `--drive` is given (see
 <!-- screen main -->
 ```text
 ┌ Ports (21 · 20 optionless) ───┐╔ pkg-2.8.4 ════════════════════════════════╗
-│?  devel/gmake                 │║  [ ] DOCS         on                      ║
-│!* ports-mgmt/pkg              │║── obsolete (no longer exist; dropped on…  ║
-│── 19 ok ──────────────────────│║  [x] OLDOPT                               ║
-│✓  converters/libiconv         │║                                           ║
+│?  devel/gmake                 │║STALE: obsolete OLDOPT                     ║
+│!* ports-mgmt/pkg              │║  [ ] DOCS         on                      ║
+│── 19 ok ──────────────────────│║── obsolete (no longer exist; dropped on…  ║
+│✓  converters/libiconv         │║  [x] OLDOPT                               ║
 │✓  devel/cmake-core            │║                                           ║
 │✓  devel/gettext-runtime       │║                                           ║
 │✓  devel/gettext-tools         │║                                           ║
@@ -50,10 +50,11 @@ written — `!*` here, with staged, unapplied edits. A
 `── 19 ok ──` row parts them from the rest, `✓`: already consistent. The
 right pane shows the selected port's options — `ports-mgmt/pkg` here,
 titled with its package, `pkg-2.8.4` — each as a row with its checkbox,
-its name, the port's own default (`off`/`on`), and the value make.conf
-dictates when one of its layers mentions the option (blank otherwise).
+its name, the port's own default (`off`/`on`), and what make.conf says
+of the option when one of its layers names it (blank otherwise).
 `OLDOPT`, which the port's file records but the tree no longer has, is
-listed under `── obsolete`, struck through. The pane's bottom border gives
+named by the `STALE: obsolete OLDOPT` line above the rows and listed
+under `── obsolete`, struck through. The pane's bottom border gives
 the port's staged change, `-DOCS`, and the cursor's place among its
 options, `1/1`. The list's title
 counts the ports listed and, after a `·`, the ports without options the
@@ -187,8 +188,11 @@ is findable down the pane's left edge); the checkbox — `[x]`/`[ ]` for a
 plain option, `(o)`/`( )` for a `SINGLE`/`RADIO` member; the option's name,
 coloured yellow when the staged value deviates from the port's default and
 magenta when it contradicts make.conf; the port's own default (`on`/`off`);
-the value make.conf dictates, left blank when no layer mentions the
-option and otherwise coloured by which knob decided it — green for the
+what make.conf says of the option, whatever decides its value now — the
+options file included: the value of the last layer naming it, in the
+framework's order (the global knob, then the per-port one, then the
+`*_FORCE` knobs, the later winning), left blank only when no layer names
+the option and otherwise coloured by that layer — green for the
 global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
 `${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob, which also
 locks the toggle; then `implied by X` when an `IMPLIES` chain locked the
@@ -201,11 +205,22 @@ its own section.
 
 Above the rows, a line each says what is wrong with the port or whose
 view it is: `BROKEN:`, `IGNORE:` and the option changes likely to blame,
-`DEPRECATED:`, the flavor owning its options file, and a `CONFLICT:` per
-rule the staged options break. A row, a group header or one of those
+`DEPRECATED:`, the flavor owning its options file, a `CONFLICT:` per
+rule the staged options break, and `STALE:` when the port's option list
+changed since its file was written, naming the options added and those
+gone — `STALE: new A B · obsolete X`, each part only when it has options.
+A `CONFLICT:` names make.conf's hand in it after a `—`: the members on
+because a make.conf layer sets them where the options file does not, and
+that layer — `— A, B on by make.conf OPTIONS_SET`, or
+`${OPTIONS_NAME}_SET` for the per-port knob; a member a `*_FORCE` knob
+pins on — `— A forced on by make.conf; fix it there`; for a group with no
+member on, the members to pick from, and those make.conf turns off —
+`— pick one of A B C (A off by make.conf)`. A `PREVENTS` conflict keeps
+its own text, and gains make.conf's part when make.conf sets one of the
+two. A row, a group header or one of those
 lines too wide for the pane ends in `…` after its last whole word, rather
-than being cut mid-word at the border; a `CONFLICT:` line wraps first to
-a second line, under its text, and is cut only past that. The list's
+than being cut mid-word at the border; a `CONFLICT:` or `STALE:` line
+wraps first to a second line, under its text, and is cut only past that. The list's
 title is cut the same way. An option row too wide for the pane drops only
 its trailing description: its checkbox, name, default, make.conf value and
 badges always stay, and a row still too wide has the last of them cut in
@@ -344,7 +359,13 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 
 `Space` alone toggles: `Enter` takes the list into the option pane and
 does nothing once there. From the option pane, `n` and `p` move to the
-port and put the cursor on its first option.
+port and keep the pane. Entering the pane, and reaching another port from
+it — `n`, `p` or a jump from `r` — puts the cursor on the port's first
+option needing attention: for a conflicting port, the first member, in row
+order, of the first rule it breaks; else, for a stale one, its first new
+option (`N`); else its first option. Never on a group header. `f` keeps the
+option the cursor is on, to compare it across flavors, and lands the same
+way only when the other flavor lacks it.
 
 `B` asks for `OPTION=on`, `OPTION=off`, `OPTION+` or `OPTION-`, prefilled
 with `OPTION=` when the cursor is on an option, and sets it on every

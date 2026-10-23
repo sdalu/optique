@@ -110,6 +110,16 @@ pub enum Provenance {
     Forced,
 }
 
+/// The make.conf layer that names an option last: the global
+/// OPTIONS_SET/UNSET, the per-port ${OPTIONS_NAME}_SET/_UNSET, or one of the
+/// *_FORCE knobs (global or per-port).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McLayer {
+    Global,
+    Port,
+    Force,
+}
+
 impl PortOptions {
     pub fn has_options(&self) -> bool {
         !self.complete.is_empty()
@@ -155,6 +165,29 @@ impl PortOptions {
         ] {
             if list.contains(opt) {
                 value = Some(v);
+            }
+        }
+        value
+    }
+
+    /// What make.conf says of the option, whatever decides its value now:
+    /// the value of the last layer naming it in the framework's order
+    /// (global SET, UNSET, per-port SET, UNSET, then the four *_FORCE knobs;
+    /// later wins), with that layer. None when no layer names it.
+    pub fn mc_value(&self, opt: &str) -> Option<(bool, McLayer)> {
+        let mut value = None;
+        for (v, layer, list) in [
+            (true, McLayer::Global, &self.mc_set),
+            (false, McLayer::Global, &self.mc_unset),
+            (true, McLayer::Port, &self.port_set),
+            (false, McLayer::Port, &self.port_unset),
+            (true, McLayer::Force, &self.force_set),
+            (false, McLayer::Force, &self.force_unset),
+            (true, McLayer::Force, &self.port_force_set),
+            (false, McLayer::Force, &self.port_force_unset),
+        ] {
+            if list.contains(opt) {
+                value = Some((v, layer));
             }
         }
         value

@@ -8,7 +8,7 @@ use ratatui::widgets::{
 use ratatui::Frame;
 
 use crate::apply::PendingWrite;
-use crate::model::options::{on_off, Provenance};
+use crate::model::options::{on_off, McLayer, Provenance};
 use crate::model::port::PortInfo;
 use crate::session::UiStatus;
 
@@ -814,8 +814,9 @@ fn blame_of<'a>(app: &'a App, info: &PortInfo) -> Option<&'a String> {
 }
 
 /// The lines above a port's option rows saying what is wrong with it or
-/// whose view it is, in a pane `width` columns wide. A CONFLICT too long for
-/// one line wraps to a second, under its text; the pane cuts the rest.
+/// whose view it is, in a pane `width` columns wide. A CONFLICT, which names
+/// what make.conf did to it, or a STALE too long for one line wraps to a
+/// second, under its text; the rest is cut with `…`.
 fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'static>>) {
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     if let Some(m) = &info.broken {
@@ -842,21 +843,48 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
             Style::default().fg(Color::DarkGray),
         )));
     }
-    for v in app.session.violations(info) {
-        let text = format!("CONFLICT: {v}");
-        let mut wrapped: Vec<Line<'static>> = wrap_text(&text, width, "CONFLICT: ".len())
-            .into_iter()
-            .map(|t| Line::from(Span::styled(t, red)))
-            .collect();
-        mark_if_clipped(&mut wrapped, 2, width);
-        if let Some(mark) = wrapped.last_mut().and_then(|l| l.spans.last_mut()) {
-            // The marker in the banner's red, not the panels' gray.
-            if mark.content == "…" {
-                mark.style = red;
-            }
-        }
-        lines.extend(wrapped);
+    for c in app.session.conflicts(info) {
+        let text = match &c.cause {
+            Some(cause) => format!("{} — {cause}", c.text),
+            None => c.text,
+        };
+        lines.extend(wrapped_banner("CONFLICT: ", &text, red, width));
     }
+    if let Some(text) = stale_text(app, info) {
+        let style = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
+        lines.extend(wrapped_banner("STALE: ", &text, style, width));
+    }
+}
+
+/// What a stale port's file is behind on, `new A B · obsolete X`, each part
+/// only when it has options; None when the port is not stale.
+fn stale_text(app: &App, info: &PortInfo) -> Option<String> {
+    let (added, removed) = app.session.stale_delta(info)?;
+    let mut parts = Vec::new();
+    if !added.is_empty() {
+        parts.push(format!("new {}", added.join(" ")));
+    }
+    if !removed.is_empty() {
+        parts.push(format!("obsolete {}", removed.join(" ")));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// A banner line `label` + `text` in `style`, wrapped under its text to a
+/// second line when too long for one, and cut at a word with `…` past that.
+fn wrapped_banner(label: &str, text: &str, style: Style, width: usize) -> Vec<Line<'static>> {
+    let mut wrapped: Vec<Line<'static>> = wrap_text(&format!("{label}{text}"), width, label.len())
+        .into_iter()
+        .map(|t| Line::from(Span::styled(t, style)))
+        .collect();
+    mark_if_clipped(&mut wrapped, 2, width);
+    if let Some(mark) = wrapped.last_mut().and_then(|l| l.spans.last_mut()) {
+        // The marker in the banner's colour, not the panels' gray.
+        if mark.content == "…" {
+            mark.style = style;
+        }
+    }
+    wrapped
 }
 
 /// The option's value as recorded in the saved options file, if it mentions it
@@ -922,25 +950,21 @@ fn option_line(
         Style::default().fg(Color::DarkGray),
     ));
 
-    // make.conf column (fixed width): the value that layer dictates, in its
-    // own colour — green for the global knob, bright green for the per-port
-    // one, red bold for a *_FORCE knob the options file cannot override.
-    // Blank when nothing but the port default or the file decides.
-    let (prov, prov_style) = match opts.provenance(opt, file_state(app, info, opt)) {
-        Provenance::Forced => (
-            on_off(opts.forced_value(opt).unwrap_or(false)),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Provenance::MakeConfPort => (
-            on_off(opts.port_set.contains(opt)),
-            Style::default().fg(Color::LightGreen),
-        ),
-        Provenance::MakeConfGlobal => {
-            (on_off(opts.mc_set.contains(opt)), Style::default().fg(Color::Green))
+    // make.conf column (fixed width): what make.conf says of the option,
+    // whatever decides its value now — the options file included — as the
+    // last layer naming it says, in that layer's colour: green for the
+    // global knob, bright green for the per-port one, red bold for a *_FORCE
+    // knob the options file cannot override. Blank only when no make.conf
+    // layer names the option.
+    let (mc, mc_style) = match opts.mc_value(opt) {
+        Some((v, McLayer::Force)) => {
+            (on_off(v), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
         }
-        _ => ("", Style::default()),
+        Some((v, McLayer::Port)) => (on_off(v), Style::default().fg(Color::LightGreen)),
+        Some((v, McLayer::Global)) => (on_off(v), Style::default().fg(Color::Green)),
+        None => ("", Style::default()),
     };
-    spans.push(Span::styled(format!(" {prov:<3}"), prov_style));
+    spans.push(Span::styled(format!(" {mc:<3}"), mc_style));
 
     // No badge for a make.conf contradiction: the magenta option name above
     // already says it, and the row needs the columns for the description.
@@ -1549,7 +1573,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                 (
                     "on | off",
                     Style::default().fg(Color::Green),
-                    "2nd column: the value make.conf decides",
+                    "2nd column: what make.conf says, whatever decides",
                 ),
                 (
                     "on | off",
@@ -1630,7 +1654,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("d / U", "reset port to defaults / revert to saved state"),
             keyline("u", "undo the last change on any port: Space, d, U, B, a restored draft"),
             keyline("B", "bulk: set an option on/off across the listed ports · Ctrl-U clears"),
-            keyline("n / p", "next / previous port needing attention"),
+            keyline("n / p", "next / previous port needing attention · Enter, and n/p in the pane, put the cursor on its first option needing it"),
             keyline("f", "jump to the next flavor of the same origin"),
             keyline("i", "option details (description, constraints, deps it adds)"),
             keyline("v", "the port's full description (comment, WWW, pkg-descr)"),

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::apply;
-use crate::model::options::{GroupKind, PortOptions};
+use crate::model::options::{GroupKind, McLayer, PortOptions};
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
@@ -346,40 +346,63 @@ impl Session {
 
     /// check-config-style validation of the staged set.
     pub fn violations(&self, info: &PortInfo) -> Vec<String> {
+        self.conflicts(info).into_iter().map(|c| c.text).collect()
+    }
+
+    /// The rules the staged set breaks, in `violations` order, each with
+    /// the options it is about and what make.conf did to it.
+    pub fn conflicts(&self, info: &PortInfo) -> Vec<Conflict> {
         let Some(state) = self.state(info) else { return Vec::new() };
         let staged = &state.staged;
+        let saved = state.saved.as_ref();
+        let o = &info.options;
         let mut out = Vec::new();
         for opt in staged {
-            if let Some(def) = info.options.defs.get(opt) {
+            if let Some(def) = o.defs.get(opt) {
                 for p in &def.prevents {
                     if staged.contains(p) {
                         let msg = def
                             .prevents_msg
                             .clone()
                             .unwrap_or_else(|| "mutually exclusive".to_string());
-                        out.push(format!("{opt} conflicts with {p}: {msg}"));
+                        let members = vec![opt.clone(), p.clone()];
+                        out.push(Conflict {
+                            text: format!("{opt} conflicts with {p}: {msg}"),
+                            cause: on_cause(info, saved, staged, &members),
+                            members,
+                        });
                     }
                 }
             }
         }
-        for g in &info.options.groups {
+        for g in &o.groups {
             let on = g.count_on(staged);
-            match g.kind {
-                GroupKind::Single if on != 1 => {
-                    out.push(format!("group {} needs exactly one member enabled ({on} enabled)", g.name));
-                }
-                GroupKind::Multi if on == 0 => {
-                    out.push(format!("group {} needs at least one member enabled", g.name));
-                }
-                GroupKind::Radio if on > 1 => {
-                    out.push(format!("group {} allows at most one member enabled ({on} enabled)", g.name));
-                }
-                _ => {}
-            }
+            let members: Vec<String> =
+                g.members.iter().filter(|m| o.complete.contains(*m)).cloned().collect();
+            let (text, cause) = match g.kind {
+                GroupKind::Single if on == 0 => (
+                    format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
+                    pick_cause(info, saved, staged, &members),
+                ),
+                GroupKind::Single if on > 1 => (
+                    format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
+                    on_cause(info, saved, staged, &members),
+                ),
+                GroupKind::Multi if on == 0 => (
+                    format!("group {} needs at least one member enabled", g.name),
+                    pick_cause(info, saved, staged, &members),
+                ),
+                GroupKind::Radio if on > 1 => (
+                    format!("group {} allows at most one member enabled ({on} enabled)", g.name),
+                    on_cause(info, saved, staged, &members),
+                ),
+                _ => continue,
+            };
+            out.push(Conflict { text, members, cause });
         }
         // Deduplicate the symmetric PREVENTS pairs.
-        out.sort();
-        out.dedup();
+        out.sort_by(|a, b| a.text.cmp(&b.text));
+        out.dedup_by(|a, b| a.text == b.text);
         out
     }
 
@@ -545,6 +568,99 @@ impl Session {
     pub fn dirty(&self) -> bool {
         self.states.values().any(|s| s.staged != s.baseline)
     }
+}
+
+/// A rule the staged options break.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Conflict {
+    /// What `violations` says of it.
+    pub text: String,
+    /// The options it is about: the two of a PREVENTS pair, or the group's
+    /// members the port has.
+    pub members: Vec<String>,
+    /// What make.conf did to it, when it had a hand in it.
+    pub cause: Option<String>,
+}
+
+/// The make.conf variable a non-FORCE layer sets an option with.
+fn set_knob(info: &PortInfo, layer: McLayer) -> String {
+    match layer {
+        McLayer::Port => format!("{}_SET", info.options_name),
+        _ => "OPTIONS_SET".to_string(),
+    }
+}
+
+/// Whether the options file leaves the option to make.conf: there is no
+/// file, or it gives the option no SET or UNSET line.
+fn file_silent(saved: Option<&SavedOptionsFile>, opt: &str) -> bool {
+    saved.is_none_or(|s| s.value(opt).is_none())
+}
+
+/// For a rule broken by options that are on — a PREVENTS pair, a group
+/// with too many members on: those of `members` on because make.conf turns
+/// them on, by the layer that does (`A, B on by make.conf OPTIONS_SET`),
+/// and those a *_FORCE knob pins on (`A forced on by make.conf; fix it
+/// there`). A non-FORCE layer counts only where the options file says
+/// nothing of the option: a file line comes after it.
+fn on_cause(
+    info: &PortInfo,
+    saved: Option<&SavedOptionsFile>,
+    staged: &BTreeSet<String>,
+    members: &[String],
+) -> Option<String> {
+    let o = &info.options;
+    let mut by_knob: Vec<(String, Vec<&str>)> = Vec::new();
+    let mut forced: Vec<&str> = Vec::new();
+    for m in members.iter().filter(|m| staged.contains(*m)) {
+        match o.mc_value(m) {
+            Some((true, McLayer::Force)) => forced.push(m),
+            Some((true, layer)) if file_silent(saved, m) => {
+                let knob = set_knob(info, layer);
+                match by_knob.iter_mut().find(|(k, _)| *k == knob) {
+                    Some((_, opts)) => opts.push(m),
+                    None => by_knob.push((knob, vec![m])),
+                }
+            }
+            _ => {}
+        }
+    }
+    // The global knob before the per-port one, as the framework reads them.
+    by_knob.sort_by_key(|(k, _)| k != "OPTIONS_SET");
+    let mut parts: Vec<String> = by_knob
+        .into_iter()
+        .map(|(knob, opts)| format!("{} on by make.conf {knob}", opts.join(", ")))
+        .collect();
+    if !forced.is_empty() {
+        parts.push(format!("{} forced on by make.conf; fix it there", forced.join(", ")));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// For a group with no member on: the members to pick from (`pick one of A
+/// B C`), and those make.conf turns off (`(A off by make.conf)`) — a FORCE
+/// knob always, another layer where the options file says nothing.
+fn pick_cause(
+    info: &PortInfo,
+    saved: Option<&SavedOptionsFile>,
+    staged: &BTreeSet<String>,
+    members: &[String],
+) -> Option<String> {
+    let o = &info.options;
+    let off: Vec<&str> = members
+        .iter()
+        .filter(|m| !staged.contains(*m))
+        .filter(|m| match o.mc_value(m) {
+            Some((false, McLayer::Force)) => true,
+            Some((false, _)) => file_silent(saved, m),
+            _ => false,
+        })
+        .map(String::as_str)
+        .collect();
+    let mut cause = format!("pick one of {}", members.join(" "));
+    if !off.is_empty() {
+        cause.push_str(&format!(" ({} off by make.conf)", off.join(", ")));
+    }
+    Some(cause)
 }
 
 /// Format the option changes between two staged snapshots as `+ADDED` /

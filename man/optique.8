@@ -549,9 +549,13 @@ staged value, the port default
 .Pq Ql on No or Ql off ,
 and then a second
 .Ql on Ns / Ns Ql off :
-the value
+what
 .Pa make.conf
-dictates, in the colour of the knob that dictates it \(em green for a global
+says of the option, whatever decides its value now, the options file
+included \(em the value of the last layer naming it, in the framework's
+order: the global knob, then the per-port one, then the
+.Va *_FORCE
+knobs, the later winning \(em in the colour of that layer: green for a global
 .Va OPTIONS_SET
 or
 .Va OPTIONS_UNSET ,
@@ -562,8 +566,9 @@ or
 and red bold for a
 .Va *_FORCE
 knob that the options file cannot override, which also locks the toggle.
-That column is empty when nothing but the port default or the options file
-itself decides the value.
+That column is empty only when no
+.Pa make.conf
+layer names the option.
 Options auto-enabled through an
 .Va IMPLIES
 chain are locked and marked
@@ -586,13 +591,47 @@ is:
 .Ql IGNORE:
 and the option changes likely to blame,
 .Ql DEPRECATED: ,
-the flavor owning its options file, and a
+the flavor owning its options file, a
 .Ql CONFLICT:
-per rule the staged options break.
+per rule the staged options break, and
+.Ql STALE:
+when the port's option list changed since its file was written, naming the
+options added and those gone
+.Pq Ql STALE: new A B \[u00B7] obsolete X ,
+each part only when it has options.
+A
+.Ql CONFLICT:
+names the hand
+.Pa make.conf
+had in it, after a
+.Ql \(em :
+the members on because a
+.Pa make.conf
+layer sets them where the options file does not, and that layer
+.Pq Ql A, B on by make.conf OPTIONS_SET ,
+or
+.Va ${OPTIONS_NAME}_SET
+for the per-port knob; a member a
+.Va *_FORCE
+knob pins on
+.Pq Ql A forced on by make.conf; fix it there ;
+for a group with no member on, the members to pick from and those
+.Pa make.conf
+turns off
+.Pq Ql pick one of A B C (A off by make.conf) .
+A
+.Dv PREVENTS
+conflict keeps its own text, and gains the
+.Pa make.conf
+part when
+.Pa make.conf
+sets one of the two.
 A group header or one of those lines too wide for the pane ends in
 .Ql \[u2026]
 after its last whole word rather than being cut mid-word at the border; a
 .Ql CONFLICT:
+or
+.Ql STALE:
 line first wraps to a second line, under its text, and is cut only past that.
 An option row too wide drops only its trailing description: the checkbox,
 the name, both values and the badges always stay, and a row still too wide
@@ -697,7 +736,19 @@ and
 page by the rows shown, less one.
 A Ctrl-letter is never read as its plain letter.
 .It Ic Enter , Tab , \(->
-Edit the selected port;
+Edit the selected port, the cursor on its first option needing attention:
+for a conflicting port, the first member, in row order, of the first rule it
+breaks; else, for a stale one, its first new option
+.Pq Ql N ;
+else its first option, never a group header.
+Reaching another port from the option pane, with
+.Ic n ,
+.Ic p
+or a jump from
+.Ic r ,
+lands the same way;
+.Ic f
+keeps the option under the cursor when the other flavor has it.
 .Ic Esc ,
 .Ic Tab
 or
@@ -746,9 +797,10 @@ applies and
 cancels; an input that does not parse is quoted whole in the error.
 .It Ic n , p
 Jump to the next or previous port needing attention; from the option pane,
-onto its first option.
+onto its first option needing attention.
 .It Ic f
-Jump to the next flavor of the same origin.
+Jump to the next flavor of the same origin; from the option pane the cursor
+stays on the same option when that flavor has it.
 .It Ic t
 Show only ports needing attention, hiding the ok ones.
 .It Ic s

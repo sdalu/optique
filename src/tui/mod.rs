@@ -248,6 +248,9 @@ pub struct App {
     pub filter: String,
     pub editor_rows: Vec<EditorRow>,
     pub editor_idx: usize,
+    /// The port `editor_rows` were built for: a rebuild for the same port
+    /// keeps the cursor's option, one for another lands it afresh.
+    pub editor_port: Option<PortKey>,
     pub message: Option<(String, bool)>,
     /// The message was set since the last key: news from the background
     /// does not take its place unless it is an error.
@@ -407,6 +410,7 @@ pub(crate) fn build_app(
         filter: String::new(),
         editor_rows: Vec::new(),
         editor_idx: 0,
+        editor_port: None,
         message: None,
         message_unread: false,
         summary: None,
@@ -1218,7 +1222,11 @@ impl App {
         };
         self.editor_rows.clear();
         self.editor_idx = 0;
-        let Some(key) = self.selected_key() else { return };
+        let port = self.selected_key();
+        // Another port: the cursor lands afresh, whatever option it was on.
+        let previous = previous.filter(|_| port.is_some() && port == self.editor_port);
+        self.editor_port = port.clone();
+        let Some(key) = port else { return };
         let info = &self.session.ports[&key];
         let opts = &info.options;
         let grouped: BTreeSet<&str> = opts
@@ -1284,12 +1292,32 @@ impl App {
         self.editor_select_first();
     }
 
+    /// Put the cursor on the port's first option needing attention: for a
+    /// conflicting port, the first member in row order of the first rule
+    /// it breaks; else for a stale one, its first new option (`N`); else
+    /// its first option. Never on a header.
     fn editor_select_first(&mut self) {
-        self.editor_idx = self
-            .editor_rows
-            .iter()
-            .position(|r| matches!(r, EditorRow::Option(_)))
-            .unwrap_or(0);
+        let row_of = |rows: &[EditorRow], pick: &dyn Fn(&str) -> bool| {
+            rows.iter().position(|r| matches!(r, EditorRow::Option(o) if pick(o)))
+        };
+        let first = row_of(&self.editor_rows, &|_| true);
+        let attention = self.selected_key().and_then(|key| {
+            let info = &self.session.ports[&key];
+            let conflict = self
+                .session
+                .conflicts(info)
+                .iter()
+                .find_map(|c| row_of(&self.editor_rows, &|o| c.members.iter().any(|m| m == o)));
+            conflict.or_else(|| {
+                let stale = self
+                    .session
+                    .stale_delta(info)
+                    .is_some_and(|(added, removed)| !added.is_empty() || !removed.is_empty());
+                let saved = self.session.state(info)?.saved.as_ref()?;
+                stale.then(|| row_of(&self.editor_rows, &|o| !saved.mentions(o))).flatten()
+            })
+        });
+        self.editor_idx = attention.or(first).unwrap_or(0);
     }
 
     /// Up to `n` options in direction `dir`, stopping at the edges.
@@ -1385,9 +1413,22 @@ impl App {
         }
         let cur = siblings.iter().position(|k| *k == key).unwrap_or(0);
         let next = siblings[(cur + 1) % siblings.len()].clone();
+        // The option under the cursor, to compare it across flavors.
+        let option = match self.editor_rows.get(self.editor_idx) {
+            Some(EditorRow::Option(name)) if self.focus == Focus::Editor => Some(name.clone()),
+            _ => None,
+        };
         match self.visible.iter().position(|v| *v == next) {
             Some(idx) => {
                 self.select_index(idx);
+                // Same option on the other flavor when it has it; else the
+                // pane lands as on entering it.
+                let same = option.and_then(|o| {
+                    self.editor_rows.iter().position(|r| matches!(r, EditorRow::Option(n) if *n == o))
+                });
+                if let Some(i) = same {
+                    self.editor_idx = i;
+                }
                 self.flash(&format!("flavor {next}"), false);
             }
             None => {
@@ -5496,5 +5537,393 @@ mod tests {
             "\"=on\": no option name — expected OPTION=on|off (or OPTION+ / OPTION-)"
         );
         assert_eq!(parse_bulk("docs").unwrap_err(), "\"docs\": expected OPTION=on|off (or OPTION+ / OPTION-)");
+    }
+
+    /// An options file for cat/alpha listing `complete`, `set` on and every
+    /// other option off.
+    fn alpha_file(tmp: &std::path::Path, complete: &[&str], set: &[&str]) {
+        let dir = tmp.join("options/cat_alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut text = format!("_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST={}\n", complete.join(" "));
+        for o in complete {
+            let verb = if set.contains(o) { "SET" } else { "UNSET" };
+            text.push_str(&format!("OPTIONS_FILE_{verb}+={o}\n"));
+        }
+        std::fs::write(dir.join("options"), text).unwrap();
+    }
+
+    /// cat/alpha alone, with the options `complete`, its file already
+    /// written (or not) by the caller.
+    fn alpha_app(tmp: &std::path::Path, complete: &[&str]) -> App {
+        let mut app = app_for(tmp, &[("cat/alpha", &[])]);
+        alpha_mut(&mut app).options.complete = complete.iter().map(|o| o.to_string()).collect();
+        app.rebuild_visible(None);
+        app.rebuild_editor();
+        app
+    }
+
+    fn alpha_mut(app: &mut App) -> &mut crate::model::port::PortInfo {
+        app.session.ports.get_mut(&PortKey::parse("cat/alpha").unwrap()).unwrap()
+    }
+
+    fn stage(app: &mut App, name: &str, on: &[&str]) {
+        app.session.states.get_mut(name).unwrap().staged = on.iter().map(|o| o.to_string()).collect();
+    }
+
+    /// The option under the cursor.
+    fn cursor(app: &App) -> String {
+        match app.editor_rows.get(app.editor_idx) {
+            Some(EditorRow::Option(o)) => o.clone(),
+            _ => "(not an option)".into(),
+        }
+    }
+
+    /// The make.conf column of `opt`'s row on the 100x35 screen: its text and
+    /// its style.
+    fn mc_column(app: &mut App, opt: &str) -> (String, ratatui::style::Style) {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = ui::screen_rows(buffer);
+        let name = format!(" {opt:<12} ");
+        let (y, row) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.contains(&format!("]{name}")) || r.contains(&format!("){name}")))
+            .unwrap_or_else(|| panic!("no row for {opt}:\n{}", rows.join("\n")));
+        // The checkbox's end, the name, the default (` off`), then ` ` and
+        // the column's three.
+        let at = row[..row.find(&name).unwrap()].chars().count() + name.len() + 4;
+        let text: String = row.chars().skip(at).take(3).collect();
+        let cell = buffer.cell((at as u16, y as u16)).unwrap();
+        (text.trim().to_string(), cell.style())
+    }
+
+    /// The make.conf column says what make.conf says whenever a layer names
+    /// the option, the options file deciding or not: the last layer wins,
+    /// in its colour; blank only when no layer names it.
+    #[test]
+    fn the_makeconf_column_shows_makeconf_even_where_the_file_decides() {
+        use ratatui::style::{Color, Modifier};
+        let tmp = tempfile::tempdir().unwrap();
+        let all = ["A", "B", "C", "D", "E", "F"];
+        alpha_file(tmp.path(), &all, &["A", "B", "C", "E", "F"]);
+        let mut app = alpha_app(tmp.path(), &all);
+        let o = &mut alpha_mut(&mut app).options;
+        o.mc_set = ["A".to_string(), "B".to_string()].into();
+        o.mc_unset = ["E".to_string(), "F".to_string()].into();
+        o.port_set = ["C".to_string(), "F".to_string()].into();
+        o.port_unset = ["B".to_string()].into();
+        o.force_unset = ["C".to_string()].into();
+        let green = |c: Color| move |s: ratatui::style::Style| s.fg == Some(c) && !s.add_modifier.contains(Modifier::BOLD);
+        let (text, style) = mc_column(&mut app, "A");
+        assert!(text == "on" && green(Color::Green)(style), "global SET: {text} {style:?}");
+        let (text, style) = mc_column(&mut app, "B");
+        assert!(text == "off" && green(Color::LightGreen)(style), "per-port UNSET after the global SET: {text} {style:?}");
+        let (text, style) = mc_column(&mut app, "C");
+        assert!(
+            text == "off" && style.fg == Some(Color::Red) && style.add_modifier.contains(Modifier::BOLD),
+            "FORCE after the per-port SET: {text} {style:?}"
+        );
+        let (text, _) = mc_column(&mut app, "D");
+        assert_eq!(text, "", "no layer names D");
+        let (text, style) = mc_column(&mut app, "E");
+        assert!(text == "off" && green(Color::Green)(style), "the file sets E, make.conf still says off: {text}");
+        let (text, style) = mc_column(&mut app, "F");
+        assert!(text == "on" && green(Color::LightGreen)(style), "per-port SET after the global UNSET: {text}");
+        // Where the value comes from is unchanged: the file decides A.
+        let info = info_of(&app, "cat/alpha");
+        assert_eq!(info.options.provenance("A", Some(true)), crate::model::options::Provenance::File);
+    }
+
+    /// A stale port says what its file is behind on above the rows, each
+    /// part only when it has options.
+    #[test]
+    fn a_stale_port_has_a_banner_naming_its_new_and_obsolete_options() {
+        let line = |file: &[&str], complete: &[&str]| {
+            let tmp = tempfile::tempdir().unwrap();
+            alpha_file(tmp.path(), file, &[]);
+            let mut app = alpha_app(tmp.path(), complete);
+            let shown = screen(&mut app);
+            shown.lines().find(|l| l.contains("STALE:")).map(|l| {
+                let at = l.find("STALE:").unwrap();
+                l[at..].trim_end_matches(['│', '║']).trim_end().to_string()
+            })
+        };
+        assert_eq!(line(&["A", "OLD"], &["A", "B", "C"]).as_deref(), Some("STALE: new B C · obsolete OLD"));
+        assert_eq!(line(&["A"], &["A", "B"]).as_deref(), Some("STALE: new B"));
+        assert_eq!(line(&["A", "OLD"], &["A"]).as_deref(), Some("STALE: obsolete OLD"));
+        assert_eq!(line(&["A"], &["A"]), None, "not stale");
+        // Never configured: nothing to be behind on.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = alpha_app(tmp.path(), &["A"]);
+        assert!(!screen(&mut app).contains("STALE:"));
+    }
+
+    /// A STALE line too long for the pane wraps to a second, under its
+    /// text, and is cut with `…` past that.
+    #[test]
+    fn a_long_stale_banner_wraps_to_two_lines_then_is_cut() {
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A"], &[]);
+        let names: Vec<String> = (0..20).map(|i| format!("NEWOPTION{i:02}")).collect();
+        let mut complete = vec!["A"];
+        complete.extend(names.iter().map(String::as_str));
+        let mut app = alpha_app(tmp.path(), &complete);
+        let shown = screen_at(&mut app, 80, 24);
+        let lines: Vec<&str> = shown.lines().collect();
+        let at = lines.iter().position(|l| l.contains("STALE: ")).expect(&shown);
+        let pane = |l: &str| l.split(['│', '║']).nth(3).unwrap_or_default().to_string();
+        let first = pane(lines[at]);
+        let second = pane(lines[at + 1]);
+        let indent = first.find("STALE: ").unwrap() + "STALE: ".len();
+        assert!(first[indent..].starts_with("new NEWOPTION00"), "{shown}");
+        assert!(second.starts_with(&" ".repeat(indent)) && !second[indent..].starts_with(' '), "under its text:\n{shown}");
+        assert!(second.trim_end().ends_with('…'), "cut after two lines:\n{shown}");
+        assert!(!pane(lines[at + 2]).starts_with(&" ".repeat(indent)), "no third line:\n{shown}");
+    }
+
+    /// Entering the pane puts the cursor on what needs attention: a
+    /// conflict's first member, else the first new option, else the first
+    /// option — never a header.
+    #[test]
+    fn entering_the_pane_lands_on_the_first_option_needing_attention() {
+        use crate::model::options::{GroupKind, OptionGroup};
+        // Stale: the first new option.
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A"], &["A"]);
+        let mut app = alpha_app(tmp.path(), &["A", "B", "C"]);
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(cursor(&app), "B");
+
+        // Stale and conflicting: the conflict first, past the group header.
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A"], &["A"]);
+        let mut app = alpha_app(tmp.path(), &["A", "B", "C", "D"]);
+        alpha_mut(&mut app).options.groups.push(OptionGroup {
+            kind: GroupKind::Single,
+            name: "G".into(),
+            desc: String::new(),
+            members: vec!["C".into(), "D".into()],
+        });
+        stage(&mut app, "cat_alpha", &["C", "D"]);
+        app.rebuild_editor();
+        for key in [KeyCode::Tab, KeyCode::Right] {
+            hit(&mut app, key);
+            assert_eq!((cursor(&app), app.editor_idx), ("C".to_string(), 3), "{key:?}");
+            hit(&mut app, KeyCode::Esc);
+        }
+
+        // Nothing to attend to: the first option, the header passed by.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = alpha_app(tmp.path(), &["X", "Y"]);
+        alpha_mut(&mut app).options.groups.push(OptionGroup {
+            kind: GroupKind::Radio,
+            name: "R".into(),
+            desc: String::new(),
+            members: vec!["X".into(), "Y".into()],
+        });
+        app.rebuild_editor();
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!((cursor(&app), app.editor_idx), ("X".to_string(), 1));
+    }
+
+    /// The first member of the first rule broken, in row order: a PREVENTS
+    /// pair's too.
+    #[test]
+    fn a_prevents_conflict_lands_on_its_first_member_in_row_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = alpha_app(tmp.path(), &["A", "B", "C", "D"]);
+        alpha_mut(&mut app).options.defs.insert(
+            "D".into(),
+            crate::model::options::OptionDef { prevents: vec!["B".into()], ..Default::default() },
+        );
+        stage(&mut app, "cat_alpha", &["B", "D"]);
+        app.rebuild_editor();
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(cursor(&app), "B");
+    }
+
+    /// n/p from the option pane land the same way on the port they reach,
+    /// and so do a jump from r and f.
+    #[test]
+    fn n_p_and_jumps_from_the_pane_land_on_what_needs_attention() {
+        use crate::model::options::{GroupKind, OptionGroup};
+        let tmp = tempfile::tempdir().unwrap();
+        for (name, complete) in [("cat_beta", "DOCS"), ("cat_gamma", "DOCS X Y")] {
+            let dir = tmp.path().join("options").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut text = format!("_OPTIONS_READ=x-1.0\n_FILE_COMPLETE_OPTIONS_LIST={complete}\n");
+            for o in complete.split(' ') {
+                text.push_str(&format!("OPTIONS_FILE_UNSET+={o}\n"));
+            }
+            std::fs::write(dir.join("options"), text).unwrap();
+        }
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[]), ("cat/gamma", &[])]);
+        let beta = app.session.ports.get_mut(&PortKey::parse("cat/beta").unwrap()).unwrap();
+        beta.options.complete = vec!["DOCS".into(), "NEW".into()];
+        let gamma = app.session.ports.get_mut(&PortKey::parse("cat/gamma").unwrap()).unwrap();
+        gamma.options.complete = vec!["DOCS".into(), "X".into(), "Y".into()];
+        gamma.options.groups.push(OptionGroup {
+            kind: GroupKind::Single,
+            name: "G".into(),
+            desc: String::new(),
+            members: vec!["X".into(), "Y".into()],
+        });
+        stage(&mut app, "cat_gamma", &["X", "Y"]);
+        app.rebuild_visible(None);
+        app.rebuild_editor();
+        assert_eq!(visible(&app), ["cat/gamma", "cat/alpha", "cat/beta"]);
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!((selected(&app), cursor(&app)), ("cat/gamma".into(), "X".into()));
+        press(&mut app, 'j');
+        press(&mut app, 'n');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/alpha".into(), "DOCS".into()));
+        press(&mut app, 'n');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/beta".into(), "NEW".into()));
+        press(&mut app, 'p');
+        press(&mut app, 'p');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/gamma".into(), "X".into()), "not where it was left");
+        assert!(app.focus == Focus::Editor);
+
+        // r on beta lists alpha among its dependents; Enter jumps there and
+        // back, landing each time.
+        press(&mut app, 'p');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/beta".into(), "NEW".into()));
+        press(&mut app, 'r');
+        let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.to_string() == "cat/alpha");
+        app.why.as_mut().unwrap().selected = at.expect("alpha depends on beta");
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!((selected(&app), cursor(&app)), ("cat/alpha".into(), "DOCS".into()));
+        assert!(app.focus == Focus::Editor);
+    }
+
+    /// The flavor jump keeps the option the cursor is on, to compare it
+    /// across flavors; when the other flavor lacks it, it lands as on
+    /// entering the pane: on what needs attention.
+    #[test]
+    fn f_from_the_pane_keeps_the_option_or_lands_on_what_needs_attention() {
+        use crate::model::options::{GroupKind, OptionGroup};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[])]);
+        for k in ["cat/alpha@a", "cat/alpha@b"] {
+            let info = app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap();
+            info.flavors = vec!["a".into(), "b".into()];
+            info.options_name = format!("cat_alpha_{}", &k[10..]);
+            info.options.complete = vec!["DOCS".into(), "X".into(), "Y".into()];
+        }
+        let a = app.session.ports.get_mut(&PortKey::parse("cat/alpha@a").unwrap()).unwrap();
+        a.options.complete.push("ONLY_A".into());
+        let b = app.session.ports.get_mut(&PortKey::parse("cat/alpha@b").unwrap()).unwrap();
+        b.options.groups.push(OptionGroup {
+            kind: GroupKind::Radio,
+            name: "G".into(),
+            desc: String::new(),
+            members: vec!["X".into(), "Y".into()],
+        });
+        let state = |staged: &[&str]| crate::session::OptState {
+            saved: None,
+            baseline: BTreeSet::new(),
+            staged: staged.iter().map(|o| o.to_string()).collect(),
+        };
+        app.session.states.insert("cat_alpha_a".into(), state(&[]));
+        app.session.states.insert("cat_alpha_b".into(), state(&["X", "Y"]));
+        app.session.owners.insert("cat_alpha_a".into(), PortKey::parse("cat/alpha@a").unwrap());
+        app.session.owners.insert("cat_alpha_b".into(), PortKey::parse("cat/alpha@b").unwrap());
+        app.rebuild_visible(None);
+        let a = app.visible.iter().position(|k| k.to_string() == "cat/alpha@a").unwrap();
+        app.select_index(a);
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'G');
+        assert_eq!(cursor(&app), "ONLY_A");
+        press(&mut app, 'f');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@b".into(), "X".into()), "b lacks ONLY_A");
+        press(&mut app, 'f');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@a".into(), "X".into()), "back on a, X kept");
+        press(&mut app, 'j');
+        assert_eq!(cursor(&app), "Y");
+        press(&mut app, 'f');
+        assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@b".into(), "Y".into()), "the same option");
+    }
+
+    /// The CONFLICT banner names what make.conf did: the members it turns
+    /// on and the layer that does, a FORCE knob, the members to pick from
+    /// and those it turns off; the plain violations keep their text.
+    #[test]
+    fn a_conflict_names_its_makeconf_cause() {
+        use crate::model::options::{GroupKind, OptionGroup};
+        let setup = |file: bool| {
+            let tmp = tempfile::tempdir().unwrap();
+            // The file records A alone.
+            if file {
+                alpha_file(tmp.path(), &["A"], &["A"]);
+            }
+            let mut app = alpha_app(tmp.path(), &["A", "B", "C", "D"]);
+            alpha_mut(&mut app).options.groups.push(OptionGroup {
+                kind: GroupKind::Single,
+                name: "G".into(),
+                desc: String::new(),
+                members: vec!["A".into(), "B".into(), "C".into()],
+            });
+            (tmp, app)
+        };
+        let causes = |app: &App| -> Vec<(String, Option<String>)> {
+            let info = info_of(app, "cat/alpha");
+            app.session.conflicts(&info).into_iter().map(|c| (c.text, c.cause)).collect()
+        };
+        let too_many = "group G needs exactly one member enabled (2 enabled)".to_string();
+
+        // Too many on, through make.conf: each layer named.
+        let (_tmp, mut app) = setup(false);
+        let o = &mut alpha_mut(&mut app).options;
+        o.mc_set = ["A".to_string()].into();
+        o.port_set = ["B".to_string()].into();
+        stage(&mut app, "cat_alpha", &["A", "B"]);
+        assert_eq!(
+            causes(&app),
+            [(too_many.clone(), Some("A on by make.conf OPTIONS_SET; B on by make.conf cat_alpha_SET".into()))]
+        );
+        let shown = screen_at(&mut app, 200, 30);
+        assert!(shown.contains(&format!("CONFLICT: {too_many} — A on by make.conf OPTIONS_SET;")), "{shown}");
+        let info = info_of(&app, "cat/alpha");
+        assert_eq!(app.session.violations(&info), std::slice::from_ref(&too_many), "the violation's own text is unchanged");
+
+        // The file decides A: only B is make.conf's doing.
+        let (_tmp, mut app) = setup(true);
+        let o = &mut alpha_mut(&mut app).options;
+        o.mc_set = ["A".to_string(), "B".to_string()].into();
+        stage(&mut app, "cat_alpha", &["A", "B"]);
+        assert_eq!(causes(&app), [(too_many.clone(), Some("B on by make.conf OPTIONS_SET".into()))]);
+
+        // A FORCE knob.
+        let (_tmp, mut app) = setup(true);
+        alpha_mut(&mut app).options.port_force_set = ["C".to_string()].into();
+        stage(&mut app, "cat_alpha", &["A", "C"]);
+        assert_eq!(causes(&app), [(too_many.clone(), Some("C forced on by make.conf; fix it there".into()))]);
+
+        // None on: the members to pick from, and those make.conf turns off.
+        let none = "group G needs exactly one member enabled (0 enabled)".to_string();
+        let (_tmp, mut app) = setup(false);
+        let o = &mut alpha_mut(&mut app).options;
+        o.mc_unset = ["A".to_string()].into();
+        o.force_unset = ["C".to_string()].into();
+        stage(&mut app, "cat_alpha", &[]);
+        assert_eq!(causes(&app), [(none.clone(), Some("pick one of A B C (A, C off by make.conf)".into()))]);
+        let (_tmp, mut app) = setup(false);
+        stage(&mut app, "cat_alpha", &[]);
+        assert_eq!(causes(&app), [(none, Some("pick one of A B C".into()))]);
+
+        // PREVENTS: its text, and make.conf's hand when it has one.
+        let (_tmp, mut app) = setup(false);
+        alpha_mut(&mut app).options.defs.insert(
+            "D".into(),
+            crate::model::options::OptionDef { prevents: vec!["A".into()], ..Default::default() },
+        );
+        stage(&mut app, "cat_alpha", &["A", "D"]);
+        let prevents = "D conflicts with A: mutually exclusive".to_string();
+        assert_eq!(causes(&app), [(prevents.clone(), None)]);
+        alpha_mut(&mut app).options.mc_set = ["D".to_string()].into();
+        assert_eq!(causes(&app), [(prevents, Some("D on by make.conf OPTIONS_SET".into()))]);
     }
 }
