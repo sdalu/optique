@@ -30,14 +30,14 @@ not change a result; **known gap**, with what it can change.
 | Defaults: `OPTIONS_DEFAULT` (`_${ARCH}`), DOCS/NLS/EXAMPLES/IPV6 | `bsd.options.mk` | matches |
 | Layer order: `OPTIONS_SET`/`UNSET`, `${OPTIONS_NAME}_SET`/`_UNSET`, the options file, the four `*_FORCE`, each scope's UNSET after its SET | `bsd.options.mk` | matches |
 | `options.local` read after the options file, its lines joining the file's | `bsd.options.mk` (`.sinclude ${OPTIONS_FILE}.local`) | matches; shown as a note, never written; read with or without the options file, so `-m` and `clean --redundant` judge a file redundant only when options.local alone gives the same outcome; an option one of its entries decides is locked (`locked_by: "options.local"`), its edits refused; one assigning a SET or UNSET list afresh (`=`, `:=`, an effective `?=`) makes the file unmanageable: warned about once, never written or removed, never stale, edits refused |
-| UNSET entries are make patterns (`${PORT_OPTIONS:N${opt}}`); a SET entry is added only when `COMPLETE_OPTIONS_LIST:M${opt}` matches | `bsd.options.mk` | matches (bmake's `Str_Match`) |
+| UNSET entries are make patterns (`${PORT_OPTIONS:N${opt}}`); a SET entry is added, word for word, only when it matches as `COMPLETE_OPTIONS_LIST:M${opt}` | `bsd.options.mk` | matches (bmake's `Str_Match`) |
 | `WITH`/`WITHOUT` in make.conf, after FORCE, before IMPLIES | `bsd.options.mk` | matches; locked like FORCE, JSON scope `with` |
 | IMPLIES, transitive, after FORCE | `bsd.options.mk` | matches |
 | `OPTIONS_SLAVE`, added to `PORT_OPTIONS` last | `bsd.options.mk` | matches; its PREVENTS are checked, its IMPLIES are not (the chain is built from the option list alone, as in the framework) |
-| Conditional SINGLE/MULTI groups (named after an option) checked only while that option is on, their members dropped otherwise | `bsd.port.mk` pre-check-config | matches |
+| Conditional SINGLE/MULTI groups (named in `ALL_OPTIONS`) checked only while that option is on, their members dropped otherwise | `bsd.port.mk` pre-check-config | matches: `ALL_OPTIONS` is dumped and tested as make tests it |
 | RADIO and PREVENTS always checked; SINGLE never picks a member by itself | `bsd.port.mk` pre-check-config | matches |
 | New options: no SET/UNSET line anywhere (`NEW_OPTIONS`); `_FILE_COMPLETE_OPTIONS_LIST` is written, never read | `bsd.options.mk`, `bsd.port.mk` do-config | matches for "new"; "undecided" is judged by outcome — **differs on purpose** ("make.conf decisions are judged by outcome") |
-| The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=` assigns only a list no earlier line (file, then `options.local`) assigned | `bsd.options.mk` (`.include`) | matches; a `!=` line (a shell command) is not run — **differs**: ignored, with a warning naming the file and line |
+| The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=` assigns only a list no earlier line (file, then `options.local`) assigned, a trailing backslash continues the line, `#` starts a comment and `\#` is a literal `#` | `bsd.options.mk` (`.include`) | matches; a `!=` line (a shell command) is not run — **differs**: ignored, with a warning naming the file and line |
 | What `make config` writes: header, `_OPTIONS_READ`, list, one SET/UNSET line per option | `bsd.port.mk` do-config | matches |
 | `rmconfig` keeps a directory holding `options.local` | `bsd.port.mk` | matches (`clean`) |
 | `OPTIONS_NAME` ignores the flavor: flavors share one file | `bsd.options.mk` | matches; who writes it — **differs on purpose** ("Flavors sharing one options file") |
@@ -52,21 +52,22 @@ not change a result; **known gap**, with what it can change.
 | `-o name` under poudriere.d vs a path | `options.sh` | differs: optique's `-o` is a path (man page) |
 | make.conf layers, order, realpath dedupe | `setup_makeconf`, `append_make` | matches |
 | Hook plugins' `make.conf` after the layers | `setup_makeconf` | matches |
-| Jail prelude: `USE_PACKAGE_DEPENDS`, `BATCH`, `PACKAGE_BUILDING(_FLAVORS)`, `OVERLAYS+=` | `setup_makeconf` | matches |
+| ccache: `WITH_CCACHE_BUILD=yes`, `CCACHE_DIR=/root/.ccache` after the layers when poudriere.conf's `CCACHE_DIR` is a directory | `setup_ccache` | matches |
+| Jail prelude: `USE_PACKAGE_DEPENDS`, `BATCH`, `OVERLAYS+=`, `PACKAGE_BUILDING(_FLAVORS)`, in that order | `setup_makeconf` | matches |
 | `NO_PACKAGE_BUILDING`, `FLAVOR_DEFAULT_ALL`, read from poudriere.conf's layers | `include_poudriere_confs` | matches for plain assignments; a value set by shell logic is missed — **differs on purpose** |
 | The jail's system: cross-build `MACHINE`/`MACHINE_ARCH`/`ARCH`, the jail's `OSVERSION`/`OSREL` | `setup_makeconf`, `setup_ports_env`, `need_cross_build` | `OSVERSION`/`OSREL` match under `-j` (from `jails/<j>/arch`, `version`, `mnt`; `OSVERSION` derived from the version, with a note, when the jail's `param.h` is not there); the cross-build lines are written whenever the jail's MACHINE_ARCH differs from the host's, ignoring `kern.supported_archs` — **differs on purpose**: optique always runs the host's own `make`, never the jail's 32-bit one, so an armv6/armv7 jail on an arm64 host still needs them |
 | An empty `/usr/local` | the jail itself | `LOCALBASE=/nonexistent` — **differs on purpose** ("Queries see a jail, not the host") |
 | `FORCE_PACKAGE`, stripped `DEVELOPER=` lines | `setup_makeconf` | not modelled: no option or dependency effect |
-| Blacklist: layers, words, literal match, `@flavor`/`@all`/`@-` | `load_blacklist`, `gather_port_vars_port` | matches |
+| Blacklist: layers, words, literal match, `@flavor`/`@all`/`@-`; `qemu-blacklist` for a jail poudriere would emulate | `load_blacklist`, `need_emulation`, `gather_port_vars_port` | matches |
 | A blacklisted port's dependencies are not gathered | `gather_port_vars_port` | matches |
 | An IGNORE'd port's dependencies are not gathered | `gather_port_vars_port` | **differs on purpose**: optique walks them, IGNORE often depending on the options being configured |
-| pkglist: first word, `#` comments, a stray `/` trimmed | list reading in `common.sh` | matches in `-f` lists; **known gap**: on the command line a trailing `/` is refused |
+| Origins: first word of a list line, a line whose first word starts with `#` skipped, one leading and one trailing `/` trimmed, in lists and on the command line | list and argument reading in `common.sh` | matches |
 | `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` | `common.sh` flavor expansion | matches, MOVED applied to the originspec first (`_check_moved`) so `@all`/a bare origin under FLAVOR_DEFAULT_ALL queries the FLAVORS of wherever it moved to, not the old origin's missing directory |
 | `origin~subpackage` | `common.sh` | **known gap**: refused, or read as part of the flavor after `@` |
-| `-a` (every port) | `bulk.sh` | not modelled: a full list is accepted but slow, and only default flavors are rooted |
+| `-a` (every port) | `bulk.sh` | **known gap**: no `-a`; a full list is accepted but slow, and only its default flavors are rooted where `bulk -a` builds every flavor |
 | MOVED: renamed, chained, removed, expired entries | `parse_MOVED.awk`, `check_moved` | matches |
 | MOVED: a flavored entry (`origin@flavor\|new`); a listed origin that still exists but has an entry | `check_moved` | **known gap**: optique looks up the bare origin, and stops at one that exists |
-| Options changed since the package: pkg annotation vs `SELECTED_OPTIONS` | `common.sh` | consistent: optique rewrites a file only when the enabled set changes |
+| Options changed since the package: pkg annotation vs `SELECTED_OPTIONS` | `common.sh` | consistent: optique rewrites a file when the outcome or its option list changes; neither changes what poudriere compares, so no spurious rebuild |
 | Overlays: `-O` order, `OVERLAYS+=` | `bulk.sh`, `common.sh` | matches |
 | `poudriere options` runs `make config` on the host, no jail prelude | `options.sh` | **differs on purpose**: optique asks what the jail's build will see |
 | `poudriere -e etcdir`; the old `<mnt>/ports` tree layout | `common.sh` | not modelled; the second fails loudly |
@@ -77,16 +78,16 @@ not change a result; **known gap**, with what it can change.
 | :-- | :-- | :-- |
 | Profile: `-s name`, else `$SYNTHPROFILE` (when its section has `Directory_packages`), else `profile_selected`, else LiveSystem | `parameters.adb` | matches |
 | Profile keys from the profile's own section, never `[Global Configuration]` | `parameters.adb` | matches |
-| INI syntax: `;`/`#` comments, case-sensitive keys and sections, first match wins, no quoting | ini-files `config.adb` | matches; **known gap** on hand edits: an empty or bare key does not end the search as in synth, and indented headers and tab-indented keys are accepted where synth would not |
+| INI syntax: `;`/`#` comments, case-sensitive keys and sections, a header is a `[` in column 1 named up to the first `]` untrimmed, keys and values trimmed of spaces only, the first match (a bare or empty one included) ends the search, no quoting | ini-files `config.adb` | matches |
 | `Directory_options` (default `/var/db/ports`) as `PORT_DBDIR`, `options.local` included | `parameters.adb`, `replicant.adb` | matches |
 | Missing `Directory_portsdir`: synth tries `$PORTSDIR`, `make -V PORTSDIR`, then `/usr/dports`, `/usr/ports` | `parameters.adb` | not modelled (`/usr/ports`): synth writes every key back into synth.ini on first use |
-| Scan make.conf: `SYNTHPROFILE`, `USE_PACKAGE_DEPENDS_ONLY`, `PACKAGE_BUILDING`, `BATCH`, the ccache lines when `Directory_ccache` exists, then `<profile>-make.conf` | `replicant.adb` `create_make_conf` | matches |
-| `varcache.conf` (`OSVERSION`, `ARCH`, … from `Directory_system`) | `replicant-platform.adb` | not copied: the host computes the same while `Directory_system` is `/`; **known gap** otherwise |
+| Scan make.conf: `SYNTHPROFILE`, `USE_PACKAGE_DEPENDS_ONLY`, `PACKAGE_BUILDING`, `BATCH`, the ccache lines when `Directory_ccache` exists, then `<profile>-make.conf` | `replicant.adb` `create_make_conf` | matches; synth's test mode adds `DEVELOPER=1` (not modelled: `-s` configures builds), and an unreadable `<profile>-make.conf` is skipped by synth where optique stops with an error |
+| `varcache.conf` (`OSVERSION`, `ARCH`, … from `Directory_system`) | `replicant-platform.adb` | not copied: while `Directory_system` is `/` the host gives the same `OSVERSION`, `ARCH` and `OPSYS`; the rest (`_OSRELEASE=…-SYNTH`, `UID=0`, `PYTHONBASE`, `_SMP_CPUS`) changes no option or dependency; **known gap** when `Directory_system` is not `/` |
 | An empty `/usr/local` in the scan chroot | `replicant.adb` | `LOCALBASE=/nonexistent` — **differs on purpose** |
-| Scan environment `env -i PATH=… USER=root LANG=C` | `portscan.adb` | not modelled: queries get `PATH`, `HOME`, `TMPDIR`, `PKG_DBDIR`; nothing in the options or dependency paths reads the others |
+| Scan environment `env -i PATH=… TERM=dumb USER=root HOME=/root LANG=C` | `portscan.adb` | not modelled: queries get `PATH`, `HOME`, `TMPDIR`, `PKG_DBDIR`; nothing in the options or dependency paths reads the others |
 | No blacklist | — | matches |
-| Implicit list: every installed package, its flavor from the `flavor` annotation, kept only where synth's flavor index matches | `portscan-pilot.adb` | matches |
-| A build refused when an options file's entries differ in number from the port's options, or name one it lacks | `portscan-packages.adb` | matches: such a port trips `scan`'s gate under `-s` |
+| Implicit list: every installed package, its flavor from the `flavor` annotation, kept only where synth's index (the categories' `SUBDIR` lines, each port's flavors) has it | `portscan-pilot.adb`, `portscan.adb` `prescan_ports_tree` | matches |
+| A build refused when an options file's entries differ in number from the port's options, or name one it lacks; aborted outright on a line shorter than 18 bytes, or of 18–19 without `+=` at 17–18 (an Ada range error, by reading) | `portscan-packages.adb` | matches: such a port trips `scan`'s gate under `-s`, with the reason |
 | Prebuilt packages: their options compared with the port's selected options | `portscan-packages.adb` | consistent: synth compares outcomes, so a minimal or redundant file causes no rebuild |
 
 ## How it is checked
@@ -95,7 +96,9 @@ Two kinds of tests pin the table:
 
 - Unit tests model the framework's rules on hand-built port data: the
   layering, patterns, groups, flavors sharing a file, the file reader, the
-  poudriere.d and synth.ini readers.
+  poudriere.d and synth.ini readers. They alone pin the poudriere and synth
+  rows, driven through fake poudriere.d and synth trees: no fixture test
+  runs a poudriere (`-j`) or synth (`-s`) build.
 - Fixture tests run the binary over a handful of minimal ports laid on the
   host's real `/usr/ports/Mk` (`tests/ports`, `tests/common`), so `make`
   decides and optique must agree with it. `make tests-live` runs them:
@@ -104,19 +107,25 @@ Two kinds of tests pin the table:
     databases/sqlite3@icu), three flavors sharing a file (`misc/flav`,
     after editors/emacs), a forced group member (`misc/forced`), a
     Latin-1 make.conf;
-  - `tests/fixture_model.rs`: new options counted by line, a hand-written
-    file, `options.local`, UNSET patterns (`misc/model-globs`), an
-    `OPTIONS_SLAVE` option's PREVENTS (`misc/model-slave-prevents`),
-    `WITH`/`WITHOUT`;
+  - `tests/fixture_model.rs`: new options counted by line; a hand-written
+    file, `:=`/`?=`, a continued line; `options.local` after the file,
+    without one, kept by `-m`, locking `decide`; UNSET patterns
+    (`misc/model-globs`); an `OPTIONS_SLAVE` option's PREVENTS
+    (`misc/model-slave-prevents`); `WITH`/`WITHOUT`; `OPTIONS_OVERRIDE`,
+    set and empty; a group named after a defined member
+    (`misc/model-defined-group`); an IMPLIES chain (`misc/model-implies`);
+    an overfull RADIO group against `make check-config`
+    (`misc/model-radio`);
   - `tests/fixture_lists.rs`: `@all` and `@-`.
 
-poudriere and synth themselves were not run: their side of each row comes
-from reading their source, and optique's side was driven through fake
-poudriere.d and synth.ini trees.
+Every fixture port depends on a `ports-mgmt/pkg` stub, as every real port
+depends on pkg. poudriere and synth themselves were not run: their side
+of each row comes from reading their source.
 
 ## Not checked
 
-- synth's pkgsrc mode, and its NetBSD, Linux and SunOS profiles.
+- synth's pkgsrc mode, its NetBSD, Linux and SunOS profiles, and its test
+  mode (`DEVELOPER=1`).
 - A run against a real poudriere jail or a real synth build.
 - MOVED entries in overlays; synth.ini lines longer than its 1,000-character
   limit.

@@ -86,7 +86,7 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   │                    conf_hash, QueryEnv, blacklist, overlays, notes   │
   │ Cache::open        generation v<SCHEMA>-<tree>-<make.conf>           │
   │ Moved::load_all    MOVED of the tree and every overlay               │
-  │ roots::resolve     MOVED, @all, @-, FLAVOR_DEFAULT_ALL, synth list   │
+  │ roots::resolve     @all, @-, FLAVOR_DEFAULT_ALL (through MOVED)      │
   │ scanner::scan      breadth-first closure, cache first, make -V       │
   │ deps::detect       dependency loops (Tarjan)                         │
   └──────────────────────────────────────────────┬───────────────────────┘
@@ -131,17 +131,22 @@ answer is in the staged text.
 
 | Build | Staged make.conf, in order | `QueryEnv` |
 | :-- | :-- | :-- |
-| poudriere | jail prelude (`USE_PACKAGE_DEPENDS`, `BATCH`, `PACKAGE_BUILDING…` unless `NO_PACKAGE_BUILDING`), overlays' `OVERLAYS+=`, the jail's system under `-j` (`_OSRELEASE`, `OSREL`, `OSVERSION`, cross-build `MACHINE…`), the poudriere.d layers, hook plugins' `make.conf`, `LOCALBASE=/nonexistent` | `Jail` |
+| poudriere | jail prelude (`USE_PACKAGE_DEPENDS`, `BATCH`), overlays' `OVERLAYS+=`, `PACKAGE_BUILDING…` unless `NO_PACKAGE_BUILDING`, the jail's system under `-j` (cross-build `MACHINE…` when its architecture is not the host's, then `_OSRELEASE`, `OSREL`, `OSVERSION`), the poudriere.d layers, hook plugins' `make.conf`, the ccache lines when poudriere.conf's `CCACHE_DIR` exists, `LOCALBASE=/nonexistent` | `Jail` |
 | synth | `SYNTHPROFILE`, synth's scan header, ccache lines when `Directory_ccache` exists, `<profile>-make.conf`, `LOCALBASE=/nonexistent` | `Synth` |
 | local | `__MAKE_CONF` or `/etc/make.conf`, read in place (`/dev/null` when there is none); overlays through a small wrapper make.conf | `Host` |
 
-A layer reached twice through a symlink is read once. A local build
-also folds pkg's database (size, mtime) into the hash: what is installed
-is part of its answer. `roots::resolve` then turns the listed origins
-into the scan's roots: MOVED first, then `@all` and (under
-`FLAVOR_DEFAULT_ALL`) bare origins to every flavor, `@-` to the default
-one; under `-s` with no list, the installed packages filtered as synth
-filters them.
+A layer reached twice through a symlink is read once. The blacklist is
+read from the same layers, plus `qemu-blacklist` for a jail poudriere
+would emulate. A local build also folds pkg's database (size, mtime)
+into the hash: what is installed is part of its answer.
+
+`roots::resolve` turns the listed origins into the scan's roots: `@all`
+and (under `FLAVOR_DEFAULT_ALL`) bare origins become every flavor of the
+port, after MOVED maps them to the port's current origin; `@-` becomes
+the default flavor. Other roots meet MOVED in the scan, like any
+dependency. Under `-s` with no list, `run_scan` first takes the installed
+packages and keeps those synth's index has (`roots::synth_installed`:
+the categories' `SUBDIR` lines and each port's flavors).
 
 ## Querying and caching
 
@@ -200,19 +205,23 @@ from a given options file, in the framework's order:
                    PORT_OPTIONS as make computes it
 ```
 
-Each SET entry goes in only when it names an option of the port; each
-UNSET entry is a bmake pattern removing every option it matches; each
-scope's UNSET runs before the next scope's SET. The options file and
-`options.local` are read as one makefile (`+=`, `=`, `:=`, `?=`;
-`!=` ignored with a warning). `nofile_effective` is the same with no
-file: the defaults plus make.conf.
+Each SET entry goes in, word for word, only when it matches an option
+of the port as a bmake pattern; each UNSET entry removes every option it
+matches; each scope's UNSET runs before the next scope's SET. The
+options file and `options.local` are read as one makefile, the second
+continuing the first even when there is no first: `+=`, `=`, `:=`,
+`?=`, backslash continuations, `#` comments and `\#`; `!=` is ignored
+with a warning. A SINGLE or MULTI group is conditional when its name is
+in the port's `ALL_OPTIONS`. `nofile_effective` is the same with no
+options file: the defaults plus make.conf (and `options.local`, where
+there is one, for the redundancy checks).
 
 The session keeps one `OptState` per options file, shared by the
 flavors reading it:
 
 | Field | What it holds |
 | :-- | :-- |
-| `saved` | the file on disk, with `options.local` merged in |
+| `saved` | the file on disk with `options.local` read after it; `options.local` alone when there is no file |
 | `baseline` | what `sync` would write with no edits |
 | `staged` | the enabled set being edited |
 
