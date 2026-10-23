@@ -479,6 +479,26 @@ with its current options, and
 .Sq \[u221E]
 for a port caught in a dependency loop
 .Pq see Sx Dependency loops .
+The list's title counts the ports listed and, when there are any, the
+optionless ones it never shows, as in
+.Ql Ports (21 \[u00B7] 20 optionless) .
+.Pp
+The bottom line is the status bar: the count of each status marker, then the
+key legend, starting with
+.Ql ?:help a:apply q:quit
+and going on with the keys of the focused pane, cut at a whole key with
+.Ql \[u2026]
+where the width ends.
+A message takes its place until the next key.
+One set by background work
+.Pq a re-query's result, a port turned Va BROKEN , a loop made or broken
+does not replace a message set since the last key unless it is an error, and
+only an error replaces an error.
+At start the first message sums up what needs doing, as in
+.Ql 3 conflicting \[u00B7] 4 never configured \[u00B7] 2 stale \[em] n: next problem \[u00B7] ?: help ,
+or
+.Ql all 21 ports are configured \[em] ?: help
+when nothing does.
 .Pp
 The right pane shows the port's options in framework order under their group
 headers, whose kind is enforced on every toggle:
@@ -782,7 +802,10 @@ discards them, an older draft included, and quits;
 or any other key stays in the interface.
 The next session on the same options directory restores the draft's staged
 edits, dropping options that meanwhile vanished from a port and re-querying the
-restored ports so their dependencies reappear.
+restored ports so their dependencies reappear, and its first message leads
+with the draft, as in
+.Ql restored draft (2 ports, 5m ago, U per port reverts) ,
+the last part dropped first on a narrow screen.
 The draft is cleared as soon as the changes are applied or discarded, or the
 session quits with nothing staged;
 .Ic U

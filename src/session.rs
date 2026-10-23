@@ -162,7 +162,13 @@ impl Session {
     /// state for newcomers, then drop ports no longer reachable from the
     /// roots. Returns (added, removed) counts. Option states are never
     /// discarded, so a port that flip-flops out and back keeps its edits.
-    pub fn merge(&mut self, result: crate::query::scanner::ScanResult, files: &OptionsFiles) -> (usize, usize) {
+    /// Merge a refresh's ports into the closure, then drop what the roots no
+    /// longer reach. Returns the ports that came in and those dropped.
+    pub fn merge(
+        &mut self,
+        result: crate::query::scanner::ScanResult,
+        files: &OptionsFiles,
+    ) -> (Vec<PortKey>, Vec<PortKey>) {
         self.aliases.extend(result.aliases);
         let mut added_keys = Vec::new();
         for (key, info) in result.ports {
@@ -187,13 +193,13 @@ impl Session {
                 stack.extend(self.resolved_deps(info));
             }
         }
-        let before = self.ports.len();
+        let removed: Vec<PortKey> =
+            self.ports.keys().filter(|k| !reachable.contains(*k)).cloned().collect();
         self.ports.retain(|k, _| reachable.contains(k));
         // The GC may have dropped an owner whose sibling flavor stays.
         self.rebuild_owners();
-        let removed = before - self.ports.len();
-        let added = added_keys.iter().filter(|k| self.ports.contains_key(*k)).count();
-        (added, removed)
+        added_keys.retain(|k| self.ports.contains_key(k));
+        (added_keys, removed)
     }
 
     pub fn state(&self, info: &PortInfo) -> Option<&OptState> {
@@ -1290,7 +1296,7 @@ mod tests {
         let mut result = crate::query::scanner::ScanResult::default();
         result.ports.insert(root_key.clone(), updated_root);
         let (added, removed) = s.merge(result, &OptionsFiles::new(tmp.path()));
-        assert_eq!((added, removed), (0, 1));
+        assert_eq!((added.len(), removed), (0, vec![dep_key.clone()]));
         assert!(!s.ports.contains_key(&dep_key));
 
         // Flip back: dep reappears and the staged edit survived.
@@ -1298,7 +1304,7 @@ mod tests {
         result.ports.insert(root_key.clone(), linked_info("cat/root", &["cat/dep"], &["ROOTOPT"]));
         result.ports.insert(dep_key.clone(), dep);
         let (added, removed) = s.merge(result, &OptionsFiles::new(tmp.path()));
-        assert_eq!((added, removed), (1, 0));
+        assert_eq!((added, removed.len()), (vec![dep_key.clone()], 0));
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
         assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
@@ -1330,7 +1336,8 @@ mod tests {
         // Refresh: the root keeps only the non-default flavor.
         let mut result = crate::query::scanner::ScanResult::default();
         result.ports.insert(root_key.clone(), linked_info("cat/root", &["cat/x@b"], &["R"]));
-        assert_eq!(s.merge(result, &files), (0, 1));
+        let (added, removed) = s.merge(result, &files);
+        assert_eq!((added.len(), removed.len()), (0, 1));
         assert_eq!(s.owners["cat_x"].to_string(), "cat/x@b", "the owner is a port still held");
     }
 

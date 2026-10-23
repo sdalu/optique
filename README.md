@@ -16,7 +16,7 @@ when there is no poudriere at all or `-l` asks for a local build.
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││Robust and small WWW server                │
 │? devel/gmake                  ││NGINX is a high performance edge web server│
 │! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
@@ -39,7 +39,7 @@ when there is no poudriere at all or `-l` asks for a local build.
 │✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
 │✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
+ 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 

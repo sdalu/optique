@@ -103,11 +103,15 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let count = if app.hide_ok {
+    let mut count = if app.hide_ok {
         format!("{}/{}", app.visible.len(), app.listable)
     } else {
         format!("{}", app.visible.len())
     };
+    // The ports with no options are in the closure but never listed.
+    if app.hidden > 0 {
+        count.push_str(&format!(" · {} optionless", app.hidden));
+    }
     let mut title = format!(" Ports ({count})");
     if app.only_loops {
         title.push_str(" — in a dependency loop");
@@ -706,12 +710,45 @@ fn option_line(
     Line::from(spans)
 }
 
+/// The keys the status bar names, whatever the pane.
+const LEGEND_ALWAYS: [&str; 3] = ["?:help", "a:apply", "q:quit"];
+/// The keys it names after them while the port list has the focus.
+const LEGEND_LIST: [&str; 5] =
+    ["Enter:edit", "n/p:next-problem", "t:attention", "/:filter", "v:description"];
+/// The keys it names after them while the option pane has the focus.
+const LEGEND_OPTIONS: [&str; 6] =
+    ["Space:toggle", "i:info", "d:defaults", "U:revert", "u:undo", "n/p:next-problem"];
+
+/// The legend for the focused pane in `width` columns, each token after a
+/// space, cut at a whole token with `…` standing for the rest.
+fn key_legend(focus: &Focus, width: usize) -> String {
+    let pane: &[&str] = if *focus == Focus::Editor { &LEGEND_OPTIONS } else { &LEGEND_LIST };
+    let tokens: Vec<&str> = LEGEND_ALWAYS.iter().chain(pane).copied().collect();
+    let mut out = String::new();
+    for (i, tok) in tokens.iter().enumerate() {
+        // Room for " …" unless this is the last token.
+        let room = if i + 1 == tokens.len() { 0 } else { 2 };
+        if out.chars().count() + 1 + tok.chars().count() + room > width {
+            out.push_str(" …");
+            break;
+        }
+        out.push(' ');
+        out.push_str(tok);
+    }
+    out
+}
+
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let width = area.width as usize;
     let line = if let Some((msg, is_err)) = &app.message {
         let style = if *is_err {
             Style::default().fg(Color::Black).bg(Color::LightRed)
         } else {
             Style::default().fg(Color::Black).bg(Color::LightGreen)
+        };
+        let msg = match &app.summary {
+            Some(summary) => summary.fit(width.saturating_sub(2)),
+            None => msg.clone(),
         };
         Line::from(Span::styled(format!(" {msg} "), style))
     } else {
@@ -723,8 +760,8 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let mc = if app.warn_mc { format!(" {}≠", counts[4]) } else { String::new() };
         let mut spans = vec![Span::styled(
             format!(
-                " {}✗ {}* {}? {}!{mc} {}✓ (+{} optionless) ",
-                counts[0], counts[1], counts[2], counts[3], counts[5], app.hidden
+                " {}✗ {}* {}? {}!{mc} {}✓ ",
+                counts[0], counts[1], counts[2], counts[3], counts[5]
             ),
             Style::default().fg(Color::White),
         )];
@@ -748,8 +785,10 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Black).bg(Color::Yellow),
             ));
         }
+        // The counts are the status and come whole; the legend has the rest.
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
         spans.push(Span::styled(
-            " Space:toggle n/p:problems t:attention m:mc-ok w:mc-warn /:filter a:apply ?:help q:quit",
+            key_legend(&app.focus, width.saturating_sub(used)),
             Style::default().fg(Color::DarkGray),
         ));
         Line::from(spans)
@@ -1961,5 +2000,18 @@ no library.")),
         mark_if_clipped(&mut lines, 2, 10);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[1].width(), 1);
+    }
+
+    /// The legend starts with the keys that always hold and is cut at a
+    /// whole token, `…` for the rest.
+    #[test]
+    fn the_key_legend_is_cut_at_a_whole_token() {
+        assert_eq!(key_legend(&Focus::List, 22), " ?:help a:apply …");
+        assert_eq!(key_legend(&Focus::List, 33), " ?:help a:apply q:quit …");
+        assert_eq!(key_legend(&Focus::List, 35), " ?:help a:apply q:quit Enter:edit …");
+        assert_eq!(
+            key_legend(&Focus::Editor, 200),
+            " ?:help a:apply q:quit Space:toggle i:info d:defaults U:revert u:undo n/p:next-problem"
+        );
     }
 }

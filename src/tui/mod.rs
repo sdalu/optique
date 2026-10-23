@@ -182,6 +182,12 @@ pub struct App {
     pub editor_rows: Vec<EditorRow>,
     pub editor_idx: usize,
     pub message: Option<(String, bool)>,
+    /// The message was set since the last key: news from the background
+    /// does not take its place unless it is an error.
+    pub message_unread: bool,
+    /// The first-run summary while it is the message: the status bar fits
+    /// it to the width at whole tokens, which a plain message is not.
+    pub summary: Option<Summary>,
     pub modal: Option<ApplyModal>,
     pub quit_confirm: bool,
     /// Bulk-decision prompt: the text typed so far while it is open.
@@ -190,7 +196,8 @@ pub struct App {
     /// background refresh: a toggle can create or break one by changing
     /// which dependencies a port pulls in.
     pub loops: Vec<DepLoop>,
-    /// Ports hidden because they have no options (status-bar info).
+    /// Ports hidden because they have no options (counted in the list's
+    /// title).
     pub hidden: usize,
     /// When set, ports needing no attention (status ok) are not listed.
     pub hide_ok: bool,
@@ -326,6 +333,8 @@ pub(crate) fn build_app(
         editor_rows: Vec::new(),
         editor_idx: 0,
         message: None,
+        message_unread: false,
+        summary: None,
         modal: None,
         quit_confirm: false,
         bulk: None,
@@ -354,10 +363,82 @@ pub(crate) fn build_app(
         refresh_progress: None,
         page: PageRows::default(),
     };
-    app.restore_draft_if_any();
+    let draft = app.restore_draft_if_any();
     app.rebuild_visible(None);
     app.rebuild_editor();
+    app.show_summary(draft);
     app
+}
+
+/// The first-run message: what the closure needs, in list order, after the
+/// restored draft if there is one. Kept in parts so the status bar can cut
+/// it at a whole token, the draft part always kept.
+pub struct Summary {
+    /// The restored draft, short and with how to revert it.
+    pub draft: Option<(String, String)>,
+    /// The counts, or the all-configured line.
+    pub items: Vec<String>,
+    /// The keys to go on with.
+    pub hints: Vec<String>,
+}
+
+impl Summary {
+    /// The line in at most `width` columns: the draft part whole (with how
+    /// to revert only when everything fits), then as many whole tokens as
+    /// fit, a `…` standing for the rest.
+    pub fn fit(&self, width: usize) -> String {
+        let len = |s: &str| s.chars().count();
+        if let Some((_, long)) = &self.draft {
+            let full = self.line(long);
+            if len(&full) <= width {
+                return full;
+            }
+        }
+        let head = self.draft.as_ref().map(|(short, _)| short.clone()).unwrap_or_default();
+        let tokens = self.tokens(!head.is_empty());
+        let mut out = head;
+        for (i, (sep, tok)) in tokens.iter().enumerate() {
+            let last = i + 1 == tokens.len();
+            let room = if last { 0 } else { len(" …") };
+            if len(&out) + len(sep) + len(tok) + room > width {
+                out.push_str(if out.is_empty() { "…" } else { " …" });
+                return out;
+            }
+            out.push_str(sep);
+            out.push_str(tok);
+        }
+        out
+    }
+
+    /// The whole line, with `head` as the draft part.
+    fn line(&self, head: &str) -> String {
+        let mut out = head.to_string();
+        for (sep, tok) in self.tokens(!head.is_empty()) {
+            out.push_str(sep);
+            out.push_str(&tok);
+        }
+        out
+    }
+
+    /// Each token after the draft part, with the separator before it.
+    fn tokens(&self, after_head: bool) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        for (i, item) in self.items.iter().enumerate() {
+            let sep = if i == 0 && !after_head { "" } else { " · " };
+            out.push((sep, item.clone()));
+        }
+        for (i, hint) in self.hints.iter().enumerate() {
+            let sep = if i > 0 {
+                " · "
+            } else if out.is_empty() && !after_head {
+                ""
+            } else {
+                " — "
+            };
+            out.push((sep, hint.clone()));
+        }
+        out
+    }
 }
 
 fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
@@ -402,7 +483,7 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
     // A message lasts until the next key: left up, it would hide the key
     // legend for the rest of the session.
-    app.message = None;
+    app.clear_message();
 
     // Ctrl-C quits from anywhere, before any popup or prompt can take it as
     // a key of its own; asked a second time, at the quit prompt, it keeps
@@ -1408,8 +1489,10 @@ impl App {
     /// Adopt the draft saved by a previous session on this options dir, if
     /// any. Restored ports are marked pending so the background re-query
     /// picks up the dependencies their staged options pull in.
-    fn restore_draft_if_any(&mut self) {
-        let Some(draft) = draft::load(&self.options_dir) else { return };
+    /// Returns how many ports it restored and how old it is, for the
+    /// first-run message.
+    fn restore_draft_if_any(&mut self) -> Option<(usize, String)> {
+        let draft = draft::load(&self.options_dir)?;
         // Pre-images of every state the draft names, so 'u' can walk back the
         // restore one port at a time.
         let before: Vec<(String, BTreeSet<String>)> = draft
@@ -1431,20 +1514,51 @@ impl App {
             // Nothing in it still applies (ports gone, or the edits already
             // landed) — a stale draft would only nag on every launch.
             draft::discard(&self.options_dir);
-            return;
+            return None;
         }
         let owners: Vec<PortKey> =
             draft.staged.keys().filter_map(|name| self.session.owners.get(name).cloned()).collect();
         for key in owners {
             self.mark_pending(&key);
         }
-        self.flash(
-            &format!(
-                "restored draft with {restored} staged port(s) from {} — 'U' per port reverts, draft cleared on apply",
-                draft::age_label(draft.age_secs())
-            ),
-            false,
-        );
+        Some((restored, draft::age_label(draft.age_secs())))
+    }
+
+    /// Say, once the first scan is in, what the closure needs: the counts
+    /// of each kind of port waiting on a decision, in list order, after the
+    /// restored draft if any. The draft's own ports are its part, so the
+    /// edited count is not repeated; ≠ needs the w view, off at start.
+    fn show_summary(&mut self, draft: Option<(usize, String)>) {
+        let mut counts = [0usize; 6];
+        for key in &self.visible {
+            counts[self.effective_status(&self.session.ports[key]) as usize] += 1;
+        }
+        let mut items: Vec<String> = [
+            (UiStatus::Conflict as usize, "conflicting"),
+            (UiStatus::Unconfigured as usize, "never configured"),
+            (UiStatus::Stale as usize, "stale"),
+        ]
+        .into_iter()
+        .filter(|(status, _)| counts[*status] > 0)
+        .map(|(status, label)| format!("{} {label}", counts[status]))
+        .collect();
+        let draft = draft.map(|(n, age)| {
+            let ports = if n == 1 { "port" } else { "ports" };
+            (
+                format!("restored draft ({n} {ports}, {age})"),
+                format!("restored draft ({n} {ports}, {age}, U per port reverts)"),
+            )
+        });
+        let next = if draft.is_some() { "n: next" } else { "n: next problem" };
+        let hints = if items.is_empty() && draft.is_none() {
+            items.push(format!("all {} ports are configured", self.visible.len()));
+            vec!["?: help".to_string()]
+        } else {
+            vec![next.to_string(), "?: help".to_string()]
+        };
+        let summary = Summary { draft, items, hints };
+        self.flash(&summary.fit(usize::MAX), false);
+        self.summary = Some(summary);
     }
 
     /// Record `staged` as the state of `options_name` before a change, for 'u'.
@@ -1531,7 +1645,7 @@ impl App {
             let staged = state.staged.clone();
             let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
             if let Err(e) = self.staging_db.write(&options_name, content.as_bytes()) {
-                self.flash(&format!("staging write failed: {e:#}"), true);
+                self.notify(&format!("staging write failed: {e:#}"), true);
                 continue;
             }
             self.record_snapshot(options_name, staged);
@@ -1632,11 +1746,11 @@ impl App {
                     let blamed = self.attribute_blame(&result.ports);
                     let (added, removed) =
                         self.session.merge(*result, &self.options_files);
-                    let (a, r) = merged.get_or_insert((0usize, 0usize));
-                    *a += added;
-                    *r += removed;
+                    let (a, r) = merged.get_or_insert((Vec::new(), Vec::new()));
+                    a.extend(added);
+                    r.extend(removed);
                     if let Some((key, msg)) = first_error {
-                        self.flash(
+                        self.notify(
                             &format!("refresh: {errors} dep error(s), e.g. {key}: {msg}"),
                             true,
                         );
@@ -1644,7 +1758,7 @@ impl App {
                     }
                     // A port that just broke outranks dep errors on the line.
                     if let Some(msg) = blamed {
-                        self.flash(&msg, true);
+                        self.notify(&msg, true);
                         alerted = true;
                     }
                 }
@@ -1654,11 +1768,11 @@ impl App {
             self.refresh_progress = None;
         }
         if let Some((added, removed)) = merged {
-            if (added > 0 || removed > 0) && !alerted {
-                self.flash(
-                    &format!("dependencies refreshed: +{added} −{removed} port(s)"),
-                    false,
-                );
+            // The list's title counts the optionless ports the merge left.
+            self.hidden =
+                self.session.ports.values().filter(|p| !p.options.has_options()).count();
+            if !(added.is_empty() && removed.is_empty()) && !alerted {
+                self.notify(&refreshed_message(&added, &removed), false);
             }
             // Dep edges may have changed without any port appearing or
             // vanishing, so the loops are recomputed on every merge — and a
@@ -1728,7 +1842,7 @@ impl App {
         match self.loops.iter().find(|dl| !before.contains(&dl.members)) {
             Some(fresh) => {
                 let msg = format!("dependency loop: {}", fresh.render());
-                self.flash(&msg, true);
+                self.notify(&msg, true);
             }
             None if self.loops.is_empty() && !before.is_empty() => {
                 // The L view would now show an empty list, which says nothing
@@ -1740,16 +1854,53 @@ impl App {
                     "dependency loop gone"
                 };
                 if !alerted {
-                    self.flash(msg, false);
+                    self.notify(msg, false);
                 }
             }
             None => {}
         }
     }
 
+    /// A key was pressed: whatever was said has been read.
+    fn clear_message(&mut self) {
+        self.message = None;
+        self.message_unread = false;
+        self.summary = None;
+    }
+
+    /// Say something in answer to a key.
     fn flash(&mut self, msg: &str, error: bool) {
         self.message = Some((msg.to_string(), error));
+        self.message_unread = true;
+        self.summary = None;
     }
+
+    /// Say something no key asked for (a refresh, a loop). It does not take
+    /// the place of a message set since the last key, which the user has
+    /// not had the time to read — unless it is an error; and nothing but an
+    /// error takes the place of an error.
+    fn notify(&mut self, msg: &str, error: bool) {
+        if let Some((_, shown_error)) = &self.message {
+            if !error && (self.message_unread || *shown_error) {
+                return;
+            }
+        }
+        self.flash(msg, error);
+    }
+}
+
+/// What a refresh changed in the closure: the ports by name when there are
+/// at most three of them, else how many came in and went.
+fn refreshed_message(added: &[PortKey], removed: &[PortKey]) -> String {
+    if added.len() + removed.len() > 3 {
+        return format!("dependencies refreshed: +{} −{} port(s)", added.len(), removed.len());
+    }
+    let names: Vec<String> = added
+        .iter()
+        .map(|k| format!("+{k}"))
+        .chain(removed.iter().map(|k| format!("−{k}")))
+        .collect();
+    format!("dependencies refreshed: {}", names.join(" "))
 }
 
 /// Squeeze a BROKEN/IGNORE message onto one status-bar line: whitespace
@@ -2767,21 +2918,23 @@ mod tests {
         gamma.options_name = "cat_gamma".into();
         alpha.deps[0].target = gamma.key.clone();
         app.refreshing = 1;
+        app.clear_message();
         ev.send(done(vec![alpha, gamma], vec![])).unwrap();
         app.drain_refresh_events();
         assert_eq!(app.refreshing, 0);
         assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"]);
         assert!(app.session.state(&info_of(&app, "cat/gamma")).is_some(), "the newcomer got a state");
         let (msg, err) = app.message.clone().unwrap();
-        assert_eq!((msg.as_str(), err), ("dependencies refreshed: +1 −1 port(s)", false));
+        assert_eq!((msg.as_str(), err), ("dependencies refreshed: +cat/gamma −cat/beta", false));
 
         // A merge that only drops is reported too; one that changes nothing
         // says nothing.
         let mut alpha = info_of(&app, "cat/alpha");
         alpha.deps.clear();
+        app.clear_message();
         ev.send(done(vec![alpha.clone()], vec![])).unwrap();
         app.drain_refresh_events();
-        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +0 −1 port(s)");
+        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: −cat/gamma");
         // And one that only adds.
         let mut beta = info_of(&app, "cat/alpha");
         beta.key = PortKey::parse("cat/beta").unwrap();
@@ -2793,11 +2946,12 @@ mod tests {
             spec: "dep:cat/beta".into(),
             test_only: false,
         }];
+        app.clear_message();
         ev.send(done(vec![with_beta, beta], vec![])).unwrap();
         app.drain_refresh_events();
-        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +1 −0 port(s)");
+        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +cat/beta");
         alpha = info_of(&app, "cat/alpha");
-        app.message = None;
+        app.clear_message();
         ev.send(done(vec![alpha], vec![])).unwrap();
         app.drain_refresh_events();
         assert!(app.message.is_none(), "nothing changed: {:?}", app.message);
@@ -2811,6 +2965,7 @@ mod tests {
         let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
         let (ev, _req) = fake_refresher(&mut app);
         app.refreshing = 1;
+        app.clear_message();
         ev.send(RefreshEvent::Progress { done: 3, discovered: 5 }).unwrap();
         app.drain_refresh_events();
         assert_eq!(app.refresh_progress, Some((3, 5)));
@@ -3218,7 +3373,11 @@ mod tests {
         let mut app = three_ports(tmp.path());
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
         assert!(app.pending.contains_key(&PortKey::parse("cat/alpha").unwrap()));
-        assert!(app.message.as_ref().is_some_and(|(m, _)| m.starts_with("restored draft with 1 staged port(s)")));
+        assert!(
+            app.message.as_ref().is_some_and(|(m, _)| m.starts_with("restored draft (1 port, 0m ago, U per port reverts)")),
+            "{:?}",
+            app.message
+        );
         press(&mut app, 'u');
         assert!(staged(&app, "cat/alpha").is_empty(), "the restore is undoable");
         drop(app);
@@ -3229,7 +3388,11 @@ mod tests {
         std::fs::write(opts.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
         let app = three_ports(tmp.path());
         assert!(draft::load(&app.options_dir).is_none());
-        assert!(app.message.is_none());
+        assert_eq!(
+            app.message.as_ref().map(|(m, _)| m.as_str()),
+            Some("1 never configured — n: next problem · ?: help"),
+            "no draft to speak of"
+        );
     }
 
     /// A restored draft the user undoes by hand leaves nothing staged, so the
@@ -3554,6 +3717,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = looped_app(tmp.path());
         assert_eq!(app.loops.len(), 1, "one loop over the two ports");
+        app.clear_message();
         let text = screen(&mut app);
         assert!(text.contains("cat/alpha \u{221e}"), "{text}");
         assert!(text.contains("cat/beta \u{221e}"), "{text}");
@@ -3615,6 +3779,7 @@ mod tests {
         // cat/alpha, so the cycle is gone.
         let beta = PortKey::parse("cat/beta").unwrap();
         app.session.ports.get_mut(&beta).unwrap().deps.clear();
+        app.clear_message();
         app.refresh_loops(false);
         assert!(app.loops.is_empty());
         assert!(!app.only_loops, "the view let go");
@@ -3669,6 +3834,7 @@ mod tests {
         // The last loop broken: the view lets go, and the list says so too.
         let mut beta = info_of(&app, "cat/beta");
         beta.deps.clear();
+        app.clear_message();
         ev.send(done(vec![beta], vec![])).unwrap();
         app.drain_refresh_events();
         assert!(app.loops.is_empty() && !app.only_loops);
@@ -3880,5 +4046,221 @@ mod tests {
         assert!(parse_bulk("docs=maybe").is_err());
         assert!(parse_bulk("docs").is_err());
         assert!(parse_bulk("=on").is_err());
+    }
+
+    /// The status bar's last row on a `width`-column screen.
+    fn status_row(app: &mut App, width: u16) -> String {
+        screen_at(app, width, 24).lines().last().unwrap_or_default().to_string()
+    }
+
+    /// At 80 columns the bar keeps the counts and the keys that always
+    /// hold, then the focused pane's keys, cut at a whole token.
+    #[test]
+    fn the_status_bar_names_the_focused_panes_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'j');
+        let row = status_row(&mut app, 80);
+        assert!(row.starts_with(" 0✗ 0* 2? 0! 1✓  ?:help a:apply q:quit Enter:edit"), "{row}");
+        assert!(!row.contains("optionless"), "{row}");
+        assert!(!row.contains("Space:toggle"), "{row}");
+        hit(&mut app, KeyCode::Enter);
+        let row = status_row(&mut app, 80);
+        assert!(row.contains(" ?:help a:apply q:quit Space:toggle"), "{row}");
+        assert!(!row.contains("Enter:edit"), "{row}");
+        hit(&mut app, KeyCode::Esc);
+        let wide = status_row(&mut app, 160);
+        assert!(wide.trim_end().ends_with("/:filter v:description"), "all of it: {wide}");
+        assert!(!wide.contains('…'), "{wide}");
+    }
+
+    /// Whatever the width, the legend ends on a whole token or on `…`.
+    #[test]
+    fn the_status_bar_never_shows_half_a_token() {
+        let tokens = [
+            "?:help", "a:apply", "q:quit", "Enter:edit", "n/p:next-problem", "t:attention",
+            "/:filter", "v:description", "Space:toggle", "i:info", "d:defaults", "U:revert",
+            "u:undo", "…",
+        ];
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        for editor in [false, true] {
+            if editor {
+                hit(&mut app, KeyCode::Enter);
+            } else {
+                app.clear_message();
+            }
+            for width in 40..=140 {
+                let row = status_row(&mut app, width);
+                let legend = row.split_once(" 1✓ ").map(|(_, l)| l).unwrap_or_default();
+                for word in legend.split_whitespace() {
+                    assert!(tokens.contains(&word), "{word:?} at {width}: {row}");
+                }
+            }
+        }
+    }
+
+    /// The ports with no options are counted in the list's title, not in
+    /// the status bar, and not at all when there are none.
+    #[test]
+    fn the_optionless_count_is_in_the_list_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.clear_message();
+        let shown = screen(&mut app);
+        assert!(shown.contains("┌ Ports (3) "), "{shown}");
+        app.hidden = 151;
+        let shown = screen(&mut app);
+        assert!(shown.contains("┌ Ports (3 · 151 optionless) "), "{shown}");
+        assert!(!shown.lines().last().unwrap_or_default().contains("optionless"));
+        press(&mut app, 't');
+        let shown = screen_at(&mut app, 200, 24);
+        assert!(shown.contains("┌ Ports (2/3 · 151 optionless) — needs attention "), "{shown}");
+    }
+
+    /// News from the background waits for the line: it does not replace a
+    /// message nobody has had a key's time to read, unless it is an error,
+    /// and nothing but an error replaces an error.
+    #[test]
+    fn background_news_does_not_hide_an_unread_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let shown = |app: &App| app.message.clone().unwrap_or_default();
+        app.notify("dependency loop gone", false);
+        assert!(shown(&app).0.starts_with("2 never configured"), "the summary holds: {:?}", shown(&app));
+        press(&mut app, 'j');
+        app.notify("dependency loop gone", false);
+        assert_eq!(shown(&app), ("dependency loop gone".to_string(), false), "nothing to replace after a key");
+        press(&mut app, 'f');
+        assert!(shown(&app).0.contains("no other flavors"));
+        app.notify("dependency loop: a → b → a", true);
+        assert_eq!(shown(&app), ("dependency loop: a → b → a".to_string(), true), "an error wins");
+        app.notify("dependency loop gone", false);
+        assert!(shown(&app).1, "an error is not replaced by news");
+        app.message_unread = false;
+        app.notify("dependency loop gone", false);
+        assert!(shown(&app).1, "not even once read");
+        app.notify("refresh: 1 dep error(s)", true);
+        assert_eq!(shown(&app).0, "refresh: 1 dep error(s)");
+    }
+
+    /// A refresh names the ports it brought in and dropped, up to three;
+    /// past that it counts them.
+    #[test]
+    fn a_refresh_names_up_to_three_ports() {
+        let key = |o: &str| PortKey::parse(o).unwrap();
+        let added = [key("audio/opencore-amr")];
+        let removed = [key("devel/foo")];
+        assert_eq!(
+            refreshed_message(&added, &removed),
+            "dependencies refreshed: +audio/opencore-amr −devel/foo"
+        );
+        let three = [key("cat/a"), key("cat/b"), key("cat/c")];
+        assert_eq!(refreshed_message(&three, &[]), "dependencies refreshed: +cat/a +cat/b +cat/c");
+        assert_eq!(refreshed_message(&three, &removed), "dependencies refreshed: +3 −1 port(s)");
+    }
+
+    /// At start the line says what the closure needs, in list order, and
+    /// only what it does need.
+    #[test]
+    fn the_first_message_sums_up_what_needs_doing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = tmp.path().join("options/cat_beta");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n")
+            .unwrap();
+        let ok = tmp.path().join("options/cat_eps");
+        std::fs::create_dir_all(&ok).unwrap();
+        std::fs::write(ok.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
+        let ports: [(&str, &[&str]); 5] =
+            [("cat/alpha", &[]), ("cat/beta", &[]), ("cat/gamma", &[]), ("cat/delta", &[]), ("cat/eps", &[])];
+        let mut app = app_for(tmp.path(), &ports);
+        make_conflict(&mut app, "cat/alpha");
+        app.rebuild_visible(None);
+        app.show_summary(None);
+        assert_eq!(
+            app.message,
+            Some(("1 conflicting · 2 never configured · 1 stale — n: next problem · ?: help".to_string(), false))
+        );
+        assert_eq!(
+            status_row(&mut app, 80).trim_end(),
+            " 1 conflicting · 2 never configured · 1 stale — n: next problem · ?: help"
+        );
+        // Cut at a whole token on a narrow screen.
+        assert_eq!(
+            status_row(&mut app, 50).trim_end(),
+            " 1 conflicting · 2 never configured · 1 stale …"
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["cat_alpha", "cat_beta"] {
+            let dir = tmp.path().join("options").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\n").unwrap();
+        }
+        let app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        assert_eq!(app.message, Some(("all 2 ports are configured — ?: help".to_string(), false)));
+    }
+
+    /// A restored draft leads the first message, whole; how to revert it
+    /// goes first when the line is short, then the counts at a whole token.
+    #[test]
+    fn the_first_message_leads_with_a_restored_draft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, ' ');
+        press(&mut app, 'q');
+        press(&mut app, 'y');
+        drop(app);
+
+        let mut app = three_ports(tmp.path());
+        assert_eq!(
+            app.message.clone().unwrap().0,
+            "restored draft (1 port, 0m ago, U per port reverts) · 1 never configured — n: next · ?: help"
+        );
+        assert_eq!(
+            status_row(&mut app, 80).trim_end(),
+            " restored draft (1 port, 0m ago) · 1 never configured — n: next · ?: help"
+        );
+        assert_eq!(status_row(&mut app, 40).trim_end(), " restored draft (1 port, 0m ago) …");
+        assert_eq!(status_row(&mut app, 20).trim_end(), " restored draft (1 p", "kept whole, cut by the edge");
+        let summary = app.summary.as_ref().unwrap();
+        assert_eq!(summary.fit(60), "restored draft (1 port, 0m ago) · 1 never configured …");
+    }
+
+    /// A refresh landing before the first key leaves the first message up;
+    /// after a key it has the line.
+    #[test]
+    fn the_first_message_outlives_a_startup_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])]);
+        app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
+        let (ev, _req) = fake_refresher(&mut app);
+        let first = app.message.clone();
+        assert_eq!(first.as_ref().unwrap().0, "2 never configured — n: next problem · ?: help");
+        let mut alpha = info_of(&app, "cat/alpha");
+        alpha.deps.clear();
+        app.hidden = 7;
+        ev.send(done(vec![alpha.clone()], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(visible(&app), ["cat/alpha"], "merged all the same");
+        assert_eq!(app.hidden, 0, "the optionless count follows the merge");
+        assert_eq!(app.message, first, "the summary is still up");
+        assert!(app.summary.is_some());
+
+        press(&mut app, 'j');
+        let mut beta = info_of(&app, "cat/alpha");
+        beta.key = PortKey::parse("cat/beta").unwrap();
+        beta.canonical = beta.key.clone();
+        beta.options_name = "cat_beta".into();
+        alpha.deps = vec![crate::model::port::DepEdge {
+            target: beta.key.clone(),
+            spec: "dep:cat/beta".into(),
+            test_only: false,
+        }];
+        ev.send(done(vec![alpha, beta], vec![])).unwrap();
+        app.drain_refresh_events();
+        assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +cat/beta");
     }
 }

@@ -15,7 +15,7 @@ tty — unless `--drive` is given (see
 
 <!-- screen main -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││Robust and small WWW server                │
 │? devel/gmake                  ││NGINX is a high performance edge web server│
 │! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
@@ -38,7 +38,7 @@ tty — unless `--drive` is given (see
 │✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
 │✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
+ 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 
@@ -52,11 +52,52 @@ row with its checkbox, its name, the port's own default (`off`/`on`), and
 the value make.conf dictates when one of its layers mentions the option
 (blank otherwise); `HTTP`'s row ends in `imp`, the pane-edge truncation of
 an `implied by` note — another enabled option implies it. A row
-introduced by `──` is a group header (`HTTPGRP` here). The bottom line is
-the status bar: how many ports carry each marker (`0✗ 1* 1? 1! 18✓`), how
-many ports without options the list hides (`+20 optionless`), and the
-start of the key legend, cut off by the screen width — see [Keys](#keys)
-for the rest.
+introduced by `──` is a group header (`HTTPGRP` here). The list's title
+counts the ports listed and, after a `·`, the ports without options the
+list never shows (`Ports (21 · 20 optionless)`; the part is left out when
+there are none). The bottom line is the status bar: how many ports carry
+each marker (`0✗ 1* 1? 1! 18✓`) — then, when there are any, the ports
+caught in a dependency loop (`2∞ L:loops`) and the progress of a
+background re-query (`⟳ refreshing deps 3/5`) — and the key legend:
+`?:help a:apply q:quit` first, then the keys of the focused pane —
+`Enter:edit n/p:next-problem t:attention /:filter v:description` on the
+port list, `Space:toggle i:info d:defaults U:revert u:undo
+n/p:next-problem` in the option pane. What does not fit the width is cut
+at a whole key, a `…` standing for the rest; at 80 columns the counts and
+`?:help a:apply q:quit` always show. See [Keys](#keys) for every key.
+
+### Messages
+
+A message takes the status bar's place, green for news and red for an
+error, until the next key. One the background sets — a re-query's result,
+a port that just turned `BROKEN` or `IGNORE`, a dependency loop made or
+broken — does not take the place of a message set since the last key,
+which there has not been a key's time to read, unless it is an error; and
+nothing but an error replaces an error. A re-query that changed the
+closure names the ports it brought in and dropped when there are three or
+fewer (`dependencies refreshed: +audio/opencore-amr −devel/foo`), and
+counts them past that (`dependencies refreshed: +5 −2 port(s)`).
+
+At start, once the closure is scanned, the first message sums up what
+needs doing, in list order, leaving out what is at zero:
+
+```text
+3 conflicting · 4 never configured · 2 stale — n: next problem · ?: help
+```
+
+and, with nothing to do, `all 21 ports are configured — ?: help`. When a
+draft was restored (see [Quitting and drafts](#quitting-and-drafts)), it
+comes first on the same line, with how many ports it staged again and how
+old it is:
+
+```text
+restored draft (2 ports, 5m ago, U per port reverts) · 3 conflicting · 4 never configured — n: next · ?: help
+```
+
+On a screen too narrow for the whole line, `U per port reverts` goes
+first, then the rest is cut at a whole part with `…`; the draft's count
+and age always stay. Being a message set before the first key, the
+summary stays up through the re-query a restored draft starts.
 
 ## Port markers
 
@@ -84,7 +125,7 @@ Three further markers may trail the status one:
 
 <!-- screen options -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │? devel/gmake                  ││Robust and small WWW server                │
 │! ports-mgmt/pkg               ││NGINX is a high performance edge web server│
 │✓ converters/libiconv          ││with the lowest memory footprint and the   │
@@ -107,7 +148,7 @@ Three further markers may trail the status one:
 │✓ textproc/libxml2             ││  Enable file aio                          │
 │✓ www/nginx                    ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 0* 1? 1! 19✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
+ 0✗ 0* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 
@@ -168,7 +209,7 @@ portconfig's own Ports Collection help, not the port's.
 
 <!-- screen about -->
 ```text
-┌ Ports (1) — filter: pcre2 ────┐┌ devel/pcre2 — pcre2-10.49 ────────────────┐
+┌ Ports (1 · 20 optionless) — fi┐┌ devel/pcre2 — pcre2-10.49 ────────────────┐
 │✓ devel/pcre2                  ││Perl Compatible Regular Expressions        │
 │                               ││library, version 2                         │
 │                               ││PCRE2 is the name used for a revised API   │
@@ -191,7 +232,7 @@ portconfig's own Ports Collection help, not the port's.
 │                               ││  Enter: edit the options                  │
 │                               ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 0* 0? 0! 1✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-o
+ 0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
 
@@ -269,7 +310,7 @@ gained, and to unconfigured ones when it decides all of them.
 
 <!-- screen why -->
 ```text
-┌ Ports (1) — filter: libunistri┐┌ devel/libunistring — libunistring-1.4.2 ──┐
+┌ Ports (1 · 20 optionless) — fi┐┌ devel/libunistring — libunistring-1.4.2 ──┐
 │✓ devel/libunistring           ││Unicode string library                     │
 │                               ││GNU LIBUNISTRING - Unicode string library  │
 │                               ││This library provides functions for        │
@@ -292,7 +333,7 @@ gained, and to unconfigured ones when it decides all of them.
 │                               ││  Enter: edit the options                  │
 │                               ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 0* 0? 0! 1✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-o
+ 0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
 
@@ -309,7 +350,7 @@ walked port by port. Any other key closes it.
 
 <!-- screen apply -->
 ```text
-┌ Ports (21) ───────────────────┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
 │* www/nginx                    ││Robust and small WWW server                │
 │? devel/gmake                  ││NGINX is a high performance edge web server│
 │! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
@@ -332,7 +373,7 @@ walked port by port. Any other key closes it.
 │✓ textproc/expat2              ││  Enter: edit the options                  │
 │✓ textproc/libxml2             ││                                           │
 └───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓ (+20 optionless)  Space:toggle n/p:problems t:attention m:mc-
+ 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
 
@@ -397,7 +438,9 @@ an older draft included, and quits; `Esc` or any other key stays in the
 interface. The next TUI launch
 on the same options directory restores the draft's staged edits —
 options that vanished from a port meanwhile are dropped, and the
-restored ports are re-queried so their dependencies reappear. The draft
+restored ports are re-queried so their dependencies reappear — and its
+first message says so: `restored draft (2 ports, 5m ago, …)`, ahead of
+what else the closure needs (see [Messages](#messages)). The draft
 is cleared as soon as the changes are applied (they are on disk by then)
 or discarded; `U` still reverts an individual port as usual. Quitting
 with nothing staged skips the prompt and clears the draft too: a
