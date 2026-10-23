@@ -19,16 +19,24 @@ use crate::model::port::PortInfo;
 
 /// Resolve a (possibly non-canonical) key to the key the closure stores the
 /// port under. Dep edges and command-line arguments may name a port without
-/// its flavor, while the scan files it under the flavor `make` selected.
+/// its flavor, while the scan files it under the flavor `make` selected, and
+/// may name an origin MOVED sends to another. Aliases chain (a moved origin
+/// to its new one, that to its flavor) and are followed until a key the
+/// closure holds; None when there is none, a cycle of aliases included.
 pub fn resolve(
     ports: &BTreeMap<PortKey, PortInfo>,
     aliases: &HashMap<PortKey, PortKey>,
     key: &PortKey,
 ) -> Option<PortKey> {
-    if ports.contains_key(key) {
-        return Some(key.clone());
+    let mut key = key;
+    // Each hop but the last lands on a distinct alias, unless they cycle.
+    for _ in 0..=aliases.len() {
+        if ports.contains_key(key) {
+            return Some(key.clone());
+        }
+        key = aliases.get(key)?;
     }
-    aliases.get(key).cloned()
+    None
 }
 
 /// One dependency loop found in the closure.
@@ -431,6 +439,31 @@ mod tests {
         assert_eq!(found[0].render(), "cat/a → cat/b@py312 → cat/a");
         // Without the alias table the edge dangles outside the closure.
         assert!(detect(&ports, &HashMap::new()).is_empty());
+    }
+
+    /// A MOVED origin is an alias of the origin it moved to, itself an
+    /// alias of the flavor make chose: resolving follows the chain, and a
+    /// cycle of aliases resolves to nothing rather than spinning.
+    #[test]
+    fn resolve_follows_chained_aliases_and_stops_on_a_cycle() {
+        let key = |s: &str| PortKey::parse(s).unwrap();
+        let mut ports = closure(&[("cat/a", &[])]);
+        let mut flavored = linked("cat/new", &[]);
+        flavored.canonical = key("cat/new@py312");
+        ports.insert(flavored.canonical.clone(), flavored);
+        let mut aliases = HashMap::new();
+        aliases.insert(key("cat/old"), key("cat/new"));
+        aliases.insert(key("cat/new"), key("cat/new@py312"));
+        aliases.insert(key("cat/x"), key("cat/y"));
+        aliases.insert(key("cat/y"), key("cat/x"));
+        aliases.insert(key("cat/self"), key("cat/self"));
+        aliases.insert(key("cat/dangling"), key("cat/nowhere"));
+
+        assert_eq!(resolve(&ports, &aliases, &key("cat/old")), Some(key("cat/new@py312")));
+        assert_eq!(resolve(&ports, &aliases, &key("cat/a")), Some(key("cat/a")));
+        for k in ["cat/x", "cat/self", "cat/dangling", "cat/none"] {
+            assert_eq!(resolve(&ports, &aliases, &key(k)), None, "{k}");
+        }
     }
 
     /// A tangle too wide for a line is cut and the rest counted.

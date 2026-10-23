@@ -12,7 +12,9 @@ use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 pub struct ScanResult {
     /// Ports keyed by canonical key (origin + resolved flavor).
     pub ports: BTreeMap<PortKey, PortInfo>,
-    /// Requested key -> canonical key (for dedup of default-flavor aliases).
+    /// Requested key -> canonical key (for dedup of default-flavor aliases),
+    /// and a MOVED origin -> the key it moved to; `deps::resolve` follows
+    /// the chain.
     pub aliases: HashMap<PortKey, PortKey>,
     /// Ports whose query failed: (requested key, error).
     pub errors: Vec<(PortKey, String)>,
@@ -70,6 +72,9 @@ pub fn scan(
                         .push(format!("{} moved to {origin} ({reason})", key.origin));
                     resolved_away += 1;
                     let new_key = key.with_origin(&origin);
+                    // Dep edges still name the old origin: resolved through
+                    // this alias, then the new key's own, to the port.
+                    result.aliases.insert(key.clone(), new_key.clone());
                     if !seen.insert(new_key.clone()) {
                         continue;
                     }
@@ -291,6 +296,44 @@ mod tests {
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let warm = scan(&roots, &ctx, &files, 2, &mut cache, &moved, |_| {});
         assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
+    }
+
+    /// A dependency on a MOVED origin resolves to the port it moved to: the
+    /// loop through it is found, and a refresh's GC keeps the port.
+    #[test]
+    fn a_dependency_on_a_moved_origin_resolves_to_its_new_one() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let dep = |o: &str| format!("_UNIFIED_DEPENDS=x:{o}\nRUN_DEPENDS_ALL=x:{o}\n");
+        let tmp = fake_tree(&[
+            ("cat/a", &format!("PKGNAME=a-1.0\n{}", dep("cat/old"))),
+            ("cat/new", &format!("PKGNAME=new-1.0\n{}", dep("cat/a"))),
+        ]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+        };
+        let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let roots = vec![PortKey::parse("cat/a").unwrap()];
+        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, |_| {});
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.ports.len(), 2);
+        let old = PortKey::parse("cat/old").unwrap();
+        assert_eq!(
+            crate::deps::resolve(&result.ports, &result.aliases, &old),
+            Some(PortKey::parse("cat/new").unwrap())
+        );
+        let loops = crate::deps::detect(&result.ports, &result.aliases);
+        assert_eq!(loops.len(), 1, "cat/a → cat/old=cat/new → cat/a");
+
+        let mut session =
+            crate::session::Session::new(result.ports, result.aliases, &roots, &files, false);
+        let refresh = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, |_| {});
+        let (_, removed) = session.merge(refresh, &files);
+        assert!(removed.is_empty(), "the GC dropped {removed:?}");
+        assert_eq!(session.ports.len(), 2);
     }
 
     /// make reads `options.local` after the options file (bsd.options.mk's
