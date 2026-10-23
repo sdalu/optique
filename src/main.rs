@@ -998,8 +998,12 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
     let mut given = rs.roots.clone();
     if rs.installed {
-        // synth roots only the installed packages its flavor index matches.
-        let exists = |o: &str| ctx.locate(o).is_some();
+        // synth roots only the installed packages its flavor index matches:
+        // present only when its origin is in synth's own index — each
+        // category Makefile's SUBDIR entries (roots::synth_index) — not
+        // merely a directory holding a Makefile.
+        let synth_index = roots::synth_index(&ctx.portsdir, &ctx.overlays);
+        let exists = |o: &str| synth_index.contains(o);
         let origins = given.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
         let flavors = roots::query_flavors(&origins, &ctx, &files, jobs, &mut cache);
         let (kept, skipped) = roots::synth_installed(&given, exists, &flavors);
