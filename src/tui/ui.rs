@@ -18,6 +18,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     // The description panel's default goes by the terminal's height, taken
     // at every frame so a resize across it shows or hides the panel.
     app.note_screen(f.area().height);
+    // The option pane draws the selected port's rows, never another's.
+    app.sync_editor();
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
@@ -279,7 +281,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         let selected = app.focus == Focus::Editor && i == app.editor_idx;
         match row {
             EditorRow::GroupHeader(gi) => {
-                let g = &info.options.groups[*gi];
+                let Some(g) = info.options.groups.get(*gi) else { continue };
                 let mut text = format!("── {} — {}", g.name, g.kind.label());
                 if !g.desc.is_empty() {
                     text.push_str(&format!(": {}", g.desc));

@@ -562,6 +562,8 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     if ctrl && key.code == KeyCode::Char('l') {
         return KeyOutcome::Repaint;
     }
+    // A key acts on the port the pane shows.
+    app.sync_editor();
     // A message lasts until the next key: left up, it would hide the key
     // legend for the rest of the session.
     app.clear_message();
@@ -1213,6 +1215,15 @@ impl App {
         }
     }
 
+    /// Rebuild the editor rows when they were built for another port than
+    /// the selected one: the pane never shows, nor edits, one port's rows
+    /// under another.
+    pub(crate) fn sync_editor(&mut self) {
+        if self.selected_key() != self.editor_port {
+            self.rebuild_editor();
+        }
+    }
+
     /// Rebuild the editor rows for the selected port: top-level options in
     /// COMPLETE order, then each group, then obsolete saved-only options.
     pub fn rebuild_editor(&mut self) {
@@ -1461,16 +1472,21 @@ impl App {
     }
 
     /// Move the list selection to the given port. A view that hides the
-    /// target (filter, L, t, optionless ports never listed) is widened as far
-    /// as needed — the user asked to go there.
+    /// target (filter, L, t) is widened as far as needed — the user asked to
+    /// go there. A port no view lists (it has no options) is not jumped to:
+    /// the view, the selection and the pane stay as they are.
     fn jump_to_port(&mut self, target: &PortKey) {
-        if !self.session.ports.contains_key(target) {
+        let Some(info) = self.session.ports.get(target) else {
             self.flash(&format!("{target}: not in the closure"), true);
             return;
-        }
+        };
         if let Some(idx) = self.visible.iter().position(|v| v == target) {
             self.select_index(idx);
             self.flash(&format!("jumped to {target}"), false);
+            return;
+        }
+        if !info.options.has_options() {
+            self.flash(&format!("{target} has no options and is not listed: not jumped to"), true);
             return;
         }
         let mut widened = Vec::new();
@@ -1489,13 +1505,9 @@ impl App {
             widened.push("showing ok ports");
             self.rebuild_visible(Some(target.clone()));
         }
-        if self.visible.contains(target) {
-            self.rebuild_editor();
-            self.flash(&format!("jumped to {target} ({})", widened.join(", ")), false);
-        } else {
-            // Only optionless ports remain unlistable.
-            self.flash(&format!("{target} has no options and is not listed"), true);
-        }
+        // A port with options is listed once no view hides it.
+        self.rebuild_editor();
+        self.flash(&format!("jumped to {target} ({})", widened.join(", ")), false);
     }
 
     /// Open the detail overlay on the option under the editor cursor. Only
@@ -4729,6 +4741,62 @@ mod tests {
         assert!(!app.only_loops, "the loop view let go");
         let (msg, err) = app.message.clone().unwrap();
         assert_eq!((msg.as_str(), err), ("jumped to cat/gamma (loop view left)", false));
+    }
+
+    /// Enter in the why overlay on a port without options, which no view
+    /// lists, changes nothing: not the filter, nor the selection, nor the
+    /// pane, and Space then edits the port the pane shows.
+    #[test]
+    fn a_jump_to_an_optionless_port_leaves_the_view_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(
+            tmp.path(),
+            &[("cat/aaa", &[]), ("cat/zeta", &[]), ("cat/beta", &["cat/zeta"])],
+        );
+        app.session.ports.get_mut(&PortKey::parse("cat/beta").unwrap()).unwrap().options =
+            Default::default();
+        app.rebuild_visible(None);
+        press(&mut app, '/');
+        for c in "zeta".chars() {
+            press(&mut app, c);
+        }
+        hit(&mut app, KeyCode::Enter);
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(selected(&app), "cat/zeta");
+        assert!(app.focus == Focus::Editor);
+        press(&mut app, 'r');
+        let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.origin == "cat/beta");
+        for _ in 0..at.expect("beta is a dependent of zeta") {
+            hit(&mut app, KeyCode::Down);
+        }
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(app.filter, "zeta", "the filter stays");
+        assert_eq!(visible(&app), ["cat/zeta"]);
+        assert_eq!(selected(&app), "cat/zeta");
+        assert_eq!(app.editor_port.as_ref().map(|k| k.to_string()).as_deref(), Some("cat/zeta"));
+        let (msg, err) = app.message.clone().unwrap();
+        assert_eq!(
+            (msg.as_str(), err),
+            ("cat/beta has no options and is not listed: not jumped to", true)
+        );
+        hit(&mut app, KeyCode::Char(' '));
+        assert_eq!(staged(&app, "cat/zeta"), ["DOCS"]);
+        assert!(staged(&app, "cat/aaa").is_empty(), "the port the pane did not show");
+    }
+
+    /// Rows built for another port are never drawn, nor edited, under the
+    /// selected one: a group header past the port's groups does not panic.
+    #[test]
+    fn the_pane_never_draws_another_ports_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/aaa", &[]), ("cat/zeta", &[])]);
+        app.editor_rows = vec![EditorRow::GroupHeader(3), EditorRow::Option("GONE".into())];
+        app.editor_idx = 1;
+        app.editor_port = Some(PortKey::parse("cat/zeta").unwrap());
+        assert_eq!(selected(&app), "cat/aaa");
+        let shown = screen(&mut app);
+        assert!(shown.contains("DOCS") && !shown.contains("GONE"), "{shown}");
+        assert_eq!(cursor(&app), "DOCS");
     }
 
     /// On an 80x30 terminal the why box wraps the loop's note line; the
