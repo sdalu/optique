@@ -1176,7 +1176,7 @@ impl App {
 
     /// Is this port blacklisted for the current jail/tree/set?
     pub fn is_blacklisted(&self, info: &crate::model::port::PortInfo) -> bool {
-        self.blacklist.matches(&info.key.origin)
+        self.blacklist.matches(&info.canonical, info.is_default_flavor())
     }
 
     /// The dependency loop this port is caught in, if any.

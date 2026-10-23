@@ -33,6 +33,7 @@ use std::time::Instant;
 use anyhow::{Context as _, Result};
 
 use crate::cli::{Cli, Command};
+use crate::model::port::PortInfo;
 use crate::moved::Moved;
 use crate::query::makerunner::QueryCtx;
 use crate::query::scanner::{self, ScanResult};
@@ -1100,7 +1101,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             undecided,
             state,
             warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
-            blacklisted: settings.blacklist.matches(&key.origin),
+            blacklisted: settings.blacklist.matches(key, info.is_default_flavor()),
             in_loop: dep_loops.iter().any(|dl| dl.contains(key)),
             options_name: info.options_name.clone(),
             overlay: settings.overlay_of(&key.origin),
@@ -1122,7 +1123,10 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     // A loop every member of which is blacklisted blocks nothing here:
     // poudriere never builds any of them.
     let loop_blacklisted = |dl: &deps::DepLoop| {
-        dl.members.iter().all(|k| settings.blacklist.matches(&k.origin))
+        dl.members.iter().all(|k| {
+            let default_flavor = sess.ports.get(k).is_none_or(PortInfo::is_default_flavor);
+            settings.blacklist.matches(k, default_flavor)
+        })
     };
     let blocking_loops = dep_loops.iter().filter(|dl| !loop_blacklisted(dl)).count();
     let attention = rows.iter().filter(|r| r.needs_attention()).count();

@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
+use crate::model::origin::PortKey;
+
 const POUDRIERE_D: &str = "/usr/local/etc/poudriere.d";
 const POUDRIERE_CONF: &str = "/usr/local/etc/poudriere.conf";
 
@@ -170,7 +172,10 @@ pub struct Blacklist {
 
 impl Blacklist {
     /// Read every existing layer, in poudriere(8) order. Unlike the options
-    /// dir (first match wins) all files contribute entries.
+    /// dir (first match wins) all files contribute entries. Each line has
+    /// its comment (`#` to end) stripped and is then split on whitespace,
+    /// one entry per word — a line may hold several origins
+    /// (`load_blacklist` in common.sh).
     pub fn load(
         poudriere_d: &Path,
         jail: Option<&str>,
@@ -185,21 +190,30 @@ impl Blacklist {
                 let entry = match line.split_once('#') {
                     Some((before, _)) => before,
                     None => line,
-                }
-                .trim();
-                if !entry.is_empty() {
-                    bl.patterns.push(entry.to_string());
-                }
+                };
+                bl.patterns.extend(entry.split_whitespace().map(str::to_string));
             }
             bl.sources.push(path);
         }
         bl
     }
 
-    /// Is this port origin blacklisted? Entries are exact origins or
-    /// shell-style `*` globs, as poudriere(8) allows.
-    pub fn matches(&self, origin: &str) -> bool {
-        self.patterns.iter().any(|p| glob_match(p, origin))
+    /// Is this port blacklisted, matching as poudriere(8)'s `check_bl` does
+    /// (common.sh): entries are exact origins, never globs. A port with no
+    /// flavors (`key.flavor` is `None`) matches only its bare origin. A
+    /// flavored port always matches `origin` or `origin@all`, and
+    /// `origin@<its flavor>`; the default flavor (first of `PortInfo::flavors`,
+    /// told apart by `is_default_flavor`) additionally matches `origin@-`,
+    /// poudriere's `FLAVOR_DEFAULT`.
+    pub fn matches(&self, key: &PortKey, is_default_flavor: bool) -> bool {
+        let has = |entry: &str| self.patterns.iter().any(|p| p == entry);
+        let Some(flavor) = &key.flavor else {
+            return has(&key.origin);
+        };
+        has(&key.origin)
+            || has(&format!("{}@all", key.origin))
+            || has(&format!("{}@{flavor}", key.origin))
+            || (is_default_flavor && has(&format!("{}@-", key.origin)))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -240,26 +254,6 @@ fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<St
     let mut v = vec!["blacklist".to_string()];
     v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-blacklist")));
     v
-}
-
-/// Minimal glob: `*` matches any substring (including empty), everything
-/// else is literal. A pattern without `*` is an exact match.
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.len() == 1 {
-        return pattern == text;
-    }
-    // First literal anchors the start, last one the end, the rest must occur
-    // in order in between (searching left to right can't backtrack wrongly:
-    // every literal is separated by an unbounded '*').
-    let Some(mut rest) = text.strip_prefix(parts[0]) else { return false };
-    for part in &parts[1..parts.len() - 1] {
-        match rest.find(part) {
-            Some(i) => rest = &rest[i + part.len()..],
-            None => return false,
-        }
-    }
-    rest.ends_with(parts[parts.len() - 1])
 }
 
 /// What the command line asks of the resolution.
@@ -1451,7 +1445,7 @@ mod tests {
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(pd.join("options")).unwrap();
         fs::write(pd.join("make.conf"), "WITH_DEBUG=yes\n").unwrap();
-        fs::write(pd.join("blacklist"), "www/*\n").unwrap();
+        fs::write(pd.join("blacklist"), "www/nginx\n").unwrap();
         let host = host(tmp.path(), &pd, &ports, &db);
 
         let local = Request { local: true, ..Request::default() };
@@ -1891,28 +1885,9 @@ not a key value line
         }
     }
 
-    #[test]
-    fn glob_match_handles_poudriere_style_entries() {
-        // A pattern without '*' is an exact match, nothing else.
-        assert!(glob_match("www/nginx", "www/nginx"));
-        assert!(!glob_match("www/nginx", "www/nginx-devel"));
-        assert!(!glob_match("www/nginx", "www/ngin"));
-        // Trailing '*' matches any tail, including the empty one.
-        assert!(glob_match("www/*", "www/nginx"));
-        assert!(glob_match("www/nginx*", "www/nginx-devel"));
-        assert!(glob_match("www/nginx*", "www/nginx"));
-        assert!(!glob_match("www/*", "mail/dovecot"));
-        // '*' alone matches everything, interior globs anchor both ends.
-        assert!(glob_match("*", "anything/at-all"));
-        assert!(glob_match("*", ""));
-        assert!(glob_match("*/nginx", "www/nginx"));
-        assert!(glob_match("www/*devel", "www/nginx-devel"));
-        assert!(!glob_match("www/*devel", "www/nginx"));
-        // A middle literal consumes what it matched: two of them need two.
-        assert!(glob_match("*ab*ab", "abab"));
-        assert!(!glob_match("*ab*ab", "ab"));
-        assert!(glob_match("x*-*y", "xa-by"));
-        assert!(!glob_match("x*-*y", "xy"));
+    /// A non-default-flavor port, matched as `Blacklist::matches` wants it.
+    fn flavor(origin: &str, fl: &str) -> PortKey {
+        PortKey::new(origin, Some(fl.to_string()))
     }
 
     #[test]
@@ -1920,26 +1895,70 @@ not a key value line
         let tmp = tempfile::tempdir().unwrap();
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();
-        fs::write(pd.join("blacklist"), "# comment\n\nwww/nginx\n").unwrap();
-        fs::write(pd.join("s1-blacklist"), "devel/*   # globbed\n").unwrap();
+        // A line may hold several origins, split on whitespace, and '#'
+        // comments the rest of the line away — no globs anywhere.
+        fs::write(pd.join("blacklist"), "# comment\n\nwww/nginx mail/dovecot\n").unwrap();
+        fs::write(pd.join("s1-blacklist"), "devel/py-foo@py312   # one flavor only\n").unwrap();
 
         let bl = Blacklist::load(&pd, None, "default", Some("s1"));
         assert_eq!(bl.sources.len(), 2);
         assert!(!bl.is_empty());
-        assert!(bl.matches("www/nginx"));
-        assert!(bl.matches("devel/anything"));
-        assert!(!bl.matches("mail/dovecot"));
+        // A flavorless port matches only its bare origin.
+        assert!(bl.matches(&PortKey::new("www/nginx", None), true));
+        assert!(bl.matches(&PortKey::new("mail/dovecot", None), true));
+        assert!(!bl.matches(&PortKey::new("mail/dovecot2", None), true));
+        // A flavored entry names one flavor: only that flavor matches,
+        // default or not.
+        assert!(bl.matches(&flavor("devel/py-foo", "py312"), true));
+        assert!(bl.matches(&flavor("devel/py-foo", "py312"), false));
+        assert!(!bl.matches(&flavor("devel/py-foo", "py311"), false));
+        // An unglobbed entry does not become a substring match.
+        assert!(!bl.matches(&PortKey::new("www/nginx-devel", None), true));
 
         // Without -z the set layer is not even looked at.
         let bl = Blacklist::load(&pd, None, "default", None);
         assert_eq!(bl.sources, vec![pd.join("blacklist")]);
-        assert!(bl.matches("www/nginx"));
-        assert!(!bl.matches("devel/anything"));
+        assert!(bl.matches(&PortKey::new("www/nginx", None), true));
+        assert!(!bl.matches(&flavor("devel/py-foo", "py312"), true));
 
         // No poudriere.d at all: empty, matches nothing.
         let bl = Blacklist::load(&tmp.path().join("nope"), Some("j1"), "t1", Some("s1"));
         assert!(bl.is_empty());
-        assert!(!bl.matches("www/nginx"));
+        assert!(!bl.matches(&PortKey::new("www/nginx", None), true));
+    }
+
+    /// A port that has flavors matches `origin`, `origin@all` and
+    /// `origin@<flavor>` whatever flavor is asked for, plus `origin@-`
+    /// (poudriere's `FLAVOR_DEFAULT`) only for the default flavor — see
+    /// `check_bl` in common.sh.
+    #[test]
+    fn blacklist_matching_follows_poudriere_flavor_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("blacklist"), "devel/py-foo@- net/bar@all devel/py-baz@py312\n")
+            .unwrap();
+        let bl = Blacklist::load(&pd, None, "default", None);
+
+        // `origin@-` matches only the default flavor, never another one.
+        assert!(bl.matches(&flavor("devel/py-foo", "py311"), true));
+        assert!(!bl.matches(&flavor("devel/py-foo", "py311"), false));
+        assert!(!bl.matches(&flavor("devel/py-foo", "py312"), false));
+
+        // `origin@all` matches every flavor, default or not.
+        assert!(bl.matches(&flavor("net/bar", "py311"), true));
+        assert!(bl.matches(&flavor("net/bar", "py312"), false));
+
+        // A named flavor matches only itself, default or not.
+        assert!(bl.matches(&flavor("devel/py-baz", "py312"), true));
+        assert!(bl.matches(&flavor("devel/py-baz", "py312"), false));
+        assert!(!bl.matches(&flavor("devel/py-baz", "py311"), true));
+
+        // A bare origin blacklists every flavor too, default or not.
+        fs::write(pd.join("blacklist"), "devel/py-quux\n").unwrap();
+        let bl = Blacklist::load(&pd, None, "default", None);
+        assert!(bl.matches(&flavor("devel/py-quux", "py312"), true));
+        assert!(bl.matches(&flavor("devel/py-quux", "py311"), false));
     }
 
     #[test]

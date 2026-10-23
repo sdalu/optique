@@ -121,13 +121,17 @@ blacklist
 <jail>-<tree>-<set>-blacklist
 ```
 
-Each line holds one port origin, `#` starts a comment, and `*` globs
-are allowed (`www/nginx*`). Blacklisted ports are marked in `scan` and
-in the TUI, never demand attention, and never trip `scan`'s exit-status
-gate, whatever their status — poudriere will not build them, so their
-options cannot hold a build up. A dependency loop trips the gate unless
-every one of its members is blacklisted (see
-[Dependency loops](dependency-loops.md)).
+Each line holds one or more whitespace-separated port origins, and `#`
+starts a comment running to the end of the line. There are no globs —
+entries are matched literally, exactly as poudriere matches them: a
+port with no flavors matches only its bare origin; a flavored port
+matches `origin`, `origin@all`, or `origin@<its flavor>`, and its
+default flavor (the first `make` offers) also matches `origin@-`.
+Blacklisted ports are marked in `scan` and in the TUI, never demand
+attention, and never trip `scan`'s exit-status gate, whatever their
+status — poudriere will not build them, so their options cannot hold a
+build up. A dependency loop trips the gate unless every one of its
+members is blacklisted (see [Dependency loops](dependency-loops.md)).
 
 ## Synth
 

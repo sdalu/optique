@@ -57,6 +57,16 @@ pub struct PortInfo {
     pub warnings: Vec<String>,
 }
 
+impl PortInfo {
+    /// Is `canonical`'s flavor the port's default (the first of `flavors`)?
+    /// Poudriere's blacklist (`Blacklist::matches`) treats the default
+    /// flavor specially (`origin@-` also matches it); a flavorless port has
+    /// no flavor to be default or not, so this is vacuously true for one.
+    pub fn is_default_flavor(&self) -> bool {
+        self.canonical.flavor.as_deref() == self.flavors.first().map(String::as_str)
+    }
+}
+
 #[cfg(test)]
 impl PortInfo {
     /// A port with nothing but its origin (`cat/port` or `cat/port@flavor`):

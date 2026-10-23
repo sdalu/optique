@@ -1852,12 +1852,22 @@ blacklist
 <jail>-<tree>-<set>-blacklist
 .Ed
 .Pp
-Each line holds one port origin,
+Each line holds one or more whitespace-separated port origins, and
 .Ql #
-starts a comment, and
-.Ql *
-globs are allowed, as in
-.Ql www/nginx* .
+starts a comment running to the end of the line; there are no globs, only
+literal origins, matched exactly as
+.Xr poudriere 8
+matches them: a port with no flavors matches only its bare
+.Ar origin ;
+a flavored port matches
+.Ar origin ,
+.Ar origin Ns @all ,
+or
+.Ar origin Ns @ Ns Ar flavor
+for its own flavor, and its default flavor (the first
+.Xr make 1
+offers) also matches
+.Ar origin Ns @- .
 Blacklisted ports are marked in
 .Cm scan
 and in the interface, never demand attention and never trip
