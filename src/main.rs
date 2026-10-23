@@ -1024,6 +1024,17 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         .map(|i| i.options_name.as_str())
         .collect();
     for name in names {
+        // make reads options.local after the file (bsd.options.mk:341-363),
+        // and so does optique; sync never writes it, so what it sets or
+        // unsets stays whatever the options file says.
+        let local = files.local_names(name);
+        if !local.is_empty() {
+            eprintln!(
+                "{} {name}/options.local overrides the options file for {}; sync leaves it alone",
+                tint(paint, ansi::CYAN, "note:"),
+                local.into_iter().collect::<Vec<_>>().join(" ")
+            );
+        }
         let Some(saved) = files.saved(name) else { continue };
         let unlined = saved.unlined();
         if !unlined.is_empty() {

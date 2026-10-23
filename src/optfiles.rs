@@ -111,12 +111,32 @@ impl OptionsFiles {
         self.read_local(options_name).hash()
     }
 
-    /// The saved choices the file records. A stray byte that is not UTF-8
-    /// (in a comment, say) does not void them: the lines that matter are
-    /// plain ASCII, and make reads the file all the same.
+    /// The saved choices as make reads them: the options file, with the
+    /// SET and UNSET lines of the `options.local` beside it read after it
+    /// (`SavedOptionsFile::with_local`); None without an options file. A
+    /// stray byte that is not UTF-8 (in a comment, say) does not void them:
+    /// the lines that matter are plain ASCII, and make reads the files all
+    /// the same.
     pub fn saved(&self, options_name: &str) -> Option<SavedOptionsFile> {
+        let own = self.own(options_name)?;
+        Some(match self.local_bytes(options_name) {
+            Some(local) => own.with_local(&String::from_utf8_lossy(&local)),
+            None => own,
+        })
+    }
+
+    /// The options file alone, as written: what a write may carry over.
+    pub fn own(&self, options_name: &str) -> Option<SavedOptionsFile> {
         let bytes = self.bytes(options_name)?;
         Some(SavedOptionsFile::parse(&String::from_utf8_lossy(&bytes)))
+    }
+
+    /// The options `options.local` sets or unsets: what it overrides of the
+    /// options file. Empty without one.
+    pub fn local_names(&self, options_name: &str) -> std::collections::BTreeSet<String> {
+        self.local_bytes(options_name)
+            .map(|b| SavedOptionsFile::local_names(&String::from_utf8_lossy(&b)))
+            .unwrap_or_default()
     }
 
     /// Drop what is known of these files, so the next read sees the disk:
@@ -281,6 +301,24 @@ mod tests {
             assert_eq!(files.hash("cat_locked"), UNREADABLE);
         }
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    /// The saved choices are the file with options.local read after it, as
+    /// make reads them (bsd.options.mk:341-363); the file alone stays at
+    /// hand for what a write carries over.
+    #[test]
+    fn saved_reads_options_local_after_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        put(tmp.path(), "cat_port", b"OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n");
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n")
+            .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let saved = files.saved("cat_port").unwrap();
+        let v: Vec<_> = ["A", "B", "C"].iter().map(|o| saved.value(o)).collect();
+        assert_eq!(v, [Some(false), Some(false), Some(false)]);
+        assert_eq!(files.own("cat_port").unwrap().value("A"), Some(true));
+        assert_eq!(files.local_names("cat_port").into_iter().collect::<Vec<_>>(), ["A", "B"]);
+        assert!(files.local_names("cat_none").is_empty());
     }
 
     #[test]

@@ -89,7 +89,11 @@ command that reads it, and `sync` completes it: make reads such an option at
 its defaults, follows them if they change, and `make config-conditional` asks
 about it again. A hand-written file is read as the makefile it is: several
 options to a line, spaces around `+=` or `=`, and `=` assigning a list
-afresh; `sync` writes it back as `make config` does. `--dry-run`/`-n` reports what
+afresh; `sync` writes it back as `make config` does. An `options.local`
+beside the file is read after it, as make does: its SET and UNSET lines
+join the file's, UNSET winning, and the result is the saved choice every
+command shows. `sync` never writes it, so an option it unsets stays off;
+every command that reads one notes which options it sets or unsets. `--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in
 the same shape as `decide` (see [machine-interface.md](machine-interface.md))
 instead of the per-file listing.

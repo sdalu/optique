@@ -60,3 +60,31 @@ fn a_hand_written_file_is_read_as_make_reads_it() {
     assert_eq!(flagged(&port, "staged"), make, "{port}");
     assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
 }
+
+/// bsd.options.mk:341-363: options.local is read after the options file and
+/// joins its lists, UNSET winning. The file sets DOCS, options.local unsets
+/// it and sets AUDIO, which the file unsets: make has neither on, nor does
+/// optique, the port is configured, and sync leaves both files alone.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn options_local_is_read_after_the_file() {
+    let f = Fixture::new();
+    let file = "_OPTIONS_READ=cond-1.0\n_FILE_COMPLETE_OPTIONS_LIST=AUDIO DOCS NAS SOX\n\
+                OPTIONS_FILE_UNSET+=AUDIO\nOPTIONS_FILE_SET+=DOCS\n\
+                OPTIONS_FILE_UNSET+=NAS\nOPTIONS_FILE_UNSET+=SOX\n";
+    let local = "OPTIONS_FILE_UNSET+=DOCS\nOPTIONS_FILE_SET+=AUDIO\n";
+    f.write_file("misc_cond", file);
+    let local_path = f.options.join("misc_cond/options.local");
+    std::fs::write(&local_path, local).unwrap();
+    let make = f.make_v("misc/cond", "PORT_OPTIONS");
+    assert_eq!(make, Vec::<String>::new());
+    let port = f.scan_port(&["misc/cond"], "misc/cond");
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(port["status"], "ok", "{port}");
+
+    let out = f.run("sync", &["misc/cond"]);
+    assert!(common::stderr(&out).contains("options.local overrides the options file for AUDIO DOCS"));
+    assert!(common::stderr(&out).contains("up to date"), "{}", common::stderr(&out));
+    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
+    assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
+}

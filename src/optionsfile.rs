@@ -20,6 +20,33 @@ impl SavedOptionsFile {
     /// Lines that assign nothing optique reads are skipped.
     pub fn parse(text: &str) -> Self {
         let mut out = SavedOptionsFile::default();
+        out.read(text, false);
+        out
+    }
+
+    /// The file as make sees it with `options.local` (`local`) read after
+    /// it: bsd.options.mk:341-363 includes the options file, then
+    /// `.sinclude`s `${OPTIONS_FILE}.local`, and only then applies
+    /// OPTIONS_FILE_SET and OPTIONS_FILE_UNSET as both left them. The local
+    /// file's SET and UNSET lines carry on the file's lists (`+=` adds to
+    /// them, `=` assigns them afresh); its list and `_OPTIONS_READ`, which
+    /// make never reads, are not taken. optique never writes it.
+    pub fn with_local(mut self, local: &str) -> Self {
+        self.read(local, true);
+        self
+    }
+
+    /// The options `options.local` text `local` names on a SET or UNSET
+    /// line.
+    pub fn local_names(local: &str) -> BTreeSet<String> {
+        let mut f = SavedOptionsFile::default();
+        f.read(local, true);
+        f.set.into_iter().chain(f.unset).collect()
+    }
+
+    /// Read `text`'s assignments into `self`, in order; `lists_only`
+    /// takes nothing but the SET and UNSET lines.
+    fn read(&mut self, text: &str, lists_only: bool) {
         for line in text.lines() {
             // A `#` starts a comment, at the head of a line or after a value.
             let line = line.split('#').next().unwrap_or_default().trim();
@@ -30,22 +57,22 @@ impl SavedOptionsFile {
             };
             let words = value.split_whitespace().map(str::to_string);
             match name {
-                "_OPTIONS_READ" => {
+                "_OPTIONS_READ" if !lists_only => {
                     let v = value.trim();
-                    if append && !out.options_read.is_empty() {
-                        out.options_read = format!("{} {v}", out.options_read);
+                    if append && !self.options_read.is_empty() {
+                        self.options_read = format!("{} {v}", self.options_read);
                     } else {
-                        out.options_read = v.to_string();
+                        self.options_read = v.to_string();
                     }
                 }
-                "_FILE_COMPLETE_OPTIONS_LIST" => {
+                "_FILE_COMPLETE_OPTIONS_LIST" if !lists_only => {
                     if !append {
-                        out.complete.clear();
+                        self.complete.clear();
                     }
-                    out.complete.extend(words);
+                    self.complete.extend(words);
                 }
                 "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => {
-                    let list = if name == "OPTIONS_FILE_SET" { &mut out.set } else { &mut out.unset };
+                    let list = if name == "OPTIONS_FILE_SET" { &mut self.set } else { &mut self.unset };
                     if !append {
                         list.clear();
                     }
@@ -54,7 +81,6 @@ impl SavedOptionsFile {
                 _ => {}
             }
         }
-        out
     }
 
     /// The option's value as make reads the file: bsd.options.mk applies
@@ -179,6 +205,29 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.complete, ["A", "B", "X"]);
         let v: Vec<_> = ["A", "C", "X", "Y"].iter().map(|o| f.value(o)).collect();
         assert_eq!(v, [None, Some(false), Some(true), Some(false)]);
+    }
+
+    /// bsd.options.mk:341-363: options.local is read after the file and
+    /// its lines join the file's lists before either is applied, so UNSET
+    /// wins across the two: A, set by the file and unset by options.local,
+    /// is off; B, unset by the file and set by options.local, too.
+    #[test]
+    fn options_local_joins_the_files_lists() {
+        let f = SavedOptionsFile::parse(
+            "_FILE_COMPLETE_OPTIONS_LIST=A B C\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\nOPTIONS_FILE_UNSET+=C\n",
+        )
+        .with_local("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n_FILE_COMPLETE_OPTIONS_LIST=Z\n");
+        let v: Vec<_> = ["A", "B", "C"].iter().map(|o| f.value(o)).collect();
+        assert_eq!(v, [Some(false), Some(false), Some(false)]);
+        assert_eq!(f.complete, ["A", "B", "C"], "the file's own list");
+        // An assignment in options.local resets what the file added.
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A B\n").with_local("OPTIONS_FILE_SET=C\n");
+        let v: Vec<_> = ["A", "B", "C"].iter().map(|o| f.value(o)).collect();
+        assert_eq!(v, [None, None, Some(true)]);
+        let names: Vec<String> =
+            SavedOptionsFile::local_names("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n").into_iter().collect();
+        assert_eq!(names, ["A", "B"]);
     }
 
     #[test]

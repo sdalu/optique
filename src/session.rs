@@ -838,8 +838,10 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// Effective options as make computes them with `file` as the options file
 /// (None: no file), from what the scan knows — never from the port's
 /// queried `effective`, which in the TUI already holds staged edits once a
-/// refresh has run. `options.local`, WITH/WITHOUT and OPTIONS_OVERRIDE are
-/// not modelled.
+/// refresh has run. `file` is the options file with its `options.local`
+/// read after it (`OptionsFiles::saved`), when it comes from disk; with
+/// no file, an `options.local` alone is not modelled, nor are WITH/WITHOUT
+/// and OPTIONS_OVERRIDE.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete: BTreeSet<&str> = o.complete.iter().map(String::as_str).collect();

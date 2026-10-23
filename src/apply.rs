@@ -215,8 +215,10 @@ pub fn plan_writes<'a>(
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        // Read with its options.local, as make reads it; what a write
+        // carries over comes from the file alone, which is all it writes.
         let old = files.saved(options_name);
-        let planned = planned_file(chosen, cands, old.as_ref());
+        let planned = planned_file(chosen, cands, files.own(options_name).as_ref());
         if minimal {
             // The file decides every flavor sharing it: it goes only when
             // none of them ends up elsewhere without it (a flavor can set its
@@ -702,6 +704,36 @@ mod tests {
             false,
         );
         assert_eq!(planned.writes.len(), 1);
+    }
+
+    /// bsd.options.mk:341-363: options.local is read after the file and
+    /// joins its lists, UNSET winning. With the file setting A and
+    /// options.local unsetting it, make has A off: so does the session,
+    /// the port is configured, and sync finds nothing to write, leaving
+    /// options.local alone.
+    #[test]
+    fn options_local_is_read_with_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let info = mk_info(&["A", "B", "C"], &[]);
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B C\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\nOPTIONS_FILE_UNSET+=C\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n")
+            .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let mut ports = std::collections::BTreeMap::new();
+        ports.insert(info.key.clone(), info.clone());
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let sess = crate::session::Session::new(ports, Default::default(), &roots, &files, false);
+        let staged = sess.state(&info).unwrap().staged.clone();
+        assert!(staged.is_empty(), "{staged:?}");
+        assert_eq!(sess.status(&info), crate::session::UiStatus::Ok);
+        let planned = plan_writes(std::iter::once((&info.key.clone(), &info, staged)), &files, false);
+        assert!(planned.writes.is_empty(), "{:?}", planned.writes);
     }
 
     /// A file `make config` wrote with LDAPS on and LDAP unset, LDAPS
