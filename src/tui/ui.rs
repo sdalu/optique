@@ -10,7 +10,7 @@ use crate::model::options::{on_off, Provenance};
 use crate::model::port::PortInfo;
 use crate::session::UiStatus;
 
-use super::{App, EditorRow, Focus, OverlayKind};
+use super::{clamp_u16, App, EditorRow, Focus, OverlayKind};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let outer = Layout::default()
@@ -814,9 +814,12 @@ fn scroll_indicator(f: &mut Frame, area: Rect, rows: usize, scroll: usize, borde
     }
 }
 
-fn draw_apply_modal(f: &mut Frame, app: &App) {
-    let Some(modal) = &app.modal else { return };
+fn draw_apply_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(80, 70, f.area());
+    let inner_h = area.height.saturating_sub(2);
+    app.page.apply = inner_h;
+    let dir = &app.options_dir;
+    let Some(modal) = &mut app.modal else { return };
     f.render_widget(Clear, area);
     let width = area.width.saturating_sub(2);
 
@@ -840,7 +843,7 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
             format!(", {} removed (--minimal)", modal.removals.len())
         };
         let head = |dir: &str| format!("{} options file(s) will be written to {dir}{removed}:", modal.writes.len());
-        let dir = app.options_dir.display().to_string();
+        let dir = dir.display().to_string();
         // One row: the directory gives way, its last two components kept.
         let room = (width as usize).saturating_sub(head("").chars().count());
         lines.push(Line::from(head(&elide_dir(&dir, room))));
@@ -871,9 +874,20 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
         }
         entries.extend(modal.removals.iter().filter(|r| !conflicting(&r.options_name)).map(removal_line));
         entries.extend(modal.writes.iter().filter(|w| !conflicting(&w.options_name)).map(write_line));
-        let skip = modal.scroll.min(entries.len());
-        skipped = wrapped_height(&entries[..skip], width);
-        lines.extend(entries.into_iter().skip(skip));
+        // Scrolled no further than it takes to bring the last entry in:
+        // past that only blank rows would come into view.
+        let heights: Vec<usize> =
+            entries.iter().map(|e| wrapped_height(std::slice::from_ref(e), width)).collect();
+        let head_rows = wrapped_height(&lines, width);
+        let mut rest: usize = heights.iter().sum();
+        let mut last_page = 0;
+        while last_page < entries.len() && head_rows + rest > inner_h as usize {
+            rest -= heights[last_page];
+            last_page += 1;
+        }
+        modal.scroll = modal.scroll.min(last_page);
+        skipped = heights[..modal.scroll].iter().sum();
+        lines.extend(entries.into_iter().skip(modal.scroll));
     }
 
     let (title, keys) = match (&modal.done, modal.conflicted.len()) {
@@ -1197,9 +1211,11 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
 /// Cap on the dependents listed before collapsing the rest into "+ N more".
 pub(crate) const WHY_MAX_DEPENDENTS: usize = 15;
 
-fn draw_why(f: &mut Frame, app: &App) {
-    let Some(why) = &app.why else { return };
+fn draw_why(f: &mut Frame, app: &mut App) {
     let area = centered_rect(70, 60, f.area());
+    let inner_height = area.height.saturating_sub(2) as usize;
+    app.page.why = inner_height as u16;
+    let Some(why) = &mut app.why else { return };
     f.render_widget(Clear, area);
     let dim = Style::default().fg(Color::DarkGray);
 
@@ -1327,25 +1343,56 @@ fn draw_why(f: &mut Frame, app: &App) {
     if why.dependents.is_empty() {
         lines.push(Line::from(Span::styled("  none in this closure", dim)));
     }
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "↑/↓ move · Enter jump to port · r why of selection · other key closes",
-        dim,
-    )));
 
-    // A loop's tangle can outrun the box; keep the cursor's row in view,
-    // counting the rows the lines above it wrap to.
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let cursor_row = wrapped_height(&lines[..selected_line], area.width.saturating_sub(2));
-    let scroll = cursor_row.saturating_sub(inner_height.saturating_sub(1)) as u16;
-    let rows = wrapped_height(&lines, area.width.saturating_sub(2));
+    // A loop's tangle or the dependents can outrun the box: the view moves
+    // only as far as it takes to keep the cursor's row in it, counting the
+    // rows the lines above wrap to. The first entry shows the top, the last
+    // one the end, so what heads and closes the text is reached too.
+    let width = area.width.saturating_sub(2);
+    let cursor_row = wrapped_height(&lines[..selected_line], width);
+    let rows = wrapped_height(&lines, width);
+    let last_page = rows.saturating_sub(inner_height);
+    let mut scroll = why.scroll.min(last_page).min(cursor_row);
+    if cursor_row >= scroll + inner_height {
+        scroll = cursor_row + 1 - inner_height.max(1);
+    }
+    if why.selected == 0 && cursor_row < inner_height {
+        scroll = 0;
+    }
+    if why.selected + 1 >= row && rows - cursor_row <= inner_height {
+        scroll = last_page;
+    }
+    why.scroll = scroll;
+    let hint = fitting(
+        width,
+        &[
+            " Enter: jump · r: why of selection · j/k move · other key closes ",
+            " Enter jump · r why · j/k move · other key closes ",
+        ],
+    );
     let border = Style::default().fg(Color::LightBlue);
-    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(
-        Block::default().borders(Borders::ALL).title(format!(" why {}? ", why.key)).border_style(border),
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((clamp_u16(scroll), 0)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" why {}? ", why.key))
+            .title_bottom(Line::from(Span::styled(hint, dim)))
+            .border_style(border),
     );
     f.render_widget(p, area);
-    scroll_indicator(f, area, rows, scroll as usize, border);
+    scroll_indicator(f, area, rows, scroll, border);
 }
+
+/// The first of `hints` that fits on a border `width` columns wide between
+/// its corners, else the last (the shortest).
+fn fitting<'a>(width: u16, hints: &[&'a str]) -> &'a str {
+    hints
+        .iter()
+        .find(|h| h.chars().count() <= width as usize)
+        .or(hints.last())
+        .copied()
+        .unwrap_or_default()
+}
+
 
 /// Human-readable source of an option's current value.
 fn provenance_label(p: Provenance) -> &'static str {
@@ -1360,10 +1407,13 @@ fn provenance_label(p: Provenance) -> &'static str {
 
 /// Everything the framework says about one option, including the dependencies
 /// enabling it pulls in. Looked up fresh on every frame.
-fn draw_opt_info(f: &mut Frame, app: &App) {
-    let Some((key, opt)) = &app.opt_info else { return };
-    let Some(info) = app.session.ports.get(key) else { return };
+fn draw_opt_info(f: &mut Frame, app: &mut App) {
     let area = centered_rect(72, 66, f.area());
+    let inner_height = area.height.saturating_sub(2);
+    app.page.opt_info = inner_height;
+    let Some(shown) = &app.opt_info else { return };
+    let (key, opt) = (&shown.key, &shown.opt);
+    let Some(info) = app.session.ports.get(key) else { return };
     f.render_widget(Clear, area);
     let dim = Style::default().fg(Color::DarkGray);
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
@@ -1455,39 +1505,109 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
         }
     }
 
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled("press any key to close", dim)));
-
-    // This one does not scroll: the bar still says the box cut it short.
     let rows = wrapped_height(&lines, area.width.saturating_sub(2));
+    let last_page = clamp_u16(rows.saturating_sub(inner_height as usize));
+    let scroll = shown.scroll.min(last_page);
+    let hint = if last_page > 0 { " j/k scroll · any other key closes " } else { " any key closes " };
     let border = Style::default().fg(Color::LightBlue);
-    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default().borders(Borders::ALL).title(format!(" {opt} — {key} ")).border_style(border),
+    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {opt} — {key} "))
+            .title_bottom(Line::from(Span::styled(hint, dim)))
+            .border_style(border),
     );
     f.render_widget(p, area);
-    scroll_indicator(f, area, rows, 0, border);
+    scroll_indicator(f, area, rows, scroll as usize, border);
+    if let Some(shown) = &mut app.opt_info {
+        shown.scroll = scroll;
+    }
 }
 
-/// The port's pkg-help file, scrollable. These are prose files with their own
-/// indentation and lines that outrun the popup, so each source line keeps its
-/// indent and wraps under itself; tabs are expanded so the wrap counts what
-/// the terminal will show.
-/// One source line of a pkg-help, ready for the popup: tabs expanded, its own
-/// indentation kept and wrapped under itself, blank lines preserved. Both
-/// indents are capped at half the width — a deeply indented line (a code
-/// sample, say) must still wrap inside the box instead of running off it.
+/// The bullets a line of a pkg-help or pkg-descr can start with.
+const BULLETS: [&str; 3] = ["- ", "* ", "• "];
+
+/// A pkg-help or the port's description as the popup lays it out, before
+/// wrapping: consecutive plain lines join into one paragraph, which wraps to
+/// the box, and blank lines separate paragraphs. A line that starts with
+/// whitespace or a bullet, that looks preformatted (a run of two spaces or
+/// more inside it, a table say), or a `WWW:` line keeps a line of its own.
+/// Two spaces after a full stop, `!`, `?` or `:` are typing, not layout: a
+/// tenth of the ports' pkg-descr files space their sentences so. Tabs are
+/// expanded first, so a tab inside a line counts as a run.
+fn reflow(src: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // Whether the last line out is a paragraph that takes the next one.
+    let mut open = false;
+    for line in src {
+        let line = line.replace('\t', "        ");
+        let line = line.trim_end();
+        let kept = line.starts_with(char::is_whitespace)
+            || BULLETS.iter().any(|b| line.starts_with(b))
+            || line.starts_with("WWW:")
+            || laid_out(line);
+        match out.last_mut() {
+            Some(para) if open && !kept && !line.is_empty() => {
+                para.push(' ');
+                para.push_str(line);
+            }
+            _ => out.push(line.to_string()),
+        }
+        open = !kept && !line.is_empty();
+    }
+    out
+}
+
+/// Whether a run of two spaces or more inside `line` lays it out (a table,
+/// aligned columns), rather than ending a sentence.
+fn laid_out(line: &str) -> bool {
+    let mut prev = None;
+    let mut run = 0;
+    for c in line.chars() {
+        if c == ' ' {
+            run += 1;
+            if run == 2 && !matches!(prev, Some('.' | '!' | '?' | ':')) {
+                return true;
+            }
+        } else {
+            run = 0;
+            prev = Some(c);
+        }
+    }
+    false
+}
+
+/// One line of the popup's text, ready for the box: tabs expanded, blank
+/// lines preserved, its own indentation kept and its wrap hung under it
+/// (under the text of a bullet). Both indents are capped at half the width —
+/// a deeply indented line (a code sample, say) must still wrap inside the
+/// box instead of running off it.
 fn help_line(src: &str, width: usize) -> Vec<String> {
     let src = src.replace('\t', "        ");
     if src.trim().is_empty() {
         return vec![String::new()];
     }
-    let indent = (src.len() - src.trim_start().len()).min(width / 2);
-    let hang = (indent + 2).min(width.saturating_sub(1));
-    wrap_text(&format!("{}{}", " ".repeat(indent), src.trim_start()), width, hang)
+    let text = src.trim_start();
+    let indent = (src.len() - text.len()).min(width / 2);
+    let bullet = if BULLETS.iter().any(|b| text.starts_with(b)) { 2 } else { 0 };
+    let hang = (indent + bullet).min(width.saturating_sub(1));
+    wrap_text(&format!("{}{}", " ".repeat(indent), text), width, hang)
 }
 
+/// The pkg-help and description popup: as tall as before, and wide enough
+/// for an 80-column line where the screen allows — 76% of it, at least 84
+/// columns, never closer than two columns to either edge.
+fn port_help_rect(r: Rect) -> Rect {
+    let width = ((r.width as u32 * 76 / 100) as u16).max(84).min(r.width.saturating_sub(4));
+    Rect { x: r.x + (r.width - width) / 2, width, ..centered_rect(76, 70, r) }
+}
+
+/// The port's pkg-help file or description, scrollable. These are prose
+/// files written for an 80-column terminal, hard-wrapped: their paragraphs
+/// are joined and wrapped to the box, while whatever has a layout of its
+/// own keeps its lines (see `reflow`).
 fn draw_port_help(f: &mut Frame, app: &mut App) {
-    let area = centered_rect(76, 70, f.area());
+    let area = port_help_rect(f.area());
     let inner_w = area.width.saturating_sub(2) as usize;
     let inner_h = area.height.saturating_sub(2) as usize;
     app.page.port_help = inner_h as u16;
@@ -1495,7 +1615,7 @@ fn draw_port_help(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
 
     let lines: Vec<Line> =
-        help.lines.iter().flat_map(|src| help_line(src, inner_w)).map(Line::from).collect();
+        reflow(&help.lines).iter().flat_map(|src| help_line(src, inner_w)).map(Line::from).collect();
 
     let max_scroll = lines.len().saturating_sub(inner_h) as u16;
     help.scroll = help.scroll.min(max_scroll);
@@ -1705,11 +1825,83 @@ mod tests {
         assert_eq!(help_line("\tx", 40), ["        x"]);
         // Blank lines survive as blank lines.
         assert_eq!(help_line("   ", 40), [""]);
-        // A normal line keeps its own indent and hangs the wrap under it.
+        // A normal line keeps its own indent and wraps under it.
+        assert_eq!(help_line("  alpha beta gamma", 12), ["  alpha beta", "  gamma"]);
+        // A bullet hangs its wrap under its text.
+        assert_eq!(help_line("- alpha beta gamma", 12), ["- alpha beta", "  gamma"]);
+    }
+
+    /// A hard-wrapped paragraph is joined into one; a blank line ends it.
+    #[test]
+    fn reflow_joins_a_hard_wrapped_paragraph() {
+        let src = |t: &str| t.lines().map(str::to_string).collect::<Vec<_>>();
         assert_eq!(
-            help_line("  alpha beta gamma", 12),
-            ["  alpha beta", "    gamma"]
+            reflow(&src("Dovecot uses its own daemon\nfor authentication, so\nno library.\n\nNext one.")),
+            ["Dovecot uses its own daemon for authentication, so no library.", "", "Next one."]
         );
+        // Two spaces between sentences are not a table (mail/postfix's
+        // pkg-help); a run inside a sentence still is.
+        assert_eq!(
+            reflow(&src("for authentication.  Because there is
+no library.")),
+            ["for authentication.  Because there is no library."]
+        );
+        assert!(laid_out("name    value"));
+        assert!(!laid_out("one.  Two?  Three:  four"));
+    }
+
+    /// A bulleted list, an indented block, a table and WWW: lines keep their
+    /// lines, and a paragraph after them starts afresh.
+    #[test]
+    fn reflow_keeps_lists_blocks_and_tables() {
+        let src: Vec<String> = [
+            "Use it to:",
+            "- avoid this",
+            "* avoid that",
+            "• and so on",
+            "then a paragraph",
+            "that goes on",
+            "",
+            "  % postconf -a",
+            "  % postconf -A",
+            "\tindented by a tab",
+            "NAME    VALUE",
+            "WWW: https://example.org/",
+            "last",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(
+            reflow(&src),
+            [
+                "Use it to:",
+                "- avoid this",
+                "* avoid that",
+                "• and so on",
+                "then a paragraph that goes on",
+                "",
+                "  % postconf -a",
+                "  % postconf -A",
+                "        indented by a tab",
+                "NAME    VALUE",
+                "WWW: https://example.org/",
+                "last",
+            ]
+        );
+    }
+
+    /// The pkg-help popup is 76% of the screen, at least 84 columns so an
+    /// 80-column line fits, and two columns short of either edge at most.
+    #[test]
+    fn the_pkg_help_popup_fits_an_80_column_line() {
+        let width = |w: u16| port_help_rect(Rect::new(0, 0, w, 40)).width;
+        assert_eq!(width(100), 84, "wider than 76% of 100");
+        assert_eq!(width(88), 84, "an 80-column line fits inside the borders and a blank");
+        assert_eq!(width(80), 76, "two columns short of each edge");
+        assert_eq!(width(200), 152, "76%");
+        let r = port_help_rect(Rect::new(0, 0, 100, 40));
+        assert_eq!((r.x, r.x + r.width), (8, 92), "centered");
+        assert_eq!(r.height, centered_rect(76, 70, Rect::new(0, 0, 100, 40)).height, "height as before");
     }
 
     /// The rows `draw` leaves on a `width` x `height` screen, trimmed.

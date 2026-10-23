@@ -683,7 +683,8 @@ In the option pane, show details for the selected option: description, group,
 .Va IMPLIES
 and
 .Va PREVENTS ,
-and the dependencies enabling it would add.
+and the dependencies enabling it would add, in a popup any key but the
+scroll keys closes.
 On the port list it only says so.
 .It Ic v
 Show what the selected port is, from either pane: its
@@ -711,9 +712,20 @@ cannot be read says so.
 .It Ic h
 Show the selected port's
 .Pa pkg-help
-notes in a scrollable popup
-.Pq Ic j , k , \(ua , \(da , Ic PgUp , Ic PgDn , Ic Ctrl-B , Ic Ctrl-F , Ic g , Ic G ;
-any other key closes it.
+notes in a scrollable popup; any key but the scroll keys closes it.
+The file is written for an 80-column terminal: the popup joins the lines of a
+paragraph and wraps it to its own width, a blank line ending the paragraph,
+while a line that starts with a blank or a bullet
+.Po
+.Ql \&- ,
+.Ql \&* ,
+.Ql \(bu
+.Pc ,
+holds a run of two spaces or more (not after a full stop), or starts with
+.Ql WWW\&:
+keeps a line of its own, wrapped under its indent.
+The popup is 76% of the screen wide but at least 84 columns, so an 80-column
+line fits on a screen 88 columns wide or more.
 Only ports that ship the file offer this, and those advertise it with a
 .Ql [h] notes
 marker at the right of the option pane's title; see
@@ -722,12 +734,12 @@ The key works in both panes.
 .It Ic r
 Explain why the port is in the closure: its dependency chain, its dependents
 and, when it is caught in one, the dependency loop it belongs to.
-Every port shown is navigable with
-.Ic \(ua Ns / Ns Ic \(da :
+Every port shown is navigable with the scroll keys, the view following;
 .Ic Enter
 jumps the list to it and
 .Ic r
-re-opens the explanation there, which walks a loop port by port.
+re-opens the explanation there, which walks a loop port by port, and any
+other key closes it.
 .It Ic \&? , F1
 Colour-coded in-interface help listing markers, badges and keys.
 .It Ic Ctrl-L
@@ -737,6 +749,25 @@ Quit.
 .Ic Ctrl-C
 quits from anywhere: a popup, the filter or a prompt.
 .El
+.Pp
+Every popup that scrolls \(em the help, the
+.Ic h
+and
+.Ic v
+text, the
+.Ic r
+explanation, the
+.Ic i
+details and the apply preview \(em takes the same scroll keys:
+.Ic j , k , \(ua , \(da
+a row,
+.Ic g , G , Home , End
+the first or the last,
+.Ic PgUp , PgDn , Ctrl-B , Ctrl-F
+a page.
+None of them closes a popup or cancels the preview; the popup's other keys
+are named on its bottom border, and one too small for its text shows a
+scrollbar on its right border.
 .Pp
 Quitting with staged changes opens a prompt offering to keep them:
 .Ic y ,

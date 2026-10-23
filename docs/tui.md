@@ -147,14 +147,22 @@ and the dependencies enabling it would add.
 
 A `[h] notes` marker at the right of the pane's title means the port ships
 a `pkg-help` file — the free-form notes `make config` offers behind its
-Help button (`${PKGDIR}/pkg-help`); `h` opens it in a scrollable popup
-(`j`/`k`, arrows, `PgUp`/`PgDn` or `Ctrl-B`/`Ctrl-F`, `g`/`G`; any other
-key closes it), read
-from disk every time it opens. Any popup too small for its text — this one,
-the help, `r`, `i`, the apply preview — shows a scrollbar on its right
-border, between `▲` and `▼`, its thumb as tall as the share in view and
-where it is. `F1` inside `make config` is portconfig's
-own Ports Collection help, not the port's.
+Help button (`${PKGDIR}/pkg-help`); `h` opens it in a scrollable popup,
+read from disk every time it opens. The file is written for an 80-column
+terminal, hard-wrapped: the popup joins the lines of a paragraph and wraps
+it to its own width, a blank line ending the paragraph, while a line that
+starts with a blank or a bullet (`- `, `* `, `• `), or holds a run of two
+spaces or more (a table, say — two spaces after a full stop do not count),
+keeps a line of its own, wrapped under its
+indent, as a `WWW:` line does. The popup is 76% of the screen wide but at least 84 columns, so an
+80-column line fits on a screen 88 columns wide or more. Every popup that
+scrolls — this one, the help, `r`, `i`, the apply preview — takes the same
+keys: `j`/`k` or `↑`/`↓` a row, `g`/`G` or `Home`/`End` the first or the
+last, `PgUp`/`PgDn` or `Ctrl-B`/`Ctrl-F` a page; none of them closes it,
+and its other keys are on its bottom border. Any popup too small for its
+text shows a scrollbar on its right border, between `▲` and `▼`, its thumb
+as tall as the share in view and where it is. `F1` inside `make config` is
+portconfig's own Ports Collection help, not the port's.
 
 ### The port's description
 
@@ -195,7 +203,8 @@ not move; it shrinks only on a pane too short to leave the options four
 rows, and never depends on how many options the port has, which scroll
 under it. When the text is cut, the rule under the panel says
 `[v] full text`: `v`, from either pane, shows the port's `COMMENT`, `WWW`
-and `pkg-descr` in full, in the popup `h` uses for `pkg-help` (`i` is the
+and `pkg-descr` in full, in the popup `h` uses for `pkg-help`, laid out
+the same way (`i` is the
 selected option's detail popup, in the option pane, see
 [The option pane](#the-option-pane); on the port list it only says so). A port that has
 neither a `COMMENT` nor a `pkg-descr` reads `No description available`; a
@@ -266,19 +275,19 @@ gained, and to unconfigured ones when it decides all of them.
 │                               ││This library provides functions for        │
 │                               ││manipulating Unicode strings and for       │
 │           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
-│           │www/nginx  (root)                                   ▲ull text ──┤
-│           │ └─ devel/pcre2                                     █           │
-│           │  └─ devel/cmake-core                               █           │
-│           │   └─ dns/libidn2                                   █           │
-│           │    └─ devel/libunistring                           █           │
-│           │                                                    █           │
-│           │direct dependents (3):                              █           │
-│           │  devel/gettext-tools                               █           │
-│           │  dns/libidn2                                       █           │
-│           │  print/texinfo                                     █           │
+│           │www/nginx  (root)                                   │ull text ──┤
+│           │ └─ devel/pcre2                                     │           │
+│           │  └─ devel/cmake-core                               │           │
+│           │   └─ dns/libidn2                                   │           │
+│           │    └─ devel/libunistring                           │           │
 │           │                                                    │           │
-│           │↑/↓ move · Enter jump to port · r why of selection ·▼           │
-│           └────────────────────────────────────────────────────┘           │
+│           │direct dependents (3):                              │           │
+│           │  devel/gettext-tools                               │           │
+│           │  dns/libidn2                                       │           │
+│           │  print/texinfo                                     │           │
+│           │                                                    │           │
+│           │                                                    │           │
+│           └ Enter jump · r why · j/k move · other key closes ──┘           │
 │                               │├───────────────────────────────────────────┤
 │                               ││  Enter: edit the options                  │
 │                               ││                                           │
@@ -291,9 +300,10 @@ gained, and to unconfigured ones when it decides all of them.
 from a root of the closure down to it, its direct dependents, and, when
 the port is caught in one, the [dependency loop](dependency-loops.md) it
 belongs to, rotated to start at the port asked about. Every port named in
-the overlay is selectable with `↑`/`↓`; `Enter` jumps the list to it, and
+the overlay is selectable with the popups' scroll keys (`j`/`k` or `↑`/`↓`,
+`g`/`G`, `PgUp`/`PgDn`), the view following; `Enter` jumps the list to it, and
 `r` re-opens the explanation there, which is how a chain or a loop is
-walked port by port.
+walked port by port. Any other key closes it.
 
 ## Applying changes
 
@@ -355,7 +365,7 @@ every planned file but theirs), and the result adds `N port(s) skipped:
 conflicting options`. A skipped port's file stays as it is on disk; its
 edits stay staged, still marked `✗`, and still in the draft a quit
 offers to keep. Flavors share one options file, so the file conflicts
-when any of them does. `n` or any other key but `j`/`k`/`↑`/`↓`
+when any of them does. `n` or any other key but the scroll keys
 cancels.
 
 Each options file is read once, when the TUI starts, and judged as it

@@ -106,6 +106,9 @@ pub struct WhyInfo {
     /// Cursor over the navigable entries (the chain, then the loop, then the
     /// shown dependents): Enter jumps to that port, 'r' re-opens why on it.
     pub selected: usize,
+    /// Rows of the text scrolled past, kept by the drawing code so the
+    /// cursor stays in view.
+    pub scroll: usize,
 }
 
 impl WhyInfo {
@@ -133,6 +136,15 @@ pub struct PortHelp {
     pub title: &'static str,
     pub key: PortKey,
     pub lines: Vec<String>,
+    pub scroll: u16,
+}
+
+/// The option-detail overlay: the port and the option it is about, looked
+/// up at draw time so a background refresh keeps the popup current.
+pub struct OptInfo {
+    pub key: PortKey,
+    pub opt: String,
+    /// Rows scrolled past (clamped at draw time).
     pub scroll: u16,
 }
 
@@ -212,9 +224,8 @@ pub struct App {
     pub help_scroll: u16,
     /// Dependency-chain ("why") overlay, when open.
     pub why: Option<WhyInfo>,
-    /// Option-detail overlay: (port, option name). The data is looked up at
-    /// draw time so a background refresh keeps the popup current.
-    pub opt_info: Option<(PortKey, String)>,
+    /// Option-detail overlay, when open.
+    pub opt_info: Option<OptInfo>,
     /// pkg-help or description overlay of the selected port, when open.
     pub port_help: Option<PortHelp>,
     /// Undo stack of (OPTIONS_NAME, staged set before the change), oldest
@@ -246,6 +257,9 @@ pub struct PageRows {
     pub options: u16,
     pub help: u16,
     pub port_help: u16,
+    pub why: u16,
+    pub opt_info: u16,
+    pub apply: u16,
 }
 
 pub fn ensure_terminal() -> Result<()> {
@@ -421,7 +435,6 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     }
     if let Some(tab) = app.help_tab {
         let n = ui::HELP_TABS.len();
-        let page = page_step(app.page.help) as u16;
         match code {
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = c as usize - '1' as usize;
@@ -431,44 +444,31 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             }
             KeyCode::Tab | KeyCode::Right => app.open_help((tab + 1) % n),
             KeyCode::BackTab | KeyCode::Left => app.open_help((tab + n - 1) % n),
-            KeyCode::Down | KeyCode::Char('j') => {
-                app.help_scroll = app.help_scroll.saturating_add(1)
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                app.help_scroll = app.help_scroll.saturating_sub(1)
-            }
-            KeyCode::PageDown => app.help_scroll = app.help_scroll.saturating_add(page),
-            KeyCode::PageUp => app.help_scroll = app.help_scroll.saturating_sub(page),
-            _ => {
-                app.help_tab = None;
-                app.help_scroll = 0;
-            }
+            _ => match scroll_key(code, app.help_scroll as usize, app.page.help) {
+                Some(at) => app.help_scroll = clamp_u16(at),
+                None => {
+                    app.help_tab = None;
+                    app.help_scroll = 0;
+                }
+            },
         }
         return KeyOutcome::Continue;
     }
     if let Some(help) = &mut app.port_help {
-        let page = page_step(app.page.port_help) as u16;
-        match code {
-            KeyCode::Down | KeyCode::Char('j') => help.scroll = help.scroll.saturating_add(1),
-            KeyCode::Up | KeyCode::Char('k') => help.scroll = help.scroll.saturating_sub(1),
-            KeyCode::PageDown => help.scroll = help.scroll.saturating_add(page),
-            KeyCode::PageUp => help.scroll = help.scroll.saturating_sub(page),
-            KeyCode::Home | KeyCode::Char('g') => help.scroll = 0,
-            // Clamped to the real content at draw time.
-            KeyCode::End | KeyCode::Char('G') => help.scroll = u16::MAX,
-            _ => app.port_help = None,
+        // Clamped to the real content at draw time.
+        match scroll_key(code, help.scroll as usize, app.page.port_help) {
+            Some(at) => help.scroll = clamp_u16(at),
+            None => app.port_help = None,
         }
         return KeyOutcome::Continue;
     }
     if let Some(why) = &mut app.why {
-        let count = why.entries().len();
+        // The scroll keys move the cursor, which the box keeps in view.
+        if let Some(at) = scroll_key(code, why.selected, app.page.why) {
+            why.selected = at.min(why.entries().len().saturating_sub(1));
+            return KeyOutcome::Continue;
+        }
         match code {
-            KeyCode::Down | KeyCode::Char('j') if count > 0 => {
-                why.selected = (why.selected + 1).min(count - 1);
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                why.selected = why.selected.saturating_sub(1);
-            }
             KeyCode::Enter => {
                 let target = why.entries().get(why.selected).cloned().cloned();
                 app.why = None;
@@ -487,8 +487,11 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         }
         return KeyOutcome::Continue;
     }
-    if app.opt_info.is_some() {
-        app.opt_info = None;
+    if let Some(info) = &mut app.opt_info {
+        match scroll_key(code, info.scroll as usize, app.page.opt_info) {
+            Some(at) => info.scroll = clamp_u16(at),
+            None => app.opt_info = None,
+        }
         return KeyOutcome::Continue;
     }
     // The bulk prompt takes text input, so it grabs the keys before the
@@ -632,6 +635,29 @@ fn plain_code(key: KeyEvent) -> KeyCode {
     }
 }
 
+/// The one scroll key set of every scrolling popup — the help, pkg-help
+/// and about, why, option info, the apply preview: `j`/`k` and `↑`/`↓` a
+/// row, `g`/`G` and Home/End the first and the last, PgUp/PgDn (Ctrl-B/F
+/// folded in) a page of the `rows` the popup last showed. The offset `at`
+/// moved, `usize::MAX` for the last (the popup clamps it); None for any
+/// other key, which keeps its popup's own meaning.
+fn scroll_key(code: KeyCode, at: usize, rows: u16) -> Option<usize> {
+    Some(match code {
+        KeyCode::Down | KeyCode::Char('j') => at.saturating_add(1),
+        KeyCode::Up | KeyCode::Char('k') => at.saturating_sub(1),
+        KeyCode::PageDown => at.saturating_add(page_step(rows)),
+        KeyCode::PageUp => at.saturating_sub(page_step(rows)),
+        KeyCode::Home | KeyCode::Char('g') => 0,
+        KeyCode::End | KeyCode::Char('G') => usize::MAX,
+        _ => return None,
+    })
+}
+
+/// A scroll offset kept in a u16 (a Paragraph's), saturated.
+fn clamp_u16(at: usize) -> u16 {
+    at.min(u16::MAX as usize) as u16
+}
+
 /// How far a page key moves in a view that showed `rows` rows: one less,
 /// so the row at the edge stays in view (and at least one).
 fn page_step(rows: u16) -> usize {
@@ -755,17 +781,15 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('y') => {
             app.flash("conflicts remain: Y writes anyway · s skips them · n cancels", false)
         }
-        KeyCode::Char('j') | KeyCode::Down => {
-            if let Some(modal) = app.modal.as_mut() {
-                modal.scroll = modal.scroll.saturating_add(1);
+        _ => match scroll_key(code, app.modal.as_ref().map_or(0, |m| m.scroll), app.page.apply) {
+            // In entries, clamped at draw time to the last page.
+            Some(at) => {
+                if let Some(modal) = app.modal.as_mut() {
+                    modal.scroll = at;
+                }
             }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if let Some(modal) = app.modal.as_mut() {
-                modal.scroll = modal.scroll.saturating_sub(1);
-            }
-        }
-        _ => app.modal = None,
+            None => app.modal = None,
+        },
     }
 }
 
@@ -1200,6 +1224,7 @@ impl App {
             dependents: self.session.dependents(&key),
             key,
             selected: 0,
+            scroll: 0,
         }
     }
 
@@ -1255,7 +1280,7 @@ impl App {
         let Some(EditorRow::Option(opt)) = self.editor_rows.get(self.editor_idx) else {
             return;
         };
-        self.opt_info = Some((key, opt.clone()));
+        self.opt_info = Some(OptInfo { key, opt: opt.clone(), scroll: 0 });
     }
 
     /// Open the selected port's pkg-help. Read here rather than at query time
@@ -1960,7 +1985,8 @@ mod tests {
         let thumb = |shown: &str| -> Vec<usize> {
             shown.lines().enumerate().filter(|(_, l)| l.contains('█')).map(|(i, _)| i).collect()
         };
-        let lines = (1..=200).map(|i| format!("line {i}")).collect();
+        // Bullets, so each keeps a line of its own.
+        let lines = (1..=200).map(|i| format!("- line {i}")).collect();
         app.port_help = Some(PortHelp { title: "pkg-help", key: key.clone(), lines, scroll: 0 });
         let top = thumb(&screen(&mut app));
         assert!(!top.is_empty(), "a bar when the text overflows");
@@ -2251,6 +2277,10 @@ mod tests {
         press(&mut app, 'k');
         hit(&mut app, KeyCode::PageUp);
         assert_eq!(app.help_scroll, 0);
+        press(&mut app, 'G');
+        assert_eq!(app.help_scroll, u16::MAX, "G: the end, clamped when drawn");
+        hit(&mut app, KeyCode::Home);
+        assert_eq!((app.help_tab, app.help_scroll), (Some(1), 0), "Home: the top");
         // vi's h and l switch no tab: they are other keys, which close.
         press(&mut app, 'l');
         assert_eq!(app.help_tab, None, "l closes");
@@ -3309,10 +3339,212 @@ mod tests {
 
     /// Everything the in-memory screen shows, rows joined by newlines.
     fn screen(app: &mut App) -> String {
+        screen_at(app, 100, 35)
+    }
+
+    /// The same on a `width` x `height` screen.
+    fn screen_at(app: &mut App, width: u16, height: u16) -> String {
         let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| ui::draw(f, app)).unwrap();
         ui::screen_rows(terminal.backend().buffer()).join("\n")
+    }
+
+    /// The rows holding a popup's scrollbar thumb, top to bottom.
+    fn thumb_rows(shown: &str) -> Vec<usize> {
+        shown.lines().enumerate().filter(|(_, l)| l.contains('█')).map(|(i, _)| i).collect()
+    }
+
+    /// The bottom border of the popup whose hint contains `hint`.
+    fn hint_row<'a>(shown: &'a str, hint: &str) -> &'a str {
+        shown.lines().find(|l| l.contains(hint)).unwrap_or_default()
+    }
+
+    /// The why popup takes the one scroll key set — the cursor moving a row,
+    /// a page or to either end, the view and its scrollbar following — and
+    /// none of those keys closes it; its keys are on its bottom border, out
+    /// of the scrolled text, however many dependents it lists.
+    #[test]
+    fn the_why_popup_scrolls_without_closing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS + 5).map(|i| format!("cat/d{i:02}")).collect();
+        let mut graph: Vec<(&str, &[&str])> =
+            vec![("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])];
+        for name in &names {
+            graph.push((name, &["cat/alpha"]));
+        }
+        let mut app = app_for(tmp.path(), &graph);
+        press(&mut app, 'r');
+        let count = app.why.as_ref().unwrap().entries().len();
+        let shown = screen_at(&mut app, 80, 24);
+        let hint = hint_row(&shown, "j/k move · other key closes");
+        assert!(hint.contains('└') && hint.contains('┘'), "on the bottom border:\n{shown}");
+        assert_eq!(shown.matches("other key closes").count(), 1, "{shown}");
+        let top = thumb_rows(&shown);
+        assert!(!top.is_empty(), "the text overflows:\n{shown}");
+        let page = page_step(app.page.why);
+        assert!(page > 1, "the box's height, from the last frame");
+
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(page), "PgDn moves, not closes");
+        let middle = thumb_rows(&screen_at(&mut app, 80, 24));
+        assert!(middle[0] > top[0], "the thumb follows: {top:?} {middle:?}");
+        ctrl(&mut app, 'f');
+        let further = (2 * page).min(count - 1);
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(further), "Ctrl-F too");
+        ctrl(&mut app, 'b');
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(further - page));
+        press(&mut app, 'G');
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(count - 1), "G: the last");
+        let shown = screen_at(&mut app, 80, 24);
+        // beta depends on alpha too: six dependents past the cap.
+        assert!(shown.contains("+ 6 more"), "the end of the text in view:\n{shown}");
+        let bottom = thumb_rows(&shown);
+        assert!(bottom[0] > middle[0], "the thumb at the bottom: {middle:?} {bottom:?}");
+        press(&mut app, 'g');
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(0), "g: the first");
+        hit(&mut app, KeyCode::End);
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(count - 1), "End: the last");
+        hit(&mut app, KeyCode::Home);
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(app.why.as_ref().map(|w| w.selected), Some(0));
+        assert_eq!(thumb_rows(&screen_at(&mut app, 80, 24)), top, "back at the top");
+        press(&mut app, 'x');
+        assert!(app.why.is_none(), "any other key closes");
+    }
+
+    /// A port with one option described at length.
+    fn long_described(tmp: &std::path::Path, words: usize) -> App {
+        let mut app = app_for(tmp, &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let desc = (0..words).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+        app.session.ports.get_mut(&key).unwrap().options.defs.insert(
+            "DOCS".into(),
+            crate::model::options::OptionDef { desc, ..Default::default() },
+        );
+        hit(&mut app, KeyCode::Enter);
+        press(&mut app, 'i');
+        assert!(app.opt_info.is_some());
+        app
+    }
+
+    /// The option detail scrolls a description too long for a short screen,
+    /// its scrollbar following, and the scroll keys do not close it.
+    #[test]
+    fn the_option_detail_scrolls_without_closing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = long_described(tmp.path(), 300);
+        let shown = screen_at(&mut app, 80, 24);
+        let hint = hint_row(&shown, " j/k scroll · any other key closes ");
+        assert!(hint.contains('└'), "on the bottom border:\n{shown}");
+        assert!(shown.contains("│word0 word1 "), "the popup's first row:\n{shown}");
+        let top = thumb_rows(&shown);
+        assert!(!top.is_empty(), "the text overflows:\n{shown}");
+        let page = page_step(app.page.opt_info) as u16;
+        assert!(page > 1, "the box's height, from the last frame");
+        let scroll = |app: &App| app.opt_info.as_ref().map(|i| i.scroll);
+
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(scroll(&app), Some(page), "PgDn scrolls, not closes");
+        let shown = screen_at(&mut app, 80, 24);
+        assert!(!shown.contains("│word0 word1 "), "scrolled past the first row:\n{shown}");
+        assert!(thumb_rows(&shown)[0] > top[0], "the thumb follows");
+        ctrl(&mut app, 'f');
+        assert!(scroll(&app).is_some(), "Ctrl-F too");
+        press(&mut app, 'G');
+        assert_eq!(scroll(&app), Some(u16::MAX), "G: to the end, clamped when drawn");
+        let shown = screen_at(&mut app, 80, 24);
+        assert!(shown.contains("source: port default"), "the end in view:\n{shown}");
+        let last = scroll(&app).unwrap();
+        assert!(last < u16::MAX && last >= page, "clamped: {last}");
+        press(&mut app, 'k');
+        assert_eq!(scroll(&app), Some(last - 1));
+        hit(&mut app, KeyCode::End);
+        hit(&mut app, KeyCode::Home);
+        press(&mut app, 'g');
+        press(&mut app, 'j');
+        assert_eq!(scroll(&app), Some(1));
+        press(&mut app, 'x');
+        assert!(app.opt_info.is_none(), "any other key closes");
+
+        // A description that fits: no bar, and any key closes, it says.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = long_described(tmp.path(), 3);
+        let shown = screen_at(&mut app, 80, 24);
+        assert!(hint_row(&shown, " any key closes ").contains('└'), "{shown}");
+        assert!(thumb_rows(&shown).is_empty(), "{shown}");
+    }
+
+    /// The apply preview takes the one scroll key set, its list moving by a
+    /// row, a page or to either end, the scrollbar following; none of those
+    /// keys cancels it, and y still writes.
+    #[test]
+    fn the_apply_preview_scrolls_without_cancelling() {
+        let tmp = tempfile::tempdir().unwrap();
+        let names: Vec<String> = (0..40).map(|i| format!("cat/p{i:02}")).collect();
+        let graph: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &[][..])).collect();
+        let mut app = app_for(tmp.path(), &graph);
+        press(&mut app, 'a');
+        let shown = screen_at(&mut app, 80, 24);
+        let top = thumb_rows(&shown);
+        assert!(!top.is_empty(), "the list overflows:\n{shown}");
+        let page = page_step(app.page.apply);
+        assert!(page > 1, "the box's height, from the last frame");
+        let scroll = |app: &App| app.modal.as_ref().map(|m| m.scroll);
+
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(scroll(&app), Some(page), "PgDn scrolls, not cancels");
+        ctrl(&mut app, 'f');
+        assert_eq!(scroll(&app), Some(2 * page), "Ctrl-F too");
+        let middle = thumb_rows(&screen_at(&mut app, 80, 24));
+        assert!(middle[0] > top[0], "the thumb follows: {top:?} {middle:?}");
+        ctrl(&mut app, 'b');
+        assert_eq!(scroll(&app), Some(page));
+        press(&mut app, 'G');
+        let shown = screen_at(&mut app, 80, 24);
+        assert!(shown.contains("cat/p39"), "the last entry in view:\n{shown}");
+        let last = scroll(&app).unwrap();
+        assert!(last < names.len(), "clamped to the last page: {last}");
+        assert!(thumb_rows(&shown)[0] > middle[0], "the thumb at the bottom");
+        press(&mut app, 'k');
+        assert_eq!(scroll(&app), Some(last - 1), "a row up from the last page");
+        hit(&mut app, KeyCode::End);
+        hit(&mut app, KeyCode::Home);
+        assert_eq!(scroll(&app), Some(0));
+        press(&mut app, 'G');
+        press(&mut app, 'g');
+        assert_eq!(scroll(&app), Some(0));
+        hit(&mut app, KeyCode::PageUp);
+        assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "still the preview");
+        press(&mut app, 'y');
+        let done = app.modal.as_ref().and_then(|m| m.done.clone()).unwrap_or_default();
+        assert!(done.starts_with("40 file(s) written"), "{done}");
+    }
+
+    /// A pkg-help paragraph hard-wrapped at 72 columns is one paragraph in
+    /// the popup, wrapped to its width; a list and an indented block keep
+    /// their lines.
+    #[test]
+    fn a_pkg_help_paragraph_is_reflowed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let help = tmp.path().join("pkg-help");
+        std::fs::write(
+            &help,
+            "This port needs a line\nwrapped by hand here.\n\n- one item\n- two items\n\n  % run this\n  % then that\n",
+        )
+        .unwrap();
+        let key = app.selected_key().unwrap();
+        app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
+        press(&mut app, 'h');
+        let shown = screen(&mut app);
+        assert!(shown.contains("This port needs a line wrapped by hand here."), "{shown}");
+        for kept in ["- one item ", "- two items ", "  % run this ", "  % then that "] {
+            assert!(
+                shown.lines().any(|l| l.contains(&format!("│{kept}")) || l.contains(&format!("│ {kept}"))),
+                "{kept:?} on a line of its own:\n{shown}"
+            );
+        }
     }
 
     /// A loop is visible without asking: both ports wear the ∞ badge, and the
