@@ -2003,6 +2003,13 @@ for every flavor of its port, as
 does; a flavor given,
 .Ar origin Ns @-
 included, still names that flavor alone.
+A
+.Pa MOVED
+entry on that origin is applied first, as
+.Xr poudriere 8
+itself applies it to the listed originspec before expanding: both forms
+query the FLAVORS of wherever the origin last moved to, never the old
+one, which has no directory to query.
 A local build
 .Pq Sx LOCAL BUILDS
 has no jail: queries see the host as it is, which is then the machine that

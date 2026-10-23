@@ -1006,7 +1006,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         given = kept;
     }
     let roots =
-        roots::resolve(&given, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
+        roots::resolve(&given, settings.flavor_default_all, &ctx, &files, jobs, &mut cache, &moved);
     let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));

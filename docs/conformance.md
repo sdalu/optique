@@ -61,7 +61,7 @@ not change a result; **known gap**, with what it can change.
 | A blacklisted port's dependencies are not gathered | `gather_port_vars_port` | matches |
 | An IGNORE'd port's dependencies are not gathered | `gather_port_vars_port` | **differs on purpose**: optique walks them, IGNORE often depending on the options being configured |
 | pkglist: first word, `#` comments, a stray `/` trimmed | list reading in `common.sh` | matches in `-f` lists; **known gap**: on the command line a trailing `/` is refused |
-| `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` | `common.sh` flavor expansion | matches |
+| `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` | `common.sh` flavor expansion | matches, MOVED applied to the originspec first (`_check_moved`) so `@all`/a bare origin under FLAVOR_DEFAULT_ALL queries the FLAVORS of wherever it moved to, not the old origin's missing directory |
 | `origin~subpackage` | `common.sh` | **known gap**: refused, or read as part of the flavor after `@` |
 | `-a` (every port) | `bulk.sh` | not modelled: a full list is accepted but slow, and only default flavors are rooted |
 | MOVED: renamed, chained, removed, expired entries | `parse_MOVED.awk`, `check_moved` | matches |
