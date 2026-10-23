@@ -691,7 +691,6 @@ fn resolve_poudriere(
     let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
 
     let default_all = flavor_default_all(host.poudriere_conf, poudriere_d, jail, tree, set);
-    let mut notes = Vec::new();
     if default_all {
         notes.push("FLAVOR_DEFAULT_ALL=yes: a bare origin listed stands for every flavor".to_string());
     }
