@@ -768,12 +768,52 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(v[1])[1]
 }
 
+/// A scrollbar on the right border of a popup whose `rows` of content do not
+/// fit in it, `scroll` rows down: `▲` and `▼` end it, and between them the
+/// thumb says how much shows and where, so a cut text never looks whole; a
+/// box under three rows high gets the arrows alone.
+/// Nothing when it all fits. The thumb's length is the share in view,
+/// rounded once, so it keeps its size as it moves; the border is the track.
+fn scroll_indicator(f: &mut Frame, area: Rect, rows: usize, scroll: usize, border: Style) {
+    let view = area.height.saturating_sub(2) as usize;
+    if rows <= view || view == 0 || area.width == 0 {
+        return;
+    }
+    let x = area.x + area.width - 1;
+    let top = area.y + 1;
+    let max = rows - view;
+    let buf = f.buffer_mut();
+    // Too short for a thumb between the arrows: the arrows alone, or on a
+    // single row the way there is still to go.
+    if view < 3 {
+        if view == 2 {
+            buf[(x, top)].set_symbol("▲").set_style(border);
+            buf[(x, top + 1)].set_symbol("▼").set_style(border);
+        } else {
+            let arrow = if scroll < max { "▼" } else { "▲" };
+            buf[(x, top)].set_symbol(arrow).set_style(border);
+        }
+        return;
+    }
+    buf[(x, top)].set_symbol("▲").set_style(border);
+    buf[(x, top + view as u16 - 1)].set_symbol("▼").set_style(border);
+    let (track_top, track) = (top + 1, view - 2);
+    let thumb = ((track * view + rows / 2) / rows).clamp(1, track);
+    // At the top when scrolled to the top, at the bottom when to the bottom.
+    let start = (scroll.min(max) * (track - thumb) + max / 2) / max;
+    for y in start..start + thumb {
+        buf[(x, track_top + y as u16)].set_symbol("█").set_style(border);
+    }
+}
+
 fn draw_apply_modal(f: &mut Frame, app: &App) {
     let Some(modal) = &app.modal else { return };
     let area = centered_rect(80, 70, f.area());
     f.render_widget(Clear, area);
 
     let mut lines: Vec<Line> = Vec::new();
+    // Rows of the files scrolled past (j/k skip whole files).
+    let mut skipped = 0;
     if let Some(done) = &modal.done {
         for l in done.lines() {
             lines.push(Line::from(l.to_string()));
@@ -822,19 +862,30 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
                 Span::styled(r.reason.clone(), Style::default().fg(Color::DarkGray)),
             ]));
         }
-        for w in modal.writes.iter().skip(modal.scroll) {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
-                Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
-            ]));
-        }
+        let writes: Vec<Line> = modal
+            .writes
+            .iter()
+            .map(|w| {
+                Line::from(vec![
+                    Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
+                    Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
+                ])
+            })
+            .collect();
+        let skip = modal.scroll.min(writes.len());
+        skipped = wrapped_height(&writes[..skip], area.width.saturating_sub(2));
+        lines.extend(writes.into_iter().skip(skip));
     }
 
     let title = if modal.done.is_some() { " apply — done " } else { " apply? y/n (j/k scroll) " };
+    // j/k scroll by whole files, skipped from the list: count their rows in.
+    let rows = skipped + wrapped_height(&lines, area.width.saturating_sub(2));
+    let border = Style::default().fg(Color::LightYellow);
     let p = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(Color::LightYellow)));
+        .block(Block::default().borders(Borders::ALL).title(title).border_style(border));
     f.render_widget(p, area);
+    scroll_indicator(f, area, rows, skipped, border);
 }
 
 /// Help overlay tab titles; indices match `App.help_tab`.
@@ -1074,13 +1125,12 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
     } else {
         " help — 1-4/Tab/←→ switch · any other key closes "
     };
+    let border = Style::default().fg(Color::LightBlue);
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((*scroll, 0)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(Style::default().fg(Color::LightBlue)),
+        Block::default().borders(Borders::ALL).title(title).border_style(border),
     );
     f.render_widget(p, area);
+    scroll_indicator(f, area, rows, *scroll as usize, border);
 }
 
 /// Cap on the dependents listed before collapsing the rest into "+ N more".
@@ -1227,13 +1277,13 @@ fn draw_why(f: &mut Frame, app: &App) {
     let inner_height = area.height.saturating_sub(2) as usize;
     let cursor_row = wrapped_height(&lines[..selected_line], area.width.saturating_sub(2));
     let scroll = cursor_row.saturating_sub(inner_height.saturating_sub(1)) as u16;
+    let rows = wrapped_height(&lines, area.width.saturating_sub(2));
+    let border = Style::default().fg(Color::LightBlue);
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((scroll, 0)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" why {}? ", why.key))
-            .border_style(Style::default().fg(Color::LightBlue)),
+        Block::default().borders(Borders::ALL).title(format!(" why {}? ", why.key)).border_style(border),
     );
     f.render_widget(p, area);
+    scroll_indicator(f, area, rows, scroll as usize, border);
 }
 
 /// Human-readable source of an option's current value.
@@ -1347,13 +1397,14 @@ fn draw_opt_info(f: &mut Frame, app: &App) {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled("press any key to close", dim)));
 
+    // This one does not scroll: the bar still says the box cut it short.
+    let rows = wrapped_height(&lines, area.width.saturating_sub(2));
+    let border = Style::default().fg(Color::LightBlue);
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" {opt} — {key} "))
-            .border_style(Style::default().fg(Color::LightBlue)),
+        Block::default().borders(Borders::ALL).title(format!(" {opt} — {key} ")).border_style(border),
     );
     f.render_widget(p, area);
+    scroll_indicator(f, area, rows, 0, border);
 }
 
 /// The port's pkg-help file, scrollable. These are prose files with their own
@@ -1391,15 +1442,18 @@ fn draw_port_help(f: &mut Frame, app: &mut App) {
     } else {
         " any key closes "
     };
+    let rows = lines.len();
+    let border = Style::default().fg(Color::LightBlue);
     let p = Paragraph::new(lines).scroll((help.scroll, 0)).block(
         Block::default()
             .borders(Borders::ALL)
             .title(format!(" {} — {} ", help.title, help.key))
             .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))))
-            .border_style(Style::default().fg(Color::LightBlue)),
+            .border_style(border),
     );
     f.render_widget(p, area);
+    scroll_indicator(f, area, rows, help.scroll as usize, border);
 }
 
 /// One-line input prompt for the bulk decision, centered on the screen.
@@ -1470,6 +1524,21 @@ mod tests {
         assert!(l.about.is_none());
         assert!(l.detail.is_some(), "8 rows keep 4 beside 2 lines and a rule");
         assert!(editor_layout(Rect::new(1, 1, 38, 6), false).detail.is_none());
+    }
+
+    /// A box too short for a thumb between the arrows keeps the arrows.
+    #[test]
+    fn a_short_popup_keeps_the_arrows() {
+        let bar = |height: u16, scroll: usize| -> String {
+            let rows = rendered(10, height, |f| {
+                scroll_indicator(f, Rect::new(0, 0, 10, height), 50, scroll, Style::default())
+            });
+            rows.iter().map(|r| r.chars().last().unwrap_or(' ')).collect()
+        };
+        assert_eq!(bar(4, 0).trim(), "▲▼");
+        assert_eq!(bar(3, 0).trim(), "▼", "one row: more below");
+        assert_eq!(bar(3, 49).trim(), "▲", "one row, at the bottom");
+        assert!(bar(5, 0).contains('█'), "three rows: arrows and a thumb");
     }
 
     /// A cut line loses the word it would split, not half of it.
@@ -1559,7 +1628,7 @@ mod tests {
     /// The last row of text inside the box, borders stripped.
     fn last_text_row(rows: &[String]) -> String {
         rows.iter()
-            .map(|r| r.trim().trim_matches('│').trim().to_string())
+            .map(|r| r.trim().trim_matches(['│', '█', '▲', '▼']).trim().to_string())
             .rfind(|r| !r.is_empty() && !r.starts_with('└') && !r.starts_with('┌'))
             .unwrap_or_default()
     }

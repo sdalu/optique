@@ -149,7 +149,10 @@ A `[h] help` marker at the right of the pane's title means the port ships
 a `pkg-help` file — the free-form notes `make config` offers behind its
 Help button (`${PKGDIR}/pkg-help`); `h` opens it in a scrollable popup
 (`j`/`k`, arrows, `PgUp`/`PgDn`, `g`/`G`; any other key closes it), read
-from disk every time it opens. `F1` inside `make config` is portconfig's
+from disk every time it opens. Any popup too small for its text — this one,
+the help, `r`, `i`, the apply preview — shows a scrollbar on its right
+border, between `▲` and `▼`, its thumb as tall as the share in view and
+where it is. `F1` inside `make config` is portconfig's
 own Ports Collection help, not the port's.
 
 ### The port's description
@@ -252,18 +255,18 @@ gained, and to unconfigured ones when it decides all of them.
 │                               ││This library provides functions for        │
 │                               ││manipulating Unicode strings and for       │
 │           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
-│           │www/nginx  (root)                                   │ull text ──┤
-│           │ └─ devel/pcre2                                     │           │
-│           │  └─ devel/cmake-core                               │           │
-│           │   └─ dns/libidn2                                   │           │
-│           │    └─ devel/libunistring                           │           │
+│           │www/nginx  (root)                                   ▲ull text ──┤
+│           │ └─ devel/pcre2                                     █           │
+│           │  └─ devel/cmake-core                               █           │
+│           │   └─ dns/libidn2                                   █           │
+│           │    └─ devel/libunistring                           █           │
+│           │                                                    █           │
+│           │direct dependents (3):                              █           │
+│           │  devel/gettext-tools                               █           │
+│           │  dns/libidn2                                       █           │
+│           │  print/texinfo                                     █           │
 │           │                                                    │           │
-│           │direct dependents (3):                              │           │
-│           │  devel/gettext-tools                               │           │
-│           │  dns/libidn2                                       │           │
-│           │  print/texinfo                                     │           │
-│           │                                                    │           │
-│           │↑/↓ move · Enter jump to port · r why of selection ·│           │
+│           │↑/↓ move · Enter jump to port · r why of selection ·▼           │
 │           └────────────────────────────────────────────────────┘           │
 │                               │├───────────────────────────────────────────┤
 │                               ││  Enter: edit the options                  │

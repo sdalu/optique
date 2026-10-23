@@ -1815,6 +1815,41 @@ mod tests {
         assert!(shown.contains("[h] help"), "{shown}");
     }
 
+    /// A popup too small for its text says so on its right border: a
+    /// scrollbar whose thumb follows the scroll; one that fits has none.
+    #[test]
+    fn a_popup_that_cannot_hold_its_text_shows_a_scrollbar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let key = PortKey::parse("cat/alpha").unwrap();
+        // The rows of the right border holding the thumb, top to bottom.
+        let thumb = |shown: &str| -> Vec<usize> {
+            shown.lines().enumerate().filter(|(_, l)| l.contains('█')).map(|(i, _)| i).collect()
+        };
+        let lines = (1..=200).map(|i| format!("line {i}")).collect();
+        app.port_help = Some(PortHelp { title: "pkg-help", key: key.clone(), lines, scroll: 0 });
+        let top = thumb(&screen(&mut app));
+        assert!(!top.is_empty(), "a bar when the text overflows");
+        app.port_help.as_mut().unwrap().scroll = u16::MAX;
+        let bottom = thumb(&screen(&mut app));
+        assert!(bottom[0] > top[top.len() - 1], "the thumb follows the scroll: {top:?} {bottom:?}");
+        // One size wherever it is, moving down one step at a time.
+        let mut last = top.clone();
+        for scroll in 0..=200 {
+            app.port_help.as_mut().unwrap().scroll = scroll;
+            let at = thumb(&screen(&mut app));
+            assert_eq!(at.len(), top.len(), "scroll {scroll}: {at:?}");
+            assert!(at[0] >= last[0], "scroll {scroll}: moved up");
+            last = at;
+        }
+        assert_eq!(last, bottom);
+        let shown = screen(&mut app);
+        assert!(shown.contains('▲') && shown.contains('▼'), "the ends are marked");
+
+        app.port_help = Some(PortHelp { title: "pkg-help", key, lines: vec!["short".into()], scroll: 0 });
+        assert!(thumb(&screen(&mut app)).is_empty(), "no bar when it fits");
+    }
+
     /// The panel reads a port's pkg-descr once, not at every redraw: the loop
     /// redraws every 150 ms, and the ports tree may be on NFS.
     #[test]
