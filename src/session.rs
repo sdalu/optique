@@ -852,9 +852,13 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
             }
         }
     }
-    // Then bsd.port.mk drops the members of a conditional group whose
-    // option is off from PORT_OPTIONS (see `unchecked_groups`).
-    unchecked_groups(o, close_implies(info, set)).1
+    // OPTIONS_SLAVE goes in after IMPLIES (bsd.options.mk:447), not in the
+    // list but on whatever the layers said. Then bsd.port.mk drops the
+    // members of a conditional group whose option is off from PORT_OPTIONS
+    // (see `unchecked_groups`).
+    let mut set = close_implies(info, set);
+    set.extend(o.slave.iter().cloned());
+    unchecked_groups(o, set).1
 }
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
@@ -1984,6 +1988,24 @@ mod tests {
         let (mut ports, key) = mk_port(&["A", "B", "C"], &[], vec![], defs);
         ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
         assert_eq!(undecided_options(&ports[&key], None, false), ["C"]);
+    }
+
+    /// OPTIONS_SLAVE is on whatever the layers say, out of the list:
+    /// databases/sqlite3@icu has ICU with or without a file, so a file
+    /// repeating the defaults is not judged to differ from none.
+    #[test]
+    fn a_slave_option_is_on_with_or_without_the_file() {
+        let (mut ports, key) = mk_port(&["FTS", "JSON"], &["JSON"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.slave.insert("ICU".into());
+        let info = &ports[&key];
+        let file = SavedOptionsFile {
+            complete: info.options.complete.clone(),
+            set: set(&["JSON"]),
+            unset: set(&["FTS"]),
+            ..Default::default()
+        };
+        assert_eq!(nofile_effective(info), set(&["ICU", "JSON"]));
+        assert_eq!(effective_with(info, Some(&file)), nofile_effective(info));
     }
 
     /// bsd.port.mk drops the members of a conditional SINGLE or MULTI group

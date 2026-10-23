@@ -97,6 +97,11 @@ pub struct PortOptions {
     pub port_force_set: BTreeSet<String>,
     #[serde(default)]
     pub port_force_unset: BTreeSet<String>,
+    /// OPTIONS_SLAVE: options a slave port or flavor takes out of the
+    /// list and turns on whatever the file, make.conf or FORCE say
+    /// (bsd.options.mk adds them to PORT_OPTIONS last, after IMPLIES).
+    #[serde(default)]
+    pub slave: BTreeSet<String>,
 }
 
 /// Where an option's current value comes from, following the

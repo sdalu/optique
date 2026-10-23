@@ -1411,6 +1411,13 @@ Disagreements confined to options one flavor does not even have, such as those
 removed by
 .Va OPTIONS_EXCLUDE ,
 are structural and not reported.
+An option a flavor takes out of the list through
+.Va OPTIONS_SLAVE ,
+as
+.Pa databases/sqlite3@icu
+does ICU, is on for that flavor with or without the file, as
+.Nm make
+has it.
 When only a non-default flavor of the origin is in the closure, it writes the
 file from its own view but never drops what it does not see: the file is up
 to date when everything that flavor has is unchanged, and a write keeps the
