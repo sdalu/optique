@@ -133,7 +133,11 @@ fn run() -> Result<()> {
             let (origins, files) = split_raw_origins(raw).unwrap_or_else(|e| e.exit());
             let mut all_files = cli.files.clone();
             all_files.extend(files);
-            let rs = RootSet { roots: cli::collect_roots(&origins, &all_files)?, notes: Vec::new() };
+            let rs = RootSet {
+                roots: cli::collect_roots(&origins, &all_files)?,
+                notes: Vec::new(),
+                installed: false,
+            };
             cmd_tui(&cli, &rs, false)
         }
         None => {
@@ -647,6 +651,9 @@ fn parse_installed(
 struct RootSet {
     roots: Vec<model::origin::PortKey>,
     notes: Vec<String>,
+    /// The roots are synth's implicit list, the installed packages, which
+    /// the scan matches against the tree as synth does.
+    installed: bool,
 }
 
 /// Roots for a subcommand: the given list, or — in synth mode only — the
@@ -663,9 +670,13 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
                 repos_phrase(&cli.repo)
             )
         };
-        return Ok(RootSet { roots, notes: vec![note] });
+        return Ok(RootSet { roots, notes: vec![note], installed: true });
     }
-    Ok(RootSet { roots: cli::collect_roots(origins, &cli.files)?, notes: Vec::new() })
+    Ok(RootSet {
+        roots: cli::collect_roots(origins, &cli.files)?,
+        notes: Vec::new(),
+        installed: false,
+    })
 }
 
 /// Split an external-subcommand argument vector into origins and -f/--file
@@ -903,8 +914,26 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let t0 = Instant::now();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
+    let mut given = rs.roots.clone();
+    if rs.installed {
+        // synth roots only the installed packages its flavor index matches.
+        let exists = |o: &str| ctx.locate(o).is_some();
+        let origins = given.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
+        let flavors = roots::query_flavors(&origins, &ctx, &files, jobs, &mut cache);
+        let (kept, skipped) = roots::synth_installed(&given, exists, &flavors);
+        if !skipped.is_empty() && !cli.quiet {
+            let list: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} ({why})")).collect();
+            eprintln!(
+                "  {}        synth skips {} installed package(s) its flavor index does not match: {}",
+                tint(paint, ansi::YELLOW, "note:"),
+                skipped.len(),
+                list.join(", ")
+            );
+        }
+        given = kept;
+    }
     let roots =
-        roots::resolve(&rs.roots, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
+        roots::resolve(&given, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
     let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
@@ -1537,9 +1566,14 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         RootSet {
             roots: plan.roots(),
             notes: vec!["no port list given; the plan's own ports are the closure roots".into()],
+            installed: false,
         }
     } else {
-        RootSet { roots: cli::collect_roots(&args.roots.origins, &cli.files)?, notes: Vec::new() }
+        RootSet {
+            roots: cli::collect_roots(&args.roots.origins, &cli.files)?,
+            notes: Vec::new(),
+            installed: false,
+        }
     };
 
     let scanned = run_scan(cli, &rs)?;

@@ -2109,6 +2109,11 @@ and its flavor from the package's
 .Ql flavor
 annotation, so several flavors of one origin installed side by side are
 each a root.
+As synth matches them against its flavor index, a package whose origin is
+not in the tree, a flavored port's package without a flavor annotation or
+with a flavor the port no longer has are skipped, all named in one note,
+and a port without flavors is rooted as its bare origin whatever the
+annotation says.
 This applies to the TUI,
 .Cm scan ,
 .Cm sync

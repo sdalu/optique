@@ -119,9 +119,90 @@ pub fn resolve(
     expand(roots, &flavors, default_all)
 }
 
+/// The installed packages synth roots (`installed`: origin and flavor
+/// annotation of each), and those it skips with why. synth matches each
+/// against its flavor index, where a port without FLAVORS is its bare
+/// origin and a flavored one is listed only as `origin@flavor`
+/// (portscan-pilot.adb ~1137-1173, portscan.adb ~1726-1762): an origin not
+/// in the tree is skipped; a port without FLAVORS is rooted as its bare
+/// origin, whatever the annotation; a flavored port only when the
+/// annotation names one of its FLAVORS. `exists` says whether the tree has
+/// an origin, `flavors` gives the FLAVORS of those queried; a port whose
+/// FLAVORS are unknown (a failed query) is kept as given for the scan to
+/// report.
+pub fn synth_installed(
+    installed: &[PortKey],
+    exists: impl Fn(&str) -> bool,
+    flavors: &HashMap<String, Vec<String>>,
+) -> (Vec<PortKey>, Vec<(PortKey, &'static str)>) {
+    let mut kept = Vec::new();
+    let mut seen = HashSet::new();
+    let mut skipped = Vec::new();
+    for key in installed {
+        let root = if !exists(&key.origin) {
+            Err("missing from ports")
+        } else {
+            match flavors.get(&key.origin) {
+                None => Ok(key.clone()),
+                Some(fl) if fl.is_empty() => Ok(PortKey::new(key.origin.clone(), None)),
+                Some(fl) => match &key.flavor {
+                    Some(f) if fl.contains(f) => Ok(key.clone()),
+                    _ => Err("package unmatched"),
+                },
+            }
+        };
+        match root {
+            Ok(k) => {
+                if seen.insert(k.clone()) {
+                    kept.push(k);
+                }
+            }
+            Err(why) => skipped.push((key.clone(), why)),
+        }
+    }
+    (kept, skipped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// synth roots an installed package only when its flavor index matches
+    /// it: a stale flavor, a flavored port's unannotated package and an
+    /// origin gone from the tree are skipped, an unflavored port is rooted
+    /// bare whatever its annotation says.
+    #[test]
+    fn synth_installed_keeps_what_the_flavor_index_matches() {
+        let flavors: HashMap<String, Vec<String>> = [
+            ("misc/flav".to_string(), vec!["full".into(), "nox".into()]),
+            ("misc/plain".to_string(), Vec::new()),
+        ]
+        .into();
+        let exists = |o: &str| o != "misc/gone";
+        let (kept, skipped) = synth_installed(
+            &keys(&[
+                "misc/flav@nox",
+                "misc/flav@old",
+                "misc/flav",
+                "misc/plain@py39",
+                "misc/plain",
+                "misc/gone",
+                "misc/broken@x",
+            ]),
+            exists,
+            &flavors,
+        );
+        assert_eq!(kept, keys(&["misc/flav@nox", "misc/plain", "misc/broken@x"]));
+        let skipped: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} {why}")).collect();
+        assert_eq!(
+            skipped,
+            [
+                "misc/flav@old package unmatched",
+                "misc/flav package unmatched",
+                "misc/gone missing from ports",
+            ]
+        );
+    }
 
     fn keys(specs: &[&str]) -> Vec<PortKey> {
         specs.iter().map(|s| PortKey::parse(s).unwrap()).collect()
