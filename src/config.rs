@@ -1604,6 +1604,13 @@ mod tests {
         assert_eq!(s.env, QueryEnv::Jail { package_building: true });
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
+
+        // With poudriere.d present too, -o is still taken verbatim, never
+        // one of the options-dir candidates.
+        let s = resolve_host(&host, &Request { options_dir: Some(&mine), set: Some("s"), ..none }, &stage)
+            .unwrap();
+        assert_eq!(s.options_dir, mine);
+        assert_ne!(s.options_dir, pd.join("s-options"));
     }
 
     /// A poudriere.d whose jail `j` has `arch` and `version`, its mnt holding
@@ -2050,6 +2057,36 @@ mod tests {
         assert!(err.contains("is not a ports tree"), "{err}");
     }
 
+    /// poudriere's old `<mnt>/ports` tree layout (the real tree one level
+    /// under `mnt`, in a `ports/` subdirectory) is not modelled: `mnt`
+    /// names the tree directly these days, so a tree whose `mnt` still
+    /// points at the old layout's parent directory is simply not a ports
+    /// tree, and resolving it fails loudly with the usual message
+    /// (docs/conformance.md).
+    #[test]
+    fn poudriere_tree_old_mnt_ports_layout_fails_loudly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(pd.join("ports/main")).unwrap();
+        let old_mnt = tmp.path().join("old-mnt");
+        fake_tree(&old_mnt.join("ports"));
+        fs::write(pd.join("ports/main/mnt"), format!("{}\n", old_mnt.display())).unwrap();
+        let host = host(tmp.path(), &pd, &ports, &db);
+
+        let err = resolve_host(&host, &Request { tree: Some("main"), ..Request::default() }, &stage)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            format!("poudriere tree 'main' points to {} which is not a ports tree", old_mnt.display())
+        );
+    }
+
     #[test]
     fn shell_assignment_reads_plain_assignments_only() {
         fn v(l: &str) -> Option<&str> {
@@ -2397,6 +2434,29 @@ not a key value line
         let o = tmp.path().join("other");
         let s = resolve_synth(&synth, "Live", None, None, Some(&o), &stage).unwrap();
         assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
+    }
+
+    /// synth has no jail: nothing stages the jail system lines poudriere's
+    /// own `jail_system` writes for -j, so the staged synth make.conf never
+    /// sets OSVERSION, ARCH or _OSRELEASE.
+    #[test]
+    fn synth_make_conf_never_sets_the_jail_system_vars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let tree = tmp.path().join("ports");
+        fake_tree(&tree);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
+            .unwrap();
+        fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
+
+        let s = resolve_synth(&synth, "A", None, None, None, &stage).unwrap();
+        let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
+        for var in ["OSVERSION", "ARCH", "_OSRELEASE"] {
+            assert!(!conf.contains(var), "{var} in synth make.conf: {conf}");
+        }
     }
 
     /// A bare -s runs with the profile synth itself would: SYNTHPROFILE's
