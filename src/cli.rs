@@ -511,12 +511,9 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
             spec
         };
         match PortKey::parse(spec) {
-            Some(mut k) => {
-                // `origin@-` is the port's default flavor, the bare origin
-                // (poudriere's FLAVOR_DEFAULT, common.sh ~8531-8537).
-                if k.flavor.as_deref() == Some(crate::roots::FLAVOR_DEFAULT) {
-                    k.flavor = None;
-                }
+            Some(k) => {
+                // `origin@all` and `origin@-` are kept as given: the scan
+                // reads them (`roots::expand`).
                 if seen.insert(k.clone()) {
                     out.push(k);
                 }

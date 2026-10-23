@@ -105,6 +105,11 @@ those files is not seen. The startup banner's
 `poudriere jail (host packages under /usr/local not seen)`, or the same
 line with `; NO_PACKAGE_BUILDING set` appended.
 
+`FLAVOR_DEFAULT_ALL=yes`, read from the same files the same way, makes
+a bare origin listed stand for every flavor of its port, as `origin@all`
+does, as poudriere builds them; a flavor given (`origin@-` included)
+still names that flavor alone. The banner notes it.
+
 Given `-j jail`, queries also see the jail's system rather than the
 host's, from poudriere.d's `jails/<jail>/arch`, `version` and `mnt`: the
 prelude sets `_OSRELEASE`, `OSREL` and `OSVERSION` for the jail

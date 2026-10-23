@@ -122,6 +122,9 @@ pub struct Settings {
     /// a port shadows the others and the main tree): the `OVERLAYS` make
     /// itself reports once the make.conf is settled.
     pub overlays: Vec<Overlay>,
+    /// poudriere.conf's `FLAVOR_DEFAULT_ALL=yes`: a bare origin listed
+    /// stands for every flavor of its port (poudriere builds only).
+    pub flavor_default_all: bool,
 }
 
 /// A ports tree laid over the main one (the framework's `OVERLAYS`).
@@ -647,6 +650,7 @@ fn resolve_local(
         blacklist: Blacklist::default(),
         notes,
         overlays: Vec::new(),
+        flavor_default_all: false,
     })
 }
 
@@ -686,6 +690,12 @@ fn resolve_poudriere(
 
     let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
 
+    let default_all = flavor_default_all(host.poudriere_conf, poudriere_d, jail, tree, set);
+    let mut notes = Vec::new();
+    if default_all {
+        notes.push("FLAVOR_DEFAULT_ALL=yes: a bare origin listed stands for every flavor".to_string());
+    }
+
     Ok(Settings {
         portsdir,
         options_dir,
@@ -696,6 +706,7 @@ fn resolve_poudriere(
         blacklist,
         notes,
         overlays: Vec::new(),
+        flavor_default_all: default_all,
     })
 }
 
@@ -916,6 +927,7 @@ fn resolve_synth(
         blacklist: Blacklist::default(),
         notes,
         overlays: Vec::new(),
+        flavor_default_all: false,
     })
 }
 
@@ -1080,6 +1092,35 @@ fn no_package_building(
         }
     }
     set_on
+}
+
+/// Does poudriere.conf set `FLAVOR_DEFAULT_ALL=yes`, which makes poudriere
+/// build every flavor of a bare origin listed (common.sh ~7037, ~8573,
+/// ~11233)? Read from the same files, in the same order and the same way,
+/// as [`no_package_building`]; only the exact value `yes` counts.
+fn flavor_default_all(
+    poudriere_conf: &Path,
+    poudriere_d: &Path,
+    jail: Option<&str>,
+    tree: Option<&str>,
+    set: Option<&str>,
+) -> bool {
+    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
+    files.extend(
+        poudriere_conf_layers(jail, tree, set)
+            .into_iter()
+            .map(|name| poudriere_d.join(format!("{name}-poudriere.conf"))),
+    );
+    let mut value = String::new();
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else { continue };
+        for line in text.lines() {
+            if let Some(v) = shell_assignment(line, "FLAVOR_DEFAULT_ALL") {
+                value = v.to_string();
+            }
+        }
+    }
+    value == "yes"
 }
 
 /// The per-name poudriere.conf layers, in poudriere(8)'s reading order:
@@ -1904,6 +1945,31 @@ mod tests {
         fs::write(pd.join("default-poudriere.conf"), "NO_PACKAGE_BUILDING=yes\n").unwrap();
         assert!(!npb(None, None, None), "no -p, no tree file");
         assert!(npb(None, Some("default"), None));
+    }
+
+    /// FLAVOR_DEFAULT_ALL is read from the files NO_PACKAGE_BUILDING is,
+    /// last assignment winning, and only `yes` turns it on.
+    #[test]
+    fn flavor_default_all_reads_every_layer_in_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conf = tmp.path().join("poudriere.conf");
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        let fda = |jail, tree, set| flavor_default_all(&conf, &pd, jail, tree, set);
+        assert!(!fda(None, None, None), "no file at all");
+        fs::write(&conf, "#FLAVOR_DEFAULT_ALL=yes\n").unwrap();
+        assert!(!fda(None, None, None));
+        fs::write(&conf, "FLAVOR_DEFAULT_ALL=yes # every flavor\n").unwrap();
+        assert!(fda(None, None, None));
+        fs::write(&conf, "FLAVOR_DEFAULT_ALL=\"yes\"\n").unwrap();
+        assert!(fda(None, None, None));
+        fs::write(pd.join("poudriere.conf"), "FLAVOR_DEFAULT_ALL=no\n").unwrap();
+        assert!(!fda(None, None, None), "poudriere.d's turns it off");
+        fs::write(pd.join("j-poudriere.conf"), "export FLAVOR_DEFAULT_ALL=yes\n").unwrap();
+        assert!(fda(Some("j"), None, None));
+        assert!(!fda(Some("other"), None, None));
+        fs::write(pd.join("j-poudriere.conf"), "FLAVOR_DEFAULT_ALL=YES\n").unwrap();
+        assert!(!fda(Some("j"), None, None), "poudriere matches yes exactly");
     }
 
     /// End to end: with NO_PACKAGE_BUILDING set, the staged make.conf keeps

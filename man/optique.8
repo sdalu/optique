@@ -1860,6 +1860,13 @@ reads after it, for the jail, tree and set given
 and
 .Va PACKAGE_BUILDING_FLAVORS
 are left out, as poudriere leaves them out.
+.Va FLAVOR_DEFAULT_ALL Ns = Ns Ql yes ,
+read from the same files the same way, makes a bare origin listed stand
+for every flavor of its port, as
+.Ar origin Ns @all
+does; a flavor given,
+.Ar origin Ns @-
+included, still names that flavor alone.
 A local build
 .Pq Sx LOCAL BUILDS
 has no jail: queries see the host as it is, which is then the machine that

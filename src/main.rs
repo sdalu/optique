@@ -754,7 +754,8 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
 struct Scanned {
     settings: config::Settings,
     /// The roots the scan started from: the given ones, each `origin@all`
-    /// expanded to its port's flavors.
+    /// expanded to its port's flavors (every bare one too under
+    /// FLAVOR_DEFAULT_ALL), `origin@-` read as the bare origin.
     roots: Vec<model::origin::PortKey>,
     result: ScanResult,
     /// Dependency loops found in the scanned closure (already reported on
@@ -902,7 +903,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let t0 = Instant::now();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
-    let roots = roots::resolve(&rs.roots, &ctx, &files, jobs, &mut cache);
+    let roots =
+        roots::resolve(&rs.roots, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
     let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
