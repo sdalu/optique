@@ -761,7 +761,11 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         // 'U' takes the selected port back to its saved state.
         KeyCode::Char('u') => app.undo_last(),
         KeyCode::Char('U') => app.reset_selected(Session::revert, "reverted to saved state"),
-        KeyCode::Char('d') => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
+        // A port whose file takes no edit keeps its state; say why.
+        KeyCode::Char('d') => match app.selected_key().and_then(|k| app.session.edit_refusal(&k)) {
+            Some(why) => app.flash(&why, true),
+            None => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
+        },
         KeyCode::Char('t') => app.toggle_view(
             |a| &mut a.hide_ok,
             "showing only ports needing attention (t to show all)",

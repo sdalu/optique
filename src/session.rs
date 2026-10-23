@@ -277,32 +277,36 @@ impl Session {
         self.locals.get(&info.options_name).and_then(SavedOptionsFile::local_reset)
     }
 
-    /// Toggle an option; returns a user-facing error when refused.
-    pub fn toggle(&mut self, key: &PortKey, opt: &str) -> Result<(), String> {
-        let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
-        // Checked before `states` is borrowed mutably; refused below, after
-        // OPTIONS_OVERRIDE, which leaves options.local unread too.
-        let by_local = self.local_decides(info, opt);
-        let reset = self.local_reset(info);
-        let state = self
-            .states
-            .get_mut(&info.options_name)
-            .ok_or_else(|| "port has no options".to_string())?;
-        let opts = &info.options;
-
+    /// Why no edit of the port's options file is taken, whatever the
+    /// option: an OPTIONS_OVERRIDE, or an options.local resetting a list.
+    pub fn edit_refusal(&self, key: &PortKey) -> Option<String> {
+        let info = self.ports.get(key)?;
         // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
         // itself; the options file is never read, so editing it is pointless.
-        if opts.r#override.is_some() {
-            return Err(
+        if info.options.r#override.is_some() {
+            return Some(
                 "OPTIONS_OVERRIDE in make.conf decides this port; its options file is not read"
                     .to_string(),
             );
         }
         // An options.local that assigns a list afresh drops the file's
         // lines: the file is not optique's to edit.
-        if let Some(why) = reset {
+        self.local_reset(info)
+    }
+
+    /// Toggle an option; returns a user-facing error when refused.
+    pub fn toggle(&mut self, key: &PortKey, opt: &str) -> Result<(), String> {
+        if let Some(why) = self.edit_refusal(key) {
             return Err(why);
         }
+        let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
+        // Checked before `states` is borrowed mutably.
+        let by_local = self.local_decides(info, opt);
+        let state = self
+            .states
+            .get_mut(&info.options_name)
+            .ok_or_else(|| "port has no options".to_string())?;
+        let opts = &info.options;
 
         if opts.is_forced(opt) {
             return Err(format!(
@@ -404,7 +408,12 @@ impl Session {
         (changed, skipped)
     }
 
+    /// Stage the port's defaults; nothing for a port whose file takes no
+    /// edit (`edit_refusal`, which the TUI shows instead).
     pub fn reset_to_defaults(&mut self, key: &PortKey) {
+        if self.edit_refusal(key).is_some() {
+            return;
+        }
         let Some(info) = self.ports.get(key) else { return };
         // The shared state follows the file OWNER's view, like the
         // baseline: a flavor lacking some of its options must not drop them.
@@ -2174,6 +2183,37 @@ mod tests {
         s.reset_to_defaults(&key);
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.staged.contains("A") && !st.staged.contains("B"));
+    }
+
+    /// bsd.options.mk:300-304: under OPTIONS_OVERRIDE the file is never
+    /// read, so `d` must not stage the defaults any more than a toggle may:
+    /// the state stays as the override has it, not dirty, and the refusal
+    /// is the toggle's. The same for a file options.local resets.
+    #[test]
+    fn reset_to_defaults_does_nothing_where_toggle_refuses() {
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["B"]));
+        let mut s = session_for(ports);
+        let why = s.toggle(&key, "A").unwrap_err();
+        assert_eq!(s.edit_refusal(&key), Some(why));
+        s.reset_to_defaults(&key);
+        assert_eq!(s.state(&s.ports[&key]).unwrap().staged, set(&["B"]));
+        assert!(!s.dirty());
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=A\n").unwrap();
+        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET=\n").unwrap();
+        let (ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let mut s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        let before = s.state(&s.ports[&key]).unwrap().staged.clone();
+        let why = s.toggle(&key, "A").unwrap_err();
+        assert!(why.starts_with("options.local resets OPTIONS_FILE_UNSET"), "{why}");
+        assert_eq!(s.edit_refusal(&key), Some(why));
+        s.reset_to_defaults(&key);
+        assert_eq!(s.state(&s.ports[&key]).unwrap().staged, before);
+        assert!(!s.dirty());
     }
 
     /// Flavors share one options state, built from the owner's view: a reset

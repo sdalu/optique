@@ -867,6 +867,11 @@ toggles nothing and says
 .Ql Enter: edit the options .
 .It Ic d
 Reset the port to its defaults, from either pane.
+A port whose options file takes no edit, under
+.Va OPTIONS_OVERRIDE
+or with an
+.Pa options.local
+resetting a list, is left as it is, the toggle's refusal shown instead.
 .It Ic U
 Revert the port to its saved state, from either pane.
 .It Ic u
