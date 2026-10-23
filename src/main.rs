@@ -732,13 +732,14 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         tui::ensure_terminal()?;
     }
     let scanned = run_scan(cli, rs)?;
-    let session = session::Session::new(
+    let mut session = session::Session::new(
         scanned.result.ports,
         scanned.result.aliases,
         &scanned.roots,
         &scanned.files,
         cli.minimal,
     );
+    session.blacklist = scanned.settings.blacklist.clone();
 
     // Background refreshes query against a staging copy of the options files
     // so staged edits take effect before anything is applied for real.

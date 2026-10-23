@@ -122,6 +122,7 @@ mod tests {
             roots: Vec::new(),
             owners: HashMap::new(),
             minimal: false,
+            blacklist: Default::default(),
         }
     }
 

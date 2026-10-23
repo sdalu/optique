@@ -49,6 +49,9 @@ pub struct Session {
     /// --minimal: bare defaults count as decisions, so nothing is
     /// "undecided" — only deviations and conflicts demand attention.
     pub minimal: bool,
+    /// The build's blacklist: the reachability GC does not walk through a
+    /// port it matches, as the scan does not (scanner::register).
+    pub blacklist: crate::config::Blacklist,
 }
 
 /// Is this port the default flavor of its origin (or unflavored)?
@@ -74,6 +77,7 @@ impl Session {
             roots: Vec::new(),
             owners: HashMap::new(),
             minimal,
+            blacklist: crate::config::Blacklist::default(),
         };
         session.roots = requested_roots
             .iter()
@@ -197,7 +201,9 @@ impl Session {
                 continue;
             }
             if let Some(info) = self.ports.get(&key) {
-                stack.extend(self.resolved_deps(info));
+                if !self.blacklist.matches(&info.canonical, info.is_default_flavor()) {
+                    stack.extend(self.resolved_deps(info));
+                }
             }
         }
         let removed: Vec<PortKey> =
@@ -1909,6 +1915,37 @@ mod tests {
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
         assert!(s.edited(&s.ports[&dep_key]));
+    }
+
+    /// The GC walks the closure as the scan does: not through a blacklisted
+    /// port. A port reached both through it and another way goes when the
+    /// other way does, as a fresh scan would drop it.
+    #[test]
+    fn merge_gc_does_not_walk_through_a_blacklisted_port() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::write(pd.join("blacklist"), "cat/bl\n").unwrap();
+        let ports: BTreeMap<_, _> = [
+            linked_info("cat/root", &["cat/x", "cat/bl"], &["R"]),
+            linked_info("cat/x", &["cat/d"], &["X"]),
+            linked_info("cat/bl", &["cat/d"], &["B"]),
+            linked_info("cat/d", &[], &["D"]),
+        ]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+        let root = PortKey::parse("cat/root").unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), std::slice::from_ref(&root), &files, false);
+        s.blacklist = crate::config::Blacklist::load(&pd, None, "default", None);
+
+        // Refresh: cat/x no longer depends on cat/d; only cat/bl still does.
+        let mut result = crate::query::scanner::ScanResult::default();
+        result.ports.insert(PortKey::parse("cat/x").unwrap(), linked_info("cat/x", &[], &["X"]));
+        let (_, removed) = s.merge(result, &files);
+        assert_eq!(removed, vec![PortKey::parse("cat/d").unwrap()]);
+        assert!(s.ports.contains_key(&PortKey::parse("cat/bl").unwrap()), "the blacklisted port stays listed");
     }
 
     /// When the GC drops the flavor that owned a shared options file while a
