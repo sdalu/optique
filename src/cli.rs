@@ -493,12 +493,22 @@ pub struct RootsArgs {
 pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<PortKey>> {
     let mut out: Vec<PortKey> = Vec::new();
     let mut seen: HashSet<PortKey> = HashSet::new();
-    let mut push = |spec: &str, source: &str| -> anyhow::Result<()> {
+    let mut push = |spec: &str, source: &str, from_pkglist: bool| -> anyhow::Result<()> {
         // Strip inline comments and surrounding whitespace.
         let spec = spec.split('#').next().unwrap_or("").trim();
         if spec.is_empty() {
             return Ok(());
         }
+        // poudriere(8) reads a pkglist line with `read`: only its first
+        // whitespace-separated word is the origin, and one stray leading or
+        // trailing '/' (a common typo) is stripped (common.sh ~9590-9600).
+        let spec = if from_pkglist {
+            let word = spec.split_whitespace().next().unwrap_or(spec);
+            let word = word.strip_prefix('/').unwrap_or(word);
+            word.strip_suffix('/').unwrap_or(word)
+        } else {
+            spec
+        };
         match PortKey::parse(spec) {
             Some(k) => {
                 if seen.insert(k.clone()) {
@@ -510,14 +520,14 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         }
     };
     for o in origins {
-        push(o, "arguments")?;
+        push(o, "arguments", false)?;
     }
     for f in files {
         let text = std::fs::read_to_string(f)
             .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
         let source = f.display().to_string();
         for line in text.lines() {
-            push(line, &source)?;
+            push(line, &source, true)?;
         }
     }
     if out.is_empty() {
@@ -594,6 +604,21 @@ mod tests {
                 "sysutils/tmux"
             ]
         );
+    }
+
+    #[test]
+    fn pkglist_lines_take_first_word_and_strip_slashes() {
+        // poudriere(8) reads a pkglist with `read`: a trailing or leading
+        // '/' is a stray typo it strips, and anything after the first
+        // whitespace-separated word (a trailing description, say) is not
+        // part of the origin.
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "sysutils/tmux/\nsysutils/screen  terminal multiplexer\n/mail/dovecot")
+            .unwrap();
+
+        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
+        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        assert_eq!(names, vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]);
     }
 
     #[test]
