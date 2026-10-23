@@ -1384,6 +1384,7 @@ mod commit_writes_tests {
             old: None,
             enabled: Default::default(),
             complete: vec![],
+            kept: vec![],
             content: "x\n".into(),
         };
         let removal = crate::clean::Removal {

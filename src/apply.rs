@@ -21,6 +21,10 @@ pub struct PendingWrite {
     pub enabled: BTreeSet<String>,
     /// Current complete option list (display/diff aid).
     pub complete: Vec<String>,
+    /// Options of the old file that a non-default flavor writing it lacks,
+    /// carried over with their list entry and SET/UNSET lines as they were:
+    /// the default flavor may still have them (see `kept_options`).
+    pub kept: Vec<String>,
     pub content: String,
 }
 
@@ -83,7 +87,7 @@ impl PendingWrite {
                 .collect(),
             dropped: mentioned
                 .iter()
-                .filter(|o| !now_known.contains(**o))
+                .filter(|o| !now_known.contains(**o) && !self.kept.iter().any(|k| k == *o))
                 .map(|o| o.to_string())
                 .collect(),
         }
@@ -245,7 +249,11 @@ pub fn plan_writes<'a>(
         if old.as_ref().is_some_and(|old| up_to_date(old, info, enabled)) {
             continue;
         }
-        let content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
+        let kept = old.as_ref().map(|old| kept_options(old, info)).unwrap_or_default();
+        let mut content = optionsfile::render(&info.pkgname, &info.options.complete, enabled);
+        if let (Some(old), false) = (&old, kept.is_empty()) {
+            content = carry_over(&content, old, &kept);
+        }
         writes.push(PendingWrite {
             key: chosen.key.clone(),
             options_name: options_name.clone(),
@@ -253,6 +261,7 @@ pub fn plan_writes<'a>(
             old,
             enabled: enabled.clone(),
             complete: info.options.complete.clone(),
+            kept,
             content,
         });
     }
@@ -310,14 +319,70 @@ fn divergence_warning(options_name: &str, chosen: &Candidate, other: &Candidate)
 /// SET lines miss the first two; the port's queried `effective` cannot stand
 /// in for the old file either, since in the TUI a background refresh queries
 /// make with the staged edits in place.
+///
+/// A non-default flavor writing the file sees only its own options: the
+/// file's list may be a superset of them (the default flavor's view), and
+/// only its own options need a line; the rest is not its to judge.
 fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String>) -> bool {
-    let same_list = old.complete.iter().collect::<BTreeSet<_>>()
-        == info.options.complete.iter().collect::<BTreeSet<_>>();
-    if !same_list || !old.unlined().is_empty() {
+    let list_ok = if crate::session::is_preferred(info) {
+        old.complete.iter().collect::<BTreeSet<_>>()
+            == info.options.complete.iter().collect::<BTreeSet<_>>()
+            && old.unlined().is_empty()
+    } else {
+        info.options
+            .complete
+            .iter()
+            .all(|o| old.complete.contains(o) && old.value(o).is_some())
+    };
+    if !list_ok {
         return false;
     }
     let would = written_file(info, enabled);
     crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
+}
+
+/// The options of `old` that a non-default flavor writing it lacks, in the
+/// file's order: such a flavor cannot tell an option it merely lacks (the
+/// default flavor's, OPTIONS_EXCLUDE) from one the port removed, and
+/// dropping the first loses the user's choice for good, while keeping the
+/// second is harmless (make ignores it, the default flavor's next write
+/// drops it). Empty for the default flavor or an unflavored port.
+fn kept_options(old: &SavedOptionsFile, info: &PortInfo) -> Vec<String> {
+    if crate::session::is_preferred(info) {
+        return Vec::new();
+    }
+    let mut kept: Vec<String> = Vec::new();
+    for o in old.complete.iter().chain(old.recorded()) {
+        if !info.options.complete.contains(o) && !kept.contains(o) {
+            kept.push(o.clone());
+        }
+    }
+    kept
+}
+
+/// `content` (a rendered file) with the `kept` options of `old` added back:
+/// each in the complete list, and with the SET/UNSET lines it had.
+fn carry_over(content: &str, old: &SavedOptionsFile, kept: &[String]) -> String {
+    let mut out = String::new();
+    for line in content.lines() {
+        out.push_str(line);
+        if line.starts_with("_FILE_COMPLETE_OPTIONS_LIST=") {
+            for o in kept {
+                out.push(' ');
+                out.push_str(o);
+            }
+        }
+        out.push('\n');
+    }
+    for o in kept {
+        if old.set.contains(o) {
+            out.push_str(&format!("OPTIONS_FILE_SET+={o}\n"));
+        }
+        if old.unset.contains(o) {
+            out.push_str(&format!("OPTIONS_FILE_UNSET+={o}\n"));
+        }
+    }
+    out
 }
 
 /// The file writing `enabled` from `info`'s view produces, as make reads it.
@@ -527,6 +592,7 @@ mod tests {
             old: old.map(SavedOptionsFile::parse),
             enabled: enabled.iter().map(|s| s.to_string()).collect(),
             complete: complete.iter().map(|s| s.to_string()).collect(),
+            kept: vec![],
             content: String::new(),
         }
     }
@@ -771,6 +837,44 @@ mod tests {
         assert!(planned.warnings.is_empty(), "structural exclusion must not warn: {:?}", planned.warnings);
     }
 
+    /// A non-default flavor alone sees only its own options: the default
+    /// flavor's others in the shared file are not its to drop.
+    #[test]
+    fn a_non_default_flavor_keeps_the_options_it_lacks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut nox = mk_info(&["A", "B"], &["A"]);
+        nox.key = PortKey::parse("editors/emacs@nox").unwrap();
+        nox.canonical = nox.key.clone();
+        nox.flavors = vec!["full".into(), "nox".into()];
+        nox.options_name = "editors_emacs".into();
+        fs::create_dir_all(tmp.path().join("editors_emacs")).unwrap();
+        fs::write(
+            tmp.path().join("editors_emacs/options"),
+            "_OPTIONS_READ=emacs-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A B X11 GTK\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\nOPTIONS_FILE_SET+=X11\nOPTIONS_FILE_UNSET+=GTK\n",
+        )
+        .unwrap();
+        let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+        let plan = |enabled: BTreeSet<String>| {
+            plan_writes(std::iter::once((&nox.key, &nox, enabled)), &OptionsFiles::new(tmp.path()), false)
+        };
+
+        // Nothing @nox sees changed: the file is up to date.
+        assert!(plan(set(&["A"])).writes.is_empty(), "a superset list is up to date for @nox");
+
+        // B turned on: written, X11 and GTK kept as they were, not dropped.
+        let planned = plan(set(&["A", "B"]));
+        assert_eq!(planned.writes.len(), 1);
+        let w = &planned.writes[0];
+        let c = w.changes();
+        assert_eq!(c.turned_on, ["B"]);
+        assert!(c.dropped.is_empty() && c.turned_off.is_empty(), "{c:?}");
+        let written = SavedOptionsFile::parse(&w.content);
+        assert_eq!(written.complete, ["A", "B", "X11", "GTK"]);
+        assert_eq!(written.set, set(&["A", "B", "X11"]));
+        assert_eq!(written.unset, set(&["GTK"]));
+    }
+
     #[test]
     fn describe_covers_all_change_kinds() {
         // Old file: knows A(on) B(off) GONE(off); current: A B NEWOPT.
@@ -786,6 +890,7 @@ mod tests {
             // A turned off, B turned on, NEWOPT adopted on, GONE dropped.
             enabled: ["B".to_string(), "NEWOPT".to_string()].into(),
             complete: vec!["A".into(), "B".into(), "NEWOPT".into()],
+            kept: vec![],
             content: String::new(),
         };
         let d = w.describe();
@@ -964,6 +1069,7 @@ mod tests {
             old: None,
             enabled: BTreeSet::new(),
             complete: vec![],
+            kept: vec![],
             content: "x\n".into(),
         };
         let summary = apply(&[w]);
@@ -983,6 +1089,7 @@ mod tests {
             old: None,
             enabled: BTreeSet::new(),
             complete: vec![],
+            kept: vec![],
             content: "x\n".into(),
         };
         // Sorted first, so it is the one that would land before the failure.

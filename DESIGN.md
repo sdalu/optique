@@ -228,6 +228,16 @@ judged from its view — exactly what `make config` on the plain origin
 produces — and a divergent flavor's difference is reported as a warning,
 not an error (`src/apply.rs`, `src/session.rs`).
 
+A non-default flavor alone in the closure writes from its own view but
+drops nothing it does not see: it cannot tell an option it lacks (the
+default flavor's) from one the port removed, and dropping the first loses
+the user's choice for good, while keeping the second is harmless (make
+ignores it, the default flavor's next write drops it). So a file whose list
+is a superset of that flavor's is up to date when everything the flavor has
+is unchanged, and a write keeps the other options' list entries and lines
+as they were. Rejected: querying the default flavor to tell the two apart,
+an extra make query per such origin for a case the rule settles.
+
 Removing the file is the exception: it decides every flavor reading it, and
 a flavor can set its own defaults (`www/sogo@pgsql` adds `PGSQL`), so
 `--minimal` removes it only when it repeats defaults + make.conf for every

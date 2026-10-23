@@ -1409,6 +1409,14 @@ Disagreements confined to options one flavor does not even have, such as those
 removed by
 .Va OPTIONS_EXCLUDE ,
 are structural and not reported.
+When only a non-default flavor of the origin is in the closure, it writes the
+file from its own view but never drops what it does not see: the file is up
+to date when everything that flavor has is unchanged, and a write keeps the
+list entry and
+.Ql SET Ns / Ns Ql UNSET
+line of every option the flavor lacks as they were, since it cannot tell an
+option it lacks from one the port removed; the default flavor's next write
+drops the latter.
 A flavor can set defaults of its own, which the shared file then overrides,
 so a shared file is removed as repeating defaults plus
 .Pa make.conf
