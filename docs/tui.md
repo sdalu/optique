@@ -150,13 +150,14 @@ the latter:
 It is not a port: no key selects it, and the selection steps over it.
 Neither `s` (alphabetical order) nor `t` (no ok port listed) shows it.
 
-Three further markers may trail the port's name:
+Four further markers may trail the port's name:
 
 | Marker | Meaning                                                                   |
 | :----: | :------------------------------------------------------------------------ |
 | `⊘`    | blacklisted for this jail, tree and set — never needs attention           |
 | `⚠`    | the port is `BROKEN` or `IGNORE`d with its current options                |
 | `∞`    | caught in a dependency loop — see [Dependency loops](dependency-loops.md) |
+| `+N`   | N options added since the port's file was written, each marked `N` in the option pane; shown even on a port `-m` or the `m` view settles (`≈`) |
 
 A row too long for the pane loses its category first, the port's name,
 its `@flavor` and these markers kept whole: `multim…/ffmpeg@default ⚠`,

@@ -123,6 +123,15 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             if app.loop_of(key).is_some() {
                 badges.push(Span::styled(" ∞", Style::default().fg(Color::Red)));
             }
+            // Options the port gained since its file was written, in the
+            // style of their N in the option pane: shown whatever the
+            // state, so a port -m or the m view settles still says it.
+            if let Some((added, _)) = app.session.stale_delta(info).filter(|(a, _)| !a.is_empty()) {
+                badges.push(Span::styled(
+                    format!(" +{}", added.len()),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+            }
             let badge_width: usize = badges.iter().map(Span::width).sum();
             let name = fit_port_name(key, name_room.saturating_sub(badge_width));
             let mut spans = vec![
@@ -1629,6 +1638,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             mark("⚠", Color::Red, "", "port is BROKEN/IGNORE with the current options"),
             mark("⊘", Color::DarkGray, "", "blacklisted for this jail/tree/set (never needs attention)"),
             mark("∞", Color::Red, "", "caught in a dependency loop — r lists it, Enter jumps to any port"),
+            mark("+N", Color::Yellow, "", "N options added since its file was written (N in the pane), even when settled (≈)"),
             blank(),
             head("Port name color"),
             legend(

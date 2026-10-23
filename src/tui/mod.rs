@@ -5859,6 +5859,7 @@ mod tests {
         assert_eq!(banner(&mut app), ("STALE: obsolete OLD".to_string(), Color::LightRed));
 
         app.minimal = true;
+        app.session.minimal = true;
         assert_eq!(app.effective_status(&info_of(&app, "cat/alpha")), UiStatus::Ok);
         assert_eq!(
             banner(&mut app),
@@ -5866,6 +5867,7 @@ mod tests {
         );
 
         app.minimal = false;
+        app.session.minimal = false;
         app.mc_relax = true;
         assert_eq!(
             banner(&mut app),
@@ -5891,6 +5893,30 @@ mod tests {
         for want in ["OPT39", "── obsolete", "OLD1", "OLD2"] {
             assert!(shown.contains(want), "{want} in view:\n{shown}");
         }
+    }
+
+    /// A port that gained options says how many after its name, `+N` in
+    /// the yellow of the option pane's N, settled (≈ under -m) or not.
+    #[test]
+    fn a_port_with_new_options_has_a_plus_n_badge() {
+        let row = |app: &mut App| {
+            screen(app).lines().find(|l| l.contains("cat/alpha")).unwrap().to_string()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A", "OLD"], &["A"]);
+        let mut app = alpha_app(tmp.path(), &["A", "B", "C"]);
+        assert!(row(&mut app).contains("!  cat/alpha +2 "), "{}", row(&mut app));
+        // -m sets both: the app's view and the session's notion of decided.
+        app.minimal = true;
+        app.session.minimal = true;
+        assert!(row(&mut app).contains("≈  cat/alpha +2 "), "{}", row(&mut app));
+        // Only obsolete options: nothing new to point at.
+        let mut app = alpha_app(tmp.path(), &["A"]);
+        assert!(!row(&mut app).contains('+'), "{}", row(&mut app));
+        // Never configured: no file to be behind on.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = alpha_app(tmp.path(), &["A", "B"]);
+        assert!(!row(&mut app).contains('+'), "{}", row(&mut app));
     }
 
     /// A STALE line too long for the pane wraps to a second, under its

@@ -484,7 +484,7 @@ parts the problem ports from the N ok ones
 .Pq \[u2248] and \[u2713] ;
 it is not a port, and no key selects it.
 .Pp
-Three further markers may follow the port's name:
+Four further markers may follow the port's name:
 .Sq \[u2298]
 for a port blacklisted for this jail, tree and set, which therefore never needs
 attention,
@@ -493,10 +493,22 @@ for a port that is
 .Va BROKEN
 or
 .Va IGNORE Ns d
-with its current options, and
+with its current options,
 .Sq \[u221E]
 for a port caught in a dependency loop
-.Pq see Sx Dependency loops .
+.Pq see Sx Dependency loops ,
+and
+.Ql + Ns Ar N
+for a port that gained
+.Ar N
+options since its file was written, each marked
+.Ql N
+in the option pane; it shows even on a port
+.Fl m
+or the
+.Ic m
+view settles
+.Pq Sq \[u2248] .
 A row too long for the pane loses its category first, keeping the port's
 name, its
 .Ql @flavor
