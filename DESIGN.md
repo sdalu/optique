@@ -44,6 +44,14 @@ same closure it removed both leaks, in agreement with poudriere's graph,
 and changed nothing else but dependency spec paths and the defaults
 `PACKAGE_BUILDING` is meant to change.
 
+The host's release leaks the same way: bsd.port.mk takes `OSREL` from
+`uname -r` and `OSVERSION` from the host's param.h, so on a 15.1 host an
+11.2 jail's `security/ca_root_nss` lost the `ETCSYMLINK` it excludes on
+15. Given `-j`, the prelude therefore also sets `_OSRELEASE`, `OSREL` and
+`OSVERSION` from the jail's poudriere.d metadata (its param.h, else
+derived from its version), plus poudriere's own cross-build lines when
+its arch is not the host's; being in the staged text, they key the cache.
+
 Rejected: re-querying only ports that come out IGNORE/BROKEN, which misses
 leaks into dependencies and defaults; running `make` inside poudriere's
 reference jail, which needs root and mounts and only exists during a build;

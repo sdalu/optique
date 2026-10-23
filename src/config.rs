@@ -308,6 +308,8 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     let (ports, db) = if local { make_defaults() } else { (None, None) };
     // make's own default, which the environment may move as for any make.
     let make_conf = env_path_or("__MAKE_CONF", "/etc/make.conf");
+    let (arch, supported_archs) =
+        if !local && req.jail.is_some() { host_arch() } else { Default::default() };
     let host = HostPaths {
         poudriere_conf: Path::new(POUDRIERE_CONF),
         poudriere_d,
@@ -318,8 +320,31 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         db_from_make: db.is_some(),
         pkg_db: &pkg_db,
         env_overlays: &env_overlays(),
+        arch: &arch,
+        supported_archs: &supported_archs,
     };
     resolve_host(&host, req, staging_dir)
+}
+
+/// This host's architecture and `kern.supported_archs`, as poudriere asks
+/// them (`get_host_arch`, `need_emulation` in its common.sh); `uname -m`
+/// stands for the list where the sysctl does not answer, as there.
+fn host_arch() -> (String, String) {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
+    let (m, p) = (run("uname", &["-m"]), run("uname", &["-p"]));
+    let arch = if m == p { p } else { format!("{m}.{p}") };
+    let supported = run("sysctl", &["-n", "kern.supported_archs"]);
+    let supported = if supported.is_empty() { m } else { supported };
+    (arch, supported)
 }
 
 /// `OVERLAYS` from the environment, each made absolute against optique's
@@ -373,6 +398,12 @@ struct HostPaths<'a> {
     /// `OVERLAYS` from optique's environment, made absolute against its own
     /// directory: what make would read for a local build.
     env_overlays: &'a [PathBuf],
+    /// The host's architecture as poudriere's `get_host_arch` writes it
+    /// (`uname -m`.`uname -p`, just the one when both agree) and the
+    /// `kern.supported_archs` its `need_emulation` reads: whether a jail is
+    /// a cross build. Asked only when -j names a jail.
+    arch: &'a str,
+    supported_archs: &'a str,
 }
 
 /// A poudriere build when poudriere.d exists and -l was not given, a local
@@ -556,7 +587,7 @@ fn resolve_local(
         }
     };
     let (staged, mut conf_hash, make_conf_sources) =
-        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], staging_dir)?;
+        concat_make_conf(&[host.make_conf.to_path_buf()], QueryEnv::Host, &[], "", staging_dir)?;
     // Queries run with a cleared environment, so make would fall back to
     // /etc/make.conf, unhashed, when the one it was given cannot be read:
     // /dev/null stands for "none", as an unreadable __MAKE_CONF is for make.
@@ -619,8 +650,18 @@ fn resolve_poudriere(
 
     let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
     let env = QueryEnv::Jail { package_building: !off };
-    let (make_conf, conf_hash, make_conf_sources) =
-        layer_make_conf(poudriere_d, jail, tree_name, set, env, overlays, staging_dir)?;
+    let mut notes = Vec::new();
+    let jail_lines = jail.map_or_else(String::new, |j| jail_system(poudriere_d, j, host, &mut notes));
+    let (make_conf, conf_hash, make_conf_sources) = layer_make_conf(
+        poudriere_d,
+        jail,
+        tree_name,
+        set,
+        env,
+        overlays,
+        &jail_lines,
+        staging_dir,
+    )?;
 
     let blacklist = Blacklist::load(poudriere_d, jail, tree_name, set);
 
@@ -632,9 +673,88 @@ fn resolve_poudriere(
         conf_hash,
         env,
         blacklist,
-        notes: Vec::new(),
+        notes,
         overlays: Vec::new(),
     })
+}
+
+/// The make.conf lines that give queries the system of jail `name` rather
+/// than the host's, poudriere reading ports inside the jail: its cross-build
+/// lines where its arch is not the host's (`setup_makeconf` in common.sh,
+/// as poudriere writes them into the jail's make.conf), then `_OSRELEASE`,
+/// `OSREL` and `OSVERSION`, which bsd.port.mk takes from `uname -r` and
+/// /usr/include/sys/param.h, and poudriere's jail gives as its own
+/// (`UNAME_r` from the jail's version, its param.h; ports_env.sh). OSVERSION
+/// is derived from the version when the jail's param.h cannot be read. A
+/// jail whose arch or version poudriere.d does not hold changes nothing:
+/// `notes` says why, for the banner.
+fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec<String>) -> String {
+    let dir = poudriere_d.join("jails").join(name);
+    let read = |file: &str| fs::read_to_string(dir.join(file)).ok().map(|s| s.trim().to_string());
+    let (Some(arch), Some(version)) = (read("arch"), read("version")) else {
+        notes.push(format!(
+            "jail {name}: no arch or version in {}; queries see this host's system",
+            dir.display()
+        ));
+        return String::new();
+    };
+    // `${version% *}`: a version may carry its osversion after a space.
+    let release = version.rsplit_once(' ').map_or(version.as_str(), |(r, _)| r);
+    // bsd.port.mk's `${_OSRELEASE:C/-.*//}`.
+    let osrel = release.split_once('-').map_or(release, |(r, _)| r);
+    let derived = || {
+        let (major, minor) = osrel.split_once('.')?;
+        Some(major.parse::<u32>().ok()? * 100_000 + minor.parse::<u32>().ok()? * 1000)
+    };
+    let param_h = read("mnt").map(|mnt| Path::new(&mnt).join("usr/include/sys/param.h"));
+    let osversion = match param_h.as_deref().and_then(freebsd_version) {
+        Some(v) => v,
+        None => {
+            let Some(v) = derived() else {
+                notes.push(format!(
+                    "jail {name}: version '{version}' is no release; queries see this host's system"
+                ));
+                return String::new();
+            };
+            let from = param_h.map_or_else(|| "no mnt".to_string(), |p| format!("no {}", p.display()));
+            notes.push(format!("jail {name}: OSVERSION {v} derived from its version {version} ({from})"));
+            v.to_string()
+        }
+    };
+    let mut out = String::new();
+    if need_cross_build(host.arch, &arch, host.supported_archs) {
+        // `${arch%.*}`, `${arch#*.}`: amd64 is amd64 twice, arm64.aarch64 two.
+        let machine = arch.rsplit_once('.').map_or(arch.as_str(), |(m, _)| m);
+        let machine_arch = arch.split_once('.').map_or(arch.as_str(), |(_, a)| a);
+        out.push_str(&format!("MACHINE={machine}\nMACHINE_ARCH={machine_arch}\nARCH=${{MACHINE_ARCH}}\n"));
+    }
+    out.push_str(&format!("_OSRELEASE={release}\nOSREL={osrel}\nOSVERSION={osversion}\n"));
+    out
+}
+
+/// `__FreeBSD_version` as a param.h defines it, None when unreadable.
+fn freebsd_version(param_h: &Path) -> Option<String> {
+    let text = fs::read(param_h).ok()?;
+    String::from_utf8_lossy(&text).lines().find_map(|l| {
+        let mut words = l.split_whitespace();
+        (words.next()? == "#define" && words.next()? == "__FreeBSD_version")
+            .then(|| words.next().map(str::to_string))?
+    })
+}
+
+/// poudriere's `need_cross_build`: i386 on amd64, powerpc on powerpc64, or
+/// an arch the host's kernel cannot run (`need_emulation`, armv6 running
+/// where armv7 does).
+fn need_cross_build(host_arch: &str, arch: &str, supported_archs: &str) -> bool {
+    let target = arch.rsplit_once('.').map_or(arch, |(t, _)| t);
+    let target_arch = arch.split_once('.').map_or(arch, |(_, a)| a);
+    let host_target_arch = host_arch.split_once('.').map_or(host_arch, |(_, a)| a);
+    let runs = supported_archs.split_whitespace().any(|a| {
+        a == target_arch || (target_arch == "armv6" && a == "armv7")
+    });
+    (target == "i386" && host_arch == "amd64")
+        || (target_arch == "powerpc" && host_target_arch == "powerpc64")
+        || !runs
 }
 
 /// A directory is a usable ports tree when it carries the ports framework.
@@ -951,6 +1071,7 @@ fn shell_assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     Some(unquoted)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layer_make_conf(
     poudriere_d: &Path,
     jail: Option<&str>,
@@ -958,18 +1079,19 @@ fn layer_make_conf(
     set: Option<&str>,
     env: QueryEnv,
     overlays: &[Overlay],
+    jail_lines: &str,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
-    concat_make_conf(&paths, env, overlays, staging_dir)
+    concat_make_conf(&paths, env, overlays, jail_lines, staging_dir)
 }
 
 /// Stage a make.conf holding the jail environment alone, no layers.
 #[cfg(test)]
 pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
     let (path, _, _) =
-        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], staging_dir)?;
+        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], "", staging_dir)?;
     Ok(path.expect("the jail environment is never empty"))
 }
 
@@ -993,7 +1115,9 @@ pub(crate) fn stage_synth_make_conf(
 /// `make.conf`, between the jail prelude and trailer in a jail's `env`, the
 /// overlays' `OVERLAYS+=` lines where poudriere writes them in the jail's
 /// make.conf: after the prelude, before the layers (host paths, as the
-/// jail's `/overlays/<name>` does not exist here). The
+/// jail's `/overlays/<name>` does not exist here), and the jail's system
+/// (`jail_system`) last, before the layers, which may still override it as
+/// they can in the jail. The
 /// hash covers the combined text (so an empty layering hashes too, and the
 /// jail environment keys a cache generation of its own); nothing is written
 /// when there is nothing to write.
@@ -1001,6 +1125,7 @@ fn concat_make_conf(
     candidates: &[PathBuf],
     env: QueryEnv,
     overlays: &[Overlay],
+    jail_lines: &str,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut prelude = String::new();
@@ -1011,6 +1136,7 @@ fn concat_make_conf(
         if package_building {
             prelude.push_str(PACKAGE_BUILDING_LINES);
         }
+        prelude.push_str(jail_lines);
         trailer = POUDRIERE_JAIL_TRAILER;
     }
     stage_make_conf(prelude, candidates, trailer, staging_dir)
@@ -1137,6 +1263,8 @@ mod tests {
             db_from_make: false,
             pkg_db: Path::new("/nonexistent/local.sqlite"),
             env_overlays: &[],
+            arch: "amd64",
+            supported_archs: "amd64 i386",
         }
     }
 
@@ -1158,7 +1286,7 @@ mod tests {
         let none = Request::default();
         let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
 
-        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], &stage).unwrap();
+        let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", &stage).unwrap();
         assert_eq!(hash(&host), bare, "no database, nothing to key");
         fs::write(&pkg_db, "one package").unwrap();
         let one = hash(&host);
@@ -1251,6 +1379,99 @@ mod tests {
         assert_eq!(s.env, QueryEnv::Jail { package_building: true });
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
+    }
+
+    /// A poudriere.d whose jail `j` has `arch` and `version`, its mnt holding
+    /// a param.h with `osversion` when given.
+    fn fake_jail(tmp: &Path, arch: &str, version: &str, osversion: Option<&str>) -> PathBuf {
+        let pd = tmp.join("poudriere.d");
+        let jd = pd.join("jails/j");
+        let _ = fs::remove_dir_all(&pd);
+        fs::create_dir_all(&jd).unwrap();
+        fs::write(jd.join("arch"), format!("{arch}\n")).unwrap();
+        fs::write(jd.join("version"), format!("{version}\n")).unwrap();
+        let mnt = tmp.join("mnt");
+        let _ = fs::remove_dir_all(&mnt);
+        fs::write(jd.join("mnt"), format!("{}\n", mnt.display())).unwrap();
+        if let Some(v) = osversion {
+            fs::create_dir_all(mnt.join("usr/include/sys")).unwrap();
+            let h = format!("#define __FreeBSD_version {v}\t/* Master, propagated to newvers */\n");
+            fs::write(mnt.join("usr/include/sys/param.h"), h).unwrap();
+        }
+        pd
+    }
+
+    /// poudriere reads ports inside the jail: -j gives queries its release,
+    /// its param.h's OSVERSION (derived from the release, and said so, when
+    /// unreadable), and poudriere's cross-build lines when its arch is not
+    /// the host's; a jail poudriere.d does not describe changes nothing.
+    #[test]
+    fn a_jail_gives_queries_its_arch_and_release() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let req = Request { jail: Some("j"), ..Request::default() };
+        let staged = |pd: &Path| {
+            let s = resolve_host(&host(tmp.path(), pd, &ports, tmp.path()), &req, &stage).unwrap();
+            (fs::read_to_string(s.make_conf.unwrap()).unwrap(), s.notes, s.conf_hash)
+        };
+
+        let pd = fake_jail(tmp.path(), "amd64", "11.2-RELEASE", Some("1102000"));
+        let (conf, notes, hash) = staged(&pd);
+        let os = "_OSRELEASE=11.2-RELEASE\nOSREL=11.2\nOSVERSION=1102000\n";
+        assert!(conf.contains(os) && !conf.contains("MACHINE"), "{conf}");
+        assert!(conf.find(os).unwrap() < conf.find("LOCALBASE").unwrap(), "{conf}");
+        assert!(notes.is_empty(), "{notes:?}");
+
+        let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE-p2 1403000", None);
+        let (conf, notes, other) = staged(&pd);
+        assert!(conf.contains("_OSRELEASE=14.3-RELEASE-p2\nOSREL=14.3\nOSVERSION=1403000\n"), "{conf}");
+        assert!(notes.iter().any(|n| n.contains("OSVERSION 1403000 derived")), "{notes:?}");
+        assert_ne!(hash, other, "the jail's system keys its own generation");
+
+        for (arch, lines) in [
+            ("i386", "MACHINE=i386\nMACHINE_ARCH=i386\nARCH=${MACHINE_ARCH}\n"),
+            ("arm64.aarch64", "MACHINE=arm64\nMACHINE_ARCH=aarch64\nARCH=${MACHINE_ARCH}\n"),
+        ] {
+            let pd = fake_jail(tmp.path(), arch, "14.3-RELEASE", Some("1403000"));
+            let (conf, _, _) = staged(&pd);
+            assert!(conf.contains(&format!("{lines}_OSRELEASE=14.3-RELEASE\n")), "{arch}: {conf}");
+        }
+
+        let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE", None);
+        fs::remove_file(pd.join("jails/j/version")).unwrap();
+        let (conf, notes, _) = staged(&pd);
+        assert!(!conf.contains("OSREL"), "{conf}");
+        assert!(notes.iter().any(|n| n.contains("this host's system")), "{notes:?}");
+        fs::remove_dir_all(pd.join("jails")).unwrap();
+        let (conf, notes, _) = staged(&pd);
+        assert!(!conf.contains("OSREL") && notes.len() == 1, "{conf}{notes:?}");
+    }
+
+    /// Under the staged make.conf of an 11.2 jail, security/ca_root_nss
+    /// offers ETCSYMLINK, which it excludes on the 15 this host may run.
+    /// Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_a_jail_release_reaches_make() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = fake_jail(tmp.path(), "amd64", "11.2-RELEASE", None);
+        let req = Request { jail: Some("j"), ..Request::default() };
+        let s = resolve_host(&host(tmp.path(), &pd, &ports, tmp.path()), &req, &stage).unwrap();
+        let out = std::process::Command::new("/usr/bin/make")
+            .args(["-C", "/usr/ports/security/ca_root_nss", "-V", "COMPLETE_OPTIONS_LIST", "-V", "OSVERSION"])
+            .arg(format!("__MAKE_CONF={}", s.make_conf.unwrap().display()))
+            .env_remove("MAKEFLAGS")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(text, "ETCSYMLINK\n1102000\n", "{}", String::from_utf8_lossy(&out.stderr));
     }
 
     /// make runs with -C in the port's directory, so a relative path handed
@@ -1480,7 +1701,7 @@ mod tests {
         assert_eq!(s.make_conf_sources, vec![etc.clone()]);
         // Read in place, for its relative .includes, and keyed all the same.
         assert_eq!(s.make_conf.as_ref(), Some(&etc));
-        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], &stage).unwrap();
+        let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", &stage).unwrap();
         assert_ne!(s.conf_hash, empty_hash);
         // A make.conf make reads whatever its bytes, a Latin-1 comment
         // included, is read and keyed, not taken for none; one that exists
@@ -1664,7 +1885,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], "", &stage).unwrap();
         assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
@@ -1687,7 +1908,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], &stage).unwrap();
+            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
         assert_eq!(sources, vec![pd.join("make.conf")], "{sources:?}");
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert_eq!(text.matches("OVERLAYS+=/x").count(), 1, "{text}");
@@ -1703,7 +1924,7 @@ mod tests {
         fs::write(pd.join("s1-make.conf"), "B=2\n").unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], "", &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert!(text.lines().any(|l| l == "A=1"), "{text}");
         assert!(text.lines().any(|l| l == "B=2"), "{text}");
@@ -1718,7 +1939,7 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let (path, jail_hash, _) =
-            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], &stage).unwrap();
+            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", &stage).unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         // poudriere's own lines come before the layers, as in a jail...
         assert!(text.find("PACKAGE_BUILDING=yes").unwrap() < text.find("/opt/local").unwrap());
@@ -1726,16 +1947,16 @@ mod tests {
         assert!(text.trim_end().ends_with("LOCALBASE=/nonexistent"), "{text}");
 
         // The environment keys its own cache generation.
-        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], &stage).unwrap();
+        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
         assert_ne!(jail_hash, host_hash);
 
         // An empty layering still stages a make.conf in a jail's environment.
         let empty = tmp.path().join("empty.d");
         fs::create_dir_all(&empty).unwrap();
-        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", &stage).unwrap();
         assert!(sources.is_empty());
         assert!(path.is_some());
-        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], &stage).unwrap();
+        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], "", &stage).unwrap();
         assert!(path.is_none());
     }
 

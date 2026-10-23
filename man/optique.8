@@ -1844,6 +1844,39 @@ A local build
 has no jail: queries see the host as it is, which is then the machine that
 builds.
 .Pp
+Given
+.Fl j Ar jail ,
+queries also see the jail's system rather than the host's, read from
+.Pa jails/<jail>/arch ,
+.Pa version
+and
+.Pa mnt
+under
+.Pa poudriere.d :
+the same prelude sets
+.Va _OSRELEASE ,
+.Va OSREL
+and
+.Va OSVERSION
+for the jail, the last from
+.Va __FreeBSD_version
+in its
+.Pa <mnt>/usr/include/sys/param.h ,
+or derived from its version
+.Pq 11.2 gives 1102000
+with a note in the startup banner when that file cannot be read, and, when
+the jail's architecture is not the host's, the
+.Va MACHINE ,
+.Va MACHINE_ARCH
+and
+.Va ARCH
+lines poudriere writes for a cross build.
+A port that excludes an option on some releases
+.Pq Va OPTIONS_EXCLUDE_FreeBSD_15
+thus offers what it offers in the jail.
+A jail whose arch or version file is missing leaves the host's system, with
+a note.
+.Pp
 The
 .Pa blacklist
 chain is read with the same jail, tree and set expansion and, again like

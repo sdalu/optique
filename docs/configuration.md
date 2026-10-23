@@ -101,6 +101,17 @@ those files is not seen. The startup banner's
 `poudriere jail (host packages under /usr/local not seen)`, or the same
 line with `; NO_PACKAGE_BUILDING set` appended.
 
+Given `-j jail`, queries also see the jail's system rather than the
+host's, from poudriere.d's `jails/<jail>/arch`, `version` and `mnt`: the
+prelude sets `_OSRELEASE`, `OSREL` and `OSVERSION` for the jail
+(`OSVERSION` from `__FreeBSD_version` in `<mnt>/usr/include/sys/param.h`,
+else derived from the version, 11.2 giving 1102000, with a note in the
+banner), plus poudriere's cross-build lines `MACHINE`, `MACHINE_ARCH`
+and `ARCH` when the jail's architecture is not the host's. On a 15 host
+an 11.2 jail's security/ca_root_nss offers `ETCSYMLINK`, which the port
+excludes on 15. A jail without an arch or version file leaves the host's
+system, with a note.
+
 A [local build](#local-builds) has no jail wrapping at all: queries see
 the host as it is, which is then the machine that builds.
 
