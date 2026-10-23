@@ -232,10 +232,15 @@ pub fn plan_writes<'a>(
             // file as it would be written, so OPTIONS_SLAVE and conditional
             // groups count on both sides. Lines no flavor here can see are
             // another flavor's choices, and keep the file.
+            // make reads options.local whether or not the file is there
+            // (bsd.options.mk:342), so both sides read it: the file is
+            // redundant only when options.local alone ends up the same.
+            let with_file = files.under_local(options_name, planned.file.clone());
+            let without = files.under_local(options_name, SavedOptionsFile::default());
             let redundant = !planned.foreign
                 && cands.iter().all(|c| {
-                    crate::session::effective_with(c.info, Some(&planned.file))
-                        == crate::session::nofile_effective(c.info)
+                    crate::session::effective_with(c.info, Some(&with_file))
+                        == crate::session::effective_with(c.info, Some(&without))
                 });
             if redundant {
                 if files.bytes(options_name).is_some() {
@@ -791,6 +796,32 @@ mod tests {
         assert!(staged.is_empty(), "{staged:?}");
         assert_eq!(sess.status(&info), crate::session::UiStatus::Ok);
         let planned = plan_writes(std::iter::once((&info.key.clone(), &info, staged)), &files, false);
+        assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+    }
+
+    /// bsd.options.mk:342 reads options.local whether or not the options
+    /// file is there. The file says the defaults (A on, B off) and
+    /// options.local sets B: with the file make has A alone (its UNSET of
+    /// B wins), without it A and B. The file is not redundant under -m.
+    #[test]
+    fn minimal_keeps_a_file_options_local_needs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "B"], &["A"]);
+        info.options.defaults = ["A".to_string()].into();
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=B\n").unwrap();
+        let enabled: BTreeSet<String> = ["A".to_string()].into();
+        let planned = plan_writes(
+            std::iter::once((&info.key.clone(), &info, enabled)),
+            &OptionsFiles::new(tmp.path()),
+            true,
+        );
+        assert!(planned.removals.is_empty(), "{:?}", planned.removals);
         assert!(planned.writes.is_empty(), "{:?}", planned.writes);
     }
 

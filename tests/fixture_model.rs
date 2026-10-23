@@ -83,10 +83,33 @@ fn options_local_is_read_after_the_file() {
     assert_eq!(port["status"], "ok", "{port}");
 
     let out = f.run("sync", &["misc/cond"]);
-    assert!(common::stderr(&out).contains("options.local overrides the options file for AUDIO DOCS"));
+    assert!(
+        common::stderr(&out).contains("misc_cond/options.local also sets AUDIO and unsets DOCS"),
+        "{}",
+        common::stderr(&out)
+    );
     assert!(common::stderr(&out).contains("up to date"), "{}", common::stderr(&out));
     assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
+}
+
+/// bsd.options.mk:342 reads options.local whether or not the options file
+/// is there. The file sync writes for the defaults (DOCS) unsets AUDIO and
+/// NAS, which options.local sets: without the file make would turn them
+/// on. `sync -m` keeps the file, and make's PORT_OPTIONS stays as it was.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn minimal_sync_keeps_a_file_options_local_needs() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    f.run("sync", &[origin]);
+    let file = std::fs::read_to_string(f.file("misc_cond")).expect("sync writes the defaults");
+    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_SET+=AUDIO NAS\n").unwrap();
+    let before = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(before, ["DOCS"]);
+    let out = f.run("sync", &["-m", origin]);
+    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).ok().as_deref(), Some(&*file), "{}", common::stderr(&out));
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), before);
 }
 
 /// bsd.options.mk:321: an UNSET entry is a make pattern. make.conf's

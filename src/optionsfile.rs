@@ -19,6 +19,10 @@ pub struct SavedOptionsFile {
     /// the shell command, optique does not, and ignores the line. `file` is
     /// `options` or `options.local`, `line` counts from 1.
     pub shell: Vec<(&'static str, usize)>,
+    /// The SET and UNSET entries `options.local` contributes, as they stand
+    /// once it is read (`with_local`): a `?=` that assigns nothing adds none.
+    pub local_set: BTreeSet<String>,
+    pub local_unset: BTreeSet<String>,
 }
 
 /// How a line assigns its variable: make's `=` and `:=` (afresh), `+=`,
@@ -72,14 +76,6 @@ impl SavedOptionsFile {
         self
     }
 
-    /// The options `options.local` text `local` names on a SET or UNSET
-    /// line.
-    pub fn local_names(local: &str) -> BTreeSet<String> {
-        let mut f = SavedOptionsFile::default();
-        f.read(local, true);
-        f.set.into_iter().chain(f.unset).collect()
-    }
-
     /// Read `text`'s assignments into `self`, in order; `lists_only`
     /// takes nothing but the SET and UNSET lines.
     fn read(&mut self, text: &str, lists_only: bool) {
@@ -125,11 +121,17 @@ impl SavedOptionsFile {
                     self.complete.extend(words);
                 }
                 "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => {
-                    let list = if name == "OPTIONS_FILE_SET" { &mut self.set } else { &mut self.unset };
-                    if !append {
-                        list.clear();
+                    let set = name == "OPTIONS_FILE_SET";
+                    let mut lists = vec![if set { &mut self.set } else { &mut self.unset }];
+                    if lists_only {
+                        lists.push(if set { &mut self.local_set } else { &mut self.local_unset });
                     }
-                    list.extend(words);
+                    for list in lists {
+                        if !append {
+                            list.clear();
+                        }
+                        list.extend(words.clone());
+                    }
                 }
                 _ => {}
             }
@@ -313,9 +315,11 @@ OPTIONS_FILE_UNSET+=FLITE
         let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A B\n").with_local("OPTIONS_FILE_SET=C\n");
         let v: Vec<_> = ["A", "B", "C"].iter().map(|o| f.value(o)).collect();
         assert_eq!(v, [None, None, Some(true)]);
-        let names: Vec<String> =
-            SavedOptionsFile::local_names("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n").into_iter().collect();
-        assert_eq!(names, ["A", "B"]);
+        assert_eq!(f.local_set, ["C".to_string()].into());
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\n")
+            .with_local("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n");
+        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!((f.local_set, f.local_unset), (words(&["B"]), words(&["A"])));
     }
 
     /// bsd.options.mk:354-363: an UNSET entry takes out every option it

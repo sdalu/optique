@@ -245,9 +245,10 @@ impl Session {
             state.baseline = match &saved {
                 // A file apply wrote has a line for every option.
                 Some(file) => close_implies(owner, apply::sync_enabled_set(owner, Some(file))),
-                // Removed under -m: what make reads with no file, which is
-                // what the removal was judged against.
-                None => nofile_effective(owner),
+                // Removed under -m: what make reads with no file but its
+                // options.local, which is what the removal was judged
+                // against.
+                None => effective_with(owner, Some(&files.combined(name))),
             };
             state.saved = saved;
         }

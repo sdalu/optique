@@ -102,11 +102,14 @@ pub fn split_unused(
     (kept, removals)
 }
 
-/// How the options file changes the outcome versus defaults + make.conf:
-/// `+OPT` = the file turns it on, `-OPT` = the file turns it off.
-/// Empty means the file is redundant.
-pub fn redundancy_diff(info: &PortInfo) -> Vec<String> {
-    let nofile = crate::session::nofile_effective(info);
+/// How the options file changes the outcome versus defaults + make.conf
+/// and `local`, the entry's options.local read with no options file (an
+/// empty file without one): make reads options.local either way
+/// (bsd.options.mk:342), so the file is redundant only when it alone
+/// changes nothing. `+OPT` = the file turns it on, `-OPT` = the file turns
+/// it off. Empty means the file is redundant.
+pub fn redundancy_diff(info: &PortInfo, local: &crate::optionsfile::SavedOptionsFile) -> Vec<String> {
+    let nofile = crate::session::effective_with(info, Some(local));
     let effective = &info.options.effective;
     let mut out: Vec<String> =
         effective.difference(&nofile).map(|o| format!("+{o}")).collect();
@@ -267,7 +270,7 @@ mod tests {
             effective: ["B".to_string()].into(),
             ..Default::default()
         };
-        let d = redundancy_diff(&info_with(o));
+        let d = redundancy_diff(&info_with(o), &Default::default());
         assert_eq!(d, vec!["+B".to_string(), "-A".to_string()]);
     }
 
@@ -281,11 +284,27 @@ mod tests {
             effective: ["A".to_string()].into(),
             ..Default::default()
         };
-        assert!(redundancy_diff(&info_with(o.clone())).is_empty());
+        assert!(redundancy_diff(&info_with(o.clone()), &Default::default()).is_empty());
 
         // file deviates: B enabled although default+mc say off.
         o.effective = ["A".to_string(), "B".to_string()].into();
-        assert!(!redundancy_diff(&info_with(o)).is_empty());
+        assert!(!redundancy_diff(&info_with(o), &Default::default()).is_empty());
+    }
+
+    /// bsd.options.mk:342 reads options.local with or without the options
+    /// file: a file saying the defaults (A on, B off) is not redundant when
+    /// options.local sets B, which the file's UNSET line alone keeps off.
+    #[test]
+    fn redundancy_is_judged_with_options_local() {
+        let o = PortOptions {
+            complete: vec!["A".into(), "B".into()],
+            defaults: ["A".to_string()].into(),
+            // Queried with the file and options.local in place.
+            effective: ["A".to_string()].into(),
+            ..Default::default()
+        };
+        let local = crate::optionsfile::SavedOptionsFile::default().with_local("OPTIONS_FILE_SET+=B\n");
+        assert_eq!(redundancy_diff(&info_with(o), &local), ["-B"]);
     }
 
     /// A file nobody could read is not deleted: removing it needs only the

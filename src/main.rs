@@ -411,7 +411,8 @@ fn find_redundant(
         }
         // Answers arrive in any order; the reason names the same flavor each run.
         f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
-        match shared_file_deviation(&f.infos) {
+        let local = files.under_local(&f.entry.options_name, Default::default());
+        match shared_file_deviation(&f.infos, &local) {
             None => found.removals.push(clean::Removal {
                 options_name: f.entry.options_name.clone(),
                 dir: f.entry.dir.clone(),
@@ -473,7 +474,8 @@ fn find_redundant(
                     .collect();
                 let f = Flavors { entry, infos: vec![info], waiting: others.len(), failed: None };
                 // A deviating default flavor settles it: no need to ask the others.
-                if others.is_empty() || shared_file_deviation(&f.infos).is_some() {
+                let local = files.under_local(&entry.options_name, Default::default());
+                if others.is_empty() || shared_file_deviation(&f.infos, &local).is_some() {
                     settle(f, &mut found, &mut warn);
                     continue;
                 }
@@ -535,14 +537,14 @@ fn find_redundant(
 /// reads it (`infos`, default flavor first, each queried with the file in
 /// place): the first flavor it moves away from defaults + make.conf. None
 /// when the file changes nothing for any of them.
-fn shared_file_deviation(infos: &[model::port::PortInfo]) -> Option<String> {
+fn shared_file_deviation(infos: &[model::port::PortInfo], local: &optionsfile::SavedOptionsFile) -> Option<String> {
     // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
     // the file; it is kept, not judged redundant, whatever it says.
     if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {
         return Some(format!("{}: make.conf OPTIONS_OVERRIDE decides it, left alone", info.key));
     }
     infos.iter().enumerate().find_map(|(i, info)| {
-        let diff = clean::redundancy_diff(info);
+        let diff = clean::redundancy_diff(info, local);
         if diff.is_empty() {
             None
         } else if i == 0 {
@@ -1049,18 +1051,25 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         .collect();
     for name in names {
         // make reads options.local after the file (bsd.options.mk:341-363),
-        // and so does optique; sync never writes it, so what it sets or
-        // unsets stays whatever the options file says.
-        let local = files.local_names(name);
-        if !local.is_empty() {
+        // and so does optique; sync never writes it. Its lines join the
+        // file's, UNSET winning across both, so it overrides nothing by
+        // itself: the note says what it adds.
+        let both = files.combined(name);
+        let mut adds = Vec::new();
+        for (verb, list) in [("sets", &both.local_set), ("unsets", &both.local_unset)] {
+            if !list.is_empty() {
+                adds.push(format!("{verb} {}", list.iter().cloned().collect::<Vec<_>>().join(" ")));
+            }
+        }
+        if !adds.is_empty() {
             eprintln!(
-                "{} {name}/options.local overrides the options file for {}; sync leaves it alone",
+                "{} {name}/options.local also {}; sync leaves it alone",
                 tint(paint, ansi::CYAN, "note:"),
-                local.into_iter().collect::<Vec<_>>().join(" ")
+                adds.join(" and ")
             );
         }
         // make runs a `!=` line's shell command; optique does not.
-        for (file, line) in files.combined(name).shell {
+        for (file, line) in &both.shell {
             eprintln!(
                 "{} {name}/{file} line {line} assigns with != (a shell command): optique ignores it",
                 tint(paint, ansi::YELLOW, "warning:"),
@@ -1837,8 +1846,8 @@ mod tests {
             info
         };
         let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
-        assert_eq!(super::shared_file_deviation(std::slice::from_ref(&mysql)), None);
-        let why = super::shared_file_deviation(&[mysql, pgsql]).expect("@pgsql reads MYSQL from the file");
+        assert_eq!(super::shared_file_deviation(std::slice::from_ref(&mysql), &Default::default()), None);
+        let why = super::shared_file_deviation(&[mysql, pgsql], &Default::default()).expect("@pgsql reads MYSQL from the file");
         assert!(why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"), "{why}");
     }
 
@@ -1855,7 +1864,7 @@ mod tests {
         info.options.defaults = ["DOCS".into()].into();
         info.options.effective = ["DOCS".into()].into();
         info.options.r#override = Some(["DOCS".to_string()].into());
-        let why = super::shared_file_deviation(std::slice::from_ref(&info))
+        let why = super::shared_file_deviation(std::slice::from_ref(&info), &Default::default())
             .expect("an override must never be judged redundant");
         assert!(why.contains("OPTIONS_OVERRIDE"), "{why}");
     }

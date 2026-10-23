@@ -29,7 +29,7 @@ not change a result; **known gap**, with what it can change.
 | Option list: `OPTIONS_DEFINE`, groups, `_${ARCH}`, `OPTIONS_EXCLUDE` (`_${ARCH}`, `_${OPSYS}`, `_${OPSYS}_${OSREL}`) | `bsd.options.mk` | matches: taken from `make` as computed (`COMPLETE_OPTIONS_LIST`) |
 | Defaults: `OPTIONS_DEFAULT` (`_${ARCH}`), DOCS/NLS/EXAMPLES/IPV6 | `bsd.options.mk` | matches |
 | Layer order: `OPTIONS_SET`/`UNSET`, `${OPTIONS_NAME}_SET`/`_UNSET`, the options file, the four `*_FORCE`, each scope's UNSET after its SET | `bsd.options.mk` | matches |
-| `options.local` read after the options file, its lines joining the file's | `bsd.options.mk` (`.sinclude ${OPTIONS_FILE}.local`) | matches; shown as a note, never written |
+| `options.local` read after the options file, its lines joining the file's | `bsd.options.mk` (`.sinclude ${OPTIONS_FILE}.local`) | matches; shown as a note, never written; read with or without the options file, so `-m` and `clean --redundant` judge a file redundant only when options.local alone gives the same outcome |
 | UNSET entries are make patterns (`${PORT_OPTIONS:N${opt}}`); a SET entry is added only when `COMPLETE_OPTIONS_LIST:M${opt}` matches | `bsd.options.mk` | matches (bmake's `Str_Match`) |
 | `WITH`/`WITHOUT` in make.conf, after FORCE, before IMPLIES | `bsd.options.mk` | matches; locked like FORCE, JSON scope `with` |
 | IMPLIES, transitive, after FORCE | `bsd.options.mk` | matches |

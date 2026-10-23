@@ -144,14 +144,6 @@ impl OptionsFiles {
         Some(SavedOptionsFile::parse(&String::from_utf8_lossy(&bytes)))
     }
 
-    /// The options `options.local` sets or unsets: what it overrides of the
-    /// options file. Empty without one.
-    pub fn local_names(&self, options_name: &str) -> std::collections::BTreeSet<String> {
-        self.local_bytes(options_name)
-            .map(|b| SavedOptionsFile::local_names(&String::from_utf8_lossy(&b)))
-            .unwrap_or_default()
-    }
-
     /// Drop what is known of these files, so the next read sees the disk:
     /// after optique itself wrote or removed them.
     pub fn forget<'a>(&self, names: impl IntoIterator<Item = &'a str>) {
@@ -330,8 +322,9 @@ mod tests {
         let v: Vec<_> = ["A", "B", "C"].iter().map(|o| saved.value(o)).collect();
         assert_eq!(v, [Some(false), Some(false), Some(false)]);
         assert_eq!(files.own("cat_port").unwrap().value("A"), Some(true));
-        assert_eq!(files.local_names("cat_port").into_iter().collect::<Vec<_>>(), ["A", "B"]);
-        assert!(files.local_names("cat_none").is_empty());
+        let both = files.combined("cat_port");
+        assert_eq!(both.local_set.into_iter().chain(both.local_unset).collect::<Vec<_>>(), ["B", "A"]);
+        assert_eq!(files.combined("cat_none"), SavedOptionsFile::default());
     }
 
     #[test]
