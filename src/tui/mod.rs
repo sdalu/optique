@@ -5835,6 +5835,44 @@ mod tests {
         assert!(!screen(&mut app).contains("STALE:"));
     }
 
+    /// A stale port the list counts as done (≈ under -m or the m view) has
+    /// its STALE banner dimmed, saying what settles it, not in alarm red.
+    #[test]
+    fn a_settled_stale_port_has_a_dimmed_banner() {
+        let banner = |app: &mut App| {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+            terminal.draw(|f| ui::draw(f, app)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let rows = ui::screen_rows(buffer);
+            let (y, row) =
+                rows.iter().enumerate().find(|(_, r)| r.contains("STALE:")).expect("a STALE banner");
+            let at = row.find("STALE:").unwrap();
+            let x = row[..at].chars().count() as u16;
+            let text = row[at..].trim_end_matches(['│', '║']).trim_end();
+            (text.to_string(), buffer[(x, y as u16)].fg)
+        };
+        use ratatui::style::Color;
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A", "OLD"], &[]);
+        let mut app = alpha_app(tmp.path(), &["A"]);
+        assert_eq!(banner(&mut app), ("STALE: obsolete OLD".to_string(), Color::LightRed));
+
+        app.minimal = true;
+        assert_eq!(app.effective_status(&info_of(&app, "cat/alpha")), UiStatus::Ok);
+        assert_eq!(
+            banner(&mut app),
+            ("STALE: obsolete OLD — settled by the defaults (-m)".to_string(), Color::DarkGray)
+        );
+
+        app.minimal = false;
+        app.mc_relax = true;
+        assert_eq!(
+            banner(&mut app),
+            ("STALE: obsolete OLD — settled by make.conf (m view)".to_string(), Color::DarkGray)
+        );
+    }
+
     /// A STALE line too long for the pane wraps to a second, under its
     /// text, and is cut with `…` past that.
     #[test]

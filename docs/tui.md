@@ -223,6 +223,9 @@ view it is: `BROKEN:`, `IGNORE:` and the option changes likely to blame,
 rule the staged options break, and `STALE:` when the port's option list
 changed since its file was written, naming the options added and those
 gone — `STALE: new A B · obsolete X`, each part only when it has options.
+For a port the list counts as done (`≈` under `-m` or the `m` view, or
+`⊘`), the `STALE:` line is dimmed and says what settles it:
+`STALE: obsolete X — settled by the defaults (-m)`.
 A `CONFLICT:` names make.conf's hand in it after a `—`: the members on
 because a make.conf layer sets them where the options file does not, and
 that layer — `— A, B on by make.conf OPTIONS_SET`, or

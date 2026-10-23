@@ -924,9 +924,27 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
         };
         lines.extend(wrapped_banner("CONFLICT: ", &text, red, width));
     }
-    if let Some(text) = stale_text(app, info) {
-        let style = Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD);
+    if let Some(mut text) = stale_text(app, info) {
+        // A port the list shows as done (≈ or ⊘) is no alarm here either: the
+        // banner is dimmed and says what settles it.
+        let style = if app.effective_status(info) == UiStatus::Ok {
+            text.push_str(settled_by(app, info));
+            Style::default().fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)
+        };
         lines.extend(wrapped_banner("STALE: ", &text, style, width));
+    }
+}
+
+/// Why a stale port needs nothing done, for its dimmed STALE banner.
+fn settled_by(app: &App, info: &PortInfo) -> &'static str {
+    if app.is_blacklisted(info) {
+        " — blacklisted"
+    } else if app.minimal {
+        " — settled by the defaults (-m)"
+    } else {
+        " — settled by make.conf (m view)"
     }
 }
 

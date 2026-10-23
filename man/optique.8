@@ -614,6 +614,20 @@ when the port's option list changed since its file was written, naming the
 options added and those gone
 .Pq Ql STALE: new A B \[u00B7] obsolete X ,
 each part only when it has options.
+For a port the list counts as done
+.Po
+.Sq \[u2248]
+under
+.Fl m
+or the
+.Ic m
+view, or
+.Sq \[u2298]
+.Pc
+the
+.Ql STALE:
+line is dimmed and says what settles it, as in
+.Ql STALE: obsolete X \(em settled by the defaults (-m) .
 A
 .Ql CONFLICT:
 names the hand
