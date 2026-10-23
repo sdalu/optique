@@ -248,13 +248,14 @@ impl Session {
                 continue;
             };
             let saved = files.saved(name);
-            state.baseline = match &saved {
+            state.baseline = if files.own(name).is_some() {
                 // A file apply wrote has a line for every option.
-                Some(file) => close_implies(owner, apply::sync_enabled_set(owner, Some(file))),
+                close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
+            } else {
                 // Removed under -m: what make reads with no file but its
                 // options.local, which is what the removal was judged
                 // against.
-                None => effective_with(owner, Some(&files.combined(name))),
+                effective_with(owner, Some(&files.combined(name)))
             };
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
@@ -928,9 +929,10 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// (None: no file), from what the scan knows — never from the port's
 /// queried `effective`, which in the TUI already holds staged edits once a
 /// refresh has run. `file` is the options file with its `options.local`
-/// read after it (`OptionsFiles::saved`), when it comes from disk; with
-/// no file, an `options.local` alone is not modelled. `file` is ignored
-/// outright when make.conf has an OPTIONS_OVERRIDE for the port — see below.
+/// read after it (`OptionsFiles::saved`), when it comes from disk; an
+/// `options.local` without an options file is read after an empty one.
+/// `file` is ignored outright when make.conf has an OPTIONS_OVERRIDE for
+/// the port — see below.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete = &o.complete;
@@ -2264,6 +2266,33 @@ mod tests {
         assert!(st.baseline.contains("A"));
         assert!(s.edited(&s.ports[&key]));
         assert_eq!(s.status(&s.ports[&key]), UiStatus::Ok);
+    }
+
+    /// bsd.options.mk:343 reads options.local whether or not the options
+    /// file is there: with options.local alone deciding every option, the
+    /// port is configured, nothing is undecided, and the baseline is what
+    /// options.local says; an option it leaves out is new, as with an
+    /// empty options file.
+    #[test]
+    fn options_local_alone_decides_what_it_names() {
+        let (ports, key) = mk_port(&["A", "B", "C"], &["B"], vec![], vec![]);
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        let local = tmp.path().join("cat_port/options.local");
+        std::fs::write(&local, "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n").unwrap();
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let s = Session::new(ports.clone(), HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        let info = &s.ports[&key];
+        assert_eq!(s.status(info), UiStatus::Ok);
+        assert_eq!(undecided_options(info, s.state(info).unwrap().saved.as_ref(), false), Vec::<String>::new());
+        assert_eq!(s.state(info).unwrap().baseline, set(&["A"]));
+
+        std::fs::write(&local, "OPTIONS_FILE_SET+=A\n").unwrap();
+        let s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
+        let info = &s.ports[&key];
+        assert_eq!(s.status(info), UiStatus::Stale);
+        assert_eq!(s.stale_delta(info), Some((vec!["B".to_string(), "C".to_string()], vec![])));
+        assert_eq!(undecided_options(info, s.state(info).unwrap().saved.as_ref(), false), ["B", "C"]);
     }
 
     /// A TUI refresh queries make with the staged edits in place, so a

@@ -284,3 +284,33 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
     assert_eq!(flagged(&port, "staged"), make, "{port}");
     assert_eq!(flagged(&port, "new"), new, "{port}");
 }
+
+/// bsd.options.mk:343 `.sinclude`s options.local whether or not the
+/// options file is there. With options.local alone setting AUDIO and NAS
+/// and unsetting DOCS and SOX, make has AUDIO and NAS on and nothing new;
+/// optique reads the port configured, nothing undecided or new. sync still
+/// writes the options file a port without one gets, and leaves
+/// options.local alone.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn options_local_without_an_options_file_is_read() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    let local = "OPTIONS_FILE_SET+=AUDIO NAS\nOPTIONS_FILE_UNSET+=DOCS SOX\n";
+    let local_path = f.options.join("misc_cond/options.local");
+    std::fs::create_dir_all(f.options.join("misc_cond")).unwrap();
+    std::fs::write(&local_path, local).unwrap();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["AUDIO", "NAS"]);
+    assert_eq!(f.make_v(origin, "NEW_OPTIONS"), Vec::<String>::new());
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["status"], "ok", "{port}");
+    assert_eq!(port["undecided"], serde_json::json!([]), "{port}");
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
+
+    f.run("sync", &[origin]);
+    assert!(f.file("misc_cond").exists(), "a port with no options file gets one");
+    assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
+}

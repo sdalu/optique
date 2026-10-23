@@ -113,12 +113,19 @@ impl OptionsFiles {
 
     /// The saved choices as make reads them: the options file, with the
     /// SET and UNSET lines of the `options.local` beside it read after it
-    /// (`SavedOptionsFile::with_local`); None without an options file. A
-    /// stray byte that is not UTF-8 (in a comment, say) does not void them:
-    /// the lines that matter are plain ASCII, and make reads the files all
-    /// the same.
+    /// (`SavedOptionsFile::with_local`). make `.sinclude`s options.local
+    /// whether or not the options file is there (bsd.options.mk:343), so
+    /// an options.local without an options file is read after an empty
+    /// one. None when neither is there, or the options file cannot be
+    /// read. A stray byte that is not UTF-8 (in a comment, say) does not
+    /// void them: the lines that matter are plain ASCII, and make reads the
+    /// files all the same.
     pub fn saved(&self, options_name: &str) -> Option<SavedOptionsFile> {
-        let own = self.own(options_name)?;
+        let own = match self.read(options_name) {
+            Read::Present(bytes) => SavedOptionsFile::parse(&String::from_utf8_lossy(&bytes)),
+            Read::Absent if self.local_bytes(options_name).is_some() => SavedOptionsFile::default(),
+            Read::Absent | Read::Unreadable => return None,
+        };
         Some(self.under_local(options_name, own))
     }
 
@@ -325,6 +332,27 @@ mod tests {
         let both = files.combined("cat_port");
         assert_eq!(both.local_set.into_iter().chain(both.local_unset).collect::<Vec<_>>(), ["B", "A"]);
         assert_eq!(files.combined("cat_none"), SavedOptionsFile::default());
+    }
+
+    /// bsd.options.mk:343 `.sinclude`s options.local whether or not the
+    /// options file is there: the saved choices are then options.local read
+    /// after an empty file, while the file alone stays absent.
+    #[test]
+    fn saved_reads_options_local_without_an_options_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A
+OPTIONS_FILE_UNSET+=B
+")
+            .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let saved = files.saved("cat_port").expect("options.local alone is read");
+        let v: Vec<_> = ["A", "B", "C"].iter().map(|o| saved.value(o)).collect();
+        assert_eq!(v, [Some(true), Some(false), None]);
+        assert!(saved.complete.is_empty());
+        assert_eq!(saved, files.combined("cat_port"));
+        assert!(files.own("cat_port").is_none() && files.bytes("cat_port").is_none());
+        assert!(files.saved("cat_none").is_none(), "neither file");
     }
 
     #[test]

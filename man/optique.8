@@ -1509,6 +1509,10 @@ and
 .Va OPTIONS_FILE_UNSET
 lines join the file's, an option on any UNSET line of either is off, and
 the result is the saved choice every command shows and judges.
+With no options file, an
+.Pa options.local
+is read after an empty one, so the options it decides are neither new nor
+undecided.
 .Cm sync
 never writes or removes it, so what it unsets stays off whatever the options
 file says; every command that reads one says so in a note naming the options

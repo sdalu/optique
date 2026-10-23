@@ -234,7 +234,9 @@ pub fn plan_writes<'a>(
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
         // Read with its options.local, as make reads it; what a write
         // carries over comes from the file alone, which is all it writes.
-        let old = files.saved(options_name);
+        // Without an options file there is no old file, options.local or
+        // not: the write is a new one.
+        let old = files.own(options_name).map(|own| files.under_local(options_name, own));
         let planned = planned_file(chosen, cands, files.own(options_name).as_ref());
         if minimal {
             // The file decides every flavor sharing it: it goes only when
