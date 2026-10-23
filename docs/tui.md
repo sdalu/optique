@@ -372,7 +372,9 @@ parse is quoted whole in the error.
 
 The filter shows on the list's bottom border, at its right — `filter:
 TEXT▏` while it is being typed, `filter: TEXT` once `Enter` leaves it on
-the list; `Esc` while typing drops it. A filter too long for the border
+the list — or `↑`/`↓`, which also move on the list, so a few letters and an
+arrow reach the port (`j`/`k` stay letters of the filter); `Esc` while
+typing drops it. A filter too long for the border
 loses its start to a `…` (`filter: …ginx-module▏`), so the end being
 typed stays in view; the title keeps the count and the views.
 `Ctrl-C` quits from anywhere — a popup, the filter, a prompt — and a

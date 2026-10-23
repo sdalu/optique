@@ -1568,7 +1568,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("m", "make.conf-decided ports count as ok (≈)"),
             keyline("w", "flag make.conf contradictions (≠)"),
             keyline("L", "show only the ports caught in a dependency loop (∞)"),
-            keyline("/", "filter the port list · Esc on the list clears it"),
+            keyline("/", "filter the port list · Enter or ↑/↓ keep it · Esc clears it"),
             keyline("a", "apply: preview, then y writes · conflicts: Y anyway, s skips them"),
             keyline("? F1", "this help"),
             keyline("Ctrl-L", "force a full screen repaint"),

@@ -636,6 +636,12 @@ fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
                 app.rebuild_visible(app.selected_key());
             }
             KeyCode::Enter => app.focus = Focus::List,
+            // An arrow accepts the filter as Enter does, and moves on the
+            // list it left: type a few letters, then arrow to the port.
+            KeyCode::Up | KeyCode::Down => {
+                app.focus = Focus::List;
+                app.move_selection(if code == KeyCode::Up { -1 } else { 1 });
+            }
             KeyCode::Backspace => {
                 app.filter.pop();
                 app.rebuild_visible(None);
@@ -2829,6 +2835,27 @@ mod tests {
 
     /// `/` starts a fresh filter; Esc on the list lets go of one left there,
     /// keeping the port; the cursor shows only while the filter is typed.
+    /// While typing a filter an arrow accepts it, as Enter does, and moves
+    /// on the list it left; j and k stay letters of the filter.
+    #[test]
+    fn an_arrow_accepts_the_filter_and_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/jam", &[]), ("cat/jar", &[]), ("cat/kit", &[])]);
+        press(&mut app, '/');
+        press(&mut app, 'j');
+        press(&mut app, 'a');
+        assert!(app.focus == Focus::Filter && app.filter == "ja", "{:?}", app.filter);
+        let first = app.selected_key();
+        hit(&mut app, KeyCode::Down);
+        assert!(app.focus == Focus::List, "the filter is accepted");
+        assert_eq!(app.filter, "ja", "and kept");
+        assert_ne!(app.selected_key(), first, "the selection moved down");
+        press(&mut app, '/');
+        press(&mut app, 'k');
+        hit(&mut app, KeyCode::Up);
+        assert!(app.focus == Focus::List && app.filter == "k");
+    }
+
     #[test]
     fn a_filter_starts_fresh_and_esc_clears_it() {
         let tmp = tempfile::tempdir().unwrap();
