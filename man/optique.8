@@ -2364,7 +2364,9 @@ names an option the port lacks or has more or fewer
 .Li OPTIONS_FILE_SET
 and
 .Li OPTIONS_FILE_UNSET
-entries than the port has options, every line counted.
+entries than the port has options, every line counted; a line shorter
+than 18 bytes aborts synth outright rather than being skipped, and
+optique refuses such a file too, naming the line.
 Under
 .Fl s ,
 .Cm scan
