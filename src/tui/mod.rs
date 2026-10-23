@@ -70,6 +70,22 @@ pub struct ApplyModal {
     pub done: Option<ApplyDone>,
 }
 
+impl ApplyModal {
+    /// Does the preview show this plan: the same files written with the
+    /// same content, the same files removed, the same ports in conflict?
+    fn shows(&self, planned: &apply::PlannedWrites, conflicted: &[PortKey]) -> bool {
+        let writes = |ws: &[PendingWrite]| -> Vec<(String, String)> {
+            ws.iter().map(|w| (w.options_name.clone(), w.content.clone())).collect()
+        };
+        let removals = |rs: &[crate::clean::Removal]| -> Vec<String> {
+            rs.iter().map(|r| r.options_name.clone()).collect()
+        };
+        writes(&self.writes) == writes(&planned.writes)
+            && removals(&self.removals) == removals(&planned.removals)
+            && self.conflicted == conflicted
+    }
+}
+
 /// What an apply did: its result box and the message left once the box
 /// closes both read it.
 pub struct ApplyDone {
@@ -982,12 +998,24 @@ fn handle_modal_key(app: &mut App, code: KeyCode) {
     }
 }
 
-/// Write the apply plan, recomputed now: a background refresh may have
-/// merged new ports since the preview was opened. `skip_conflicting` leaves
-/// the files of ports in conflict as they are on disk, their edits staged.
+/// Write the apply plan the preview shows. It is recomputed now: a
+/// background refresh may have merged new ports, or changed some, since the
+/// preview was opened, and then nothing is written — the preview shows the
+/// new plan and asks again. `skip_conflicting` leaves the files of ports in
+/// conflict as they are on disk, their edits staged.
 fn commit_apply(app: &mut App, skip_conflicting: bool) {
     let mut planned = app.compute_writes();
     let (conflicted, files) = app.conflicting(&planned);
+    if app.modal.as_ref().is_some_and(|m| !m.shows(&planned, &conflicted)) {
+        app.modal = None;
+        app.open_apply_modal();
+        if app.modal.is_some() {
+            app.flash("the plan changed since the preview (a re-query): check it and answer again", true);
+        } else {
+            app.flash("the plan changed since the preview (a re-query): nothing to write now", true);
+        }
+        return;
+    }
     let skipped = if skip_conflicting && !conflicted.is_empty() {
         planned = planned.without(&files);
         conflicted.len()
@@ -3836,6 +3864,59 @@ mod tests {
         assert!(shown.contains(" apply — done "), "{shown}");
         assert!(shown.contains(" any key closes "), "{shown}");
         assert!(tmp.path().join("options/cat_alpha/options").is_file());
+    }
+
+    /// A re-query merged while the preview is open changes the plan: y
+    /// writes nothing then, the preview shows the new plan and the line
+    /// says so; the next y writes what it shows.
+    #[test]
+    fn a_plan_changed_under_the_preview_is_shown_again_not_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+        let (ev, _req) = fake_refresher(&mut app);
+        press(&mut app, 'a');
+        assert_eq!(app.modal.as_ref().unwrap().writes.len(), 1);
+        let mut alpha = info_of(&app, "cat/alpha");
+        let mut gamma = alpha.clone();
+        gamma.key = PortKey::parse("cat/gamma").unwrap();
+        gamma.canonical = gamma.key.clone();
+        gamma.options_name = "cat_gamma".into();
+        alpha.deps = vec![crate::model::port::DepEdge {
+            target: gamma.key.clone(),
+            spec: "dep:cat/gamma".into(),
+            test_only: false,
+        }];
+        app.refreshing = 1;
+        ev.send(done(vec![alpha, gamma], vec![])).unwrap();
+        app.drain_refresh_events();
+        press(&mut app, 'y');
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+        let modal = app.modal.as_ref().expect("the preview stays open");
+        assert!(modal.done.is_none());
+        assert_eq!(modal.writes.len(), 2, "it shows the new plan");
+        let (msg, err) = app.message.clone().unwrap();
+        assert!(msg.starts_with("the plan changed since the preview"), "{msg}");
+        assert!(err);
+        press(&mut app, 'y');
+        assert!(done_text(&app).starts_with("2 file(s) written"), "{}", done_text(&app));
+    }
+
+    /// A conflict that appears under the preview is not written by the y
+    /// the preview without it allowed: the preview asks again, Y or s.
+    #[test]
+    fn a_conflict_appearing_under_the_preview_is_asked_about() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        press(&mut app, 'a');
+        assert!(app.modal.as_ref().unwrap().conflicted.is_empty());
+        make_conflict(&mut app, "cat/alpha");
+        press(&mut app, 'y');
+        assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+        let modal = app.modal.as_ref().expect("the preview stays open");
+        assert!(modal.done.is_none());
+        assert_eq!(modal.conflicted.len(), 1);
+        press(&mut app, 'y');
+        assert!(app.modal.as_ref().unwrap().done.is_none(), "y is no answer to a conflict");
     }
 
     /// With a port in conflict, y is no answer: the preview stays open,

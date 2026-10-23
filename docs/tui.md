@@ -544,6 +544,10 @@ offers to keep. Flavors share one options file, so the file conflicts
 when any of them does. `n`, `N` or `Esc` cancels; any other key but the
 scroll keys, `Enter` included, leaves the preview open and names the
 keys, `y writes · n cancels` (or, with a conflict, the line above).
+Apply writes what the preview shows: when a background re-query changed
+the plan while it was open (another file, other content, a new
+conflict), `y`, `Y` or `s` writes nothing, the preview shows the new
+plan, and the line says the plan changed.
 
 Each options file is read once, when the TUI starts, and judged as it
 was then: a file edited outside optique while the interface is open is

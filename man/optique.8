@@ -932,6 +932,8 @@ writes nothing:
 writes every file anyway, and
 .Ic s
 every file but the conflicting ports'.
+When a background re-query changed the plan while the preview was open,
+none of them writes anything: the preview shows the new plan and asks again.
 The result is titled
 .Ql apply \[em] done ,
 the list behind it already rebuilt, or, when a file could not be written
