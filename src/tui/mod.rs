@@ -175,7 +175,13 @@ pub struct App {
     /// Trees laid over the ports tree, in lookup order: the port pane names
     /// the one a port comes from.
     pub overlays: Vec<crate::config::Overlay>,
+    /// The listed ports, in list order. The `── N ok ──` divider is not
+    /// one of them: `list_state` selects an index in here, and only the
+    /// drawing maps it to a row of the list (`list_row`).
     pub visible: Vec<PortKey>,
+    /// Where the divider sits: the index in `visible` of the first ok port,
+    /// set in problems-first order when ports of both kinds are listed.
+    pub divider: Option<usize>,
     pub list_state: ListState,
     pub focus: Focus,
     pub filter: String,
@@ -327,6 +333,7 @@ pub(crate) fn build_app(
         blacklist,
         overlays,
         visible: Vec::new(),
+        divider: None,
         list_state: ListState::default(),
         focus: Focus::List,
         filter: String::new(),
@@ -936,6 +943,15 @@ impl App {
         self.list_state.selected().and_then(|i| self.visible.get(i)).cloned()
     }
 
+    /// The list's row for the port at index `idx` of `visible`: one further
+    /// down past the divider.
+    pub(crate) fn list_row(&self, idx: usize) -> usize {
+        match self.divider {
+            Some(d) if idx >= d => idx + 1,
+            _ => idx,
+        }
+    }
+
     /// The overlay on screen: when several are open, the first in this order
     /// is the one drawn. `ui::draw` and the driver's `state` both use it.
     /// `dispatch_key` hands keys out in a different order on purpose (Ctrl-C
@@ -1094,6 +1110,9 @@ impl App {
         if self.hide_ok {
             items.retain(|(status, _)| *status != UiStatus::Ok);
         }
+        // Ok sorts last, so the ok ports (≈ and ✓) are the tail.
+        let first_ok = items.iter().position(|(status, _)| *status == UiStatus::Ok);
+        self.divider = first_ok.filter(|&i| self.sort_problems_first && i > 0);
         self.visible = items.into_iter().map(|(_, k)| k).collect();
         let idx = keep
             .and_then(|k| self.visible.iter().position(|v| *v == k))
@@ -1526,10 +1545,10 @@ impl App {
 
     /// Say, once the first scan is in, what the closure needs: the counts
     /// of each kind of port waiting on a decision, in list order, after the
-    /// restored draft if any. The draft's own ports are its part, so the
-    /// edited count is not repeated; ≠ needs the w view, off at start.
+    /// restored draft if any. Each port counts by its state, edits or not
+    /// (an edit is not a decision applied); ≠ needs the w view, off at start.
     fn show_summary(&mut self, draft: Option<(usize, String)>) {
-        let mut counts = [0usize; 6];
+        let mut counts = [0usize; 5];
         for key in &self.visible {
             counts[self.effective_status(&self.session.ports[key]) as usize] += 1;
         }
@@ -2049,9 +2068,10 @@ mod tests {
         }
     }
 
-    /// The row a rule (├…┤) of the option pane sits on, counted from the top.
+    /// The row a rule (├…┤, ╟…╢ while the pane has the focus) of the option
+    /// pane sits on, counted from the top.
     fn rule_rows(shown: &str) -> Vec<usize> {
-        shown.lines().enumerate().filter(|(_, l)| l.contains('├')).map(|(i, _)| i).collect()
+        shown.lines().enumerate().filter(|(_, l)| l.contains(['├', '╟'])).map(|(i, _)| i).collect()
     }
 
     /// The detail panel is one height whatever the option, and stays put,
@@ -2070,21 +2090,21 @@ mod tests {
 
         let on_list = screen(&mut app);
         assert!(on_list.contains("Enter: edit the options"), "{on_list}");
-        assert!(!on_list.contains("├ LONG"), "no option named while none is highlighted");
+        assert!(!on_list.contains("├ LONG") && !on_list.contains("╟ LONG"), "no option named while none is highlighted");
         hit(&mut app, KeyCode::Enter);
         let long = screen(&mut app);
-        assert!(long.contains("├ LONG"), "{long}");
+        assert!(long.contains("╟ LONG"), "{long}");
         assert!(long.contains('…'), "a long description is cut");
         press(&mut app, 'j');
         let short = screen(&mut app);
-        assert!(short.contains("├ SHORT"), "{short}");
+        assert!(short.contains("╟ SHORT"), "{short}");
         assert_eq!(rule_rows(&on_list), rule_rows(&long));
         assert_eq!(rule_rows(&long), rule_rows(&short));
         // g/G work in the pane too.
         press(&mut app, 'g');
-        assert!(screen(&mut app).contains("├ LONG"));
+        assert!(screen(&mut app).contains("╟ LONG"));
         press(&mut app, 'G');
-        assert!(screen(&mut app).contains("├ SHORT"));
+        assert!(screen(&mut app).contains("╟ SHORT"));
     }
 
     /// A description cut short says where the rest is, and `v` gets it from
@@ -3305,8 +3325,8 @@ mod tests {
     }
 
     /// Under -m the defaults are the decision: a port with no options file
-    /// (or a stale one whose new options the defaults settle) is ✓, not ?,
-    /// without the m view; an edit or a conflict still shows.
+    /// (or a stale one whose new options the defaults settle) is ≈, not ?,
+    /// without the m view; an edit shows beside it.
     #[test]
     fn minimal_mode_counts_bare_defaults_as_decided() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3320,7 +3340,9 @@ mod tests {
         assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
         hit(&mut app, KeyCode::Enter);
         press(&mut app, ' ');
-        assert_eq!(status(&app, "cat/alpha"), UiStatus::Edited, "an edit still shows");
+        assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok, "an edit is no state");
+        assert!(app.session.edited(&info_of(&app, "cat/alpha")), "but it shows: ≈*");
+        assert!(screen(&mut app).contains("≈* cat/alpha"), "{}", screen(&mut app));
     }
 
     /// In minimal mode apply removes a file that only repeats the defaults
@@ -4100,6 +4122,225 @@ mod tests {
         }
     }
 
+    /// alpha and gamma unconfigured, beta and delta ok, zeta in conflict
+    /// (by an edit), in problems-first order.
+    fn five_ports(tmp: &std::path::Path) -> App {
+        for name in ["cat_beta", "cat_delta"] {
+            let dir = tmp.join("options").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("options"),
+                "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n",
+            )
+            .unwrap();
+        }
+        let mut app = app_for(
+            tmp,
+            &[
+                ("cat/alpha", &[]),
+                ("cat/beta", &[]),
+                ("cat/delta", &[]),
+                ("cat/gamma", &[]),
+                ("cat/zeta", &[]),
+            ],
+        );
+        make_conflict(&mut app, "cat/zeta");
+        app.refresh_view();
+        assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/gamma", "cat/beta", "cat/delta"]);
+        app.select_index(0);
+        app
+    }
+
+    /// The list row drawn highlighted (the selection as the widget shows
+    /// it), on the 100x35 screen.
+    fn highlighted(app: &mut App) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = ui::screen_rows(buffer);
+        let y = (0..35u16)
+            .find(|&y| {
+                buffer.cell((1, y)).is_some_and(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
+            })
+            .expect("a highlighted row");
+        rows[y as usize].clone()
+    }
+
+    /// Two columns before the name: the state, then `*` for staged edits.
+    /// An edit hides no state, so an edited ok port is still ok: it sorts
+    /// with them, n/p pass it, t hides it, and the bar counts it twice.
+    #[test]
+    fn list_rows_show_the_state_then_the_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = five_ports(tmp.path());
+        for (port, on) in [("cat/alpha", "DOCS"), ("cat/beta", "DOCS")] {
+            app.jump_to_port(&PortKey::parse(port).unwrap());
+            app.session.toggle(&PortKey::parse(port).unwrap(), on).unwrap();
+        }
+        app.refresh_view();
+        let shown = screen(&mut app);
+        for row in ["✗* cat/zeta", "?* cat/alpha", "?  cat/gamma", "✓* cat/beta", "✓  cat/delta"] {
+            assert!(shown.contains(&format!("║{row}")), "{row}:\n{shown}");
+        }
+        assert_eq!(
+            visible(&app),
+            ["cat/zeta", "cat/alpha", "cat/gamma", "cat/beta", "cat/delta"],
+            "the edited ok port sorts with the ok ones"
+        );
+        app.select_index(0);
+        for want in ["cat/alpha", "cat/gamma", "cat/zeta"] {
+            press(&mut app, 'n');
+            assert_eq!(selected(&app), want, "n passes the edited ok port");
+        }
+        press(&mut app, 'p');
+        assert_eq!(selected(&app), "cat/gamma");
+        app.clear_message();
+        let row = status_row(&mut app, 100);
+        assert!(row.starts_with(" 1✗ 3* 2? 0! 2✓ "), "every port by its state, edits apart: {row}");
+        press(&mut app, 't');
+        assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/gamma"], "edits are not attention");
+    }
+
+    /// The row of the divider and of each port, on the 100x35 screen.
+    fn row_of(shown: &str, text: &str) -> usize {
+        shown.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}:\n{shown}"))
+    }
+
+    /// In problems-first order a divider counts the ok ports below the
+    /// problems, across the list's width; never under s or t, nor when one
+    /// group is empty.
+    #[test]
+    fn a_divider_parts_the_problems_from_the_ok_ports() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = five_ports(tmp.path());
+        let shown = screen(&mut app);
+        // The list is 42 columns wide: 40 inside its borders.
+        let divider = format!("║── 2 ok {}║", "─".repeat(32));
+        let at = row_of(&shown, &divider);
+        assert_eq!(row_of(&shown, "cat/gamma") + 1, at);
+        assert_eq!(row_of(&shown, "cat/beta"), at + 1);
+        assert!(shown.contains("╔ Ports (5) "), "the title counts ports only:\n{shown}");
+        press(&mut app, 's');
+        assert!(!screen(&mut app).contains(" ok ─"), "not in alphabetical order");
+        press(&mut app, 's');
+        assert!(screen(&mut app).contains(&divider));
+        press(&mut app, 't');
+        assert!(!screen(&mut app).contains(" ok ─"), "no ok port under t");
+        press(&mut app, 't');
+
+        // One group alone: no divider.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/gamma", &[])]);
+        assert!(!screen(&mut app).contains(" ok ─"), "problems only");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = five_ports(tmp.path());
+        press(&mut app, '/');
+        for c in "delta".chars() {
+            press(&mut app, c);
+        }
+        assert!(!screen(&mut app).contains(" ok ─"), "ok ports only");
+    }
+
+    /// No key lands on the divider, and the highlight follows the selected
+    /// port across it, whatever moved it there.
+    #[test]
+    fn the_selection_steps_over_the_divider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = five_ports(tmp.path());
+        let port = |app: &mut App| {
+            let row = highlighted(app);
+            assert!(!row.contains(" ok ─"), "the divider is never selected: {row}");
+            assert!(row.contains(&selected(app)), "{} not drawn at {row}", selected(app));
+            selected(app)
+        };
+        assert_eq!(port(&mut app), "cat/zeta");
+        press(&mut app, 'j');
+        press(&mut app, 'j');
+        assert_eq!(port(&mut app), "cat/gamma");
+        press(&mut app, 'j');
+        assert_eq!(port(&mut app), "cat/beta", "j steps over it");
+        press(&mut app, 'k');
+        assert_eq!(port(&mut app), "cat/gamma", "k too");
+        hit(&mut app, KeyCode::Down);
+        hit(&mut app, KeyCode::Down);
+        assert_eq!(port(&mut app), "cat/delta");
+        hit(&mut app, KeyCode::Up);
+        hit(&mut app, KeyCode::Up);
+        assert_eq!(port(&mut app), "cat/gamma");
+        press(&mut app, 'G');
+        assert_eq!(port(&mut app), "cat/delta");
+        press(&mut app, 'g');
+        assert_eq!(port(&mut app), "cat/zeta");
+        hit(&mut app, KeyCode::End);
+        assert_eq!(port(&mut app), "cat/delta");
+        hit(&mut app, KeyCode::Home);
+        assert_eq!(port(&mut app), "cat/zeta");
+        hit(&mut app, KeyCode::PageDown);
+        assert_eq!(port(&mut app), "cat/delta");
+        hit(&mut app, KeyCode::PageUp);
+        assert_eq!(port(&mut app), "cat/zeta");
+        ctrl(&mut app, 'f');
+        assert_eq!(port(&mut app), "cat/delta");
+        ctrl(&mut app, 'b');
+        assert_eq!(port(&mut app), "cat/zeta");
+        press(&mut app, 'p');
+        assert_eq!(port(&mut app), "cat/gamma", "p wraps over the ok ports");
+        press(&mut app, 'n');
+        assert_eq!(port(&mut app), "cat/zeta");
+        app.jump_to_port(&PortKey::parse("cat/beta").unwrap());
+        assert_eq!(port(&mut app), "cat/beta");
+
+        // A filter rebuilds the list and moves the divider; Esc keeps the port.
+        press(&mut app, '/');
+        press(&mut app, 'l');
+        hit(&mut app, KeyCode::Enter);
+        assert_eq!(visible(&app), ["cat/alpha", "cat/delta"]);
+        assert!(screen(&mut app).contains("║── 1 ok ─"));
+        press(&mut app, 'j');
+        assert_eq!(port(&mut app), "cat/delta");
+        press(&mut app, '/');
+        hit(&mut app, KeyCode::Esc);
+        assert_eq!(visible(&app).len(), 5);
+        assert_eq!(port(&mut app), "cat/delta");
+        // Under t the ok port it jumps to is shown again, past the divider.
+        press(&mut app, 'g');
+        press(&mut app, 't');
+        app.jump_to_port(&PortKey::parse("cat/beta").unwrap());
+        assert_eq!(port(&mut app), "cat/beta");
+    }
+
+    /// The focused pane has a double border, the other a plain one, and the
+    /// option pane's rules join whichever it has.
+    #[test]
+    fn the_focused_pane_has_a_double_border() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        let key = PortKey::parse("cat/alpha").unwrap();
+        let info = app.session.ports.get_mut(&key).unwrap();
+        info.about.comment = "The alpha port".to_string();
+        app.rebuild_editor();
+        let on_list = screen(&mut app);
+        assert!(on_list.contains("╔ Ports"), "{on_list}");
+        assert!(on_list.contains("┌ cat/alpha"), "{on_list}");
+        assert!(!on_list.contains(['╟', '╢']), "{on_list}");
+        assert_eq!(rule_rows(&on_list).len(), 2, "{on_list}");
+        for y in rule_rows(&on_list) {
+            let line = on_list.lines().nth(y).unwrap();
+            assert!(line.contains('├') && line.ends_with('┤'), "{line}");
+        }
+        hit(&mut app, KeyCode::Enter);
+        let on_options = screen(&mut app);
+        assert!(on_options.contains("┌ Ports"), "{on_options}");
+        assert!(on_options.contains("╔ cat/alpha"), "{on_options}");
+        assert!(!on_options.contains(['├', '┤']), "{on_options}");
+        assert_eq!(rule_rows(&on_options), rule_rows(&on_list));
+        for y in rule_rows(&on_options) {
+            let line = on_options.lines().nth(y).unwrap();
+            assert!(line.contains('╟') && line.ends_with('╢'), "{line}");
+        }
+    }
+
     /// The ports with no options are counted in the list's title, not in
     /// the status bar, and not at all when there are none.
     #[test]
@@ -4108,14 +4349,14 @@ mod tests {
         let mut app = three_ports(tmp.path());
         app.clear_message();
         let shown = screen(&mut app);
-        assert!(shown.contains("┌ Ports (3) "), "{shown}");
+        assert!(shown.contains("╔ Ports (3) "), "{shown}");
         app.hidden = 151;
         let shown = screen(&mut app);
-        assert!(shown.contains("┌ Ports (3 · 151 optionless) "), "{shown}");
+        assert!(shown.contains("╔ Ports (3 · 151 optionless) "), "{shown}");
         assert!(!shown.lines().last().unwrap_or_default().contains("optionless"));
         press(&mut app, 't');
         let shown = screen_at(&mut app, 200, 24);
-        assert!(shown.contains("┌ Ports (2/3 · 151 optionless) — needs attention "), "{shown}");
+        assert!(shown.contains("╔ Ports (2/3 · 151 optionless) — needs attention "), "{shown}");
     }
 
     /// News from the background waits for the line: it does not replace a
@@ -4217,16 +4458,16 @@ mod tests {
         let mut app = three_ports(tmp.path());
         assert_eq!(
             app.message.clone().unwrap().0,
-            "restored draft (1 port, 0m ago, U per port reverts) · 1 never configured — n: next · ?: help"
+            "restored draft (1 port, 0m ago, U per port reverts) · 2 never configured — n: next · ?: help"
         );
         assert_eq!(
             status_row(&mut app, 80).trim_end(),
-            " restored draft (1 port, 0m ago) · 1 never configured — n: next · ?: help"
+            " restored draft (1 port, 0m ago) · 2 never configured — n: next · ?: help"
         );
         assert_eq!(status_row(&mut app, 40).trim_end(), " restored draft (1 port, 0m ago) …");
         assert_eq!(status_row(&mut app, 20).trim_end(), " restored draft (1 p", "kept whole, cut by the edge");
         let summary = app.summary.as_ref().unwrap();
-        assert_eq!(summary.fit(60), "restored draft (1 port, 0m ago) · 1 never configured …");
+        assert_eq!(summary.fit(60), "restored draft (1 port, 0m ago) · 2 never configured …");
     }
 
     /// A refresh landing before the first key leaves the first message up;

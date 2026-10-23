@@ -16,30 +16,30 @@ when there is no poudriere at all or `-l` asks for a local build.
 
 <!-- screen main -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││Robust and small WWW server                │
-│? devel/gmake                  ││NGINX is a high performance edge web server│
-│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
-│✓ converters/libiconv          ││key features to build modern and efficient │
-│✓ devel/cmake-core             ││web infrastructure.…                       │
-│✓ devel/gettext-runtime        │├────────────────────────── [v] full text ──┤
-│✓ devel/gettext-tools          ││  [ ] DEBUG                     off        │
-│✓ devel/libtextstyle           ││  [x] DEBUGLOG                  off        │
-│✓ devel/libunistring           ││  [x] DSO                       on         │
-│✓ devel/ninja                  ││  [x] FILE_AIO                  on         │
-│✓ devel/p5-Locale-libintl      ││  [x] IPV6                      on         │
-│✓ devel/pcre2                  ││  [ ] NJS                       off        │
-│✓ devel/pkgconf                ││  [ ] NJS_QJS                   off        │
-│✓ devel/readline               ││  [ ] NJS_XML                   off        │
-│✓ lang/perl5.42                ││  [ ] OTEL                      off        │
-│✓ lang/python312               ││  [x] THREADS                   on         │
-│✓ misc/help2man                ││  [x] WWW                       on         │
-│✓ print/texinfo                ││── HTTPGRP — group: Modules that require HT│
-│✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
-│✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
-│✓ textproc/libxml2             ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
+┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
+│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
+│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
+│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
+│✓  devel/cmake-core            │║key features to build modern and efficient ║
+│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
+│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
+│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
+│✓  devel/libunistring          │║  [x] DEBUGLOG                  off        ║
+│✓  devel/ninja                 │║  [x] DSO                       on         ║
+│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
+│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
+│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
+│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
+│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
+│✓  lang/python312              │║  [ ] OTEL                      off        ║
+│✓  misc/help2man               │║  [x] THREADS                   on         ║
+│✓  print/texinfo               │║  [x] WWW                       on         ║
+│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
+│✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
+│✓* www/nginx                   │║                                           ║
+└───────────────────────────────┘╚═══════════════════════════════════════════╝
+ 0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 

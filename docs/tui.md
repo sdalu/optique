@@ -15,38 +15,40 @@ tty — unless `--drive` is given (see
 
 <!-- screen main -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││Robust and small WWW server                │
-│? devel/gmake                  ││NGINX is a high performance edge web server│
-│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
-│✓ converters/libiconv          ││key features to build modern and efficient │
-│✓ devel/cmake-core             ││web infrastructure.…                       │
-│✓ devel/gettext-runtime        │├────────────────────────── [v] full text ──┤
-│✓ devel/gettext-tools          ││  [ ] DEBUG                     off        │
-│✓ devel/libtextstyle           ││  [x] DEBUGLOG                  off        │
-│✓ devel/libunistring           ││  [x] DSO                       on         │
-│✓ devel/ninja                  ││  [x] FILE_AIO                  on         │
-│✓ devel/p5-Locale-libintl      ││  [x] IPV6                      on         │
-│✓ devel/pcre2                  ││  [ ] NJS                       off        │
-│✓ devel/pkgconf                ││  [ ] NJS_QJS                   off        │
-│✓ devel/readline               ││  [ ] NJS_XML                   off        │
-│✓ lang/perl5.42                ││  [ ] OTEL                      off        │
-│✓ lang/python312               ││  [x] THREADS                   on         │
-│✓ misc/help2man                ││  [x] WWW                       on         │
-│✓ print/texinfo                ││── HTTPGRP — group: Modules that require HT│
-│✓ security/rhash               │├ DEBUGLOG ─────────────────────────────────┤
-│✓ textproc/expat2              ││  Enable debug log (--with-debug)          │
-│✓ textproc/libxml2             ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
+┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
+│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
+│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
+│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
+│✓  devel/cmake-core            │║key features to build modern and efficient ║
+│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
+│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
+│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
+│✓  devel/libunistring          │║  [x] DEBUGLOG                  off        ║
+│✓  devel/ninja                 │║  [x] DSO                       on         ║
+│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
+│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
+│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
+│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
+│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
+│✓  lang/python312              │║  [ ] OTEL                      off        ║
+│✓  misc/help2man               │║  [x] THREADS                   on         ║
+│✓  print/texinfo               │║  [x] WWW                       on         ║
+│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│✓  textproc/expat2             │╟ DEBUGLOG ─────────────────────────────────╢
+│✓  textproc/libxml2            │║  Enable debug log (--with-debug)          ║
+│✓* www/nginx                   │║                                           ║
+└───────────────────────────────┘╚═══════════════════════════════════════════╝
+ 0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
 
 The capture shows `www/nginx` and its closure. The left pane lists every port in the closure that has options,
-problems first, one marker per row; `www/nginx` itself is `*` because it
-has staged, unapplied edits, `devel/gmake` is `?` because it has never been
-configured, and `ports-mgmt/pkg` is `!` because its option list changed
-since its file was written. The rest are `✓`: already consistent. The
+problems first, two marker columns per row (see [Port markers](#port-markers)):
+`ports-mgmt/pkg` is `!` because its option list changed since its file was
+written, and `devel/gmake`, scrolled out of view above it, is `?` because
+it has never been configured. A
+`── 19 ok ──` row parts them from the rest, `✓`: already consistent;
+`www/nginx` among them is `✓*`, ok with staged, unapplied edits. The
 right pane shows the selected port's options — `www/nginx` here — each as a
 row with its checkbox, its name, the port's own default (`off`/`on`), and
 the value make.conf dictates when one of its layers mentions the option
@@ -55,10 +57,11 @@ an `implied by` note — another enabled option implies it. A row
 introduced by `──` is a group header (`HTTPGRP` here). The list's title
 counts the ports listed and, after a `·`, the ports without options the
 list never shows (`Ports (21 · 20 optionless)`; the part is left out when
-there are none). The bottom line is the status bar: how many ports carry
-each marker (`0✗ 1* 1? 1! 18✓`) — then, when there are any, the ports
-caught in a dependency loop (`2∞ L:loops`) and the progress of a
-background re-query (`⟳ refreshing deps 3/5`) — and the key legend:
+there are none). The pane with the focus has a double border, the other a
+single one. The bottom line is the status bar: how many ports are in
+each state, and how many of them are edited (`0✗ 1* 1? 1! 19✓`) — then,
+when there are any, the ports caught in a dependency loop (`2∞ L:loops`)
+and the progress of a background re-query (`⟳ refreshing deps 3/5`) — and the key legend:
 `?:help a:apply q:quit` first, then the keys of the focused pane —
 `Enter:edit n/p:next-problem t:attention /:filter v:description` on the
 port list, `Space:toggle i:info d:defaults U:revert u:undo
@@ -101,19 +104,41 @@ summary stays up through the re-query a restored draft starts.
 
 ## Port markers
 
-Status, left to right as the pane shows them, worst first:
+Each row starts with two marker columns. The first is the port's state,
+left to right as the pane sorts them, worst first:
 
 | Marker | Meaning                                                                                    |
 | :----: | :----------------------------------------------------------------------------------------- |
 | `✗`    | conflict — staged options violate `PREVENTS` or a group rule                               |
-| `*`    | edited — staged changes not yet applied                                                    |
 | `?`    | unconfigured — no saved options file                                                       |
 | `!`    | stale — the option list changed since the file was written                                 |
 | `≠`    | contradicts the make.conf `OPTIONS_SET`/`OPTIONS_UNSET` policy; shown only in the `w` view |
 | `≈`    | needs no attention because make.conf already decides it; shown only in the `m` view        |
 | `✓`    | ok                                                                                         |
 
-Three further markers may trail the status one:
+The second is `*` when the port has staged changes not yet applied, and
+blank otherwise. An edit hides no state: an edited port that has never
+been configured reads `?*`, an edited conflicting one `✗*`, an edited ok
+one `✓*`. The order, `n`/`p` and `t` go by the state alone, so an edited
+ok port sorts with the ok ones, and `n`/`p` and `t` pass it by; the
+status bar counts every port in its state and the edited ones again,
+under `*`.
+
+In problems-first order, when the list holds both, a divider row parts
+the ports needing attention from the ok ones (`≈` and `✓`) and counts
+the latter:
+
+```text
+│?  devel/gmake                 │
+│!  ports-mgmt/pkg              │
+│── 19 ok ──────────────────────│
+│✓  converters/libiconv         │
+```
+
+It is not a port: no key selects it, and the selection steps over it.
+Neither `s` (alphabetical order) nor `t` (no ok port listed) shows it.
+
+Three further markers may trail the port's name:
 
 | Marker | Meaning                                                                   |
 | :----: | :------------------------------------------------------------------------ |
@@ -125,29 +150,29 @@ Three further markers may trail the status one:
 
 <!-- screen options -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│? devel/gmake                  ││Robust and small WWW server                │
-│! ports-mgmt/pkg               ││NGINX is a high performance edge web server│
-│✓ converters/libiconv          ││with the lowest memory footprint and the   │
-│✓ devel/cmake-core             ││key features to build modern and efficient │
-│✓ devel/gettext-runtime        ││web infrastructure.…                       │
-│✓ devel/gettext-tools          │├────────────────────────── [v] full text ──┤
-│✓ devel/libtextstyle           ││  [ ] DEBUG                     off        │
-│✓ devel/libunistring           ││  [ ] DEBUGLOG                  off        │
-│✓ devel/ninja                  ││  [x] DSO                       on         │
-│✓ devel/p5-Locale-libintl      ││  [x] FILE_AIO                  on         │
-│✓ devel/pcre2                  ││  [x] IPV6                      on         │
-│✓ devel/pkgconf                ││  [ ] NJS                       off        │
-│✓ devel/readline               ││  [ ] NJS_QJS                   off        │
-│✓ lang/perl5.42                ││  [ ] NJS_XML                   off        │
-│✓ lang/python312               ││  [ ] OTEL                      off        │
-│✓ misc/help2man                ││  [x] THREADS                   on         │
-│✓ print/texinfo                ││  [x] WWW                       on         │
-│✓ security/rhash               ││── HTTPGRP — group: Modules that require HT│
-│✓ textproc/expat2              │├ FILE_AIO ─────────────────────────────────┤
-│✓ textproc/libxml2             ││  Enable file aio                          │
-│✓ www/nginx                    ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
+┌ Ports (21 · 20 optionless) ───┐╔ www/nginx — nginx-1.30.6_5,3 ═════════════╗
+│!  ports-mgmt/pkg              │║Robust and small WWW server                ║
+│── 19 ok ──────────────────────│║NGINX is a high performance edge web server║
+│✓  converters/libiconv         │║with the lowest memory footprint and the   ║
+│✓  devel/cmake-core            │║key features to build modern and efficient ║
+│✓  devel/gettext-runtime       │║web infrastructure.…                       ║
+│✓  devel/gettext-tools         │╟────────────────────────── [v] full text ──╢
+│✓  devel/libtextstyle          │║  [ ] DEBUG                     off        ║
+│✓  devel/libunistring          │║  [ ] DEBUGLOG                  off        ║
+│✓  devel/ninja                 │║  [x] DSO                       on         ║
+│✓  devel/p5-Locale-libintl     │║  [x] FILE_AIO                  on         ║
+│✓  devel/pcre2                 │║  [x] IPV6                      on         ║
+│✓  devel/pkgconf               │║  [ ] NJS                       off        ║
+│✓  devel/readline              │║  [ ] NJS_QJS                   off        ║
+│✓  lang/perl5.42               │║  [ ] NJS_XML                   off        ║
+│✓  lang/python312              │║  [ ] OTEL                      off        ║
+│✓  misc/help2man               │║  [x] THREADS                   on         ║
+│✓  print/texinfo               │║  [x] WWW                       on         ║
+│✓  security/rhash              │║── HTTPGRP — group: Modules that require HT║
+│✓  textproc/expat2             │╟ FILE_AIO ─────────────────────────────────╢
+│✓  textproc/libxml2            │║  Enable file aio                          ║
+│✓  www/nginx                   │║                                           ║
+└───────────────────────────────┘╚═══════════════════════════════════════════╝
  0✗ 0* 1? 1! 19✓  ?:help a:apply q:quit Space:toggle i:info d:defaults …
 ```
 <!-- /screen -->
@@ -182,7 +207,9 @@ option's description, wrapped, marking with `…` what does not fit; an
 option the ports framework describes nowhere reads `(no description)`.
 The panel keeps its place and height whatever the option, so the rows
 never move; while no option is highlighted — the port list has the focus —
-it stays, untitled, and reads `Enter: edit the options`. `i` opens a detail popup for
+it stays, untitled, and reads `Enter: edit the options`. The rules
+above and below the rows join the pane's border: `╟`…`╢` while the pane
+has the focus and its border is double, `├`…`┤` otherwise. `i` opens a detail popup for
 the selected option instead: its description, group, `IMPLIES`/`PREVENTS`,
 and the dependencies enabling it would add.
 
@@ -209,29 +236,29 @@ portconfig's own Ports Collection help, not the port's.
 
 <!-- screen about -->
 ```text
-┌ Ports (1 · 20 optionless) — fi┐┌ devel/pcre2 — pcre2-10.49 ────────────────┐
-│✓ devel/pcre2                  ││Perl Compatible Regular Expressions        │
-│                               ││library, version 2                         │
-│                               ││PCRE2 is the name used for a revised API   │
-│                               ││for the PCRE library, which is a set of    │
-│                               ││functions, written in C, that implement…   │
-│                               │├────────────────────────── [v] full text ──┤
-│                               ││  [x] DOCS         on                      │
-│                               ││  [ ] LIBBZ2       off                     │
-│                               ││  [ ] LIBZ         off                     │
-│                               ││  [x] STATIC       on                      │
-│                               ││── CLI — radio (pick at most one): Command-│
-│                               ││  ( ) LIBEDIT      off                     │
-│                               ││  ( ) READLINE     off                     │
-│                               ││                                           │
-│                               ││                                           │
-│                               ││                                           │
-│                               ││                                           │
-│                               ││                                           │
-│                               │├───────────────────────────────────────────┤
-│                               ││  Enter: edit the options                  │
-│                               ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
+╔ Ports (1 · 20 optionless) — fi╗┌ devel/pcre2 — pcre2-10.49 ────────────────┐
+║✓  devel/pcre2                 ║│Perl Compatible Regular Expressions        │
+║                               ║│library, version 2                         │
+║                               ║│PCRE2 is the name used for a revised API   │
+║                               ║│for the PCRE library, which is a set of    │
+║                               ║│functions, written in C, that implement…   │
+║                               ║├────────────────────────── [v] full text ──┤
+║                               ║│  [x] DOCS         on                      │
+║                               ║│  [ ] LIBBZ2       off                     │
+║                               ║│  [ ] LIBZ         off                     │
+║                               ║│  [x] STATIC       on                      │
+║                               ║│── CLI — radio (pick at most one): Command-│
+║                               ║│  ( ) LIBEDIT      off                     │
+║                               ║│  ( ) READLINE     off                     │
+║                               ║│                                           │
+║                               ║│                                           │
+║                               ║│                                           │
+║                               ║│                                           │
+║                               ║│                                           │
+║                               ║├───────────────────────────────────────────┤
+║                               ║│  Enter: edit the options                  │
+║                               ║│                                           │
+╚═══════════════════════════════╝└───────────────────────────────────────────┘
  0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
@@ -310,29 +337,29 @@ gained, and to unconfigured ones when it decides all of them.
 
 <!-- screen why -->
 ```text
-┌ Ports (1 · 20 optionless) — fi┐┌ devel/libunistring — libunistring-1.4.2 ──┐
-│✓ devel/libunistring           ││Unicode string library                     │
-│                               ││GNU LIBUNISTRING - Unicode string library  │
-│                               ││This library provides functions for        │
-│                               ││manipulating Unicode strings and for       │
-│           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
-│           │www/nginx  (root)                                   │ull text ──┤
-│           │ └─ devel/pcre2                                     │           │
-│           │  └─ devel/cmake-core                               │           │
-│           │   └─ dns/libidn2                                   │           │
-│           │    └─ devel/libunistring                           │           │
-│           │                                                    │           │
-│           │direct dependents (3):                              │           │
-│           │  devel/gettext-tools                               │           │
-│           │  dns/libidn2                                       │           │
-│           │  print/texinfo                                     │           │
-│           │                                                    │           │
-│           │                                                    │           │
-│           └ Enter jump · r why · j/k move · other key closes ──┘           │
-│                               │├───────────────────────────────────────────┤
-│                               ││  Enter: edit the options                  │
-│                               ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
+╔ Ports (1 · 20 optionless) — fi╗┌ devel/libunistring — libunistring-1.4.2 ──┐
+║✓  devel/libunistring          ║│Unicode string library                     │
+║                               ║│GNU LIBUNISTRING - Unicode string library  │
+║                               ║│This library provides functions for        │
+║                               ║│manipulating Unicode strings and for       │
+║           ┌ why devel/libunistring? ───────────────────────────┐ to the…   │
+║           │www/nginx  (root)                                   │ull text ──┤
+║           │ └─ devel/pcre2                                     │           │
+║           │  └─ devel/cmake-core                               │           │
+║           │   └─ dns/libidn2                                   │           │
+║           │    └─ devel/libunistring                           │           │
+║           │                                                    │           │
+║           │direct dependents (3):                              │           │
+║           │  devel/gettext-tools                               │           │
+║           │  dns/libidn2                                       │           │
+║           │  print/texinfo                                     │           │
+║           │                                                    │           │
+║           │                                                    │           │
+║           └ Enter jump · r why · j/k move · other key closes ──┘           │
+║                               ║├───────────────────────────────────────────┤
+║                               ║│  Enter: edit the options                  │
+║                               ║│                                           │
+╚═══════════════════════════════╝└───────────────────────────────────────────┘
  0✗ 0* 0? 0! 1✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
@@ -350,30 +377,30 @@ walked port by port. Any other key closes it.
 
 <!-- screen apply -->
 ```text
-┌ Ports (21 · 20 optionless) ───┐┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
-│* www/nginx                    ││Robust and small WWW server                │
-│? devel/gmake                  ││NGINX is a high performance edge web server│
-│! ports-mgmt/pkg               ││with the lowest memory footprint and the   │
-│✓ conve┌ apply? ────────────────────────────────────────────────────┐icient │
-│✓ devel│3 options file(s) will be written to …/server-options:      │       │
-│✓ devel│                                                            │text ──┤
-│✓ devel│devel/gmake                             new file (1 of 1 on)│       │
-│✓ devel│ports-mgmt/pkg                          dropped: OLDOPT     │       │
-│✓ devel│www/nginx                               +DEBUGLOG           │       │
-│✓ devel│                                                            │       │
-│✓ devel│                                                            │       │
-│✓ devel│                                                            │       │
-│✓ devel│                                                            │       │
-│✓ devel│                                                            │       │
-│✓ lang/│                                                            │       │
-│✓ lang/│                                                            │       │
-│✓ misc/│                                                            │       │
-│✓ print│                                                            │uire HT│
-│✓ secur└ y: write · n: cancel · j/k scroll ─────────────────────────┘───────┤
-│✓ textproc/expat2              ││  Enter: edit the options                  │
-│✓ textproc/libxml2             ││                                           │
-└───────────────────────────────┘└───────────────────────────────────────────┘
- 0✗ 1* 1? 1! 18✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
+╔ Ports (21 · 20 optionless) ═══╗┌ www/nginx — nginx-1.30.6_5,3 ─────────────┐
+║!  ports-mgmt/pkg              ║│Robust and small WWW server                │
+║── 19 ok ──────────────────────║│NGINX is a high performance edge web server│
+║✓  converters/libiconv         ║│with the lowest memory footprint and the   │
+║✓  deve┌ apply? ────────────────────────────────────────────────────┐icient │
+║✓  deve│3 options file(s) will be written to …/server-options:      │       │
+║✓  deve│                                                            │text ──┤
+║✓  deve│devel/gmake                             new file (1 of 1 on)│       │
+║✓  deve│ports-mgmt/pkg                          dropped: OLDOPT     │       │
+║✓  deve│www/nginx                               +DEBUGLOG           │       │
+║✓  deve│                                                            │       │
+║✓  deve│                                                            │       │
+║✓  deve│                                                            │       │
+║✓  deve│                                                            │       │
+║✓  lang│                                                            │       │
+║✓  lang│                                                            │       │
+║✓  misc│                                                            │       │
+║✓  prin│                                                            │       │
+║✓  secu│                                                            │uire HT│
+║✓  text└ y: write · n: cancel · j/k scroll ─────────────────────────┘───────┤
+║✓  textproc/libxml2            ║│  Enter: edit the options                  │
+║✓* www/nginx                   ║│                                           │
+╚═══════════════════════════════╝└───────────────────────────────────────────┘
+ 0✗ 1* 1? 1! 19✓  ?:help a:apply q:quit Enter:edit n/p:next-problem …
 ```
 <!-- /screen -->
 

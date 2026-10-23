@@ -435,14 +435,13 @@ is given
 .Pp
 The left pane lists every port in the dependency closure that has options
 .Pq optionless ports remain in the graph but are never shown ,
-problems first, each with a status marker:
+problems first, each with two marker columns.
+The first is the port's state:
 .Bl -tag -width 6n -compact
 .It \[u2717]
 conflict: the staged options violate
 .Va PREVENTS
 or a group rule.
-.It *
-edited: staged changes not yet applied.
 .It \&?
 unconfigured: no saved options file.
 .It \&!
@@ -466,7 +465,26 @@ view.
 ok.
 .El
 .Pp
-Three further markers may trail the status one:
+The second is
+.Ql *
+when the port has staged changes not yet applied, blank otherwise; an edit
+hides no state, so an edited unconfigured port reads
+.Ql ?* ,
+and an edited ok port
+.Ql \[u2713]* .
+The order and
+.Ic n ,
+.Ic p
+and
+.Ic t
+go by the state alone: edits are not a problem.
+In problems-first order, when both kinds are listed, a row
+.Ql \[u2500]\[u2500] N ok \[u2500]\[u2500]
+parts the problem ports from the N ok ones
+.Pq \[u2248] and \[u2713] ;
+it is not a port, and no key selects it.
+.Pp
+Three further markers may follow the port's name:
 .Sq \[u2298]
 for a port blacklisted for this jail, tree and set, which therefore never needs
 attention,
@@ -482,9 +500,13 @@ for a port caught in a dependency loop
 The list's title counts the ports listed and, when there are any, the
 optionless ones it never shows, as in
 .Ql Ports (21 \[u00B7] 20 optionless) .
+The focused pane has a double border, the other a single one; the option
+pane's inner rules join whichever it has.
 .Pp
-The bottom line is the status bar: the count of each status marker, then the
-key legend, starting with
+The bottom line is the status bar: the count of ports in each state, the
+edited ones apart as
+.Ql * ,
+then the key legend, starting with
 .Ql ?:help a:apply q:quit
 and going on with the keys of the focused pane, cut at a whole key with
 .Ql \[u2026]

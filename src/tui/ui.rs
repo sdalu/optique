@@ -2,7 +2,9 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget as _, Wrap};
+use ratatui::widgets::{
+    Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Widget as _, Wrap,
+};
 use ratatui::Frame;
 
 use crate::apply::PendingWrite;
@@ -49,7 +51,6 @@ pub(crate) fn screen_rows(buffer: &Buffer) -> Vec<String> {
 fn status_marker(status: &UiStatus) -> (&'static str, Color) {
     match status {
         UiStatus::Conflict => ("✗", Color::Red),
-        UiStatus::Edited => ("*", Color::Cyan),
         UiStatus::Unconfigured => ("?", Color::Yellow),
         UiStatus::Stale => ("!", Color::LightRed),
         UiStatus::McDeviation => ("≠", Color::Magenta),
@@ -57,8 +58,26 @@ fn status_marker(status: &UiStatus) -> (&'static str, Color) {
     }
 }
 
+/// The border of a pane: double and light blue when it has the focus,
+/// plain and dim otherwise.
+fn pane_border(focused: bool) -> (Style, BorderType) {
+    if focused {
+        (Style::default().fg(Color::LightBlue), BorderType::Double)
+    } else {
+        (Style::default().fg(Color::DarkGray), BorderType::Plain)
+    }
+}
+
+/// The row between the problem ports and the `ok` ok ones, `width` wide.
+fn divider_item(ok: usize, width: usize) -> ListItem<'static> {
+    let mut text = format!("── {ok} ok ");
+    let fill = width.saturating_sub(text.chars().count());
+    text.push_str(&"─".repeat(fill));
+    ListItem::new(Line::from(Span::styled(text, Style::default().fg(Color::DarkGray))))
+}
+
 fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
-    let items: Vec<ListItem> = app
+    let mut items: Vec<ListItem> = app
         .visible
         .iter()
         .map(|key| {
@@ -73,6 +92,8 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 status_marker(&status)
             };
+            // The second column: staged edits, whatever the state.
+            let edited = if app.session.edited(info) { "*" } else { " " };
             // The port name itself carries the severity: red bold for a port
             // that will not build (BROKEN/IGNORE), red for conflicting staged
             // options, dim for blacklisted ports.
@@ -87,7 +108,8 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
                 Style::default()
             };
             let mut spans = vec![
-                Span::styled(format!("{marker} "), Style::default().fg(color)),
+                Span::styled(marker, Style::default().fg(color)),
+                Span::styled(format!("{edited} "), Style::default().fg(Color::Cyan)),
                 Span::styled(key.to_string(), name_style),
             ];
             if blacklisted {
@@ -102,6 +124,10 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(Line::from(spans))
         })
         .collect();
+    if let Some(d) = app.divider {
+        let width = area.width.saturating_sub(2) as usize;
+        items.insert(d, divider_item(app.visible.len() - d, width));
+    }
 
     let mut count = if app.hide_ok {
         format!("{}/{}", app.visible.len(), app.listable)
@@ -127,28 +153,37 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         title.push_str(&format!(" — filter: {}", app.filter));
     }
     title.push(' ');
-    let border_style = if app.focus == Focus::List || app.focus == Focus::Filter {
-        Style::default().fg(Color::LightBlue)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    let (border_style, border_type) =
+        pane_border(app.focus == Focus::List || app.focus == Focus::Filter);
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(title).border_style(border_style))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(border_type)
+                .title(title)
+                .border_style(border_style),
+        )
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    f.render_stateful_widget(list, area, &mut app.list_state);
+    // The selection is an index among the ports; the widget counts rows,
+    // the divider among them. Its scroll offset is in rows and kept.
+    let mut rows = ListState::default()
+        .with_offset(app.list_state.offset())
+        .with_selected(app.list_state.selected().map(|i| app.list_row(i)));
+    f.render_stateful_widget(list, area, &mut rows);
+    *app.list_state.offset_mut() = rows.offset();
     app.page.list = area.height.saturating_sub(2);
 }
 
 /// Draw the option pane; returns how many option rows it showed.
 fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
-    let border_style = if app.focus == Focus::Editor {
-        Style::default().fg(Color::LightBlue)
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    let (border_style, border_type) = pane_border(app.focus == Focus::Editor);
     let Some(key) = app.selected_key() else {
-        let p = Paragraph::new("no port selected")
-            .block(Block::default().borders(Borders::ALL).border_style(border_style));
+        let p = Paragraph::new("no port selected").block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(border_type)
+                .border_style(border_style),
+        );
         f.render_widget(p, area);
         return 0;
     };
@@ -265,7 +300,10 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     // The pane's title, and right of it the key that opens this port's
     // pkg-help notes, shown only for the ports that ship one. A long title
     // is cut short rather than drawn over the marker.
-    let mut block = Block::default().borders(Borders::ALL).border_style(border_style);
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(border_style);
     if info.pkg_help.is_some() {
         let marker = " [h] notes ";
         let room = (area.width as usize).saturating_sub(2 + marker.len() + 1);
@@ -282,7 +320,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         let cut = mark_if_clipped(&mut about, panel.height as usize, inner_width);
         f.render_widget(Paragraph::new(about), panel);
         let hint = cut.then(|| RuleLabel::Hint(Span::styled(" [v] full text ", key_hint())));
-        draw_rule(f, area, panel.y + panel.height, hint, border_style);
+        draw_rule(f, area, panel.y + panel.height, hint, border_style, border_type);
     }
     f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), layout.rows);
     if let Some(panel) = layout.detail {
@@ -290,7 +328,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         let label = opt.map(|o| {
             RuleLabel::Title(Span::styled(format!(" {o} "), Style::default().add_modifier(Modifier::BOLD)))
         });
-        draw_rule(f, area, panel.y - 1, label, border_style);
+        draw_rule(f, area, panel.y - 1, label, border_style, border_type);
         f.render_widget(Paragraph::new(detail), panel);
     }
     layout.rows.height
@@ -354,7 +392,14 @@ enum RuleLabel {
 }
 
 /// A rule across the pane at row `y`, joining its side borders.
-fn draw_rule(f: &mut Frame, pane: Rect, y: u16, label: Option<RuleLabel>, style: Style) {
+fn draw_rule(
+    f: &mut Frame,
+    pane: Rect,
+    y: u16,
+    label: Option<RuleLabel>,
+    style: Style,
+    border: BorderType,
+) {
     let dashes = |n: usize| Span::styled("─".repeat(n), style);
     let inner = (pane.width as usize).saturating_sub(2);
     let width = |s: &Span| s.content.chars().count();
@@ -370,9 +415,11 @@ fn draw_rule(f: &mut Frame, pane: Rect, y: u16, label: Option<RuleLabel>, style:
             vec![dashes(fill), h, dashes(2)]
         }
     };
-    let mut spans = vec![Span::styled("├", style)];
+    // Its ends join the pane's sides, double ones while it has the focus.
+    let (left, right) = if border == BorderType::Double { ("╟", "╢") } else { ("├", "┤") };
+    let mut spans = vec![Span::styled(left, style)];
     spans.extend(middle);
-    spans.push(Span::styled("┤", style));
+    spans.push(Span::styled(right, style));
     f.render_widget(Paragraph::new(Line::from(spans)), Rect { y, height: 1, ..pane });
 }
 
@@ -752,16 +799,20 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         };
         Line::from(Span::styled(format!(" {msg} "), style))
     } else {
-        let mut counts = [0usize; 6];
-        // Indexed in UiStatus declaration order, Conflict first.
+        // Each port by its state, indexed in UiStatus declaration order
+        // (Conflict first); the edited ones again, apart.
+        let mut counts = [0usize; 5];
+        let mut edited = 0;
         for key in &app.visible {
-            counts[app.effective_status(&app.session.ports[key]) as usize] += 1;
+            let info = &app.session.ports[key];
+            counts[app.effective_status(info) as usize] += 1;
+            edited += usize::from(app.session.edited(info));
         }
-        let mc = if app.warn_mc { format!(" {}≠", counts[4]) } else { String::new() };
+        let mc = if app.warn_mc { format!(" {}≠", counts[3]) } else { String::new() };
         let mut spans = vec![Span::styled(
             format!(
-                " {}✗ {}* {}? {}!{mc} {}✓ ",
-                counts[0], counts[1], counts[2], counts[3], counts[5]
+                " {}✗ {edited}* {}? {}!{mc} {}✓ ",
+                counts[0], counts[1], counts[2], counts[4]
             ),
             Style::default().fg(Color::White),
         )];
@@ -1073,14 +1124,22 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     let mut lines: Vec<Line> = Vec::new();
     match tab {
         0 => lines.extend([
-            head("Status column"),
+            head("First column: the port's state"),
             mark("✗", Color::Red, "conflict     staged options violate PREVENTS or group rules"),
-            mark("*", Color::Cyan, "edited       staged changes not yet applied"),
             mark("?", Color::Yellow, "unconfigured no saved options file"),
             mark("!", Color::LightRed, "stale        option list changed since the file was written"),
             mark("≠", Color::Magenta, "mc-conflict  contradicts make.conf policy (w view)"),
             mark("≈", Color::DarkGray, "mc-covered   decided by make.conf, no attention (m view)"),
             mark("✓", Color::DarkGray, "ok"),
+            Line::default(),
+            head("Second column"),
+            mark("*", Color::Cyan, "edited       staged changes not yet applied (?*)"),
+            Line::default(),
+            head("Between the groups"),
+            Line::from(vec![
+                Span::styled("  ── N ok ──", Style::default().fg(Color::DarkGray)),
+                Span::raw(" parts the N ok ports (≈ ✓) from the rest"),
+            ]),
             Line::default(),
             head("After the port name"),
             mark("⚠", Color::Red, "port is BROKEN/IGNORE with the current options"),

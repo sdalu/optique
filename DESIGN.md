@@ -332,3 +332,11 @@ cannot flip an option.
 only when edits are staged; a second `Ctrl-C` at that prompt keeps them as
 a draft, the way out that loses nothing. A Ctrl-letter is never read as
 its plain letter: `Ctrl-F`/`Ctrl-B` page, the others are no key.
+
+## TUI port list: the state, then the edit
+
+An edit no longer hides a port's state: each row shows the state (`✗ ? !
+≠ ≈ ✓`) and, in a column of its own, `*` for staged edits, and only the
+state orders the list and makes a port a problem for `n`/`p`/`t`.
+Rejected: "edited" as one more state ranked after conflict, which read an
+edited unconfigured port as handled before anything was applied.

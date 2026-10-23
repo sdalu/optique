@@ -951,7 +951,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 UiStatus::Conflict => "conflict",
                 UiStatus::Unconfigured => "unconfigured",
                 UiStatus::Stale => "stale",
-                // Edited/McDeviation need staged edits, which a scan never has.
+                // McDeviation needs the TUI's w view, which a scan never has.
                 _ => "ok",
             }
         }

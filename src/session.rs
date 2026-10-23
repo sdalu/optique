@@ -19,11 +19,11 @@ pub struct OptState {
     pub staged: BTreeSet<String>,
 }
 
-/// UI-level status of a port, most severe first.
+/// UI-level status of a port, most severe first. Staged edits are not a
+/// status: `Session::edited` says whether a port has any, whatever its state.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UiStatus {
     Conflict,
-    Edited,
     Unconfigured,
     Stale,
     /// Staged options contradict the global make.conf OPTIONS_SET/UNSET
@@ -383,16 +383,17 @@ impl Session {
         out
     }
 
+    /// Does the port have staged edits (staged differs from the baseline)?
+    pub fn edited(&self, info: &PortInfo) -> bool {
+        self.state(info).is_some_and(|s| s.staged != s.baseline)
+    }
+
     pub fn status(&self, info: &PortInfo) -> UiStatus {
-        if !info.options.has_options() {
+        if !info.options.has_options() || self.state(info).is_none() {
             return UiStatus::Ok;
         }
-        let Some(state) = self.state(info) else { return UiStatus::Ok };
         if !self.violations(info).is_empty() {
             return UiStatus::Conflict;
-        }
-        if state.staged != state.baseline {
-            return UiStatus::Edited;
         }
         match self.stale_delta(info) {
             None => UiStatus::Unconfigured,
@@ -1289,7 +1290,7 @@ mod tests {
 
         // User edits the dependency's options.
         s.toggle(&dep_key, "DEPOPT").unwrap();
-        assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+        assert!(s.edited(&s.ports[&dep_key]));
 
         // Refresh: the root no longer depends on cat/dep -> GC'd.
         let updated_root = linked_info("cat/root", &[], &["ROOTOPT"]);
@@ -1307,7 +1308,7 @@ mod tests {
         assert_eq!((added, removed.len()), (vec![dep_key.clone()], 0));
         let st = s.state(&s.ports[&dep_key]).unwrap();
         assert!(st.staged.contains("DEPOPT"), "edit preserved across GC round-trip");
-        assert_eq!(s.status(&s.ports[&dep_key]), UiStatus::Edited);
+        assert!(s.edited(&s.ports[&dep_key]));
     }
 
     /// When the GC drops the flavor that owned a shared options file while a
@@ -1408,7 +1409,7 @@ mod tests {
     }
 
     #[test]
-    fn status_precedence_conflict_beats_edited() {
+    fn an_edit_leaves_the_state_showing() {
         let defs = vec![(
             "X",
             OptionDef { prevents: vec!["Y".into()], ..Default::default() },
@@ -1417,7 +1418,8 @@ mod tests {
         let mut s = session_for(ports);
         s.toggle(&key, "X").unwrap(); // staged != baseline AND a conflict
         let info = s.ports.get(&key).unwrap();
-        assert_eq!(s.status(info), UiStatus::Conflict, "conflict outranks edited");
+        assert_eq!(s.status(info), UiStatus::Conflict, "the edit does not hide the conflict");
+        assert!(s.edited(info));
     }
 
     #[test]
@@ -1478,10 +1480,11 @@ mod tests {
         )
         .unwrap();
         s.reload_saved(&OptionsFiles::new(tmp.path()), ["cat_port"]);
-        // Baseline now follows the file; staged still empty -> Edited.
+        // Baseline now follows the file; staged still empty -> edited.
         let st = s.state(&s.ports[&key]).unwrap();
         assert!(st.baseline.contains("A"));
-        assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+        assert!(s.edited(&s.ports[&key]));
+        assert_eq!(s.status(&s.ports[&key]), UiStatus::Ok);
     }
 
     /// A TUI refresh queries make with the staged edits in place, so a
@@ -1667,7 +1670,7 @@ mod tests {
         let st = s.state(&s.ports[&key]).unwrap();
         assert_eq!(st.staged, ["A".to_string()].into_iter().collect::<BTreeSet<_>>());
         // Baseline is untouched, so the restored state still reads as edited.
-        assert_eq!(s.status(&s.ports[&key]), UiStatus::Edited);
+        assert!(s.edited(&s.ports[&key]));
         // Re-applying the same draft changes nothing.
         assert_eq!(s.restore_draft(&draft), 0);
     }
