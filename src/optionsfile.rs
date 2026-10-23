@@ -23,6 +23,9 @@ pub struct SavedOptionsFile {
     /// once it is read (`with_local`): a `?=` that assigns nothing adds none.
     pub local_set: BTreeSet<String>,
     pub local_unset: BTreeSet<String>,
+    /// The lists `options.local` assigns afresh (`=`, `:=`, a `?=` that
+    /// assigns), dropping what the options file put in them, in order.
+    pub local_resets: Vec<String>,
 }
 
 /// How a line assigns its variable: make's `=` and `:=` (afresh), `+=`,
@@ -125,6 +128,9 @@ impl SavedOptionsFile {
                     let mut lists = vec![if set { &mut self.set } else { &mut self.unset }];
                     if lists_only {
                         lists.push(if set { &mut self.local_set } else { &mut self.local_unset });
+                        if !append && !self.local_resets.iter().any(|r| r == name) {
+                            self.local_resets.push(name.to_string());
+                        }
                     }
                     for list in lists {
                         if !append {
@@ -161,6 +167,19 @@ impl SavedOptionsFile {
     /// make reads it after the options file, so the file cannot change it.
     pub fn local_decides(&self, opt: &str) -> bool {
         mentions(&self.local_set, opt) || mentions(&self.local_unset, opt)
+    }
+
+    /// Why optique cannot manage the options file, when options.local
+    /// assigns OPTIONS_FILE_SET or OPTIONS_FILE_UNSET afresh: make drops
+    /// what the file put in that list (bsd.options.mk:341-363), so no write
+    /// of the file can say what the port ends up with.
+    pub fn local_reset(&self) -> Option<String> {
+        (!self.local_resets.is_empty()).then(|| {
+            format!(
+                "options.local resets {}: the options file's lines are not read; edit options.local",
+                self.local_resets.join(" and ")
+            )
+        })
     }
 
     /// Options with a SET or UNSET line: the ones the file gives a value.
@@ -327,6 +346,28 @@ OPTIONS_FILE_UNSET+=FLITE
             .with_local("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n");
         let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
         assert_eq!((f.local_set, f.local_unset), (words(&["B"]), words(&["A"])));
+    }
+
+    /// An options.local that assigns a list afresh drops the file's lines
+    /// for it: `=` and `:=` always, `?=` only when the file left the list
+    /// unassigned; `+=` never.
+    #[test]
+    fn options_local_resets_are_recorded() {
+        let file = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\n");
+        let resets = |local: &str| file.clone().with_local(local).local_resets;
+        assert_eq!(resets("OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=A\n"), Vec::<String>::new());
+        assert_eq!(resets("OPTIONS_FILE_SET=B\n"), ["OPTIONS_FILE_SET"]);
+        assert_eq!(resets("OPTIONS_FILE_UNSET:=B\nOPTIONS_FILE_UNSET=C\n"), ["OPTIONS_FILE_UNSET"]);
+        assert_eq!(resets("OPTIONS_FILE_SET?=B\nOPTIONS_FILE_UNSET?=C\n"), ["OPTIONS_FILE_UNSET"]);
+        let f = file.with_local("OPTIONS_FILE_UNSET?=C\nOPTIONS_FILE_SET=B\n");
+        assert_eq!(
+            f.local_reset().as_deref(),
+            Some(
+                "options.local resets OPTIONS_FILE_UNSET and OPTIONS_FILE_SET: \
+                 the options file's lines are not read; edit options.local"
+            )
+        );
+        assert_eq!(SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").local_reset(), None, "the file's own `=`");
     }
 
     /// bsd.options.mk:354-363: an UNSET entry takes out every option it

@@ -220,6 +220,13 @@ pub fn plan_writes<'a>(
         if cands.iter().any(|c| c.info.options.r#override.is_some()) {
             continue;
         }
+        // bsd.options.mk:341-363: an options.local assigning a SET or UNSET
+        // list afresh drops what the file put in it; no write or removal
+        // of the file can say what make ends up with (the startup warning
+        // names it).
+        if files.combined(options_name).local_reset().is_some() {
+            continue;
+        }
         let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
         // Read with its options.local, as make reads it; what a write
         // carries over comes from the file alone, which is all it writes.

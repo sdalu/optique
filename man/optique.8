@@ -1513,6 +1513,24 @@ file: the TUI and
 .Cm decide
 refuse it with
 .Dq options.local decides Ar OPT ; edit it there .
+An
+.Pa options.local
+that assigns
+.Va OPTIONS_FILE_SET
+or
+.Va OPTIONS_FILE_UNSET
+afresh
+.Po
+.Ql = ,
+.Ql :=
+or a
+.Ql ?=
+that takes effect
+.Pc
+drops the options file's lines for that list, so
+.Nm
+cannot manage the file: one warning names it, no command writes or removes
+it, its port is never stale, and edits to it are refused.
 It then reports every file it changed.
 A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force

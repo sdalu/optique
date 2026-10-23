@@ -269,12 +269,21 @@ impl Session {
         self.locals.get(&info.options_name).is_some_and(|l| l.local_decides(opt))
     }
 
+    /// Why the port's options file is one optique cannot manage, when its
+    /// options.local assigns a SET or UNSET list afresh
+    /// (`SavedOptionsFile::local_reset`): nothing is written or removed
+    /// for it, and no edit is taken.
+    pub fn local_reset(&self, info: &PortInfo) -> Option<String> {
+        self.locals.get(&info.options_name).and_then(SavedOptionsFile::local_reset)
+    }
+
     /// Toggle an option; returns a user-facing error when refused.
     pub fn toggle(&mut self, key: &PortKey, opt: &str) -> Result<(), String> {
         let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
         // Checked before `states` is borrowed mutably; refused below, after
         // OPTIONS_OVERRIDE, which leaves options.local unread too.
         let by_local = self.local_decides(info, opt);
+        let reset = self.local_reset(info);
         let state = self
             .states
             .get_mut(&info.options_name)
@@ -288,6 +297,11 @@ impl Session {
                 "OPTIONS_OVERRIDE in make.conf decides this port; its options file is not read"
                     .to_string(),
             );
+        }
+        // An options.local that assigns a list afresh drops the file's
+        // lines: the file is not optique's to edit.
+        if let Some(why) = reset {
+            return Err(why);
         }
 
         if opts.is_forced(opt) {
@@ -491,6 +505,11 @@ impl Session {
         // itself, the options file unread; it can be neither unconfigured
         // nor stale, whatever is or is not on disk.
         if info.options.r#override.is_some() {
+            return UiStatus::Ok;
+        }
+        // Nor can a file whose options.local resets a list: sync would
+        // rewrite it every run and make would still not read its lines.
+        if self.local_reset(self.owner_info(info)).is_some() {
             return UiStatus::Ok;
         }
         match self.stale_delta(info) {
@@ -1639,6 +1658,36 @@ mod tests {
         let locked: Vec<_> = reports.iter().map(|o| (o.name.as_str(), o.locked_by.as_deref())).collect();
         let local = Some("options.local");
         assert_eq!(locked, [("A", local), ("A2", local), ("B", local), ("C", None)]);
+    }
+
+    /// bsd.options.mk:341-363: `OPTIONS_FILE_SET=B` in options.local drops
+    /// the file's SET lines, so make counts A new however the file is
+    /// written. The port is left alone: not stale, edits refused, and no
+    /// write planned for its file, which sync would otherwise rewrite
+    /// byte for byte every run.
+    #[test]
+    fn an_options_local_reset_leaves_the_file_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        let file = "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A B\n\
+                    OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n";
+        std::fs::write(tmp.path().join("cat_port/options"), file).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET=B\n").unwrap();
+        let (ports, key) = mk_port(&["A", "B"], &[], vec![], vec![]);
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        let files = OptionsFiles::new(tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &roots, &files, false);
+        let info = s.ports[&key].clone();
+        assert_eq!(s.status(&info), UiStatus::Ok);
+        let why = "options.local resets OPTIONS_FILE_SET: the options file's lines are not read; edit options.local";
+        assert_eq!(s.toggle(&key, "A").unwrap_err(), why);
+        assert_eq!(s.toggle(&key, "B").unwrap_err(), why);
+        for minimal in [false, true] {
+            let staged = s.state(&info).unwrap().staged.clone();
+            let planned = apply::plan_writes(std::iter::once((&key, &info, staged)), &files, minimal);
+            assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+            assert!(planned.removals.is_empty(), "{:?}", planned.removals);
+        }
     }
 
     /// scan --json --options reports every option of an overridden port

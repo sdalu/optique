@@ -411,6 +411,13 @@ fn find_redundant(
         }
         // Answers arrive in any order; the reason names the same flavor each run.
         f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
+        // An options.local assigning a list afresh: not optique's to remove.
+        if let Some(why) = files.combined(&f.entry.options_name).local_reset() {
+            if cli.verbose {
+                found.kept.push((f.entry.options_name.clone(), why));
+            }
+            return;
+        }
         let local = files.under_local(&f.entry.options_name, Default::default());
         match shared_file_deviation(&f.infos, &local) {
             None => found.removals.push(clean::Removal {
@@ -1055,6 +1062,19 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         // file's, UNSET winning across both, so it overrides nothing by
         // itself: the note says what it adds.
         let both = files.combined(name);
+        // make runs a `!=` line's shell command; optique does not.
+        for (file, line) in &both.shell {
+            eprintln!(
+                "{} {name}/{file} line {line} assigns with != (a shell command): optique ignores it",
+                tint(paint, ansi::YELLOW, "warning:"),
+            );
+        }
+        // An options.local assigning a list afresh drops the file's lines:
+        // optique leaves the file alone (apply::plan_writes), said once.
+        if let Some(why) = both.local_reset() {
+            eprintln!("{} {name}/options: {why}", tint(paint, ansi::YELLOW, "warning:"));
+            continue;
+        }
         let mut adds = Vec::new();
         for (verb, list) in [("sets", &both.local_set), ("unsets", &both.local_unset)] {
             if !list.is_empty() {
@@ -1066,13 +1086,6 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 "{} {name}/options.local also {}; sync leaves it alone",
                 tint(paint, ansi::CYAN, "note:"),
                 adds.join(" and ")
-            );
-        }
-        // make runs a `!=` line's shell command; optique does not.
-        for (file, line) in &both.shell {
-            eprintln!(
-                "{} {name}/{file} line {line} assigns with != (a shell command): optique ignores it",
-                tint(paint, ansi::YELLOW, "warning:"),
             );
         }
         let Some(saved) = files.saved(name) else { continue };
