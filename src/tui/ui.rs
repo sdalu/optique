@@ -891,6 +891,39 @@ fn draw_apply_modal(f: &mut Frame, app: &App) {
 /// Help overlay tab titles; indices match `App.help_tab`.
 pub const HELP_TABS: [&str; 4] = ["Markers", "Option row", "Navigate/Edit", "Views/Actions"];
 
+/// The help's tabs with their number keys, the current one highlighted, for
+/// a border `width` columns wide: every name when they fit, else the current
+/// one named and the others by number.
+fn help_tab_bar(tab: usize, width: usize) -> Line<'static> {
+    let labels = |all: bool| -> Vec<String> {
+        HELP_TABS
+            .iter()
+            .enumerate()
+            .map(|(i, name)| match (i == tab, all) {
+                // The highlight takes a blank each side of the current tab.
+                (true, _) => format!(" {}:{name} ", i + 1),
+                (false, true) => format!("{}:{name}", i + 1),
+                (false, false) => format!("{}", i + 1),
+            })
+            .collect()
+    };
+    // A blank before each tab and after the last, against the corners.
+    let fits = |l: &[String]| l.iter().map(|t| t.chars().count() + 1).sum::<usize>() < width;
+    let full = labels(true);
+    let shown = if fits(&full) { full } else { labels(false) };
+    let mut spans = Vec::new();
+    for (i, label) in shown.into_iter().enumerate() {
+        spans.push(Span::raw(" "));
+        spans.push(if i == tab {
+            Span::styled(label, Style::default().fg(Color::Black).bg(Color::LightBlue))
+        } else {
+            Span::styled(label, Style::default().fg(Color::Gray))
+        });
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
+}
+
 /// Rows `lines` take in a `width`-wide Paragraph wrapped with
 /// `Wrap { trim: false }`. Measured by laying each long line out the way the
 /// Paragraph will: ratatui keeps its own count (`line_count`) behind an
@@ -944,17 +977,6 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
         ])
     };
 
-    // Tab bar with the number hotkeys.
-    let mut bar: Vec<Span> = vec![Span::raw(" ")];
-    for (i, name) in HELP_TABS.iter().enumerate() {
-        let label = format!(" {}:{} ", i + 1, name);
-        bar.push(if i == tab {
-            Span::styled(label, Style::default().fg(Color::Black).bg(Color::LightBlue))
-        } else {
-            Span::styled(label, Style::default().fg(Color::DarkGray))
-        });
-        bar.push(Span::raw(" "));
-    }
 
     let head = |t: &str| {
         Line::from(Span::styled(
@@ -962,7 +984,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         ))
     };
-    let mut lines: Vec<Line> = vec![Line::from(bar), Line::default()];
+    let mut lines: Vec<Line> = Vec::new();
     match tab {
         0 => lines.extend([
             head("Status column"),
@@ -1120,14 +1142,19 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) {
     let rows = wrapped_height(&lines, area.width.saturating_sub(2));
     let max_scroll = rows.saturating_sub(inner_height) as u16;
     *scroll = (*scroll).min(max_scroll);
-    let title = if max_scroll > 0 {
-        " help — 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes "
+    let hint = if max_scroll > 0 {
+        " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes "
     } else {
-        " help — 1-4/Tab/←→ switch · any other key closes "
+        " 1-4/Tab/←→ switch · any other key closes "
     };
     let border = Style::default().fg(Color::LightBlue);
+    // The tabs head the box, out of the scrolled text: they stay in view.
     let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((*scroll, 0)).block(
-        Block::default().borders(Borders::ALL).title(title).border_style(border),
+        Block::default()
+            .borders(Borders::ALL)
+            .title(help_tab_bar(tab, area.width.saturating_sub(2) as usize))
+            .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))))
+            .border_style(border),
     );
     f.render_widget(p, area);
     scroll_indicator(f, area, rows, *scroll as usize, border);
@@ -1539,6 +1566,23 @@ mod tests {
         assert_eq!(bar(3, 0).trim(), "▼", "one row: more below");
         assert_eq!(bar(3, 49).trim(), "▲", "one row, at the bottom");
         assert!(bar(5, 0).contains('█'), "three rows: arrows and a thumb");
+    }
+
+    /// The help's tabs head its box, in view however far it is scrolled,
+    /// and name only the current tab when all the names do not fit.
+    #[test]
+    fn the_help_tabs_stay_in_view() {
+        let mut scroll = u16::MAX;
+        let shown = rendered(80, 24, |f| draw_help(f, 0, &mut scroll));
+        let top = shown.iter().find(|r| r.contains('┌')).expect("the box");
+        assert!(top.contains("1:Markers") && top.contains("4:Views/Actions"), "{top}");
+        assert!(scroll > 0, "scrolled");
+        assert!(shown.iter().any(|r| r.contains("↑/↓ scroll")), "the keys at the bottom");
+
+        let narrow = rendered(60, 24, |f| draw_help(f, 2, &mut 0));
+        let top = narrow.iter().find(|r| r.contains('┌')).expect("the box");
+        assert!(top.contains("3:Navigate/Edit") && !top.contains("Markers"), "{top}");
+        assert!(top.contains(" 1 2 ") && top.contains(" 4 "), "{top}");
     }
 
     /// A cut line loses the word it would split, not half of it.
