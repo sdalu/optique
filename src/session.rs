@@ -776,7 +776,13 @@ pub fn undecided_options(
     let known: BTreeSet<&str> =
         saved.into_iter().flat_map(|s| s.recorded()).map(String::as_str).collect();
     let o = &info.options;
-    let mc_decided = |opt: &str| o.mc_mentions(opt) || o.is_forced(opt);
+    // IMPLIES runs after FORCE (bsd.options.mk:411): what a forced-on option
+    // implies is on whatever the file says.
+    let forced_on: BTreeSet<String> =
+        o.complete.iter().filter(|opt| o.forced_value(opt) == Some(true)).cloned().collect();
+    let forced_implied = close_implies(info, forced_on);
+    let mc_decided =
+        |opt: &str| o.mc_mentions(opt) || o.is_forced(opt) || forced_implied.contains(opt);
     // Selected means make.conf ENDS UP enabling it, not merely that some layer
     // names it: a later layer can undo an earlier one, and then the member
     // actually in force was picked by the port default — nobody's decision.
@@ -1964,6 +1970,17 @@ mod tests {
             })
             .collect();
         assert_eq!(verdicts, [("A".to_string(), false, "global"), ("B".to_string(), false, "port")]);
+    }
+
+    /// IMPLIES runs after FORCE (bsd.options.mk:411), so an option a
+    /// forced-on one implies is on whatever the file says: no decision is
+    /// owed for it.
+    #[test]
+    fn what_a_forced_option_implies_is_decided() {
+        let defs = vec![("A", OptionDef { implies: vec!["B".into()], ..Default::default() })];
+        let (mut ports, key) = mk_port(&["A", "B", "C"], &[], vec![], defs);
+        ports.get_mut(&key).unwrap().options.force_set.insert("A".into());
+        assert_eq!(undecided_options(&ports[&key], None, false), ["C"]);
     }
 
     fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
