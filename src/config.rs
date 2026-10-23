@@ -1014,7 +1014,10 @@ fn concat_make_conf(
 
 /// Stage `prelude`, every existing candidate in order, then `trailer`, as one
 /// make.conf, returning it (None when there is nothing to write), the hash of
-/// the combined text, and the candidates read.
+/// the combined text, and the candidates read. A candidate whose realpath was
+/// already appended is skipped — poudriere(8)'s `append_make` does the same
+/// (common.sh:10605-10611), so a jail's own `<jail>-make.conf` symlinked to a
+/// layer already read (or vice versa) contributes once, not twice.
 fn stage_make_conf(
     prelude: String,
     candidates: &[PathBuf],
@@ -1023,8 +1026,13 @@ fn stage_make_conf(
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
     let mut combined = prelude;
     let mut sources = Vec::new();
+    let mut seen_real: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for path in candidates {
         if let Ok(text) = fs::read_to_string(path) {
+            let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !seen_real.insert(real) {
+                continue;
+            }
             combined.push_str(&format!("# --- {} ---\n", path.display()));
             combined.push_str(&text);
             if !text.ends_with('\n') {
@@ -1631,6 +1639,26 @@ mod tests {
         let order: Vec<usize> = layers.iter().map(|(_, c)| idx(c)).collect();
         assert!(order.windows(2).all(|w| w[0] < w[1]), "layers out of order: {text}");
         assert!(!text.contains("PACKAGE_BUILDING") && !text.contains("LOCALBASE"), "{text}");
+    }
+
+    /// A jail's own `<jail>-make.conf` symlinked to a layer already read
+    /// (a common poudriere.d setup when a jail just wants the tree's own
+    /// file) is read once, not twice — poudriere's `append_make` dedups by
+    /// realpath, and so must optique.
+    #[test]
+    fn a_layer_symlinked_to_another_is_read_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("make.conf"), "OVERLAYS+=/x\n").unwrap();
+        std::os::unix::fs::symlink(pd.join("make.conf"), pd.join("j1-make.conf")).unwrap();
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let (path, _, sources) =
+            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], &stage).unwrap();
+        assert_eq!(sources, vec![pd.join("make.conf")], "{sources:?}");
+        let text = fs::read_to_string(path.unwrap()).unwrap();
+        assert_eq!(text.matches("OVERLAYS+=/x").count(), 1, "{text}");
     }
 
     /// A layer without a final newline does not run into the next one.
