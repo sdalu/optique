@@ -61,7 +61,8 @@ Non-interactive status report over the closure, meant as a build gate: each
 port is `ok`, `unconfigured` (no saved options file), `stale` (the option
 list changed since the file was written) or `conflict` (the options make
 computes from the saved ones, `*_FORCE` included, violate a group rule or
-`PREVENTS`). A flagged port also lists what
+`PREVENTS`, which `make check-config` checks for an `OPTIONS_SLAVE` option
+too). A flagged port also lists what
 `make.conf` leaves `undecided`, or is marked `[mc-covered ≈]` when `make.conf`
 settles every option by itself; `mc-covered` and blacklisted ports never
 count against the exit gate. `--json` prints one

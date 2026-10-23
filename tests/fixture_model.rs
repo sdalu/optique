@@ -108,3 +108,22 @@ fn make_conf_unset_entries_are_patterns() {
         assert_eq!(o["makeconf"], serde_json::json!({"value": false, "scope": "global"}), "{o}");
     }
 }
+
+/// bsd.port.mk ~4987: pre-check-config checks the PREVENTS of every option
+/// in PORT_OPTIONS, OPTIONS_SLAVE ones included. X, on by OPTIONS_SLAVE,
+/// prevents the default Y: check-config fails, and optique reports the
+/// conflict. X's IMPLIES turns no Z on (bsd.options.mk:414 reads only the
+/// list's), for make as for optique.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_options_slave_options_prevents_are_checked() {
+    let f = Fixture::new();
+    let origin = "misc/model-slave-prevents";
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["X", "Y"]);
+    let check = f.make(origin, &["check-config"]);
+    assert!(!check.status.success(), "check-config passes: {}", common::stdout(&check));
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["status"], "conflict", "{port}");
+    assert_eq!(port["violations"], serde_json::json!(["X conflicts with Y: mutually exclusive"]), "{port}");
+    assert_eq!(flagged(&port, "staged"), ["Y"], "{port}");
+}

@@ -1238,6 +1238,25 @@ mod tests {
         assert_eq!(c[0].cause.as_deref(), Some("B forced on by make.conf; fix it there"));
     }
 
+    /// bsd.port.mk pre-check-config checks the PREVENTS of every option in
+    /// PORT_OPTIONS, an OPTIONS_SLAVE one too: X, on by OPTIONS_SLAVE and
+    /// out of the list, conflicts with the default Y. Its IMPLIES, which
+    /// bsd.options.mk:414 reads only for the list's options and runs before
+    /// OPTIONS_SLAVE goes in, turns no Z on.
+    #[test]
+    fn an_options_slave_option_prevents_and_implies_nothing() {
+        let defs = vec![(
+            "X",
+            OptionDef { prevents: vec!["Y".into()], implies: vec!["Z".into()], ..Default::default() },
+        )];
+        let (mut ports, key) = mk_port(&["Y", "Z"], &["Y"], vec![], defs);
+        ports.get_mut(&key).unwrap().options.slave.insert("X".into());
+        let s = session_for(ports);
+        let info = &s.ports[&key];
+        assert_eq!(s.violations(info), ["X conflicts with Y: mutually exclusive"]);
+        assert_eq!(nofile_effective(info), set(&["X", "Y"]));
+    }
+
     #[test]
     fn a_group_is_decided_only_when_makeconf_really_selects_a_member() {
         let group = || OptionGroup {

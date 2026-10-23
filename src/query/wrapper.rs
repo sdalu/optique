@@ -15,6 +15,11 @@
 ///   bsd.options.desc.mk (the `<OPT>_DESC` defaults) for such targets.
 /// - Every possibly-undefined variable is expanded with `:U` so parsing never
 ///   aborts on a port that does not define it.
+///
+/// The per-option records cover the OPTIONS_SLAVE options too: they are not
+/// in COMPLETE_OPTIONS_LIST, yet bsd.options.mk:447 puts them in
+/// PORT_OPTIONS and pre-check-config (bsd.port.mk ~4987) checks the
+/// PREVENTS of every option there.
 pub const WRAPPER: &str = "\
 .include \"${PORTDIR}/Makefile\"
 .info OPTIQUE|PKGNAME|${PKGNAME:U}
@@ -55,7 +60,7 @@ pub const WRAPPER: &str = "\
 .for _g in ${OPTIONS_MULTI:U}
 .info OPTIQUE|MULTI|${_g}|${OPTIONS_MULTI_${_g}:U}
 .endfor
-.for _o in ${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_GROUP:U} ${OPTIONS_SINGLE:U} ${OPTIONS_RADIO:U} ${OPTIONS_MULTI:U}
+.for _o in ${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} ${OPTIONS_GROUP:U} ${OPTIONS_SINGLE:U} ${OPTIONS_RADIO:U} ${OPTIONS_MULTI:U}
 .info OPTIQUE|DESC|${_o}|${${_o}_DESC:U}
 .  if defined(${_o}_IMPLIES)
 .info OPTIQUE|IMPLIES|${_o}|${${_o}_IMPLIES}
@@ -97,3 +102,17 @@ pub const WRAPPER: &str = "\
 optique-config: .PHONY
 \t@true
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::WRAPPER;
+
+    /// pre-check-config checks the PREVENTS of every option in PORT_OPTIONS,
+    /// OPTIONS_SLAVE ones included: their records are dumped with the
+    /// others.
+    #[test]
+    fn options_slave_options_get_their_records() {
+        let for_line = WRAPPER.lines().find(|l| l.starts_with(".for _o in ")).unwrap();
+        assert!(for_line.contains("${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} "), "{for_line}");
+    }
+}
