@@ -486,8 +486,10 @@ impl Session {
         if !o.mc_mentions(opt) {
             return false;
         }
+        // Both sides as make ends up: a member of a conditional group whose
+        // option is off is dropped from either.
         let nofile_on = nofile_effective(info).contains(opt);
-        state.staged.contains(opt) != nofile_on
+        staged_effective(info, &state.staged).contains(opt) != nofile_on
     }
 
     /// All options of the port that deviate from the global make.conf policy.
@@ -1978,6 +1980,23 @@ mod tests {
             assert_eq!(s.toggle(&key, "B"), Ok(()), "{kind:?}");
             assert!(s.violations(&s.ports[&key]).is_empty(), "{kind:?}");
         }
+    }
+
+    /// Inside a conditional group whose option is off, a member make.conf
+    /// sets and the file keeps on agrees with make.conf: make drops it from
+    /// both outcomes.
+    #[test]
+    fn an_unchecked_group_member_does_not_deviate() {
+        let g = OptionGroup {
+            kind: GroupKind::Single,
+            name: "AUDIO".into(),
+            desc: String::new(),
+            members: vec!["NAS".into(), "RPLAY".into()],
+        };
+        let (mut ports, key) = mk_port(&["DOCS", "AUDIO", "NAS", "RPLAY"], &["NAS"], vec![g], vec![]);
+        ports.get_mut(&key).unwrap().options.mc_set.insert("NAS".into());
+        let s = session_for(ports);
+        assert!(!s.mc_deviates(&s.ports[&key], "NAS"));
     }
 
     /// bsd.options.mk applies each scope's UNSET after its SET, so an
