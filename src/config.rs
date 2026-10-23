@@ -1028,26 +1028,32 @@ fn stage_make_conf(
     trailer: &str,
     staging_dir: &Path,
 ) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
-    let mut combined = prelude;
+    // Bytes, not text: make reads a make.conf whatever its encoding (a
+    // Latin-1 comment is common), so only a missing file is none, and one
+    // that cannot be read stops the run as it would stop make.
+    let mut combined = prelude.into_bytes();
     let mut sources = Vec::new();
     let mut seen_real: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for path in candidates {
-        if let Ok(text) = fs::read_to_string(path) {
-            let real = path.canonicalize().unwrap_or_else(|_| path.clone());
-            if !seen_real.insert(real) {
-                continue;
-            }
-            combined.push_str(&format!("# --- {} ---\n", path.display()));
-            combined.push_str(&text);
-            if !text.ends_with('\n') {
-                combined.push('\n');
-            }
-            sources.push(path.clone());
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("reading make.conf {}", path.display())),
+        };
+        let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !seen_real.insert(real) {
+            continue;
         }
+        combined.extend_from_slice(format!("# --- {} ---\n", path.display()).as_bytes());
+        combined.extend_from_slice(&bytes);
+        if !bytes.ends_with(b"\n") {
+            combined.push(b'\n');
+        }
+        sources.push(path.clone());
     }
-    combined.push_str(trailer);
+    combined.extend_from_slice(trailer.as_bytes());
 
-    let conf_hash = crate::cache::sha256_hex(combined.as_bytes());
+    let conf_hash = crate::cache::sha256_hex(&combined);
     if combined.is_empty() {
         return Ok((None, conf_hash, sources));
     }
@@ -1476,10 +1482,31 @@ mod tests {
         assert_eq!(s.make_conf.as_ref(), Some(&etc));
         let (_, empty_hash, _) = concat_make_conf(&[], QueryEnv::Host, &[], &stage).unwrap();
         assert_ne!(s.conf_hash, empty_hash);
+        // A make.conf make reads whatever its bytes, a Latin-1 comment
+        // included, is read and keyed, not taken for none; one that exists
+        // but cannot be read stops the run, as it would stop make.
+        fs::write(&etc, b"# r\xe9glages\nDEFAULT_VERSIONS+=ssl=base\n").unwrap();
+        let s = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap();
+        assert_eq!((s.make_conf.as_ref(), s.make_conf_sources.as_slice()), (Some(&etc), [etc.clone()].as_slice()));
+        if !nix_is_root() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&etc, fs::Permissions::from_mode(0o000)).unwrap();
+            let err = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap_err();
+            assert!(format!("{err:#}").contains("etc-make.conf"), "{err:#}");
+            fs::set_permissions(&etc, fs::Permissions::from_mode(0o644)).unwrap();
+        }
         // The same host without -l is a poudriere build.
         let s = resolve_host(&host, &Request::default(), &stage).unwrap();
         assert_eq!(s.options_dir, pd.join("options"));
         assert!(!s.blacklist.is_empty());
+    }
+
+    /// Root reads a mode-000 file: the unreadable case only holds for others.
+    fn nix_is_root() -> bool {
+        std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .is_ok_and(|o| o.stdout.starts_with(b"0\n"))
     }
 
     /// Under a poudriere.d, -p must name a tree poudriere knows; only the
