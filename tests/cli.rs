@@ -332,6 +332,31 @@ fn malformed_origin_is_a_clean_error() {
     assert!(err.contains("not-an-origin"), "{err}");
 }
 
+/// poudriere strips one leading and one trailing '/' from a command-line
+/// origin exactly as from a pkglist line's (common.sh ~9603-9607): a stray
+/// slash must not be refused at the parse stage (exit 2, "malformed port
+/// origin"), whatever a scratch tree with no such port then makes of it.
+#[test]
+fn leading_or_trailing_slash_on_the_command_line_is_accepted() {
+    let tmp = tempfile::tempdir().unwrap();
+    let options = tmp.path().join("options");
+    let ports = tmp.path().join("ports");
+    for origin in ["/sysutils/tmux", "sysutils/tmux/"] {
+        let out = optique()
+            .env("XDG_CACHE_HOME", tmp.path())
+            .args(["scan", "-l", "-o"])
+            .arg(&options)
+            .arg("-P")
+            .arg(&ports)
+            .arg(origin)
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(2), "{origin}: {err}");
+        assert!(!err.contains("malformed port origin"), "{origin}: {err}");
+    }
+}
+
 #[test]
 fn no_arguments_is_a_helpful_error() {
     // The hint names no build-specific flag: -z would be refused with -l.

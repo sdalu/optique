@@ -495,21 +495,29 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
     let mut out: Vec<PortKey> = Vec::new();
     let mut seen: HashSet<PortKey> = HashSet::new();
     let mut push = |spec: &str, source: &str, from_pkglist: bool| -> anyhow::Result<()> {
-        // Strip inline comments and surrounding whitespace.
-        let spec = spec.split('#').next().unwrap_or("").trim();
-        if spec.is_empty() {
-            return Ok(());
-        }
-        // poudriere(8) reads a pkglist line with `read`: only its first
-        // whitespace-separated word is the origin, and one stray leading or
-        // trailing '/' (a common typo) is stripped (common.sh ~9590-9600).
         let spec = if from_pkglist {
-            let word = spec.split_whitespace().next().unwrap_or(spec);
-            let word = word.strip_prefix('/').unwrap_or(word);
-            word.strip_suffix('/').unwrap_or(word)
+            // poudriere(8) reads a pkglist line with `read`, splitting it on
+            // whitespace: only the first word is the origin, whatever comes
+            // after it on the line, comment or not, is never part of it; a
+            // line is a comment, skipped whole, only when that first word is
+            // empty or itself starts with '#' (common.sh ~9590-9593).
+            match spec.split_whitespace().next() {
+                Some(word) if !word.starts_with('#') => word,
+                _ => return Ok(()),
+            }
         } else {
+            // Command-line origins carry no comment syntax of their own.
+            let spec = spec.trim();
+            if spec.is_empty() {
+                return Ok(());
+            }
             spec
         };
+        // poudriere strips one leading and one trailing '/' from a pkglist
+        // line's origin and from one given on the command line alike — a
+        // common typo (common.sh ~9603-9607, ~9590-9600).
+        let spec = spec.strip_prefix('/').unwrap_or(spec);
+        let spec = spec.strip_suffix('/').unwrap_or(spec);
         match PortKey::parse(spec) {
             Some(k) => {
                 // `origin@all` and `origin@-` are kept as given: the scan
@@ -632,6 +640,32 @@ mod tests {
         let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
         let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]);
+    }
+
+    /// poudriere skips a pkglist line whole only when its first word starts
+    /// with '#' (common.sh ~9590-9593); a `#` reached after the origin is
+    /// just more of the line that `read` throws away with the first word,
+    /// not a comment marker of its own.
+    #[test]
+    fn a_pkglist_line_is_a_comment_only_when_its_first_word_is() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "sysutils/tmux #note\n#sysutils/tmux").unwrap();
+        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
+        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        assert_eq!(names, vec!["sysutils/tmux"]);
+    }
+
+    /// poudriere strips one leading and one trailing '/' from a command-line
+    /// origin exactly as from a pkglist line's (common.sh ~9603-9607,
+    /// ~9590-9600): a stray slash on the command line must not be refused
+    /// as a malformed origin.
+    #[test]
+    fn leading_or_trailing_slash_is_stripped_on_the_command_line_too() {
+        let roots =
+            collect_roots(&["/sysutils/tmux".to_string(), "sysutils/tmux/".to_string()], &[])
+                .unwrap();
+        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        assert_eq!(names, vec!["sysutils/tmux"]);
     }
 
     #[test]

@@ -327,9 +327,13 @@ Read port origins from
 .Ar pkglist ,
 one
 .Ar origin Ns Op @ Ns Ar flavor
-per line,
-.Ql #
-starting a comment
+per line, read as
+.Xr poudriere 8
+reads it: a line is a comment, skipped whole, only when its first word
+starts with
+.Ql # ,
+and whatever follows the first word on any other line, comment or not,
+is dropped with it
 .Pq the Xr poudriere 8 pkglist format .
 As
 .Xr poudriere 8
@@ -341,6 +345,10 @@ names every flavor in the port's
 and
 .Ar origin Ns @-
 its default flavor, the bare origin, whatever the build.
+A stray leading or trailing
+.Ql /
+is stripped from an origin, in a pkglist line or on the command line
+alike.
 Repeatable; duplicates across files and command line arguments are dropped.
 .It Fl J Ar jobs , Fl -jobs Ar jobs
 Number of parallel

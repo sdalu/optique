@@ -11,8 +11,12 @@ origins with no subcommand and it opens the interface (see [tui.md](tui.md)).
 ## Choosing the ports
 
 Ports are named as positional `category/name[@flavor]` arguments, read from
-one or more `-f`/`--file` pkglists (one origin per line, `#` starting a
-comment, the poudriere pkglist format), or both at once; `-f` is repeatable.
+one or more `-f`/`--file` pkglists (one origin per line, read as poudriere
+reads it: a line is a comment, skipped whole, only when its first word
+starts with `#`, and anything past the first word on any other line,
+comment or not, is dropped with it — the poudriere pkglist format), or
+both at once; `-f` is repeatable. A stray leading or trailing `/` is
+stripped from an origin, in a pkglist line or on the command line alike.
 As poudriere reads them, `origin@all` names every flavor of the port (its
 `FLAVORS`, queried first; the bare origin for a port without any) and
 `origin@-` its default flavor, the bare origin, whatever the build. A
