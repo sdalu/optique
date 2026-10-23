@@ -352,7 +352,19 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     // Keep the selected row in view: scroll so it sits inside the rows.
     let rows_height = layout.rows.height as usize;
     let selected_line = (banner + (app.editor_idx + 1).min(app.editor_rows.len())).saturating_sub(1);
-    let scroll = selected_line.saturating_sub(rows_height.saturating_sub(1)) as u16;
+    let mut scroll = selected_line.saturating_sub(rows_height.saturating_sub(1));
+    // On the last option, the sections after it (not in this flavor,
+    // obsolete), which the cursor never reaches, come into view as far as
+    // the cursor stays in it.
+    let last_option = app
+        .editor_rows
+        .iter()
+        .skip(app.editor_idx + 1)
+        .all(|r| !matches!(r, EditorRow::Option(_)));
+    if last_option {
+        scroll = scroll.max(lines.len().saturating_sub(rows_height).min(selected_line));
+    }
+    let scroll = scroll as u16;
 
     // The pane's title, and right of it the key that opens this port's
     // pkg-help notes, shown only for the ports that ship one. A long title

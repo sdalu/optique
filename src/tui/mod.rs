@@ -5873,6 +5873,26 @@ mod tests {
         );
     }
 
+    /// The obsolete options, after the last option where the cursor never
+    /// goes, come into view on that last option, on a pane too short to
+    /// hold every row.
+    #[test]
+    fn the_last_option_brings_the_obsolete_section_into_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["OLD1", "OLD2"], &["OLD1"]);
+        let names: Vec<String> = (0..40).map(|i| format!("OPT{i:02}")).collect();
+        let complete: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut app = alpha_app(tmp.path(), &complete);
+        hit(&mut app, KeyCode::Enter);
+        assert!(!screen_at(&mut app, 100, 30).contains("OLD2"), "out of view at the top");
+        hit(&mut app, KeyCode::Char('G'));
+        assert_eq!(cursor(&app), "OPT39");
+        let shown = screen_at(&mut app, 100, 30);
+        for want in ["OPT39", "── obsolete", "OLD1", "OLD2"] {
+            assert!(shown.contains(want), "{want} in view:\n{shown}");
+        }
+    }
+
     /// A STALE line too long for the pane wraps to a second, under its
     /// text, and is cut with `…` past that.
     #[test]

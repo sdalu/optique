@@ -54,7 +54,8 @@ its name, the port's own default (`off`/`on`), and what make.conf says
 of the option when one of its layers names it (blank otherwise).
 `OLDOPT`, which the port's file records but the tree no longer has, is
 named by the `STALE: obsolete OLDOPT` line above the rows and listed
-under `── obsolete`, struck through. The pane's bottom border gives
+under `── obsolete`, struck through, after the last option: the cursor
+stops at that option, and on it the section scrolls into view. The pane's bottom border gives
 the port's staged change, `-DOCS`, and the cursor's place among its
 options, `1/1`. The list's title
 counts the ports listed and, after a `·`, the ports without options the
