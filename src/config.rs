@@ -332,8 +332,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     let (ports, db) = if local { make_defaults() } else { (None, None) };
     // make's own default, which the environment may move as for any make.
     let make_conf = env_path_or("__MAKE_CONF", "/etc/make.conf");
-    let (arch, supported_archs) =
-        if !local && req.jail.is_some() { host_arch() } else { Default::default() };
+    let arch = if !local && req.jail.is_some() { host_arch() } else { Default::default() };
     let host = HostPaths {
         poudriere_conf: Path::new(POUDRIERE_CONF),
         poudriere_d,
@@ -345,15 +344,13 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         pkg_db: &pkg_db,
         env_overlays: &env_overlays(),
         arch: &arch,
-        supported_archs: &supported_archs,
     };
     resolve_host(&host, req, staging_dir)
 }
 
-/// This host's architecture and `kern.supported_archs`, as poudriere asks
-/// them (`get_host_arch`, `need_emulation` in its common.sh); `uname -m`
-/// stands for the list where the sysctl does not answer, as there.
-fn host_arch() -> (String, String) {
+/// This host's architecture, as poudriere's `get_host_arch` writes it
+/// (`uname -m`.`uname -p`, just the one when both agree).
+fn host_arch() -> String {
     let run = |cmd: &str, args: &[&str]| {
         std::process::Command::new(cmd)
             .args(args)
@@ -365,10 +362,7 @@ fn host_arch() -> (String, String) {
             .unwrap_or_default()
     };
     let (m, p) = (run("uname", &["-m"]), run("uname", &["-p"]));
-    let arch = if m == p { p } else { format!("{m}.{p}") };
-    let supported = run("sysctl", &["-n", "kern.supported_archs"]);
-    let supported = if supported.is_empty() { m } else { supported };
-    (arch, supported)
+    if m == p { p } else { format!("{m}.{p}") }
 }
 
 /// `OVERLAYS` from the environment, each made absolute against optique's
@@ -423,11 +417,10 @@ struct HostPaths<'a> {
     /// directory: what make would read for a local build.
     env_overlays: &'a [PathBuf],
     /// The host's architecture as poudriere's `get_host_arch` writes it
-    /// (`uname -m`.`uname -p`, just the one when both agree) and the
-    /// `kern.supported_archs` its `need_emulation` reads: whether a jail is
-    /// a cross build. Asked only when -j names a jail.
+    /// (`uname -m`.`uname -p`, just the one when both agree). Compared
+    /// against a jail's own arch to decide the cross-build lines; asked
+    /// only when -j names a jail.
     arch: &'a str,
-    supported_archs: &'a str,
 }
 
 /// A poudriere build when poudriere.d exists and -l was not given, a local
@@ -710,15 +703,18 @@ fn resolve_poudriere(
 }
 
 /// The make.conf lines that give queries the system of jail `name` rather
-/// than the host's, poudriere reading ports inside the jail: its cross-build
-/// lines where its arch is not the host's (`setup_makeconf` in common.sh,
-/// as poudriere writes them into the jail's make.conf), then `_OSRELEASE`,
-/// `OSREL` and `OSVERSION`, which bsd.port.mk takes from `uname -r` and
-/// /usr/include/sys/param.h, and poudriere's jail gives as its own
-/// (`UNAME_r` from the jail's version, its param.h; ports_env.sh). OSVERSION
-/// is derived from the version when the jail's param.h cannot be read. A
-/// jail whose arch or version poudriere.d does not hold changes nothing:
-/// `notes` says why, for the banner.
+/// than the host's, poudriere reading ports inside the jail: `MACHINE`,
+/// `MACHINE_ARCH` and `ARCH` whenever the jail's MACHINE_ARCH differs from
+/// the host's (`setup_makeconf` in common.sh writes the same lines, but
+/// only where its `need_cross_build` says a cross build runs; optique
+/// writes them whenever the arch differs, since it is always the host's own
+/// `make` that runs the query, never the jail's — see [`machine_arch`]),
+/// then `_OSRELEASE`, `OSREL` and `OSVERSION`, which bsd.port.mk takes from
+/// `uname -r` and /usr/include/sys/param.h, and poudriere's jail gives as
+/// its own (`UNAME_r` from the jail's version, its param.h; ports_env.sh).
+/// OSVERSION is derived from the version when the jail's param.h cannot be
+/// read. A jail whose arch or version poudriere.d does not hold changes
+/// nothing: `notes` says why, for the banner.
 fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec<String>) -> String {
     let dir = poudriere_d.join("jails").join(name);
     let read = |file: &str| fs::read_to_string(dir.join(file)).ok().map(|s| s.trim().to_string());
@@ -753,11 +749,13 @@ fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec
         }
     };
     let mut out = String::new();
-    if need_cross_build(host.arch, &arch, host.supported_archs) {
-        // `${arch%.*}`, `${arch#*.}`: amd64 is amd64 twice, arm64.aarch64 two.
-        let machine = arch.rsplit_once('.').map_or(arch.as_str(), |(m, _)| m);
-        let machine_arch = arch.split_once('.').map_or(arch.as_str(), |(_, a)| a);
-        out.push_str(&format!("MACHINE={machine}\nMACHINE_ARCH={machine_arch}\nARCH=${{MACHINE_ARCH}}\n"));
+    // `${arch%.*}`, `${arch#*.}`: amd64 is amd64 twice, arm64.aarch64 two.
+    let machine = arch.rsplit_once('.').map_or(arch.as_str(), |(m, _)| m);
+    let jail_machine_arch = machine_arch(&arch);
+    if jail_machine_arch != machine_arch(host.arch) {
+        out.push_str(&format!(
+            "MACHINE={machine}\nMACHINE_ARCH={jail_machine_arch}\nARCH=${{MACHINE_ARCH}}\n"
+        ));
     }
     out.push_str(&format!("_OSRELEASE={release}\nOSREL={osrel}\nOSVERSION={osversion}\n"));
     out
@@ -773,19 +771,16 @@ fn freebsd_version(param_h: &Path) -> Option<String> {
     })
 }
 
-/// poudriere's `need_cross_build`: i386 on amd64, powerpc on powerpc64, or
-/// an arch the host's kernel cannot run (`need_emulation`, armv6 running
-/// where armv7 does).
-fn need_cross_build(host_arch: &str, arch: &str, supported_archs: &str) -> bool {
-    let target = arch.rsplit_once('.').map_or(arch, |(t, _)| t);
-    let target_arch = arch.split_once('.').map_or(arch, |(_, a)| a);
-    let host_target_arch = host_arch.split_once('.').map_or(host_arch, |(_, a)| a);
-    let runs = supported_archs.split_whitespace().any(|a| {
-        a == target_arch || (target_arch == "armv6" && a == "armv7")
-    });
-    (target == "i386" && host_arch == "amd64")
-        || (target_arch == "powerpc" && host_target_arch == "powerpc64")
-        || !runs
+/// The MACHINE_ARCH half of a poudriere `arch` string (`<machine>.<machine_arch>`,
+/// or the whole string when MACHINE and MACHINE_ARCH are the same, as for
+/// amd64). Unlike poudriere's `need_cross_build`/`need_emulation`, nothing
+/// here asks what the host's kernel can run natively (`kern.supported_archs`):
+/// poudriere skips the cross-build lines for e.g. an armv7 jail on an arm64
+/// host because it then runs the jail's own 32-bit `make`, but optique
+/// always runs the host's `make`, so a query needs MACHINE_ARCH set to the
+/// jail's whenever it differs from the host's, cross-buildable or not.
+fn machine_arch(arch: &str) -> &str {
+    arch.split_once('.').map_or(arch, |(_, a)| a)
 }
 
 /// A directory is a usable ports tree when it carries the ports framework.
@@ -1361,7 +1356,6 @@ mod tests {
             pkg_db: Path::new("/nonexistent/local.sqlite"),
             env_overlays: &[],
             arch: "amd64",
-            supported_archs: "amd64 i386",
         }
     }
 
@@ -1545,6 +1539,36 @@ mod tests {
         fs::remove_dir_all(pd.join("jails")).unwrap();
         let (conf, notes, _) = staged(&pd);
         assert!(!conf.contains("OSREL") && notes.len() == 1, "{conf}{notes:?}");
+    }
+
+    /// An armv7 jail on an arm64 host still gets its cross-build lines: its
+    /// MACHINE_ARCH (armv7) differs from the host's (aarch64), even though
+    /// the host's kernel can run armv7 natively (poudriere's
+    /// `need_cross_build`/`need_emulation` would skip them there, since it
+    /// then runs the jail's own 32-bit `make`, never done here). An amd64
+    /// jail on an amd64 host, same MACHINE_ARCH, still gets none.
+    #[test]
+    fn an_arm_jail_on_an_arm64_host_still_gets_cross_build_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let req = Request { jail: Some("j"), ..Request::default() };
+        let host = HostPaths { arch: "arm64.aarch64", ..host(tmp.path(), tmp.path(), &ports, tmp.path()) };
+        let staged = |host: &HostPaths, pd: &Path| {
+            let s = resolve_host(&HostPaths { poudriere_d: pd, ..*host }, &req, &stage).unwrap();
+            fs::read_to_string(s.make_conf.unwrap()).unwrap()
+        };
+
+        let pd = fake_jail(tmp.path(), "arm.armv7", "14.3-RELEASE", Some("1403000"));
+        let conf = staged(&host, &pd);
+        assert!(conf.contains("MACHINE=arm\nMACHINE_ARCH=armv7\nARCH=${MACHINE_ARCH}\n"), "{conf}");
+
+        let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE", Some("1403000"));
+        let amd64_host = HostPaths { arch: "amd64", ..host };
+        let conf = staged(&amd64_host, &pd);
+        assert!(!conf.contains("MACHINE"), "{conf}");
     }
 
     /// poudriere appends its hook plugins' make.conf files after the

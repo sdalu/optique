@@ -121,11 +121,14 @@ host's, from poudriere.d's `jails/<jail>/arch`, `version` and `mnt`: the
 prelude sets `_OSRELEASE`, `OSREL` and `OSVERSION` for the jail
 (`OSVERSION` from `__FreeBSD_version` in `<mnt>/usr/include/sys/param.h`,
 else derived from the version, 11.2 giving 1102000, with a note in the
-banner), plus poudriere's cross-build lines `MACHINE`, `MACHINE_ARCH`
-and `ARCH` when the jail's architecture is not the host's. On a 15 host
-an 11.2 jail's security/ca_root_nss offers `ETCSYMLINK`, which the port
-excludes on 15. A jail without an arch or version file leaves the host's
-system, with a note.
+banner), plus the cross-build lines `MACHINE`, `MACHINE_ARCH` and `ARCH`
+whenever the jail's MACHINE_ARCH differs from the host's — including an
+armv6/armv7 jail on an arm64 host the kernel can run directly, where
+poudriere itself skips them because it then runs the jail's own 32-bit
+`make`; optique always runs the host's, so the query still needs the
+jail's MACHINE_ARCH. On a 15 host an 11.2 jail's security/ca_root_nss
+offers `ETCSYMLINK`, which the port excludes on 15. A jail without an
+arch or version file leaves the host's system, with a note.
 
 A [local build](#local-builds) has no jail wrapping at all: queries see
 the host as it is, which is then the machine that builds.

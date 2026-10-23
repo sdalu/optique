@@ -2036,12 +2036,23 @@ in its
 or derived from its version
 .Pq 11.2 gives 1102000
 with a note in the startup banner when that file cannot be read, and, when
-the jail's architecture is not the host's, the
+the jail's
+.Va MACHINE_ARCH
+differs from the host's, the
 .Va MACHINE ,
 .Va MACHINE_ARCH
 and
 .Va ARCH
-lines poudriere writes for a cross build.
+lines poudriere writes for a cross build
+.Po
+including an armv6 or armv7 jail on an arm64 host whose kernel can run it
+directly, where poudriere itself skips them, running the jail's own
+32-bit
+.Xr make 1
+there; optique always runs the host's, so the query still needs the
+jail's
+.Va MACHINE_ARCH
+.Pc .
 A port that excludes an option on some releases
 .Pq Va OPTIONS_EXCLUDE_FreeBSD_15
 thus offers what it offers in the jail.

@@ -54,7 +54,7 @@ not change a result; **known gap**, with what it can change.
 | Hook plugins' `make.conf` after the layers | `setup_makeconf` | matches |
 | Jail prelude: `USE_PACKAGE_DEPENDS`, `BATCH`, `PACKAGE_BUILDING(_FLAVORS)`, `OVERLAYS+=` | `setup_makeconf` | matches |
 | `NO_PACKAGE_BUILDING`, `FLAVOR_DEFAULT_ALL`, read from poudriere.conf's layers | `include_poudriere_confs` | matches for plain assignments; a value set by shell logic is missed — **differs on purpose** |
-| The jail's system: cross-build `MACHINE`/`MACHINE_ARCH`/`ARCH`, the jail's `OSVERSION`/`OSREL` | `setup_makeconf`, `setup_ports_env` | matches under `-j` (from `jails/<j>/arch`, `version`, `mnt`; `OSVERSION` derived from the version, with a note, when the jail's `param.h` is not there) |
+| The jail's system: cross-build `MACHINE`/`MACHINE_ARCH`/`ARCH`, the jail's `OSVERSION`/`OSREL` | `setup_makeconf`, `setup_ports_env`, `need_cross_build` | `OSVERSION`/`OSREL` match under `-j` (from `jails/<j>/arch`, `version`, `mnt`; `OSVERSION` derived from the version, with a note, when the jail's `param.h` is not there); the cross-build lines are written whenever the jail's MACHINE_ARCH differs from the host's, ignoring `kern.supported_archs` — **differs on purpose**: optique always runs the host's own `make`, never the jail's 32-bit one, so an armv6/armv7 jail on an arm64 host still needs them |
 | An empty `/usr/local` | the jail itself | `LOCALBASE=/nonexistent` — **differs on purpose** ("Queries see a jail, not the host") |
 | `FORCE_PACKAGE`, stripped `DEVELOPER=` lines | `setup_makeconf` | not modelled: no option or dependency effect |
 | Blacklist: layers, words, literal match, `@flavor`/`@all`/`@-` | `load_blacklist`, `gather_port_vars_port` | matches |
