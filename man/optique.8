@@ -497,14 +497,27 @@ with its current options, and
 .Sq \[u221E]
 for a port caught in a dependency loop
 .Pq see Sx Dependency loops .
+A row too long for the pane loses its category first, keeping the port's
+name, its
+.Ql @flavor
+and these markers whole, as in
+.Ql multim\[u2026]/ffmpeg@default \[u26A0] ,
+then
+.Ql \[u2026]/ffmpeg@default \[u26A0] ;
+still too long, the end of the name and flavor goes to a
+.Ql \[u2026] ,
+never a marker.
 The list's title counts the ports listed and, when there are any, the
 optionless ones it never shows, as in
 .Ql Ports (21 \[u00B7] 20 optionless) ,
 then the views narrowing it
-.Pq Ql \[em] needs attention , Ql \[em] in a dependency loop ,
-cut with
+.Pq Ql \[em] needs attention , Ql \[em] in a dependency loop .
+When it does not fit, the optionless count goes first, the views being kept
+before it, then the views are named in short
+.Pq Ql \[em] attention , Ql \[em] in a loop ,
+then the rest is cut with
 .Ql \[u2026]
-at a word when it does not fit.
+at a word.
 A filter shows on the list's bottom border, at its right, as
 .Ql filter: TEXT ;
 one too long for the border loses its start to a
@@ -527,8 +540,10 @@ One set by background work
 does not replace a message set since the last key unless it is an error, and
 only an error replaces an error.
 At start the first message sums up what needs doing, as in
-.Ql 3 conflicting \[u00B7] 4 never configured \[u00B7] 2 stale \[em] n: next problem \[u00B7] ?: help ,
-or
+.Ql 3 conflicting \[u00B7] 4 never configured \[u00B7] 2 stale \[em] a: write defaults for all \[u00B7] n: next problem \[u00B7] ?: help ,
+the
+.Ql a:
+part only when some ports were never configured, or
 .Ql all 21 ports are configured \[em] ?: help
 when nothing does.
 .Pp
@@ -651,6 +666,10 @@ marking with
 the flavor whose view owns the shared options file and with
 .Ql \[u2039]
 the flavor shown in the pane.
+A flavor the closure holds, one
+.Ic f
+reaches, is underlined; one the port declares but the closure does not hold
+is plain.
 .Pp
 The pane's bottom border names, on its left, the overlay a port is taken
 from, as
@@ -758,6 +777,10 @@ returns to the list.
 Toggle the selected option, enforcing group rules.
 .Ic Enter
 does nothing in the option pane.
+On the port list
+.Ic Space
+toggles nothing and says
+.Ql Enter: edit the options .
 .It Ic d
 Reset the port to its defaults, from either pane.
 .It Ic U

@@ -80,6 +80,9 @@ fn divider_item(ok: usize, width: usize) -> ListItem<'static> {
 }
 
 fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
+    // The columns a row has for its name and badges, after its two markers
+    // and the blank after them.
+    let name_room = (area.width as usize).saturating_sub(2 + 3);
     let mut items: Vec<ListItem> = app
         .visible
         .iter()
@@ -110,20 +113,24 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 Style::default()
             };
+            let mut badges = Vec::new();
+            if blacklisted {
+                badges.push(Span::styled(" ⊘", Style::default().fg(Color::DarkGray)));
+            }
+            if blocked {
+                badges.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
+            }
+            if app.loop_of(key).is_some() {
+                badges.push(Span::styled(" ∞", Style::default().fg(Color::Red)));
+            }
+            let badge_width: usize = badges.iter().map(Span::width).sum();
+            let name = fit_port_name(key, name_room.saturating_sub(badge_width));
             let mut spans = vec![
                 Span::styled(marker, Style::default().fg(color)),
                 Span::styled(format!("{edited} "), Style::default().fg(Color::Cyan)),
-                Span::styled(key.to_string(), name_style),
+                Span::styled(name, name_style),
             ];
-            if blacklisted {
-                spans.push(Span::styled(" ⊘", Style::default().fg(Color::DarkGray)));
-            }
-            if blocked {
-                spans.push(Span::styled(" ⚠", Style::default().fg(Color::Red)));
-            }
-            if app.loop_of(key).is_some() {
-                spans.push(Span::styled(" ∞", Style::default().fg(Color::Red)));
-            }
+            spans.extend(badges);
             ListItem::new(Line::from(spans))
         })
         .collect();
@@ -132,25 +139,38 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
         items.insert(d, divider_item(app.visible.len() - d, width));
     }
 
-    let mut count = if app.hide_ok {
+    let count = if app.hide_ok {
         format!("{}/{}", app.visible.len(), app.listable)
     } else {
         format!("{}", app.visible.len())
     };
-    // The ports with no options are in the closure but never listed.
-    if app.hidden > 0 {
-        count.push_str(&format!(" · {} optionless", app.hidden));
-    }
-    let mut title = format!(" Ports ({count})");
+    // The view the list is in, long and short: kept before the optionless
+    // count, and shortened before it is cut.
+    let (mut view, mut short) = (String::new(), String::new());
     if app.only_loops {
-        title.push_str(" — in a dependency loop");
+        view.push_str(" — in a dependency loop");
+        short.push_str(" — in a loop");
     }
     if app.hide_ok {
-        title.push_str(" — needs attention");
+        view.push_str(" — needs attention");
+        short.push_str(" — attention");
     }
-    title.push(' ');
     let room = area.width.saturating_sub(2) as usize;
-    let title = fit_title(&title, room);
+    let fits = |t: &str| Line::from(t).width() <= room;
+    // The ports with no options are in the closure but never listed; their
+    // count goes first when the title does not fit, then the view's long
+    // wording, and only then is the rest cut.
+    let full = format!(" Ports ({count} · {} optionless){view} ", app.hidden);
+    let long = format!(" Ports ({count}){view} ");
+    let brief = format!(" Ports ({count}){short} ");
+    let title = if app.hidden > 0 && fits(&full) {
+        full
+    } else if fits(&long) {
+        long
+    } else {
+        // A cut never ends on a view's dash: `in a loop…`, not `in a loop —…`.
+        fit_title(&brief, room).replace(" —…", "…")
+    };
     let (border_style, border_type) =
         pane_border(app.focus == Focus::List || app.focus == Focus::Filter);
     let mut block = Block::default()
@@ -180,6 +200,26 @@ fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.page.list = area.height.saturating_sub(2);
 }
 
+/// A list row's `category/name[@flavor]` in `room` columns: whole when it
+/// fits, else the category is cut first (`multim…/ffmpeg@default`, then
+/// `…/ffmpeg@default`), and only then the end of the name and flavor.
+pub(crate) fn fit_port_name(key: &crate::model::origin::PortKey, room: usize) -> String {
+    let full = key.to_string();
+    let width = |s: &str| Line::from(s).width();
+    if width(&full) <= room {
+        return full;
+    }
+    let (category, rest) = full.split_once('/').unwrap_or(("", full.as_str()));
+    // `…/` and the rest, with what is left of the category before them.
+    match room.checked_sub(width(rest) + 2) {
+        Some(keep) => {
+            let head: String = category.chars().take(keep).collect();
+            format!("{head}…/{rest}")
+        }
+        None => format!("…/{}", fit_end(rest, room.saturating_sub(2))),
+    }
+}
+
 /// Draw the option pane; returns how many option rows it showed.
 fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     let (border_style, border_type) = pane_border(app.focus == Focus::Editor);
@@ -195,10 +235,12 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     };
     let info = &app.session.ports[&key];
     // The versioned package names the port; its origin is the list's row.
-    let title = match flavor_summary(app, info) {
-        Some(flavors) => format!(" {} · flavors: {} ", info.pkgname, flavors),
-        None => format!(" {} ", info.pkgname),
-    };
+    let mut title = vec![Span::raw(format!(" {} ", info.pkgname))];
+    if let Some(flavors) = flavor_summary(app, info) {
+        title = vec![Span::raw(format!(" {} · flavors: ", info.pkgname))];
+        title.extend(flavors);
+        title.push(Span::raw(" "));
+    }
 
     // Text width of the pane: the rows are cut at it, so the row builder needs
     // it to decide whether a description still fits (the detail panel splits
@@ -327,7 +369,7 @@ fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
             Line::from(Span::styled(marker, key_hint())).right_aligned(),
         );
     }
-    block = block.title(fit_title(&title, room));
+    block = block.title(fit_title_line(Line::from(title), room));
     let (left, right) = editor_footer(app, info, &key.origin, (area.width as usize).saturating_sub(2));
     if let Some(left) = left {
         block = block.title_bottom(Line::from(left));
@@ -674,12 +716,30 @@ fn ellipsize(line: &mut Line<'static>, width: usize) -> bool {
 /// A border title (a blank at each end) fitted to `room` columns: cut at a
 /// word with `…` when it is wider, its closing blank kept.
 fn fit_title(title: &str, room: usize) -> String {
-    if Line::from(title).width() <= room {
-        return title.to_string();
+    fit_title_line(Line::from(title.to_string()), room).to_string()
+}
+
+/// The same for a title of styled spans: the `…` takes the style of the
+/// text it follows, the closing blank is plain.
+fn fit_title_line(mut line: Line<'static>, room: usize) -> Line<'static> {
+    if line.width() <= room {
+        return line;
     }
-    let mut line = Line::from(title.trim_end().to_string());
+    // The closing blank goes, and a span it leaves with nothing.
+    let mut n = line.spans.len();
+    while let Some(span) = line.spans.last_mut() {
+        let text = span.content.trim_end().to_string();
+        if text.is_empty() && n > 1 {
+            line.spans.pop();
+            n -= 1;
+            continue;
+        }
+        span.content = text.into();
+        break;
+    }
     ellipsize(&mut line, room.saturating_sub(1));
-    format!("{line} ")
+    line.spans.push(Span::raw(" "));
+    line
 }
 
 /// `head`, `text` and `tail` in `room` columns: whole when they fit, else
@@ -773,28 +833,42 @@ fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
 }
 
 /// The flavors of this port, marking the current one (`‹`) and the one whose
-/// view owns the shared options file (`*`). None when the port is unflavored.
-fn flavor_summary(app: &App, info: &PortInfo) -> Option<String> {
+/// view owns the shared options file (`*`), blank-separated; a flavor the
+/// closure holds — one `f` reaches — is underlined, an attribute rather than
+/// a colour, so it reads in a pane without focus and without colour. None
+/// when the port is unflavored.
+fn flavor_summary(app: &App, info: &PortInfo) -> Option<Vec<Span<'static>>> {
     if info.flavors.is_empty() {
         return None;
     }
     let owner = app.session.owner_info(info).canonical.flavor.clone();
     let current = info.canonical.flavor.clone();
-    let marked: Vec<String> = info
-        .flavors
-        .iter()
-        .map(|f| {
-            let mut s = f.clone();
-            if owner.as_deref() == Some(f.as_str()) {
-                s.push('*');
-            }
-            if current.as_deref() == Some(f.as_str()) {
-                s.push('‹');
-            }
-            s
-        })
-        .collect();
-    Some(marked.join(" "))
+    let present: Vec<Option<String>> =
+        app.session.siblings(&info.canonical).into_iter().map(|k| k.flavor).collect();
+    let mut spans = Vec::new();
+    for (i, f) in info.flavors.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+        let style = if present.iter().any(|p| p.as_deref() == Some(f.as_str())) {
+            Style::default().add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(f.clone(), style));
+        // The marks stay out of the underline: they are not the name.
+        let mut marks = String::new();
+        if owner.as_deref() == Some(f.as_str()) {
+            marks.push('*');
+        }
+        if current.as_deref() == Some(f.as_str()) {
+            marks.push('‹');
+        }
+        if !marks.is_empty() {
+            spans.push(Span::raw(marks));
+        }
+    }
+    Some(spans)
 }
 
 /// The port owning this one's options file, when that is a *different* port —
@@ -1619,6 +1693,11 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
                     "the flavor whose view owns the shared options file",
                 ),
                 legend("flavor‹", Style::default(), "the flavor shown in the pane"),
+                legend(
+                    "flavor",
+                    Style::default().add_modifier(Modifier::UNDERLINED),
+                    "underlined: in the closure, f reaches it; plain: not held",
+                ),
                 legend("[h] notes", key_hint(), "the port ships notes (pkg-help) — h reads them"),
                 blank(),
                 head("On the pane's bottom border"),
@@ -1650,7 +1729,7 @@ fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
             keyline("j/k ↑/↓", "move · g/G first/last · the same keys scroll every popup"),
             keyline("PgUp/PgDn", "page up / down · also Ctrl-B / Ctrl-F"),
             keyline("Enter", "edit selected port · Esc/Tab/← back to the list"),
-            keyline("Space", "toggle option (group rules enforced)"),
+            keyline("Space", "toggle option (group rules enforced), in the option pane"),
             keyline("d / U", "reset port to defaults / revert to saved state"),
             keyline("u", "undo the last change on any port: Space, d, U, B, a restored draft"),
             keyline("B", "bulk: set an option on/off across the listed ports · Ctrl-U clears"),
@@ -2624,9 +2703,11 @@ no library.")),
         let row = text(1);
         assert!(row.contains("flavor* = the flavor whose view owns the shared options file"), "{row}");
         assert!(row.contains("flavor‹ = the flavor shown in the pane"), "{row}");
+        assert!(row.contains("flavor = underlined: in the closure, f reaches it"), "{row}");
         assert!(row.contains("[h] notes = the port ships notes (pkg-help)"), "{row}");
         assert!(row.contains("30 rows or more") && row.contains("V shows or hides it until you quit"), "{row}");
         let keys = text(2);
+        assert!(keys.contains("toggle option (group rules enforced), in the option pane"), "{keys}");
         for want in ["Ctrl-B / Ctrl-F", "Ctrl-U clears", "  u ", "d / U", "  V ", "  v ", "  h "] {
             assert!(keys.contains(want), "{want:?} in\n{keys}");
         }

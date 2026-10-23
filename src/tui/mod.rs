@@ -896,6 +896,8 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('i') => {
             app.flash("i: option details, in the option pane (Enter) — v: port description", false)
         }
+        // Space toggles an option, and the list highlights none.
+        KeyCode::Char(' ') => app.flash("Enter: edit the options", false),
         // Esc lets go of a filter left on the list.
         KeyCode::Esc if !app.filter.is_empty() => {
             app.filter.clear();
@@ -1756,7 +1758,10 @@ impl App {
             items.push(format!("all {} ports are configured", self.visible.len()));
             vec!["?: help".to_string()]
         } else {
-            vec![next.to_string(), "?: help".to_string()]
+            // The ports never configured take their defaults in one go.
+            let defaults = (counts[UiStatus::Unconfigured as usize] > 0)
+                .then(|| "a: write defaults for all".to_string());
+            defaults.into_iter().chain([next.to_string(), "?: help".to_string()]).collect()
         };
         let summary = Summary { draft, items, hints };
         self.flash(&summary.fit(usize::MAX), false);
@@ -2272,6 +2277,40 @@ mod tests {
         let body = title.trim_start().trim_end_matches('…');
         let full = "alpha-with-a-long-package-name-1.0.0_1,1 · flavors: py311*‹ py312";
         assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+    }
+
+    /// In the option pane's title, a flavor the closure holds is underlined
+    /// and one it does not hold is plain — focused or not, since underline is
+    /// an attribute rather than a colour; the marks are never underlined.
+    #[test]
+    fn the_pane_title_underlines_the_flavors_in_the_closure() {
+        use ratatui::style::Modifier;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha@py311", &[]), ("cat/alpha@py312", &[])]);
+        for f in ["py311", "py312"] {
+            let key = PortKey::parse(&format!("cat/alpha@{f}")).unwrap();
+            app.session.ports.get_mut(&key).unwrap().flavors = vec!["py311".into(), "py312".into(), "py313".into()];
+        }
+        for focused in [true, false] {
+            if focused {
+                hit(&mut app, KeyCode::Enter);
+            } else {
+                hit(&mut app, KeyCode::Esc);
+            }
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+            terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let top = ui::screen_rows(&buffer)[0].clone();
+            assert!(top.contains("alpha-1.0 · flavors: py311*‹ py312 py313 "), "{top}");
+            let underlined = |text: &str| {
+                let col = top[..top.find(text).unwrap()].chars().count() as u16;
+                buffer[(col, 0)].modifier.contains(Modifier::UNDERLINED)
+            };
+            assert!(underlined("py311"), "focused {focused}: in the closure, current");
+            assert!(underlined("py312"), "focused {focused}: in the closure");
+            assert!(!underlined("py313"), "focused {focused}: not in the closure");
+            assert!(!underlined("*‹"), "focused {focused}: the marks are not the name");
+        }
     }
 
     /// A port of two options, NAME_A and NAME_B, under an overlay named
@@ -3201,6 +3240,19 @@ mod tests {
         );
         press(&mut app, 'v');
         assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"));
+    }
+
+    /// Space on the list toggles nothing: it says which key edits.
+    #[test]
+    fn space_on_the_list_says_enter_edits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.clear_message();
+        press(&mut app, ' ');
+        assert!(app.focus == Focus::List);
+        assert!(!app.session.dirty() && app.undo.is_empty(), "Space on the list toggles nothing");
+        assert_eq!(app.message.clone(), Some(("Enter: edit the options".into(), false)));
+        assert!(status_row(&mut app, 80).starts_with(" Enter: edit the options"), "{}", status_row(&mut app, 80));
     }
 
     /// vi's l is no key: not into the option pane, not a jump in why.
@@ -4145,7 +4197,7 @@ mod tests {
         assert!(draft::load(&app.options_dir).is_none());
         assert_eq!(
             app.message.as_ref().map(|(m, _)| m.as_str()),
-            Some("1 never configured — n: next problem · ?: help"),
+            Some("1 never configured — a: write defaults for all · n: next problem · ?: help"),
             "no draft to speak of"
         );
     }
@@ -5092,6 +5144,99 @@ mod tests {
         assert!(shown.contains("╔ Ports (2/3 · 151 optionless) — needs attention "), "{shown}");
     }
 
+    /// A list row too long for the pane loses its category first, then the
+    /// end of its name, never a badge; a row that fits is left alone.
+    #[test]
+    fn a_long_list_row_cuts_its_category_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ffmpeg = "multimedia/ffmpeg@default";
+        let libav = "multimedia/gstreamer1-libav@default";
+        let good = "multimedia/gstreamer1-plugins-good@default";
+        let mut app = app_for(
+            tmp.path(),
+            &[(ffmpeg, &[]), (libav, &[]), (good, &["cat/b"]), ("cat/b", &[good]), ("cat/a", &[])],
+        );
+        for origin in [ffmpeg, libav, good] {
+            let key = PortKey::parse(origin).unwrap();
+            app.session.ports.get_mut(&key).unwrap().broken = Some("fails".into());
+        }
+        app.clear_message();
+        // The list pane's rows, between its borders.
+        let rows = |app: &mut App, width: u16| -> Vec<String> {
+            screen_at(app, width, 24)
+                .lines()
+                .skip(1)
+                .map(|l| l.split('║').nth(1).unwrap_or_default().trim_end().to_string())
+                .filter(|r| !r.is_empty() && !r.starts_with('═'))
+                .collect()
+        };
+        let at80 = rows(&mut app, 80);
+        assert!(at80.iter().any(|r| r.ends_with(" cat/a")), "{at80:?}");
+        assert!(at80.iter().any(|r| r.ends_with(" multimedia/ffmpeg@default ⚠")), "fits, unchanged: {at80:?}");
+        assert!(at80.iter().any(|r| r.ends_with(" m…/gstreamer1-libav@default ⚠")), "{at80:?}");
+        assert!(at80.iter().any(|r| r.ends_with(" …/gstreamer1-plugins-goo… ⚠ ∞")), "{at80:?}");
+        let at60 = rows(&mut app, 60);
+        assert!(at60.iter().any(|r| r.ends_with(" mu…/ffmpeg@default ⚠")), "{at60:?}");
+        assert!(at60.iter().any(|r| r.ends_with(" …/gstreamer1-liba… ⚠")), "{at60:?}");
+        assert!(at60.iter().any(|r| r.ends_with(" …/gstreamer1-pl… ⚠ ∞")), "{at60:?}");
+        // Every row in its pane, its markers in their two columns.
+        for r in at60.iter().chain(&at80) {
+            assert!(r.chars().nth(2) == Some(' '), "{r}");
+        }
+        assert!(at60.iter().all(|r| r.chars().count() <= 23), "{at60:?}");
+    }
+
+    /// The name of a list row in a given room, cut as the row cuts it.
+    #[test]
+    fn fit_port_name_cuts_the_category_then_the_end() {
+        let key = PortKey::parse("multimedia/ffmpeg@default").unwrap();
+        assert_eq!(ui::fit_port_name(&key, 25), "multimedia/ffmpeg@default");
+        assert_eq!(ui::fit_port_name(&key, 22), "multim…/ffmpeg@default");
+        assert_eq!(ui::fit_port_name(&key, 17), "m…/ffmpeg@default");
+        assert_eq!(ui::fit_port_name(&key, 16), "…/ffmpeg@default");
+        assert_eq!(ui::fit_port_name(&key, 15), "…/ffmpeg@defau…");
+        let plain = PortKey::parse("www/nginx").unwrap();
+        assert_eq!(ui::fit_port_name(&plain, 8), "w…/nginx");
+        assert_eq!(ui::fit_port_name(&plain, 7), "…/nginx");
+    }
+
+    /// Too long for the pane, the list's title drops the optionless count,
+    /// then names its view in short, and only then cuts.
+    #[test]
+    fn the_list_title_keeps_its_view_before_the_optionless_count() {
+        let top = |app: &mut App, width| screen_at(app, width, 24).lines().next().unwrap().to_string();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = three_ports(tmp.path());
+        app.clear_message();
+        app.hidden = 151;
+        press(&mut app, 't');
+        app.listable = 142;
+        let shown = top(&mut app, 90);
+        assert!(shown.starts_with("╔ Ports (2/142) — needs attention ═"), "{shown}");
+        // At 80 columns the pane has 32 for its title: the view in short.
+        let shown = top(&mut app, 80);
+        assert!(shown.starts_with("╔ Ports (2/142) — attention ═"), "{shown}");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut looped = looped_app(tmp.path());
+        looped.clear_message();
+        looped.hidden = 151;
+        press(&mut looped, 'L');
+        let shown = top(&mut looped, 90);
+        assert!(shown.starts_with("╔ Ports (2) — in a dependency loop ═"), "{shown}");
+        let shown = top(&mut looped, 80);
+        assert!(shown.starts_with("╔ Ports (2) — in a loop ═"), "{shown}");
+        // Wide enough, the count is back.
+        let shown = top(&mut looped, 200);
+        assert!(shown.starts_with("╔ Ports (2 · 151 optionless) — in a dependency loop ═"), "{shown}");
+        // Both views: in short, cut at a word when even that is too long.
+        press(&mut looped, 't');
+        let shown = top(&mut looped, 100);
+        assert!(shown.starts_with("╔ Ports (2/2) — in a loop — attention ═"), "{shown}");
+        let shown = top(&mut looped, 80);
+        assert!(shown.starts_with("╔ Ports (2/2) — in a loop… ═"), "never a dangling dash: {shown}");
+    }
+
     /// News from the background waits for the line: it does not replace a
     /// message nobody has had a key's time to read, unless it is an error,
     /// and nothing but an error replaces an error.
@@ -5152,19 +5297,38 @@ mod tests {
         make_conflict(&mut app, "cat/alpha");
         app.rebuild_visible(None);
         app.show_summary(None);
+        let full = "1 conflicting · 2 never configured · 1 stale — a: write defaults for all · n: next problem · ?: help";
+        assert_eq!(app.message, Some((full.to_string(), false)));
+        assert_eq!(status_row(&mut app, 102).trim_end(), format!(" {full}"));
+        // The keys go from the right, whole, before the counts do.
         assert_eq!(
-            app.message,
-            Some(("1 conflicting · 2 never configured · 1 stale — n: next problem · ?: help".to_string(), false))
+            status_row(&mut app, 100).trim_end(),
+            " 1 conflicting · 2 never configured · 1 stale — a: write defaults for all · n: next problem …"
         );
         assert_eq!(
             status_row(&mut app, 80).trim_end(),
-            " 1 conflicting · 2 never configured · 1 stale — n: next problem · ?: help"
+            " 1 conflicting · 2 never configured · 1 stale — a: write defaults for all …"
         );
-        // Cut at a whole token on a narrow screen.
-        assert_eq!(
-            status_row(&mut app, 50).trim_end(),
-            " 1 conflicting · 2 never configured · 1 stale …"
-        );
+        assert_eq!(status_row(&mut app, 60).trim_end(), " 1 conflicting · 2 never configured · 1 stale …");
+        assert_eq!(status_row(&mut app, 40).trim_end(), " 1 conflicting · 2 never configured …");
+
+        // No port never configured: no `a` to offer.
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = tmp.path().join("options/cat_beta");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n")
+            .unwrap();
+        let ok = tmp.path().join("options/cat_alpha");
+        std::fs::create_dir_all(&ok).unwrap();
+        std::fs::write(ok.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
+        let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+        make_conflict(&mut app, "cat/alpha");
+        app.rebuild_visible(None);
+        app.show_summary(None);
+        let full = "1 conflicting · 1 stale — n: next problem · ?: help";
+        assert_eq!(app.message, Some((full.to_string(), false)));
+        assert_eq!(status_row(&mut app, 60).trim_end(), format!(" {full}"));
+        assert_eq!(status_row(&mut app, 40).trim_end(), " 1 conflicting · 1 stale …");
 
         let tmp = tempfile::tempdir().unwrap();
         for name in ["cat_alpha", "cat_beta"] {
@@ -5191,12 +5355,22 @@ mod tests {
         let mut app = three_ports(tmp.path());
         assert_eq!(
             app.message.clone().unwrap().0,
-            "restored draft (1 port, 0m ago, U per port reverts) · 2 never configured — n: next · ?: help"
+            "restored draft (1 port, 0m ago, U per port reverts) · 2 never configured — a: write defaults for all · n: next · ?: help"
         );
         assert_eq!(
-            status_row(&mut app, 80).trim_end(),
-            " restored draft (1 port, 0m ago) · 2 never configured — n: next · ?: help"
+            status_row(&mut app, 102).trim_end(),
+            " restored draft (1 port, 0m ago) · 2 never configured — a: write defaults for all · n: next · ?: help"
         );
+        assert_eq!(
+            status_row(&mut app, 100).trim_end(),
+            " restored draft (1 port, 0m ago) · 2 never configured — a: write defaults for all · n: next …"
+        );
+        assert_eq!(
+            status_row(&mut app, 84).trim_end(),
+            " restored draft (1 port, 0m ago) · 2 never configured — a: write defaults for all …"
+        );
+        assert_eq!(status_row(&mut app, 80).trim_end(), " restored draft (1 port, 0m ago) · 2 never configured …");
+        assert_eq!(status_row(&mut app, 60).trim_end(), " restored draft (1 port, 0m ago) · 2 never configured …");
         assert_eq!(status_row(&mut app, 40).trim_end(), " restored draft (1 port, 0m ago) …");
         assert_eq!(status_row(&mut app, 20).trim_end(), " restored draft (1 p", "kept whole, cut by the edge");
         let summary = app.summary.as_ref().unwrap();
@@ -5212,7 +5386,7 @@ mod tests {
         app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
         let (ev, _req) = fake_refresher(&mut app);
         let first = app.message.clone();
-        assert_eq!(first.as_ref().unwrap().0, "2 never configured — n: next problem · ?: help");
+        assert_eq!(first.as_ref().unwrap().0, "2 never configured — a: write defaults for all · n: next problem · ?: help");
         let mut alpha = info_of(&app, "cat/alpha");
         alpha.deps.clear();
         app.hidden = 7;

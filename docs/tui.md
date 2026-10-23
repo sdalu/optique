@@ -59,7 +59,12 @@ the port's staged change, `-DOCS`, and the cursor's place among its
 options, `1/1`. The list's title
 counts the ports listed and, after a `·`, the ports without options the
 list never shows (`Ports (21 · 20 optionless)`; the part is left out when
-there are none). The pane with the focus has a double border, the other a
+there are none), then the view it is in, `— needs attention` under `t`
+and `— in a dependency loop` under `L`. Too long for the pane, the title
+drops the optionless count first, the view being kept before it, then
+names the view in short — `— attention`, `— in a loop` — and only then
+loses its end to a `…` at a word: `Ports (8/142) — attention` at 80
+columns under `t`. The pane with the focus has a double border, the other a
 single one. The bottom line is the status bar: how many ports are in
 each state, and how many of them are edited (`0✗ 1* 1? 1! 19✓`) — then,
 when there are any, the ports caught in a dependency loop (`2∞ L:loops`)
@@ -87,8 +92,11 @@ At start, once the closure is scanned, the first message sums up what
 needs doing, in list order, leaving out what is at zero:
 
 ```text
-3 conflicting · 4 never configured · 2 stale — n: next problem · ?: help
+3 conflicting · 4 never configured · 2 stale — a: write defaults for all · n: next problem · ?: help
 ```
+
+`a: write defaults for all` shows only when some ports were never
+configured: the apply writes them their defaults in one go.
 
 and, with nothing to do, `all 21 ports are configured — ?: help`. When a
 draft was restored (see [Quitting and drafts](#quitting-and-drafts)), it
@@ -96,13 +104,14 @@ comes first on the same line, with how many ports it staged again and how
 old it is:
 
 ```text
-restored draft (2 ports, 5m ago, U per port reverts) · 3 conflicting · 4 never configured — n: next · ?: help
+restored draft (2 ports, 5m ago, U per port reverts) · 3 conflicting · 4 never configured — a: write defaults for all · n: next · ?: help
 ```
 
 On a screen too narrow for the whole line, `U per port reverts` goes
-first, then the rest is cut at a whole part with `…`; the draft's count
-and age always stay. Being a message set before the first key, the
-summary stays up through the re-query a restored draft starts.
+first, then the rest is cut at a whole part with `…`, the keys from the
+right before any count; the draft's count and age always stay. Being a
+message set before the first key, the summary stays up through the
+re-query a restored draft starts.
 
 ## Port markers
 
@@ -147,6 +156,11 @@ Three further markers may trail the port's name:
 | `⊘`    | blacklisted for this jail, tree and set — never needs attention           |
 | `⚠`    | the port is `BROKEN` or `IGNORE`d with its current options                |
 | `∞`    | caught in a dependency loop — see [Dependency loops](dependency-loops.md) |
+
+A row too long for the pane loses its category first, the port's name,
+its `@flavor` and these markers kept whole: `multim…/ffmpeg@default ⚠`,
+then `…/ffmpeg@default ⚠`. Still too long, the end of the name and flavor
+goes to a `…`; a marker never does. A row that fits is left as it is.
 
 ## The option pane
 
@@ -233,7 +247,10 @@ fit. A flavored port's title
 lists its flavors after `flavors:`, marking with `*` the flavor whose view
 owns the shared options file and with `‹` the flavor shown in the pane:
 `flavors: py311* py312‹` is the `py312` view of a file the `py311` view
-owns.
+owns. A flavor the closure holds is underlined — `f` reaches it; one the
+port declares but the closure does not hold is plain. Underline is an
+attribute, not a colour, so it reads whether the pane has the focus or
+not.
 
 The pane's bottom border carries what is not a row. On its left,
 `overlay: NAME` for a port an overlay answers for rather than the ports
@@ -358,8 +375,9 @@ Keys are grouped here as the in-TUI help (`?`/`F1`) groups them.
 | `r`                              | why is this port here? (`Enter` jumps, `r` walks)         |
 
 `Space` alone toggles: `Enter` takes the list into the option pane and
-does nothing once there. From the option pane, `n` and `p` move to the
-port and keep the pane. Entering the pane, and reaching another port from
+does nothing once there. On the port list `Space` toggles nothing and
+says so: `Enter: edit the options`. From the option pane, `n` and `p`
+move to the port and keep the pane. Entering the pane, and reaching another port from
 it — `n`, `p` or a jump from `r` — puts the cursor on the port's first
 option needing attention: for a conflicting port, the first member, in row
 order, of the first rule it breaks; else, for a stale one, its first new
