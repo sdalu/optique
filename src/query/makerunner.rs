@@ -21,6 +21,9 @@ pub struct QueryCtx {
     pub overlays: Vec<PathBuf>,
     /// Whose `USER` and `HOME` the query sees.
     pub identity: Identity,
+    /// The framework's `_EXPORTED_VARS` as [`framework_values`] found them,
+    /// given on every query's command line.
+    pub framework: Vec<(String, String)>,
 }
 
 /// Who runs the query, as far as make can tell from the environment:
@@ -131,30 +134,18 @@ fn identity_env(
     }
 }
 
-/// Run the wrapper makefile for one port@flavor and parse the dump.
-pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
-    let Some(portdir) = ctx.locate(&key.origin) else {
-        let missing = ctx.portsdir.join(&key.origin).join("Makefile");
-        match ctx.overlays.len() {
-            0 => anyhow::bail!("no such port: {} ({} missing)", key.origin, missing.display()),
-            n => anyhow::bail!(
-                "no such port: {} (not in {}, nor in {n} overlay(s))",
-                key.origin,
-                ctx.portsdir.display()
-            ),
-        }
-    };
-
+/// `make -C dir` as every query runs it: the tree, the options dir and the
+/// make.conf given, and nothing of optique's environment but what any make
+/// needs; stdin, stdout and stderr piped.
+fn make_command(ctx: &QueryCtx, dir: &Path) -> Command {
     // Given rather than left to make, which would take a PORTSDIR from the
     // environment or /etc/make.conf over this tree; resolved as make's own
     // autodetection from the port's directory would (`:tA`).
     let portsdir = ctx.portsdir.canonicalize().unwrap_or_else(|_| ctx.portsdir.clone());
     let mut cmd = Command::new("/usr/bin/make");
     cmd.arg("-C")
-        .arg(&portdir)
-        .args(["-f", "/dev/stdin", "optique-config"])
+        .arg(dir)
         .arg(format!("PORTSDIR={}", portsdir.display()))
-        .arg(format!("PORTDIR={}", portdir.display()))
         .arg(format!("PORT_DBDIR={}", ctx.port_dbdir.display()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -179,6 +170,57 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     if let Some(conf) = &ctx.make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
+    cmd
+}
+
+/// The framework's `_EXPORTED_VARS`, read once from the probe port of
+/// [`wrapper::FRAMEWORK_PROBE`] under `ctx`'s tree, make.conf and
+/// environment, for [`QueryCtx::framework`]: given on each query's command
+/// line, they spare it bsd.port.mk's `uname`, `sysctl`, param.h, pkg(8)
+/// and perl probes, as bsd.port.mk spares its own sub-makes. A value that
+/// make would expand again is left out, and so is everything when make
+/// fails: the queries then probe for themselves, as before.
+pub fn framework_values(ctx: &QueryCtx) -> Vec<(String, String)> {
+    let mut cmd = make_command(ctx, &ctx.portsdir);
+    cmd.args(["-f", "/dev/stdin", "optique-probe"]);
+    let Ok(mut child) = cmd.spawn() else { return Vec::new() };
+    let fed = child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(wrapper::FRAMEWORK_PROBE.as_bytes());
+    let Ok(out) = child.wait_with_output() else { return Vec::new() };
+    if fed.is_err() || !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stderr);
+    text.lines()
+        .filter_map(|line| {
+            let rest = &line[line.find("OPTIQUE|")? + "OPTIQUE|".len()..];
+            let (var, value) = rest.split_once('|')?;
+            (!var.is_empty() && !value.contains('$')).then(|| (var.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// Run the wrapper makefile for one port@flavor and parse the dump.
+pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
+    let Some(portdir) = ctx.locate(&key.origin) else {
+        let missing = ctx.portsdir.join(&key.origin).join("Makefile");
+        match ctx.overlays.len() {
+            0 => anyhow::bail!("no such port: {} ({} missing)", key.origin, missing.display()),
+            n => anyhow::bail!(
+                "no such port: {} (not in {}, nor in {n} overlay(s))",
+                key.origin,
+                ctx.portsdir.display()
+            ),
+        }
+    };
+
+    let mut cmd = make_command(ctx, &portdir);
+    cmd.args(["-f", "/dev/stdin", "optique-config"])
+        .arg(format!("PORTDIR={}", portdir.display()))
+        .args(ctx.framework.iter().map(|(var, value)| format!("{var}={value}")));
     if let Some(flavor) = &key.flavor {
         cmd.arg(format!("FLAVOR={flavor}"));
     }
@@ -408,6 +450,7 @@ mod tests {
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Invoker,
+            framework: Vec::new(),
         };
         (tmp, ctx)
     }
@@ -448,6 +491,7 @@ mod tests {
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Root,
+            framework: Vec::new(),
         };
         let key = PortKey::parse("cat/env").unwrap();
         std::fs::write(dir.join("Makefile"), makefile("root", "/root")).unwrap();
@@ -468,6 +512,75 @@ mod tests {
         assert_eq!(root, [("USER", "root".into()), ("HOME", "/root".into())]);
         assert_eq!(identity_env(Identity::Invoker, invoker), [("USER", "alice".into())]);
         assert!(identity_env(Identity::Invoker, |_| None).is_empty());
+    }
+
+    /// A tree whose Mk/bsd.port.mk is `framework`, and a context on it.
+    fn framework_tree(framework: &str) -> (tempfile::TempDir, QueryCtx) {
+        let tmp = tempfile::tempdir().unwrap();
+        let mk = tmp.path().join("ports/Mk");
+        std::fs::create_dir_all(&mk).unwrap();
+        std::fs::write(mk.join("bsd.port.mk"), framework).unwrap();
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+            identity: Identity::Invoker,
+            framework: Vec::new(),
+        };
+        (tmp, ctx)
+    }
+
+    /// The probe reports every non-empty `_EXPORTED_VARS` value, spaces
+    /// kept, sorted, and leaves out an empty one, as bsd.port.mk does, and
+    /// one make would expand again.
+    #[test]
+    fn framework_values_are_the_probes_exported_vars() {
+        let _lock = make_test_lock();
+        let (_tmp, ctx) = framework_tree(
+            "ARCH=amd64\nPAIR=a b\nEMPTY=\nDOLLAR=$${HOME}\n\
+             _EXPORTED_VARS+=PAIR ARCH EMPTY DOLLAR UNSET\n",
+        );
+        let got = framework_values(&ctx);
+        let want = [("ARCH", "amd64"), ("PAIR", "a b")].map(|(v, x)| (v.to_string(), x.to_string()));
+        assert_eq!(got, want);
+    }
+
+    /// An IGNOREd probe, or one make fails on, reports nothing: the
+    /// queries then probe for themselves.
+    #[test]
+    fn framework_values_are_none_from_an_ignored_or_failed_probe() {
+        let _lock = make_test_lock();
+        let checked = "_PKG_CHECKED=1\n_EXPORTED_VARS+=_PKG_CHECKED\n";
+        let (_tmp, ctx) = framework_tree(&format!("{checked}IGNORE=old pkg\n"));
+        assert!(framework_values(&ctx).is_empty());
+        let (_tmp, ctx) = framework_tree(&format!("{checked}.error broken\n"));
+        assert!(framework_values(&ctx).is_empty());
+        let (_tmp, ctx) = framework_tree("");
+        std::fs::remove_file(ctx.portsdir.join("Mk/bsd.port.mk")).unwrap();
+        assert!(framework_values(&ctx).is_empty());
+    }
+
+    /// A query gets the framework values on its command line, where they
+    /// win over the port's own assignment as on a sub-make's `.MAKEFLAGS`.
+    #[test]
+    fn a_query_is_given_the_framework_values() {
+        let _lock = make_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("ports/cat/fw");
+        std::fs::create_dir_all(&dir).unwrap();
+        let makefile = "OSREL=0\nPKGNAME=${OSREL}-${PAIR:ts_}-1.0\n";
+        std::fs::write(dir.join("Makefile"), makefile).unwrap();
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().to_path_buf(),
+            overlays: Vec::new(),
+            identity: Identity::Invoker,
+            framework: vec![("OSREL".into(), "15.1".into()), ("PAIR".into(), "a b".into())],
+        };
+        let key = PortKey::parse("cat/fw").unwrap();
+        assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "15.1-a_b-1.0");
     }
 
     #[test]
@@ -575,6 +688,7 @@ mod tests {
             port_dbdir: staging.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Invoker,
+            framework: Vec::new(),
         };
         let key = PortKey::parse("www/nginx").unwrap();
 
@@ -627,6 +741,7 @@ mod tests {
             port_dbdir: staging.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Root,
+            framework: Vec::new(),
         };
         let key = PortKey::parse("sysutils/tmux").unwrap();
         let ccache = |info: &PortInfo| info.deps.iter().any(|d| d.target.origin == "devel/ccache");
@@ -662,6 +777,7 @@ mod tests {
             port_dbdir: db.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Root,
+            framework: Vec::new(),
         };
 
         // Mk/Uses/iconv.mk adds libiconv when ${LOCALBASE}/include/iconv.h
@@ -729,6 +845,7 @@ mod tests {
             port_dbdir: db.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Root,
+            framework: Vec::new(),
         };
 
         let xml = run_query(&ctx, &PortKey::parse("textproc/php84-xml").unwrap()).unwrap();

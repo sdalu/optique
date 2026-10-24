@@ -208,6 +208,7 @@ mod tests {
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let moved = Moved::parse("cat/gone||2026-01-01|expired\ncat/old|cat/new|2026-01-01|renamed\n");
         let mut cache = Cache::disabled();
@@ -252,6 +253,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let moved = Moved::parse(
             "cat/old|cat/new|2026-01-01|renamed\n\
@@ -306,6 +308,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: vec![tmp.path().join("first"), tmp.path().join("second")],
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let a = PortKey::parse("cat/a").unwrap();
         let files = OptionsFiles::new(&ctx.port_dbdir);
@@ -349,6 +352,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let roots = vec![PortKey::parse("cat/root").unwrap()];
@@ -389,6 +393,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let pd = tmp.path().join("poudriere.d");
@@ -417,6 +422,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let roots = vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -458,6 +464,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let moved = Moved::parse(
             "cat/old|cat/new|2026-01-01|renamed\n\
@@ -514,6 +521,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let pd = tmp.path().join("poudriere.d");
@@ -546,6 +554,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
@@ -574,6 +583,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let roots = vec![PortKey::parse("cat/a").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -618,6 +628,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let roots = vec![PortKey::parse("cat/a").unwrap()];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
@@ -655,6 +666,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let bad = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/bad").unwrap())
             .unwrap_err()
@@ -700,6 +712,7 @@ mod tests {
             port_dbdir: options_dir.clone(),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let roots = vec![PortKey::parse("audio/lame").unwrap()];
         let moved = Moved::parse("");

@@ -157,6 +157,10 @@ pub struct Settings {
     /// poudriere.conf's `FLAVOR_DEFAULT_ALL=yes`: a bare origin listed
     /// stands for every flavor of its port (poudriere builds only).
     pub flavor_default_all: bool,
+    /// The framework's `_EXPORTED_VARS` as one probe of the settled tree,
+    /// make.conf and environment found them, given to every query
+    /// (`makerunner::framework_values`); empty when make could not say.
+    pub framework: Vec<(String, String)>,
 }
 
 /// A ports tree laid over the main one (the framework's `OVERLAYS`).
@@ -696,13 +700,41 @@ fn invoker_hash(conf_hash: &str, user: Option<&str>) -> String {
 
 /// The finishing steps common to every backend once its own `Settings` are
 /// built: paths absolute, `overlays` settled against what make reports, and
-/// the host's installed packages and the invoking user keyed in. Shared by
-/// `resolve`'s synth path and `resolve_host`.
+/// the host's installed packages, the invoking user and the framework
+/// values keyed in. Shared by `resolve`'s synth path and `resolve_host`.
 fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Settings> {
     let settings = settings.absolute()?;
     let settings = with_overlays(settings, given);
     let settings = key_installed_packages(settings, pkg_db);
-    Ok(key_invoker(settings, std::env::var("USER").ok().as_deref()))
+    let settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
+    Ok(with_framework(settings))
+}
+
+/// Settle `settings.framework` on what the probe port reports, and key it:
+/// the host's release, arch and CPU count come in with it, and a host
+/// upgraded under an unchanged make.conf is a new cache generation.
+fn with_framework(mut settings: Settings) -> Settings {
+    let ctx = crate::query::makerunner::QueryCtx {
+        portsdir: settings.portsdir.clone(),
+        make_conf: settings.make_conf.clone(),
+        port_dbdir: PathBuf::from("/nonexistent"),
+        overlays: settings.overlay_paths(),
+        identity: settings.env.identity(),
+        framework: Vec::new(),
+    };
+    settings.framework = crate::query::makerunner::framework_values(&ctx);
+    settings.conf_hash = framework_hash(&settings.conf_hash, &settings.framework);
+    settings
+}
+
+/// `conf_hash` with the framework values folded in; unchanged when there
+/// are none.
+fn framework_hash(conf_hash: &str, framework: &[(String, String)]) -> String {
+    if framework.is_empty() {
+        return conf_hash.to_string();
+    }
+    let lines: String = framework.iter().map(|(var, value)| format!("{var}={value}\n")).collect();
+    crate::cache::sha256_hex(format!("{conf_hash}\nframework\n{lines}").as_bytes())
 }
 
 /// A local build: `make config` on this host, built here. What is
@@ -784,6 +816,7 @@ fn resolve_local(
         refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: false,
+        framework: Vec::new(),
     })
 }
 
@@ -844,6 +877,7 @@ fn resolve_poudriere(
         refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: default_all,
+        framework: Vec::new(),
     })
 }
 
@@ -1103,6 +1137,7 @@ fn resolve_synth(
         refusals: synth_ini_refusals(&ini),
         overlays: Vec::new(),
         flavor_default_all: false,
+        framework: Vec::new(),
     })
 }
 
@@ -2833,6 +2868,20 @@ not a key value line
         assert_eq!(note, "poudriere.conf and poudriere.d read from /e (POUDRIERE_ETC)");
         let note = poudriere_etc_note(Path::new("/e"), false);
         assert_eq!(note, "POUDRIERE_ETC /e has no poudriere.d: a local build");
+    }
+
+    /// The framework values key the generation, a changed one (a host
+    /// upgraded) a new one; none leave the hash as it was.
+    #[test]
+    fn framework_values_key_the_generation() {
+        let v = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+        };
+        assert_eq!(framework_hash("h", &[]), "h");
+        let old = framework_hash("h", &v(&[("OSVERSION", "1500000")]));
+        assert_ne!(old, "h");
+        assert_ne!(framework_hash("h", &v(&[("OSVERSION", "1501000")])), old);
+        assert_eq!(framework_hash("h", &v(&[("OSVERSION", "1500000")])), old);
     }
 
     /// Queries run as root in a builder, as the invoker on the host; the

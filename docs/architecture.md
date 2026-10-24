@@ -141,7 +141,10 @@ A layer reached twice through a symlink is read once. The blacklist is
 read from the same layers, plus `qemu-blacklist` for a jail poudriere
 would emulate. A local build also folds pkg's database (size, mtime)
 and the invoking `USER` into the hash: what is installed, and who runs
-the build, are part of its answer.
+the build, are part of its answer. Last, `with_framework` runs the probe
+port (`wrapper::FRAMEWORK_PROBE`) once under the settled tree, make.conf
+and environment, keeps the `_EXPORTED_VARS` bsd.port.mk reports
+(`Settings::framework`), and folds them into the hash.
 
 `roots::resolve` turns the listed origins into the scan's roots: `@all`
 and (under `FLAVOR_DEFAULT_ALL`) bare origins become every flavor of the
@@ -154,8 +157,9 @@ the categories' `SUBDIR` lines and each port's flavors).
 ## Querying and caching
 
 `run_query` runs `/usr/bin/make -C <port> -f /dev/stdin optique-config`
-with `PORTSDIR`, `PORTDIR`, `PORT_DBDIR` on the command line,
-`__MAKE_CONF` and `FLAVOR` when set, and an environment holding only
+with `PORTSDIR`, `PORTDIR`, `PORT_DBDIR` and the framework values
+(`QueryCtx::framework`) on the command line, `__MAKE_CONF` and `FLAVOR`
+when set, and an environment holding only
 `PATH`, `TMPDIR` and `PKG_DBDIR`, with `USER` and `HOME` by the query's
 `Identity`: `root` and `/root` for a poudriere or synth build (`QueryEnv`
 `Jail` or `Synth`), the invoking user's own for a local one. The wrapper

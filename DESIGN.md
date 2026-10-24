@@ -195,6 +195,40 @@ alone decides is cached with the query: whether a port ships a `pkg-help`
 file is settled at query time, since it cannot change behind a cached entry,
 while the file's contents are read at every open.
 
+## The framework's host values are probed once per run
+
+Every query used to pay for bsd.port.mk working out the host again: about
+ten forks (`uname` three times, `awk` over param.h, `pkg-static` twice,
+`sysctl`, `nproc`, perl) before the port's own Makefile counted. bsd.port.mk
+already spares its own sub-makes this: the values it lists in
+`_EXPORTED_VARS` ("These won't change") go to them on `.MAKEFLAGS`. synth
+does the same for its scan (`set_port_cache_variables`, from a fixed
+list). So once per run, after the make.conf is settled, optique runs a probe
+port that uses nothing (`FRAMEWORK_PROBE` in `src/query/wrapper.rs`) under
+the queries' own tree, make.conf and environment, and gives every query
+the non-empty `_EXPORTED_VARS` it reports on the command line, where they
+win over make.conf just as on a sub-make's `.MAKEFLAGS`
+(`framework_values` in `src/query/makerunner.rs`). The probe is a slave
+port with `GNU_CONFIGURE`, so the two values bsd.port.mk probes only for
+such ports are in the set. An IGNOREd probe gives nothing: its
+`_PKG_CHECKED` would spare every query the pkg(8) version check that
+IGNOREs it. A failed probe gives nothing either, and the queries probe for
+themselves as before. On 841 ports a cold scan went from 42 to 36.7
+seconds, with the JSON byte-identical on local, poudriere (an 11.2 jail
+too) and synth builds. The probe costs one make, about 50 ms, on a warm run
+too.
+
+The values are folded into the make.conf hash. They are the host's
+release, arch and CPU count, which no key held before: a local or synth
+build on a host upgraded under an unchanged make.conf kept its generation
+unless pkg's database happened to change too.
+
+Rejected: synth's fixed list, which drifts from the framework where
+`_EXPORTED_VARS` cannot; keeping the values on disk between runs, which
+would need a key for the very host state they describe; probing at the
+tree's top, as synth does, where bsd.port.subdir.mk answers and the pkg(8)
+check never runs.
+
 ## Nothing on disk changes before apply
 
 TUI edits are staged against a `PORT_DBDIR` seeded from the real options

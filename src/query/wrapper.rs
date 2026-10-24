@@ -123,6 +123,35 @@ optique-config: .PHONY
 \t@true
 ";
 
+/// The makefile piped to `make -f /dev/stdin optique-probe` once per run
+/// (`makerunner::framework_values`): a port that uses nothing, so that
+/// what bsd.port.mk computes for it is what it computes for any port, and
+/// whose `_EXPORTED_VARS`, the values bsd.port.mk hands its own sub-makes
+/// on `.MAKEFLAGS` ("These won't change"), are dumped as
+/// `OPTIQUE|<var>|<value>` lines, the empty ones left out as bsd.port.mk
+/// leaves them. A `MASTERDIR` of its own makes it a slave port, for which
+/// alone bsd.port.mk probes `HAVE_COMPAT_IA32_KERN`; `GNU_CONFIGURE` gets
+/// `CONFIGURE_MAX_CMD_LEN` probed. An IGNOREd probe dumps nothing: its
+/// `_PKG_CHECKED` would spare every query the pkg(8) version check that
+/// IGNOREs it.
+pub const FRAMEWORK_PROBE: &str = "\
+PORTNAME=\toptique-probe
+PORTVERSION=\t0
+CATEGORIES=\tmisc
+COMMENT=\tprobe
+MASTERDIR=\t/nonexistent
+GNU_CONFIGURE=\tyes
+.include \"${PORTSDIR}/Mk/bsd.port.mk\"
+.if !defined(IGNORE)
+.  for _v in ${_EXPORTED_VARS:U:O:u}
+.    if !empty(${_v})
+.info OPTIQUE|${_v}|${${_v}}
+.    endif
+.  endfor
+.endif
+optique-probe:
+";
+
 #[cfg(test)]
 mod tests {
     use super::WRAPPER;

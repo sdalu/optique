@@ -107,7 +107,9 @@ Every result is cached
 keyed on the ports tree revision, the hash of the merged
 .Pa make.conf
 layers
-.Pq their own text, not the files they include; see Sx CAVEATS
+.Pq their own text, not the files they include; see Sx CAVEATS ,
+the host values the ports framework computes for every port
+.Pq release, architecture, CPU count; probed once per run and given to each query ,
 and the content of the port's own options file and of the
 .Pa options.local
 beside it, so subsequent runs

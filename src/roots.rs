@@ -428,6 +428,7 @@ mod tests {
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
             identity: crate::query::makerunner::Identity::Invoker,
+            framework: Vec::new(),
         };
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);

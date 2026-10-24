@@ -89,7 +89,10 @@ port's options file and of the `options.local` beside it, which make reads
 after it. A local build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
 install or delete starts a new generation; and on the invoking `USER`, its
-queries running as that user. Files a make.conf `.include`s are not part of that hash:
+queries running as that user. Every build also keys on the values
+bsd.port.mk works out about the host (release, arch, CPU count), probed
+once per run and then given to every query, so an upgraded host starts a
+new generation. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
 only ports whose inputs changed are queried again.
 

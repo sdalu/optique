@@ -582,6 +582,7 @@ fn query_ctx(settings: &config::Settings, port_dbdir: std::path::PathBuf) -> Que
         port_dbdir,
         overlays: settings.overlay_paths(),
         identity: settings.env.identity(),
+        framework: settings.framework.clone(),
     }
 }
 
