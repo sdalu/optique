@@ -226,13 +226,14 @@ fn categories(portsdir: &Path) -> Vec<String> {
 /// One line's `SUBDIR` entry, the way synth's `grep_Makefile` regex reads
 /// it (portscan.adb ~1266:
 /// `^SUBDIR[[:space:]]*[:+:]=[[:space:]]*([[:graph:]]*)`, applied to the
-/// line already trimmed): `SUBDIR`, optional whitespace, one `:` or `+`,
+/// line already trimmed of spaces, `JT.trim`, which leaves a tab): `SUBDIR`,
+/// optional whitespace, one `:` or `+`,
 /// `=`, optional whitespace, then the first run of non-space graphic
 /// characters — a second name on the same line is never read.
 fn subdir_entry(line: &str) -> Option<&str> {
     let is_blank = |c: char| c == ' ' || c == '\t';
     let rest = line
-        .trim()
+        .trim_matches(' ')
         .strip_prefix("SUBDIR")?
         .trim_start_matches(is_blank);
     let rest = rest
@@ -280,8 +281,11 @@ pub fn refuses(text: &[u8], options: &[String]) -> Option<String> {
 /// says of it ([`refuses`]): `<category>_<name>/options` by origin,
 /// for a port without flavors; a flavored port's name carries its
 /// `@flavor` there, a file that never exists, so it is never refused.
+/// Nor is ports-mgmt/pkg: synth builds it on a path of its own
+/// (`build_pkg8_as_necessary`, portscan-pilot.adb ~105-163), which runs no
+/// options check, and drops it from every scan (~59, ~342).
 pub fn refuses_port(files: &OptionsFiles, info: &PortInfo) -> Option<String> {
-    if !info.flavors.is_empty() {
+    if !info.flavors.is_empty() || info.key.origin == "ports-mgmt/pkg" {
         return None;
     }
     let bytes = files.bytes(&info.key.origin.replace('/', "_"))?;
@@ -442,6 +446,31 @@ mod tests {
         let mut info = PortInfo::stub("misc/port");
         info.flavors = vec!["full".to_string()];
         assert_eq!(refuses_port(&files, &info), None);
+    }
+
+    /// synth builds ports-mgmt/pkg on its own path, with no options check:
+    /// a stale file there is never refused.
+    #[test]
+    fn synth_never_refuses_pkg() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("ports-mgmt_pkg")).unwrap();
+        fs::write(
+            tmp.path().join("ports-mgmt_pkg/options"),
+            b"OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET+=OLDOPT\n",
+        )
+        .unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let mut info = PortInfo::stub("ports-mgmt/pkg");
+        info.options.complete = vec!["DOCS".to_string()];
+        assert_eq!(refuses_port(&files, &info), None);
+    }
+
+    /// synth trims spaces alone before matching `^SUBDIR`: a tab-indented
+    /// entry is no entry to it.
+    #[test]
+    fn a_tab_indented_subdir_is_not_indexed() {
+        assert_eq!(subdir_entry("    SUBDIR += foo"), Some("foo"));
+        assert_eq!(subdir_entry("\tSUBDIR += foo"), None);
     }
 
     #[test]

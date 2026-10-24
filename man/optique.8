@@ -3131,6 +3131,10 @@ entries, so a port directory present on disk but left out of that list
 is
 .Dq not in the tree
 to it, exactly as one truly absent would be.
+A category with no Makefile, whose every subdirectory synth indexes, is not
+read: an installed package from it is skipped.
+.Pa ports-mgmt/pkg ,
+which synth builds on a path of its own, is never reported as refused.
 This applies to the TUI,
 .Cm scan ,
 .Cm sync
