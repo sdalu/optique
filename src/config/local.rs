@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use super::{
-    checked_portsdir, is_ports_tree, make_values, stage_make_conf, Blacklist, HostPaths, Overlay, QueryEnv,
-    Request, Settings,
+    checked_portsdir, is_ports_tree, make_values, stage_make_conf, HostPaths, Overlay, QueryEnv, Request,
+    Settings,
 };
 
 /// PORTSDIR and PORT_DBDIR as make(1) sees them on this host, from the
@@ -94,20 +94,8 @@ pub(super) fn resolve(
         conf_hash = crate::cache::sha256_hex(format!("{conf_hash}\n{text}").as_bytes());
         make_conf = Some(path);
     }
-    Ok(Settings {
-        portsdir,
-        options_dir,
-        make_conf,
-        make_conf_sources,
-        conf_hash,
-        env: QueryEnv::Host,
-        blacklist: Blacklist::default(),
-        notes,
-        overlays: Vec::new(),
-        flavor_default_all: false,
-        framework: Vec::new(),
-        options_place: None,
-    })
+    let staged = (make_conf, conf_hash, make_conf_sources);
+    Ok(Settings::new(portsdir, options_dir, staged, QueryEnv::Host, notes))
 }
 
 #[cfg(test)]

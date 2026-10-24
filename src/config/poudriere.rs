@@ -11,7 +11,7 @@ use crate::model::origin::PortKey;
 
 use super::{
     checked_portsdir, is_ports_tree, overlay_lines, stage_make_conf, HostPaths, Overlay, QueryEnv, Request,
-    Settings,
+    Settings, StagedConf,
 };
 
 /// What poudriere(8) writes at the top of every jail's make.conf, ahead of
@@ -243,7 +243,7 @@ pub(super) fn resolve(
     let jail_lines = jail.map_or_else(String::new, |j| jail_system(poudriere_d, j, host, &mut notes));
     let ccache = ccache_dir(host.poudriere_conf, poudriere_d, jail, tree, set)
         .is_some_and(|dir| Path::new(&dir).is_dir());
-    let (make_conf, conf_hash, make_conf_sources) = layer_make_conf(
+    let staged = layer_make_conf(
         poudriere_d,
         jail,
         tree_name,
@@ -264,18 +264,9 @@ pub(super) fn resolve(
     }
 
     Ok(Settings {
-        portsdir,
-        options_dir,
-        make_conf,
-        make_conf_sources,
-        conf_hash,
-        env,
         blacklist,
-        notes,
-        overlays: Vec::new(),
         flavor_default_all: default_all,
-        framework: Vec::new(),
-        options_place: None,
+        ..Settings::new(portsdir, options_dir, staged, env, notes)
     })
 }
 
@@ -605,7 +596,7 @@ fn layer_make_conf(
     jail_lines: &str,
     ccache: bool,
     staging_dir: &Path,
-) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
+) -> Result<StagedConf> {
     let mut paths: Vec<PathBuf> =
         make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
     paths.extend(plugin_make_confs(poudriere_d));
@@ -658,7 +649,7 @@ fn concat_make_conf(
     jail_lines: &str,
     ccache: bool,
     staging_dir: &Path,
-) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
+) -> Result<StagedConf> {
     let mut prelude = String::new();
     let mut trailer = String::new();
     if let QueryEnv::Jail { package_building } = env {

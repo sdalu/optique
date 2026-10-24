@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::{checked_portsdir, is_ports_tree, stage_make_conf, Blacklist, QueryEnv, Request, Settings};
+use super::{checked_portsdir, is_ports_tree, stage_make_conf, QueryEnv, Request, Settings};
 
 /// What synth(1) writes at the top of its scan slave's make.conf, ahead of
 /// `<profile>-make.conf` (`create_make_conf` in its replicant.adb), as far as
@@ -159,27 +159,14 @@ fn resolve_synth(
     // header and the profile's make.conf alone: never the host's
     // /etc/make.conf, whose absence the always non-empty staged file keeps.
     let ccache = synth_ccache(path_setting("Directory_ccache").as_deref());
-    let (make_conf, conf_hash, make_conf_sources) = stage_make_conf(
+    let staged = stage_make_conf(
         synth_prelude(profile, ccache),
         &[synth_dir.join(format!("{profile}-make.conf"))],
         SYNTH_SCAN_TRAILER,
         staging_dir,
     )?;
 
-    Ok(Settings {
-        portsdir,
-        options_dir,
-        make_conf,
-        make_conf_sources,
-        conf_hash,
-        env: QueryEnv::Synth,
-        blacklist: Blacklist::default(),
-        notes,
-        overlays: Vec::new(),
-        flavor_default_all: false,
-        framework: Vec::new(),
-        options_place: None,
-    })
+    Ok(Settings::new(portsdir, options_dir, staged, QueryEnv::Synth, notes))
 }
 
 /// What synth reads from the host besides synth.ini.

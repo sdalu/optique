@@ -61,6 +61,10 @@ impl QueryEnv {
     }
 }
 
+/// A staged make.conf: the file make reads (None when there is nothing to
+/// write), the hash of its text, and the files read into it.
+type StagedConf = (Option<PathBuf>, String, Vec<PathBuf>);
+
 /// Resolved execution environment: where the ports tree lives, which options
 /// dir is the read/write target, and the layered make.conf to query with.
 #[derive(Debug)]
@@ -164,6 +168,32 @@ fn port_dbdir_error(env: QueryEnv, options_dir: &Path, set: &str) -> Option<Stri
 }
 
 impl Settings {
+    /// A build's resolution as its resolver leaves it: no blacklist and no
+    /// `FLAVOR_DEFAULT_ALL` (a poudriere build sets both), the overlays,
+    /// the framework values and the options place for [`finish`] to settle.
+    fn new(
+        portsdir: PathBuf,
+        options_dir: PathBuf,
+        (make_conf, conf_hash, make_conf_sources): StagedConf,
+        env: QueryEnv,
+        notes: Vec<String>,
+    ) -> Self {
+        Settings {
+            portsdir,
+            options_dir,
+            make_conf,
+            make_conf_sources,
+            conf_hash,
+            env,
+            blacklist: Blacklist::default(),
+            notes,
+            overlays: Vec::new(),
+            flavor_default_all: false,
+            framework: Vec::new(),
+            options_place: None,
+        }
+    }
+
     /// The error a make.conf `PORT_DBDIR` moving the build's options
     /// directory away from `options_dir` deserves; None when it moves
     /// nothing, or make could not say.
@@ -611,7 +641,7 @@ fn stage_make_conf(
     candidates: &[PathBuf],
     trailer: &str,
     staging_dir: &Path,
-) -> Result<(Option<PathBuf>, String, Vec<PathBuf>)> {
+) -> Result<StagedConf> {
     // Bytes, not text: make reads a make.conf whatever its encoding (a
     // Latin-1 comment is common), so only a missing file is none, and one
     // that cannot be read stops the run as it would stop make.
@@ -1046,20 +1076,8 @@ mod tests {
     /// Settings for `env` over the tree `portsdir`, options dir `db` and
     /// make.conf `conf`, the options place not probed yet.
     fn probe_settings(env: QueryEnv, portsdir: &Path, db: &Path, conf: &Path) -> Settings {
-        Settings {
-            portsdir: portsdir.to_path_buf(),
-            options_dir: db.to_path_buf(),
-            make_conf: Some(conf.to_path_buf()),
-            make_conf_sources: Vec::new(),
-            conf_hash: String::new(),
-            env,
-            blacklist: Blacklist::default(),
-            notes: Vec::new(),
-            overlays: Vec::new(),
-            flavor_default_all: false,
-            framework: Vec::new(),
-            options_place: None,
-        }
+        let staged = (Some(conf.to_path_buf()), String::new(), Vec::new());
+        Settings::new(portsdir.to_path_buf(), db.to_path_buf(), staged, env, Vec::new())
     }
 
     /// A make.conf `PORT_DBDIR?=` defers to the environment's PORT_DBDIR in
