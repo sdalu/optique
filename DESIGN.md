@@ -294,9 +294,14 @@ port that provides it). The opposite cases are caught: electron's file
 once present is included, so it is matched by name, and a `lang/zig<N>`
 that vanishes fails as the dependency on it. `Uses/python.mk` probes only
 under `_PORTS_ENV_CHECK`, which no query sets, so it always includes the
-version file. No port's Makefile in the tree probes another port's
-directory. Uncommitted edits to the tree were already invisible to the
-key.
+version file. A port's own Makefile that runs make on another port while
+it parses (`VAR!= ${MAKE} -C ../other -V X`: www/caddy-custom takes
+www/caddy's version, mail/claws-mail-plugins its options from each
+plugin, which it also probes with `exists()`) reads that port in a child
+make `.MAKE.MAKEFILES` never names; such an entry, some seventeen ports,
+is carried over no tree change (`cache::runs_make_at_parse`). A `!=`
+running anything but make reads no other port. Uncommitted edits to the
+tree were already invisible to the key.
 
 Rejected: synth's directory mtimes, which miss an edit made in place and
 cannot tell what a port reads outside its directory; fingerprinting every

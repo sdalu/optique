@@ -154,7 +154,11 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
         probe: Some(&probe),
         carry: !cli.no_carry_over,
     };
-    cache::Cache::open_trees(&cache::default_cache_dir(), &trees, conf)
+    let mut cache = cache::Cache::open_trees(&cache::default_cache_dir(), &trees, conf);
+    if settings.env == config::QueryEnv::Host {
+        cache.watch(&settings.make_conf_sources);
+    }
+    cache
 }
 
 /// MOVED of the main tree and every overlay, its warnings said once.

@@ -173,8 +173,10 @@ make runs while it parses (`Uses/cargo.mk`'s awk scripts, whose crates add
 build dependencies) counts as a change to the makefile running it; the
 other scripts, `Tools/`, `Templates/` and `Keywords/` take none, since
 only targets read them.
-On a thousand-port closure a day's update re-queried 3 ports and a week's
-44. The banner says how many entries were carried over. Without git, or
+A port whose own Makefile runs make on another port while it parses
+(www/caddy-custom reading www/caddy's version) is queried again after
+any update. On a thousand-port closure a day's update re-queried 3 ports
+and a week's 44. The banner says how many entries were carried over. Without git, or
 when git cannot list the changes (the old commit gone), nothing is carried
 over.
 
@@ -204,6 +206,10 @@ cache. Any other edit starts afresh.
 - A `lang/zig<N>` or `devel/electron<N>` port added after a port using it
   was found IGNOREd for its absence: that IGNORE is carried over until the
   port or the `.mk` changes.
+
+An edit to a local build's make.conf while optique runs (the TUI open, say)
+is not cached under the text it had at startup: once its size or mtime
+moves, a warning says so and no further answer is stored for the run.
 
 ### Turning it off
 

@@ -32,6 +32,19 @@ pub struct Cache {
     enabled: bool,
     /// What opening carried over from an earlier generation, for the banner.
     note: Option<String>,
+    /// The make.conf files queries read in place, each with its size and
+    /// mtime when the generation was opened (`watch`): once one changes,
+    /// answers come from another text than the generation's, and none is
+    /// stored any more.
+    watched: Vec<(PathBuf, Option<(u64, std::time::SystemTime)>)>,
+    /// A watched file changed: nothing more is stored this run.
+    frozen: bool,
+}
+
+/// `path`'s size and mtime; None when it cannot be stat'ed.
+fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
+    let m = fs::metadata(path).ok()?;
+    Some((m.len(), m.modified().ok()?))
 }
 
 /// A generation file's first line: what it was made for, which is what a
@@ -152,6 +165,8 @@ impl Cache {
             file: None,
             enabled: false,
             note: None,
+            watched: Vec::new(),
+            frozen: false,
         }
     }
 
@@ -246,7 +261,17 @@ impl Cache {
             file,
             enabled: true,
             note,
+            watched: Vec::new(),
+            frozen: false,
         }
+    }
+
+    /// Watch `files`, make.conf files the queries read in place (a local
+    /// build's; a builder's staged copy is fixed for the run): the
+    /// generation is keyed on the text they had at startup, so an answer
+    /// made after one is edited is not stored under it.
+    pub fn watch(&mut self, files: &[PathBuf]) {
+        self.watched = files.iter().map(|f| (f.clone(), stamp(f))).collect();
     }
 
     /// What was carried over from an earlier generation, if anything was
@@ -274,7 +299,15 @@ impl Cache {
     }
 
     pub fn insert(&mut self, info: &PortInfo, files: &OptionsFiles) {
-        if !self.enabled {
+        if !self.enabled || self.frozen {
+            return;
+        }
+        if let Some((path, _)) = self.watched.iter().find(|(f, at)| stamp(f) != *at) {
+            eprintln!(
+                "warning: {} changed during the run: no more answers are cached",
+                path.display()
+            );
+            self.frozen = true;
             return;
         }
         let entry = CacheEntry {
@@ -461,9 +494,15 @@ fn carry_over_tree(text: &str, old: &str, new: &str, portsdir: &Path) -> Option<
         });
     }
     let (mut lines, mut dropped) = (Vec::new(), 0);
+    let mut sub_make: HashMap<String, bool> = HashMap::new();
     for line in text.lines().skip(1) {
         match serde_json::from_str::<CacheEntry>(line) {
-            Ok(entry) if invalidation.keeps(&entry.info) => lines.push(line.to_string()),
+            Ok(entry)
+                if invalidation.keeps(&entry.info)
+                    && !runs_make_at_parse(portsdir, &entry.info, &mut sub_make) =>
+            {
+                lines.push(line.to_string());
+            }
             Ok(_) => dropped += 1,
             Err(_) => {}
         }
@@ -590,6 +629,44 @@ fn parse_time_readers(portsdir: &Path, changes: &[(char, String)]) -> Vec<String
     readers.sort();
     readers.dedup();
     readers
+}
+
+/// Does one of the port's own makefiles (outside `Mk/`) run make while make
+/// parses it (`VAR!= ${MAKE} -C ../other -V X`)? That child make reads
+/// another port, which `.MAKE.MAKEFILES` never names: www/caddy-custom
+/// takes its version from www/caddy, mail/claws-mail-plugins its options
+/// from each plugin. Such an entry is carried over no tree change. `seen`
+/// remembers each file's answer for the run.
+fn runs_make_at_parse(portsdir: &Path, info: &PortInfo, seen: &mut HashMap<String, bool>) -> bool {
+    info.makefiles
+        .iter()
+        .filter(|file| !file.starts_with("Mk/") && !file.starts_with('/'))
+        .any(|file| {
+            *seen.entry(file.clone()).or_insert_with(|| {
+                fs::read_to_string(portsdir.join(file)).is_ok_and(|text| {
+                    logical_lines(&text)
+                        .iter()
+                        .filter(|line| !line.starts_with('\t'))
+                        .flat_map(|line| parse_commands(line))
+                        .any(|command| runs_make(&command))
+                })
+            })
+        })
+}
+
+/// Is `command` a make run on a port: `${MAKE}`, `${MAKE_CMD}` or `make`,
+/// with `-C` or `-V`? A plain `!=` that runs no make reads no other port.
+fn runs_make(command: &str) -> bool {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    let make = words.iter().any(|w| {
+        matches!(
+            *w,
+            "${MAKE}" | "$(MAKE)" | "${MAKE_CMD}" | "$(MAKE_CMD)" | "make"
+        ) || w.ends_with("/make")
+    });
+    make && words
+        .iter()
+        .any(|w| w.starts_with("-C") || w.starts_with("-V"))
 }
 
 /// Every `*.mk` under `dir`, relative to it, with its text.
