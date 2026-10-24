@@ -599,8 +599,9 @@ had become identical.
 ## Quitting and drafts
 
 `q` or `Ctrl-C` quits. Quitting first stops any in-flight background
-`make` process and the commands it is running, so nothing keeps churning
-after the interface is gone; the quit dialog shows how many were
+`make` process and the commands it is running, and starts no other for
+the ports still queued, so nothing keeps churning after the interface is
+gone; the quit dialog shows how many were
 stopped, and the count is also reported on stderr.
 
 Quitting with staged, unapplied changes to a port still in the closure

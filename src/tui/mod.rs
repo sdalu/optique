@@ -251,7 +251,7 @@ pub fn run(
 /// Kill the make processes background refreshes still have running, saying
 /// so on stderr. Shared by the real TUI and the headless driver.
 fn stop_background_makes() {
-    let stopped = crate::query::makerunner::kill_active_makes();
+    let stopped = crate::query::makerunner::quit_makes();
     if stopped > 0 {
         eprintln!("optique: stopped {stopped} in-flight make process(es)");
     }

@@ -24,8 +24,8 @@ fn lookups_and_inserts_share_one_read_per_file() {
     // Not in the cache yet: no file is read to find that out.
     assert!(c.lookup(&plain.key, &files).is_none());
     assert_eq!(files.disk_reads(), 0);
-    c.insert(&plain, &files);
-    c.insert(&flavored, &files);
+    c.insert(&plain, &files, std::time::SystemTime::now());
+    c.insert(&flavored, &files, std::time::SystemTime::now());
     assert!(c.lookup(&plain.key, &files).is_some());
     assert!(c.lookup(&flavored.key, &files).is_some());
     assert_eq!(files.disk_reads(), 1);
@@ -41,7 +41,7 @@ fn roundtrip_and_options_file_invalidation() {
     let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
     let i = info("cat/port");
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
-    c.insert(&i, &OptionsFiles::new(&dbdir));
+    c.insert(&i, &OptionsFiles::new(&dbdir), std::time::SystemTime::now());
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
 
     // Changing the options file invalidates the entry.
@@ -60,7 +60,11 @@ fn persists_across_reopen_same_generation_only() {
     let cache_dir = tmp.path().join("cache");
 
     let mut c = Cache::open(&cache_dir, "treeA", "confA");
-    c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
+    c.insert(
+        &info("cat/port"),
+        &OptionsFiles::new(&dbdir),
+        std::time::SystemTime::now(),
+    );
     drop(c);
 
     let c2 = Cache::open(&cache_dir, "treeA", "confA");
@@ -85,7 +89,11 @@ fn persists_across_reopen_same_generation_only() {
 fn disabled_never_stores() {
     let tmp = tempfile::tempdir().unwrap();
     let mut c = Cache::disabled();
-    c.insert(&info("cat/port"), &OptionsFiles::new(tmp.path()));
+    c.insert(
+        &info("cat/port"),
+        &OptionsFiles::new(tmp.path()),
+        std::time::SystemTime::now(),
+    );
     assert!(
         c.lookup(
             &PortKey::parse("cat/port").unwrap(),
@@ -153,7 +161,7 @@ fn an_absent_entry_does_not_answer_for_an_unreadable_file() {
     fs::create_dir_all(&dbdir).unwrap();
     let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
     let i = info("cat/port");
-    c.insert(&i, &OptionsFiles::new(&dbdir));
+    c.insert(&i, &OptionsFiles::new(&dbdir), std::time::SystemTime::now());
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
     // A directory where the file should be: there, and unreadable.
     fs::create_dir_all(dbdir.join("cat_port/options")).unwrap();
@@ -406,7 +414,11 @@ fn mtime_keys_one_hour_apart_are_distinct_generations() {
     fs::create_dir_all(&dbdir).unwrap();
     let cache_dir = tmp.path().join("cache");
     let mut c = Cache::open(&cache_dir, "mtime-1792652400", "conf");
-    c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
+    c.insert(
+        &info("cat/port"),
+        &OptionsFiles::new(&dbdir),
+        std::time::SystemTime::now(),
+    );
     drop(c);
     let later = Cache::open(&cache_dir, "mtime-1792656000", "conf");
     assert!(
@@ -594,6 +606,7 @@ fn two_trees_at_one_commit_share_no_generation() {
     c.insert(
         &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
         &files,
+        std::time::SystemTime::now(),
     );
     drop(c);
     let c = Cache::open_trees(&cache_dir, &trees(&clone, &[]), "conf");
@@ -625,6 +638,7 @@ fn carry_over_needs_the_same_tree() {
     c.insert(
         &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
         &files,
+        std::time::SystemTime::now(),
     );
     drop(c);
 
@@ -686,10 +700,12 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     c.insert(
         &read("cat/a", &["Mk/bsd.port.mk", "cat/a/Makefile"]),
         &files,
+        std::time::SystemTime::now(),
     );
     c.insert(
         &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
         &files,
+        std::time::SystemTime::now(),
     );
     drop(c);
 
@@ -802,8 +818,8 @@ fn an_included_make_conf_change_drops_its_readers() {
     let other = info("cat/other");
     let files = OptionsFiles::new(&dbdir);
     let mut c = Cache::open(&cache_dir, "tree1", "conf1");
-    c.insert(&reader, &files);
-    c.insert(&other, &files);
+    c.insert(&reader, &files, std::time::SystemTime::now());
+    c.insert(&other, &files, std::time::SystemTime::now());
 
     let c = Cache::open(&cache_dir, "tree1", "conf1");
     assert!(c.lookup(&reader.key, &files).is_some());
@@ -885,8 +901,8 @@ fn an_option_edit_carries_over_what_it_cannot_reach() {
         &trees,
         conf("a", "OPTIONS_UNSET+=DOCS\n", "r", true),
     );
-    c.insert(&x11, &files);
-    c.insert(&nls, &files);
+    c.insert(&x11, &files, std::time::SystemTime::now());
+    c.insert(&nls, &files, std::time::SystemTime::now());
 
     let text = "OPTIONS_UNSET+=DOCS\nOPTIONS_UNSET+=NLS\n";
     let c = Cache::open_trees(&cache_dir, &trees, conf("b", text, "r", true));
@@ -974,13 +990,60 @@ fn a_watched_make_conf_edited_mid_run_stops_storing() {
 
     let mut c = Cache::open(&cache_dir, "tree1", "conf1");
     c.watch(std::slice::from_ref(&conf));
-    c.insert(&info("cat/before"), &files);
+    c.insert(&info("cat/before"), &files, std::time::SystemTime::now());
     fs::write(&conf, "OPTIONS_UNSET+=DOCS NLS\n").unwrap();
-    c.insert(&info("cat/after"), &files);
+    c.insert(&info("cat/after"), &files, std::time::SystemTime::now());
     drop(c);
 
     let c = Cache::open(&cache_dir, "tree1", "conf1");
     let key = |o: &str| PortKey::parse(o).unwrap();
     assert!(c.lookup(&key("cat/before"), &files).is_some());
     assert!(c.lookup(&key("cat/after"), &files).is_none());
+}
+
+/// An options file written while its port's query ran may hold other bytes
+/// than make read: the answer is not stored under them.
+#[test]
+fn an_options_file_written_during_the_query_is_not_cached() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dbdir = tmp.path().join("db");
+    fs::create_dir_all(dbdir.join("cat_port")).unwrap();
+    let since = std::time::SystemTime::now();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(dbdir.join("cat_port/options"), "rewritten\n").unwrap();
+    let files = OptionsFiles::new(&dbdir);
+    let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
+    c.insert(&info("cat/port"), &files, since);
+    assert!(
+        c.lookup(&PortKey::parse("cat/port").unwrap(), &files)
+            .is_none()
+    );
+}
+
+/// A generation whose last line was cut short gets it ended before the
+/// next entry is appended, which then parses.
+#[test]
+fn an_unterminated_line_does_not_swallow_the_next() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dbdir = tmp.path().join("db");
+    fs::create_dir_all(&dbdir).unwrap();
+    let cache_dir = tmp.path().join("cache");
+    let files = OptionsFiles::new(&dbdir);
+    drop(Cache::open(&cache_dir, "tree1", "conf1"));
+    let generation = fs::read_dir(&cache_dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        .unwrap();
+    let mut f = OpenOptions::new().append(true).open(&generation).unwrap();
+    f.write_all(b"{\"cut\": ").unwrap();
+    drop(f);
+    let mut c = Cache::open(&cache_dir, "tree1", "conf1");
+    c.insert(&info("cat/port"), &files, std::time::SystemTime::now());
+    drop(c);
+    let c = Cache::open(&cache_dir, "tree1", "conf1");
+    assert!(
+        c.lookup(&PortKey::parse("cat/port").unwrap(), &files)
+            .is_some()
+    );
 }

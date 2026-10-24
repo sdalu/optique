@@ -41,6 +41,35 @@ pub struct Cache {
     frozen: bool,
 }
 
+/// The options files a query of `info` read: the entry's file and its
+/// `.local`, and the file make.conf moved OPTIONS_FILE to with its own.
+fn read_files(info: &PortInfo, files: &OptionsFiles) -> Vec<PathBuf> {
+    let mut out = vec![
+        files.path(&info.options_name),
+        files.local_path(&info.options_name),
+    ];
+    if let Some(moved) = info.options.moved_file.as_deref().filter(|f| !f.is_empty()) {
+        out.push(PathBuf::from(moved));
+        out.push(PathBuf::from(format!("{moved}.local")));
+    }
+    out
+}
+
+/// Was `path` written since `since`? Its ctime, which a write or a rename
+/// into place always moves and nothing sets back (an mtime `cp -p` or
+/// `touch -r` can). A missing file has none, and is fine.
+fn changed_since(path: &Path, since: std::time::SystemTime) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    let Ok(m) = fs::metadata(path) else {
+        return false;
+    };
+    let Ok(secs) = u64::try_from(m.ctime()) else {
+        return false;
+    };
+    let nanos = u32::try_from(m.ctime_nsec()).unwrap_or(0);
+    std::time::UNIX_EPOCH + std::time::Duration::new(secs, nanos) >= since
+}
+
 /// `path`'s size and mtime; None when it cannot be stat'ed.
 fn stamp(path: &Path) -> Option<(u64, std::time::SystemTime)> {
     let m = fs::metadata(path).ok()?;
@@ -251,11 +280,18 @@ impl Cache {
                 None => format!("cache: {dropped}"),
             });
         }
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .ok();
+        // A line cut short (a process gone mid-write) would glue the next
+        // one to it: end it first.
+        if let Some(f) = &mut file
+            && fs::read(&path).is_ok_and(|b| !b.is_empty() && !b.ends_with(b"\n"))
+        {
+            let _ = f.write_all(b"\n");
+        }
         Cache {
             map,
             file,
@@ -298,8 +334,18 @@ impl Cache {
         }
     }
 
-    pub fn insert(&mut self, info: &PortInfo, files: &OptionsFiles) {
+    pub fn insert(&mut self, info: &PortInfo, files: &OptionsFiles, since: std::time::SystemTime) {
         if !self.enabled || self.frozen {
+            return;
+        }
+        // A file the query read that changed since it started may hold other
+        // bytes than make read: the answer is not stored under them. (A port
+        // with an entry had its files read before the query, by `lookup`;
+        // the others, and a moved OPTIONS_FILE, are read only now.)
+        if read_files(info, files)
+            .iter()
+            .any(|f| changed_since(f, since))
+        {
             return;
         }
         if let Some((path, _)) = self.watched.iter().find(|(f, at)| stamp(f) != *at) {
@@ -322,10 +368,12 @@ impl Cache {
                 .collect(),
             info: info.clone(),
         };
+        // One write(2) per line: O_APPEND keeps a single write whole, so a
+        // second optique appending to the generation cannot land inside it.
         if let Some(f) = &mut self.file
             && let Ok(line) = serde_json::to_string(&entry)
         {
-            let _ = writeln!(f, "{line}");
+            let _ = f.write_all(format!("{line}\n").as_bytes());
         }
         self.map.insert(entry.info.key.clone(), entry);
     }

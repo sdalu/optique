@@ -351,9 +351,9 @@ fn find_redundant(
             break;
         }
         match runner.events.recv() {
-            Ok(ScanEvent::PortDone(info)) => {
+            Ok(ScanEvent::PortDone(info, since)) => {
                 in_flight -= 1;
-                cache.insert(&info, &pass.files);
+                cache.insert(&info, &pass.files, since);
                 ready.push_back(Ok(*info));
             }
             Ok(ScanEvent::PortError { key, msg }) => {

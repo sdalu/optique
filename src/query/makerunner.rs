@@ -68,8 +68,13 @@ pub fn locate(portsdir: &Path, overlays: &[PathBuf], origin: &str) -> Option<Pat
 
 #[derive(Debug)]
 pub enum ScanEvent {
-    PortDone(Box<PortInfo>),
-    PortError { key: PortKey, msg: String },
+    /// A port's answer, and when its query started: a file it read that
+    /// changed since may not be the one make read (`Cache::insert`).
+    PortDone(Box<PortInfo>, std::time::SystemTime),
+    PortError {
+        key: PortKey,
+        msg: String,
+    },
 }
 
 /// Fixed pool of worker threads turning PortKeys into ScanEvents.
@@ -90,8 +95,9 @@ impl MakeRunner {
                 let ctx = ctx.clone();
                 std::thread::spawn(move || {
                     for key in job_rx.iter() {
+                        let since = std::time::SystemTime::now();
                         let ev = match run_query(&ctx, &key) {
-                            Ok(info) => ScanEvent::PortDone(Box::new(info)),
+                            Ok(info) => ScanEvent::PortDone(Box::new(info), since),
                             Err(e) => ScanEvent::PortError {
                                 key: key.clone(),
                                 msg: format!("{e:#}"),
@@ -329,11 +335,21 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         cmd.arg(format!("FLAVOR={flavor}"));
     }
 
-    let mut child = cmd.spawn()?;
     // Registered so a TUI quit can terminate whatever is still running
     // instead of leaving orphaned makes churning; the guard unregisters on
-    // every exit path, including early ?-returns.
-    let _active = ActiveMake::register(child.id());
+    // every exit path, including early ?-returns. Spawned holding the
+    // registry, and not at all once quitting (`quit_makes`): a worker
+    // taking its next port after the kill starts no make nothing kills.
+    let (mut child, _active) = {
+        let mut active = active_makes();
+        if QUITTING.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("optique is quitting");
+        }
+        let child = cmd.spawn()?;
+        active.insert(child.id());
+        let pid = child.id();
+        (child, ActiveMake(pid))
+    };
     // The wrapper is far smaller than the pipe buffer, so a plain write
     // before reading the output cannot deadlock. A failed one (make killed
     // under it) still waits, so the child is reaped.
@@ -490,16 +506,12 @@ fn active_makes() -> std::sync::MutexGuard<'static, std::collections::HashSet<u3
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Set once the process is quitting (`quit_makes`): no make starts after.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Registration guard: the pid leaves the registry when the query is done,
 /// whichever way it ends.
 struct ActiveMake(u32);
-
-impl ActiveMake {
-    fn register(pid: u32) -> Self {
-        active_makes().insert(pid);
-        ActiveMake(pid)
-    }
-}
 
 impl Drop for ActiveMake {
     fn drop(&mut self) {
@@ -510,6 +522,17 @@ impl Drop for ActiveMake {
 /// How many make processes are running right now.
 pub fn active_make_count() -> usize {
     active_makes().len()
+}
+
+/// The quit path: from now on no query starts a make (the workers drain
+/// their queues as failed queries), then every running one is terminated
+/// ([`kill_active_makes`]). Returns how many were.
+pub fn quit_makes() -> usize {
+    {
+        let _registry = active_makes();
+        QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    kill_active_makes()
 }
 
 /// Terminate every registered make process (the quit path). Returns how many
@@ -933,6 +956,21 @@ mod tests {
         runner.shutdown();
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!sleeping(), "the grandchild outlived the kill");
+    }
+
+    /// Once quitting, no query starts a make: a worker taking its next port
+    /// after the kill fails it at once instead of starting a make nothing
+    /// would kill.
+    #[test]
+    fn no_make_starts_once_quitting() {
+        let _lock = make_test_lock();
+        let (_tmp, ctx) = slow_port(0);
+        assert_eq!(quit_makes(), 0);
+        let err = run_query(&ctx, &PortKey::parse("cat/slow").unwrap()).unwrap_err();
+        QUITTING.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(format!("{err:#}").contains("quitting"), "{err:#}");
+        assert_eq!(active_make_count(), 0);
+        run_query(&ctx, &PortKey::parse("cat/slow").unwrap()).unwrap();
     }
 
     /// A thread that panicked holding the registry leaves it usable: the

@@ -92,8 +92,8 @@ pub fn query_flavors(
     }
     for _ in 0..pending {
         match runner.events.recv() {
-            Ok(ScanEvent::PortDone(info)) => {
-                cache.insert(&info, files);
+            Ok(ScanEvent::PortDone(info, since)) => {
+                cache.insert(&info, files, since);
                 out.insert(info.key.origin.clone(), info.flavors.clone());
             }
             Ok(ScanEvent::PortError { .. }) => {}

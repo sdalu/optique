@@ -99,11 +99,11 @@ pub fn scan(
             break;
         }
         match runner.events.recv() {
-            Ok(ScanEvent::PortDone(info)) => {
+            Ok(ScanEvent::PortDone(info, since)) => {
                 in_flight -= 1;
                 done += 1;
                 result.queried += 1;
-                cache.insert(&info, files);
+                cache.insert(&info, files, since);
                 let targets = register(*info, blacklist, moved, &exists, &mut result);
                 pending.extend(targets.into_iter().filter(|t| seen.insert(t.clone())));
             }

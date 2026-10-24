@@ -444,6 +444,16 @@ forgets the files it wrote or removed, and only those are read again. The
 staging dir itself changes under its reader, so the background re-queries
 read it through a fresh store per scan.
 
+Reading once leaves a gap for a port with no cache entry yet: its file is
+first read when its answer is stored, after make read it, and a file
+rewritten in between (`make config`, another optique applying) would pair
+the new bytes with the old answer. An answer is not stored when a file
+its query read has a ctime at or after the query's start: a write or a
+rename into place always moves it, which an mtime `cp -p` sets back does
+not. Each entry goes out in one write(2), whole under `O_APPEND` though
+two optiques share the generation, and a line cut short is ended before
+the next is appended.
+
 Rejected: seeding staging alone from the session's reads, which left the
 scan's pass, the largest, as it was; and copying the files in parallel,
 which still read everything twice.
