@@ -136,6 +136,42 @@ fn a_plan_confirming_the_defaults_writes_the_file() {
     assert_eq!(again["summary"]["written"], 0, "{again}");
 }
 
+/// A dependency written `pattern:${PORTSDIR}/cat/port` (a DEV_WARNING only)
+/// is followed, as poudriere strips the prefix, and a listed flavor the port
+/// does not have is an error whose dependencies are not gathered.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_portsdir_dependency_is_followed_and_an_unknown_flavor_refused() {
+    let f = Fixture::new();
+    let report = common::json(&f.run("scan", &["--json", "misc/absdep"]));
+    let ports: Vec<&str> = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["port"].as_str().unwrap())
+        .collect();
+    assert!(ports.contains(&"misc/condep"), "{report}");
+
+    let out = f.run("scan", &["--json", "misc/absdep@bogus"]);
+    let report = common::json(&out);
+    assert_eq!(out.status.code(), Some(1), "{report}");
+    assert!(
+        report["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown flavor 'bogus'"),
+        "{report}"
+    );
+    assert!(
+        !report["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["port"] == "misc/condep"),
+        "{report}"
+    );
+}
+
 /// A SINGLE group with a member forced on by make.conf and the other chosen
 /// in the file is a conflict, and turning the chosen one off settles it.
 #[test]

@@ -10,7 +10,8 @@
 /// plain `make -V` cannot reach generically.
 ///
 /// `DEPENDS` is `_UNIFIED_DEPENDS`; `BUILDDEPS` is the lists poudriere builds
-/// without `bulk -t`. On a tree before ports e7679b71cf89 (2026-09-25) the
+/// without `bulk -t`. An origin written `${PORTSDIR}/cat/port` (a DEV_WARNING
+/// only, bsd.port.mk ~4096) loses the prefix, as poudriere strips it. On a tree before ports e7679b71cf89 (2026-09-25) the
 /// unified list still folds `TEST_DEPENDS` in, and the second one tells
 /// those edges apart (see `DepEdge::test_only`); since then the two agree.
 ///
@@ -55,8 +56,8 @@ pub const WRAPPER: &str = "\
 .if defined(OPTIONS_OVERRIDE)
 .info OPTIQUE|OVERRIDE|${OPTIONS_OVERRIDE}
 .endif
-.info OPTIQUE|DEPENDS|${_UNIFIED_DEPENDS:U}
-.info OPTIQUE|BUILDDEPS|${PKG_DEPENDS_ALL:U} ${EXTRACT_DEPENDS_ALL:U} ${PATCH_DEPENDS_ALL:U} ${FETCH_DEPENDS_ALL:U} ${BUILD_DEPENDS_ALL:U} ${LIB_DEPENDS_ALL:U} ${RUN_DEPENDS_ALL:U}
+.info OPTIQUE|DEPENDS|${_UNIFIED_DEPENDS:U:S,:${PORTSDIR}/,:,}
+.info OPTIQUE|BUILDDEPS|${PKG_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${EXTRACT_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${PATCH_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${FETCH_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${BUILD_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${LIB_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,} ${RUN_DEPENDS_ALL:U:S,:${PORTSDIR}/,:,}
 .info OPTIQUE|MC_SET|${OPTIONS_SET:U}
 .info OPTIQUE|MC_UNSET|${OPTIONS_UNSET:U}
 .info OPTIQUE|PORT_SET|${${OPTIONS_NAME}_SET:U}

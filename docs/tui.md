@@ -537,7 +537,9 @@ walked port by port. Any other key closes it.
 <!-- /screen -->
 
 Toggling an option re-queries the port in the background against a
-staging `PORT_DBDIR` seeded from the real options directory; a dependency
+staging `PORT_DBDIR` seeded from the real options directory, with every
+other flavor reading the same options file, whose build the edit changes
+too; a dependency
 the option adds or removes appears or disappears in the left pane within
 a second or two, and newly appeared dependencies join the triage already
 marked `?`/`!` while dropped ones vanish, keeping any edits already

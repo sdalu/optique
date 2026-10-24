@@ -102,7 +102,10 @@ impl App {
                 } else {
                     Ok(())
                 };
-                let content = optionsfile::render(&info.pkgname, &info.options.complete, &staged);
+                // The file apply would write: the owning flavor's view, which
+                // holds every option the flavors reading it are queried with.
+                let owner = self.session.owner_info(info);
+                let content = optionsfile::render(&owner.pkgname, &owner.options.complete, &staged);
                 local.and_then(|()| self.staging_db.write(&options_name, content.as_bytes()))
             };
             if let Err(e) = written {
@@ -112,6 +115,28 @@ impl App {
             self.record_snapshot(options_name, staged);
             batch.push(key);
         }
+        // An edit to a shared file changes every flavor reading it: each is
+        // queried again, or a dependency the edit gives a sibling would
+        // never join the closure (graphics/libwmf@nox11 for
+        // ImageMagick7@nox11 when WMF is turned on in @x11).
+        let shared: BTreeSet<String> = batch
+            .iter()
+            .filter_map(|k| self.session.ports.get(k))
+            .filter(|i| crate::session::moved(i).is_none())
+            .map(|i| i.options_name.clone())
+            .collect();
+        let siblings: Vec<PortKey> = self
+            .session
+            .ports
+            .iter()
+            .filter(|(k, i)| {
+                shared.contains(&i.options_name)
+                    && crate::session::moved(i).is_none()
+                    && !batch.contains(k)
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        batch.extend(siblings);
         for key in &batch {
             if let Some(info) = self.session.ports.get(key) {
                 self.to_seed.remove(&info.options_name);

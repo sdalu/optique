@@ -1810,6 +1810,30 @@ fn a_newcomer_is_queried_again_with_its_real_options_file() {
     assert_eq!(req.try_recv().unwrap(), vec![gamma]);
 }
 
+/// An edit to a shared file is queried for every flavor reading it: a
+/// dependency the edit gives a sibling flavor joins the closure too.
+#[test]
+fn an_edit_requeries_every_flavor_sharing_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+    let (_ev, req) = fake_refresher(&mut app);
+    let alpha = PortKey::parse("cat/alpha").unwrap();
+    let mut sibling = info_of(&app, "cat/alpha");
+    sibling.key = PortKey::parse("cat/alpha@nox").unwrap();
+    sibling.canonical = sibling.key.clone();
+    let name = sibling.options_name.clone();
+    app.session
+        .ports
+        .insert(sibling.key.clone(), sibling.clone());
+    app.session.owners.insert(name, alpha.clone());
+    app.pending
+        .insert(alpha.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
+    app.flush_due_refreshes();
+    let mut sent = req.try_recv().unwrap();
+    sent.sort();
+    assert_eq!(sent, vec![alpha, sibling.key]);
+}
+
 /// A newcomer with an options.local and no options file is queried again
 /// with that options.local, which make reads all the same.
 #[test]

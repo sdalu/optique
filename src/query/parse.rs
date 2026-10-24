@@ -203,6 +203,24 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         edge.test_only = !built.contains(&edge.target);
     }
 
+    // A flavor the port does not have: make only sets IGNORE (bsd.port.mk
+    // ~1470), poudriere refuses it and gathers none of its dependencies; so
+    // does optique, rather than walk a build that never happens. An
+    // `@flavor~subpkg` spelling keeps its `~subpkg` in the flavor, as
+    // do-depends.sh does (docs/conformance.md), and is left to that.
+    if let Some(asked) = &requested.flavor
+        && !asked.contains('~')
+        && !flavors.iter().any(|f| f == asked)
+    {
+        if flavors.is_empty() {
+            bail!("has an unknown flavor '{asked}', this port does not have any flavors");
+        }
+        bail!(
+            "has an unknown flavor '{asked}', possible flavors: {}",
+            flavors.join(" ")
+        );
+    }
+
     let canonical = PortKey::new(
         requested.origin.clone(),
         if flavors.is_empty() || flavor.is_empty() {
@@ -542,6 +560,24 @@ OPTIQUE|MULTI|SOME|G H
         let key = PortKey::parse("cat/foo").unwrap();
         let info = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\nOPTIQUE|FLAVOR|x\n").unwrap();
         assert_eq!(info.canonical, key);
+    }
+
+    /// A flavor the port does not have is refused, as poudriere refuses it:
+    /// none of its dependencies is gathered.
+    #[test]
+    fn an_unknown_flavor_is_an_error() {
+        let key = PortKey::parse("devel/py-six@py311").unwrap();
+        let text = "OPTIQUE|PKGNAME|py312-six-1.0\nOPTIQUE|FLAVORS|py312\nOPTIQUE|FLAVOR|py311\n";
+        let err = parse_dump(&key, text).unwrap_err().to_string();
+        assert!(
+            err.contains("unknown flavor 'py311', possible flavors: py312"),
+            "{err}"
+        );
+        let key = PortKey::parse("devel/gmake@bogus").unwrap();
+        let err = parse_dump(&key, "OPTIQUE|PKGNAME|gmake-4\nOPTIQUE|FLAVOR|bogus\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not have any flavors"), "{err}");
     }
 
     #[test]
