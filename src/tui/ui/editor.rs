@@ -47,75 +47,7 @@ pub(super) fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     // The banner's lines, and nothing else in `lines` yet.
     let banner = lines.len();
 
-    // Align the name column to the longest option of this port.
-    let name_width = app
-        .editor_rows
-        .iter()
-        .filter_map(|r| match r {
-            EditorRow::Option(o) => Some(o.len()),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(12)
-        .clamp(12, 28);
-
-    let state = app.session.state(info);
-    let mut option_rows: Vec<usize> = Vec::new();
-    for (i, row) in app.editor_rows.iter().enumerate() {
-        let selected = app.focus == Focus::Editor && i == app.editor_idx;
-        match row {
-            EditorRow::GroupHeader(gi) => {
-                let Some(g) = info.options.groups.get(*gi) else { continue };
-                let mut text = format!("── {} — {}", g.name, g.kind.label());
-                if !g.desc.is_empty() {
-                    text.push_str(&format!(": {}", g.desc));
-                }
-                lines.push(Line::from(Span::styled(
-                    text,
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-                )));
-            }
-            // A row cuts itself: its columns stay, its description goes first.
-            EditorRow::Option(opt) => {
-                option_rows.push(lines.len());
-                lines.push(option_line(app, info, opt, selected, name_width, inner_width));
-            }
-            EditorRow::ExcludedHeader => {
-                lines.push(Line::from(Span::styled(
-                    "── not in this flavor (managed via the default flavor)",
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-                )));
-            }
-            EditorRow::Excluded(opt) => {
-                let on = app.session.is_staged(info, opt);
-                lines.push(Line::from(Span::styled(
-                    format!("  [{}] {}", if on { "x" } else { " " }, opt),
-                    Style::default().fg(Color::DarkGray),
-                )));
-            }
-            EditorRow::ObsoleteHeader => {
-                lines.push(Line::from(Span::styled(
-                    "── obsolete (no longer exist; dropped on apply)",
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-                )));
-            }
-            EditorRow::Obsolete(opt) => {
-                let was_on = state
-                    .and_then(|s| s.saved.as_ref())
-                    .and_then(|s| s.value(opt))
-                    .unwrap_or(false);
-                // The indent stays outside the struck span: a rule drawn over
-                // the leading blanks reads as part of the pane, not the row.
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("[{}] {}", if was_on { "x" } else { " " }, opt),
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
-                    ),
-                ]));
-            }
-        }
-    }
+    let option_rows = row_lines(app, info, inner_width, &mut lines);
 
     // A row wider than the pane ends in `…` at a word, not cut mid-word at
     // the border; option rows are laid out to the width already.
@@ -462,6 +394,87 @@ fn blame_of<'a>(app: &'a App, info: &PortInfo) -> Option<&'a String> {
 /// The lines above a port's option rows saying what is wrong with it or
 /// whose view it is, in a pane `width` columns wide. A CONFLICT, which names
 /// what make.conf did to it, or a STALE too long for one line wraps to a
+/// The editor's rows after the banner, appended to `lines`: group headers,
+/// option rows laid out `width` columns wide, the flavor-excluded and
+/// obsolete sections. Returns the indices in `lines` of the option rows.
+fn row_lines(
+    app: &App,
+    info: &PortInfo,
+    width: usize,
+    lines: &mut Vec<Line<'static>>,
+) -> Vec<usize> {
+    // Align the name column to the longest option of this port.
+    let name_width = app
+        .editor_rows
+        .iter()
+        .filter_map(|r| match r {
+            EditorRow::Option(o) => Some(o.len()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(12)
+        .clamp(12, 28);
+
+    let state = app.session.state(info);
+    let mut option_rows: Vec<usize> = Vec::new();
+    for (i, row) in app.editor_rows.iter().enumerate() {
+        let selected = app.focus == Focus::Editor && i == app.editor_idx;
+        match row {
+            EditorRow::GroupHeader(gi) => {
+                let Some(g) = info.options.groups.get(*gi) else { continue };
+                let mut text = format!("── {} — {}", g.name, g.kind.label());
+                if !g.desc.is_empty() {
+                    text.push_str(&format!(": {}", g.desc));
+                }
+                lines.push(Line::from(Span::styled(
+                    text,
+                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                )));
+            }
+            // A row cuts itself: its columns stay, its description goes first.
+            EditorRow::Option(opt) => {
+                option_rows.push(lines.len());
+                lines.push(option_line(app, info, opt, selected, name_width, width));
+            }
+            EditorRow::ExcludedHeader => {
+                lines.push(Line::from(Span::styled(
+                    "── not in this flavor (managed via the default flavor)",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                )));
+            }
+            EditorRow::Excluded(opt) => {
+                let on = app.session.is_staged(info, opt);
+                lines.push(Line::from(Span::styled(
+                    format!("  [{}] {}", if on { "x" } else { " " }, opt),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            EditorRow::ObsoleteHeader => {
+                lines.push(Line::from(Span::styled(
+                    "── obsolete (no longer exist; dropped on apply)",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                )));
+            }
+            EditorRow::Obsolete(opt) => {
+                let was_on = state
+                    .and_then(|s| s.saved.as_ref())
+                    .and_then(|s| s.value(opt))
+                    .unwrap_or(false);
+                // The indent stays outside the struck span: a rule drawn over
+                // the leading blanks reads as part of the pane, not the row.
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        format!("[{}] {}", if was_on { "x" } else { " " }, opt),
+                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                    ),
+                ]));
+            }
+        }
+    }
+    option_rows
+}
+
 /// second, under its text; the rest is cut with `…`.
 fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'static>>) {
     let red = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);

@@ -1,5 +1,7 @@
 //! The popups: apply, help, why, option info, port help, bulk, quit.
 
+use std::path::Path;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -9,6 +11,7 @@ use ratatui::Frame;
 use crate::apply::PendingWrite;
 use crate::model::options::{on_off, Provenance};
 use crate::model::origin::PortKey;
+use crate::tui::apply_modal::ApplyModal;
 use crate::tui::overlays::WhyLoop;
 use crate::tui::{clamp_u16, App};
 
@@ -42,63 +45,7 @@ pub(super) fn draw_apply_modal(f: &mut Frame, app: &mut App) {
             lines.push(Line::from(l));
         }
     } else {
-        for w in &modal.warnings {
-            lines.push(Line::from(Span::styled(
-                format!("note: {w}"),
-                Style::default().fg(Color::Magenta),
-            )));
-        }
-        let removed = if modal.removals.is_empty() {
-            String::new()
-        } else {
-            format!(", {} removed (--minimal)", modal.removals.len())
-        };
-        let head = |dir: &str| format!("{} options file(s) will be written to {dir}{removed}:", modal.writes.len());
-        let dir = dir.display().to_string();
-        // One row: the directory gives way, its last two components kept.
-        let room = (width as usize).saturating_sub(head("").chars().count());
-        lines.push(Line::from(head(&elide_dir(&dir, room))));
-        lines.push(Line::default());
-
-        let conflicting = |name: &str| modal.conflicting_files.contains(name);
-        let write_line = |w: &PendingWrite| {
-            Line::from(vec![
-                Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
-                Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
-            ])
-        };
-        let removal_line = |r: &crate::clean::Removal| {
-            Line::from(vec![
-                Span::styled(format!("rm {:<37}", r.options_name), Style::default().fg(Color::Yellow)),
-                Span::styled(r.reason.clone(), Style::default().fg(Color::DarkGray)),
-            ])
-        };
-        let mut entries: Vec<Line> = Vec::new();
-        if !modal.conflicting_files.is_empty() {
-            entries.push(Line::from(Span::styled(
-                "conflicting (Y writes them, s skips them):",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )));
-            entries.extend(modal.removals.iter().filter(|r| conflicting(&r.options_name)).map(removal_line));
-            entries.extend(modal.writes.iter().filter(|w| conflicting(&w.options_name)).map(write_line));
-            entries.push(Line::default());
-        }
-        entries.extend(modal.removals.iter().filter(|r| !conflicting(&r.options_name)).map(removal_line));
-        entries.extend(modal.writes.iter().filter(|w| !conflicting(&w.options_name)).map(write_line));
-        // Scrolled no further than it takes to bring the last entry in:
-        // past that only blank rows would come into view.
-        let heights: Vec<usize> =
-            entries.iter().map(|e| wrapped_height(std::slice::from_ref(e), width)).collect();
-        let head_rows = wrapped_height(&lines, width);
-        let mut rest: usize = heights.iter().sum();
-        let mut last_page = 0;
-        while last_page < entries.len() && head_rows + rest > inner_h as usize {
-            rest -= heights[last_page];
-            last_page += 1;
-        }
-        modal.scroll = modal.scroll.min(last_page);
-        skipped = heights[..modal.scroll].iter().sum();
-        lines.extend(entries.into_iter().skip(modal.scroll));
+        skipped = preview_lines(modal, dir, width, inner_h, &mut lines);
     }
 
     let failed = modal.done.as_ref().is_some_and(|d| !d.failed.is_empty());
@@ -132,6 +79,76 @@ pub(super) fn draw_apply_modal(f: &mut Frame, app: &mut App) {
     );
     f.render_widget(p, area);
     scroll_indicator(f, area, rows, skipped, border);
+}
+
+/// The preview the modal asks about, appended to `lines`: notes, the
+/// directory, then the conflicting entries and the rest, scrolled by whole
+/// entries no further than it takes to bring the last one in. Returns the
+/// rows of the entries scrolled past.
+fn preview_lines(
+    modal: &mut ApplyModal,
+    dir: &Path,
+    width: u16,
+    inner_h: u16,
+    lines: &mut Vec<Line<'static>>,
+) -> usize {
+    for w in &modal.warnings {
+        lines.push(Line::from(Span::styled(
+            format!("note: {w}"),
+            Style::default().fg(Color::Magenta),
+        )));
+    }
+    let removed = if modal.removals.is_empty() {
+        String::new()
+    } else {
+        format!(", {} removed (--minimal)", modal.removals.len())
+    };
+    let head = |dir: &str| format!("{} options file(s) will be written to {dir}{removed}:", modal.writes.len());
+    let dir = dir.display().to_string();
+    // One row: the directory gives way, its last two components kept.
+    let room = (width as usize).saturating_sub(head("").chars().count());
+    lines.push(Line::from(head(&elide_dir(&dir, room))));
+    lines.push(Line::default());
+
+    let conflicting = |name: &str| modal.conflicting_files.contains(name);
+    let write_line = |w: &PendingWrite| {
+        Line::from(vec![
+            Span::styled(format!("{:<40}", w.key.to_string()), Style::default().fg(Color::White)),
+            Span::styled(w.describe(), Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    let removal_line = |r: &crate::clean::Removal| {
+        Line::from(vec![
+            Span::styled(format!("rm {:<37}", r.options_name), Style::default().fg(Color::Yellow)),
+            Span::styled(r.reason.clone(), Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    let mut entries: Vec<Line> = Vec::new();
+    if !modal.conflicting_files.is_empty() {
+        entries.push(Line::from(Span::styled(
+            "conflicting (Y writes them, s skips them):",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+        entries.extend(modal.removals.iter().filter(|r| conflicting(&r.options_name)).map(removal_line));
+        entries.extend(modal.writes.iter().filter(|w| conflicting(&w.options_name)).map(write_line));
+        entries.push(Line::default());
+    }
+    entries.extend(modal.removals.iter().filter(|r| !conflicting(&r.options_name)).map(removal_line));
+    entries.extend(modal.writes.iter().filter(|w| !conflicting(&w.options_name)).map(write_line));
+    // Scrolled no further than it takes to bring the last entry in:
+    // past that only blank rows would come into view.
+    let heights: Vec<usize> =
+        entries.iter().map(|e| wrapped_height(std::slice::from_ref(e), width)).collect();
+    let head_rows = wrapped_height(lines, width);
+    let mut rest: usize = heights.iter().sum();
+    let mut last_page = 0;
+    while last_page < entries.len() && head_rows + rest > inner_h as usize {
+        rest -= heights[last_page];
+        last_page += 1;
+    }
+    modal.scroll = modal.scroll.min(last_page);
+    lines.extend(entries.into_iter().skip(modal.scroll));
+    heights[..modal.scroll].iter().sum()
 }
 
 /// `dir` in at most `room` columns: whole when it fits, else its leading
