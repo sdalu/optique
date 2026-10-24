@@ -691,6 +691,37 @@ fn minimal_mode_keeps_a_dropped_members_default() {
     );
 }
 
+/// The pattern dropped from a non-default flavor's write also turned off an
+/// option outside its view (the default flavor's A2): A2 gets a line of its
+/// own, and stays off.
+#[test]
+fn a_dropped_pattern_keeps_what_it_turned_off_outside_the_view() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut f = mk_info(&["A1", "X"], &[]);
+    f.key = PortKey::parse("cat/foo@f").unwrap();
+    f.canonical = f.key.clone();
+    f.flavors = vec!["a".into(), "f".into()];
+    f.options_name = "cat_foo".into();
+    fs::create_dir_all(tmp.path().join("cat_foo")).unwrap();
+    fs::write(
+        tmp.path().join("cat_foo/options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=A1 A2 X\nOPTIONS_FILE_UNSET+=A* X\n",
+    )
+    .unwrap();
+    let planned = plan_writes(
+        std::iter::once((&f.key, &f, ["X".to_string()].into())),
+        &OptionsFiles::new(tmp.path()),
+        false,
+    );
+    let written = SavedOptionsFile::parse(&planned.writes[0].content);
+    assert_eq!(
+        written.value("A2"),
+        Some(false),
+        "{}",
+        planned.writes[0].content
+    );
+}
+
 /// Under -m the file goes when the file it would write gives the no-file
 /// outcome, OPTIONS_SLAVE included: www/w3m-img with nothing chosen
 /// needs no file, and one repeating its defaults is removed.

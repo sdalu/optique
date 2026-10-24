@@ -497,7 +497,10 @@ fn planned_file(
                 if old.set.contains(o) {
                     file.set.insert(o.clone());
                 }
-                if old.unset.contains(o) {
+                // Off by its own line, or by a pattern dropped above (which
+                // matched an option of the view too): a line of its own
+                // keeps it off once the pattern is gone.
+                if old.unset.contains(o) || old.value(o) == Some(false) {
                     file.unset.insert(o.clone());
                 }
                 kept.push(o.clone());

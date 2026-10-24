@@ -59,8 +59,13 @@ enum Op {
     Shell,
 }
 
-/// What make splits words on and trims: ASCII blanks, never Unicode's.
+/// What make trims: ASCII blanks, never Unicode's.
 const MAKE_BLANKS: &[char] = &[' ', '\t', '\n', '\r', '\x0c'];
+
+/// What make splits a value's words on (bmake's `Substring_Words`): a
+/// space, a tab or a newline; a form feed or a carriage return stays in the
+/// word.
+const MAKE_WORD_BREAKS: &[char] = &[' ', '\t', '\n'];
 
 /// The variable a line assigns, how, and the value; None for a line that
 /// assigns nothing.
@@ -206,7 +211,7 @@ impl SavedOptionsFile {
             // make's blanks, not Unicode's: a no-break space a copy and
             // paste brings in is part of the word, as is a vertical tab.
             let words = value
-                .split(MAKE_BLANKS)
+                .split(MAKE_WORD_BREAKS)
                 .filter(|w| !w.is_empty())
                 .map(str::to_string);
             match name {
@@ -544,9 +549,9 @@ OPTIONS_FILE_UNSET+=FLITE
     /// part of the word, which matches no option.
     #[test]
     fn words_split_on_make_blanks_only() {
-        let f = SavedOptionsFile::parse("OPTIONS_FILE_UNSET+=X\u{a0}Y H\x0bI\tJ\n");
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_UNSET+=X\u{a0}Y H\x0bI\tJ K\x0cL\n");
         let unset: Vec<&str> = f.unset.iter().map(String::as_str).collect();
-        assert_eq!(unset, ["H\x0bI", "J", "X\u{a0}Y"]);
+        assert_eq!(unset, ["H\x0bI", "J", "K\x0cL", "X\u{a0}Y"]);
     }
 
     #[test]
