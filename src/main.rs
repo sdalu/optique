@@ -112,13 +112,13 @@ fn run() -> Result<()> {
             // Exit code is the cron/CI gate: 1 = decisions pending, 0 = clean.
             // Real errors keep travelling up the anyhow path (nonzero, 1 from
             // clap's runner) — only the *clean* run may return 0.
-            let attention = cmd_scan(&cli, &rs, args.json, args.options)?;
+            let attention = cmd_scan(&cli, &rs, args)?;
             exit_pending(attention > 0);
             Ok(())
         }
         Some(Command::Sync(args)) => {
             let rs = roots_or_installed(&cli, &args.roots.origins)?;
-            cmd_sync(&cli, &rs, cli.dry_run, args.json)
+            cmd_sync(&cli, &rs, args)
         }
         Some(Command::Decide(args)) => {
             // Same gate contract as scan: 1 means "not done", not "broke".

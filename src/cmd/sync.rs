@@ -1,16 +1,16 @@
 //! `optique sync`: every pending file written as its defaults and make.conf decide.
 
-
 use anyhow::Result;
 
 use crate::cli::Cli;
 use crate::color::{ansi, stderr_color, tint};
-use crate::{apply, report, session};
+use crate::{apply, cli, report, session};
 
 use super::write::{commit_writes, print_write_summary, WritePass};
 use super::{run_scan, RootSet};
 
-pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
+pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<()> {
+    let (dry_run, json) = (cli.dry_run, args.json);
     let scanned = run_scan(cli, rs)?;
     let (settings, result) = (&scanned.settings, &scanned.result);
     let paint = stderr_color(cli);
