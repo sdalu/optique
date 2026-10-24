@@ -107,7 +107,8 @@ differs ("differs on purpose" in the conformance table).
 
 The exception is a defect that changes behaviour radically: what gets
 built (the options a port ends up with, its dependencies, which origin is
-built) or whether the tool runs at all. Those are marked **radical** in
+built), or the tool failing on something optique wrote. Those are marked
+**radical** in
 docs/reference/, and optique conforms to them: it predicts what the
 upstream tool will actually do, tells the user that this follows an
 upstream defect, and the conformance table records it as "conforms to an
@@ -115,8 +116,11 @@ upstream defect". So optique reads a synth.ini key with a tab in it as
 synth does (ignored, the default used) and names the line; it follows
 poudriere's collapsed MOVED chains; and it never writes an options-file
 line that synth's fixed-offset probe would overrun, so no file optique
-writes makes synth abort. A file optique did not write and synth aborts
-on is left to the synth user: optique neither reports nor rejects it.
+writes makes synth abort. A tool failing on its own input is not
+optique's business: a file optique did not write and synth aborts on, or
+a synth.ini header with no `]` that stops synth loading its
+configuration, is left to the user; optique neither reports nor rejects
+it, and reads past it sanely.
 
 Rejected: copying every defect so that optique and the tool always agree,
 which makes optique wrong in the same way and hides the fault; and

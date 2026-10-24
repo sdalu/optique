@@ -254,9 +254,6 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     for note in &settings.notes {
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
-    for refusal in &settings.refusals {
-        eprintln!("  {}       {refusal}", tint(paint, ansi::RED, "error:"));
-    }
 
     let (mut removals, live, mut warnings) =
         clean::classify_entries(
@@ -976,9 +973,6 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         let notes = rs.notes.iter().chain(settings.notes.iter()).map(String::as_str);
         for note in notes.chain(cache.note()) {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
-        }
-        for refusal in &settings.refusals {
-            eprintln!("  {}       {refusal}", tint(paint, ansi::RED, "error:"));
         }
         // In lookup order: the first holding a port answers for it.
         for (i, o) in settings.overlays.iter().enumerate() {

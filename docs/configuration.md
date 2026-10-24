@@ -226,7 +226,8 @@ within its section wins, a bare or empty one included, so it ends the
 search there rather than reading on to a later, real assignment of the
 same key. Each line synth reads otherwise than it seems to say is named
 in a note, saying it is read as synth reads it. A section header with no
-`]` makes synth refuse to run: each is named as an error.
+`]` is no header and is skipped; synth fails to load such a file, which is
+left to the user to fix.
 make.conf is the single file
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
 each builder's make.conf — or none at all when the profile has none (the

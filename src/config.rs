@@ -146,10 +146,6 @@ pub struct Settings {
     /// Remarks about the resolution itself (e.g. a flag that does not apply
     /// to the selected backend), printed by the startup banner.
     pub notes: Vec<String>,
-    /// What the build tool itself will refuse to run on, though optique
-    /// reads past it (a synth.ini header with no `]`), printed by the
-    /// startup banner as errors.
-    pub refusals: Vec<String>,
     /// Ports trees laid over `portsdir`, in lookup order (the first holding
     /// a port shadows the others and the main tree): the `OVERLAYS` make
     /// itself reports once the make.conf is settled.
@@ -813,7 +809,6 @@ fn resolve_local(
         env: QueryEnv::Host,
         blacklist: Blacklist::default(),
         notes,
-        refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: false,
         framework: Vec::new(),
@@ -874,7 +869,6 @@ fn resolve_poudriere(
         env,
         blacklist,
         notes,
-        refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: default_all,
         framework: Vec::new(),
@@ -1134,7 +1128,6 @@ fn resolve_synth(
         env: QueryEnv::Synth,
         blacklist: Blacklist::default(),
         notes,
-        refusals: synth_ini_refusals(&ini),
         overlays: Vec::new(),
         flavor_default_all: false,
         framework: Vec::new(),
@@ -1230,8 +1223,9 @@ fn ini_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// These follow synth's INI reader rather than what the line seems to say
 /// (an upstream defect that decides which settings synth uses, so optique
 /// reads the file as synth does, and `synth_ini_misreads` names each such
-/// line). A header with no `]` makes synth fail (`synth_ini_refusals`);
-/// optique takes it for no header.
+/// line). A header with no `]` is no header: it makes synth fail to load
+/// its configuration, which is the user's file to fix, not optique's to
+/// report.
 fn ini_section_header(line: &str) -> Option<&str> {
     let rest = line.strip_prefix('[')?;
     rest.find(']').map(|end| &rest[..end])
@@ -1315,26 +1309,6 @@ fn line_ranges(lines: &[usize]) -> String {
         .join(", ")
 }
 
-/// The synth.ini lines synth fails on, each as an error: a section header
-/// (`[` in column 1, on a line longer than that) with no `]`, where
-/// config.adb's `Get_Value` takes `Index (..., "]") - 1` into a `Natural`
-/// and raises `Constraint_Error`, so synth stops with "Configuration failed
-/// to load". optique reads such a line as data, as before; the error says
-/// synth will not.
-fn synth_ini_refusals(text: &str) -> Vec<String> {
-    text.split('\n')
-        .enumerate()
-        .filter(|(_, raw)| raw.len() > 1 && raw.starts_with('[') && !raw.contains(']'))
-        .map(|(n, _)| {
-            format!(
-                "synth.ini line {}: a section header with no ']': synth fails to load \
-                 its configuration and will refuse to run",
-                n + 1
-            )
-        })
-        .collect()
-}
-
 /// Does synth.ini contain a `[name]` section header?
 fn synth_ini_has_section(text: &str, name: &str) -> bool {
     ini_lines(text).any(|(_, line)| ini_section_header(line) == Some(name))
@@ -1355,7 +1329,7 @@ fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
     let mut in_section = false;
     for (_, line) in ini_lines(text) {
         if line.starts_with('[') {
-            // A header with no `]` stops synth (`synth_ini_refusals`).
+            // A header with no `]` is skipped, the section going on.
             if let Some(name) = ini_section_header(line) {
                 in_section = name == profile;
             }
@@ -2739,37 +2713,16 @@ not a key value line
         assert_eq!(line_ranges(&[1, 2, 3, 5, 7, 8]), "1-3, 5, 7-8");
     }
 
-    /// A header with no `]` makes synth fail to load its configuration:
-    /// named as a refusal, the line still read as data by optique. A lone
-    /// `[` is a one-character line synth skips, and an indented one no
-    /// header at all.
+    /// A header with no `]` is no header: skipped, the section above going
+    /// on, and nothing said of it. synth fails to load such a file, but the
+    /// file is the user's, not something optique wrote.
     #[test]
-    fn synth_ini_header_without_bracket_is_a_refusal() {
-        let ini = "[A]\nk=v\n[B\n[\n  [C\n[D\r\n";
-        assert_eq!(
-            synth_ini_refusals(ini),
-            [
-                "synth.ini line 3: a section header with no ']': synth fails to load \
-                 its configuration and will refuse to run",
-                "synth.ini line 6: a section header with no ']': synth fails to load \
-                 its configuration and will refuse to run",
-            ]
-        );
-        assert!(synth_ini_refusals("[A]\nk=v\n").is_empty());
+    fn synth_ini_header_without_bracket_is_skipped() {
+        let ini = "[A]\nk=v\n[B\nj=w\n";
         assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v"));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let synth = tmp.path().join("synth");
-        let tree = tmp.path().join("ports");
-        fake_tree(&tree);
-        let stage = tmp.path().join("stage");
-        fs::create_dir_all(&synth).unwrap();
-        fs::create_dir_all(&stage).unwrap();
-        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n[B\n", tree.display()))
-            .unwrap();
-        let s = resolve_synth(&synth, "A", &synth_host(None), None, Some(&tree), &stage).unwrap();
-        assert_eq!(s.refusals.len(), 1, "{:?}", s.refusals);
-        assert_eq!(s.portsdir, tree);
+        assert_eq!(synth_ini_lookup(ini, "A", "j").as_deref(), Some("w"));
+        assert!(!synth_ini_has_section(ini, "B"));
+        assert!(synth_ini_misreads(ini).is_empty(), "{:?}", synth_ini_misreads(ini));
     }
 
     /// A missing synth.ini is none; one that cannot be read stops the run,

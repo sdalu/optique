@@ -2561,7 +2561,8 @@ on to a later, real assignment of the same key.
 Each line synth reads otherwise than it seems to say is named in a note.
 A section header with no
 .Ql \&]
-makes synth refuse to run: each is named as an error on standard error.
+is no header and is skipped; synth fails to load such a file, which is
+left to the user to fix.
 .Pa make.conf
 is the single file
 .Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,

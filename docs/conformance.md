@@ -28,10 +28,11 @@ Verdicts:
 - **differs on purpose**: with the reason, often in [DESIGN.md](../DESIGN.md);
   this includes an upstream defect that changes nothing built, which
   optique does not copy.
-- **conforms to an upstream defect**: a defect that changes what gets built
-  or whether the tool runs (marked radical in the reference pages), which
-  optique follows and says so (DESIGN.md, "Upstream's behaviour, not its
-  bugs").
+- **conforms to an upstream defect**: a defect that changes what gets built,
+  or makes the tool fail on something optique wrote (marked radical in the
+  reference pages), which optique follows and says so (DESIGN.md,
+  "Upstream's behaviour, not its bugs"). A tool failing on its own input is
+  left to the user.
 - **not modelled**: with why it does not change a result.
 - **known gap**: with what it can change.
 
@@ -115,7 +116,7 @@ Verdicts:
 | Profile keys from the profile's own section, never `[Global Configuration]` ([ref](reference/synth.md#how-a-value-is-read)) | `parameters.adb` | matches |
 | INI syntax: `;`/`#` comments, case-sensitive keys and sections, the first match (a bare or empty one included) ends the search, a line of one character skipped ([ref](reference/synth.md#how-a-value-is-read)) | ini-files `config.adb` `Get_Value` | matches |
 | The INI reader keeps a tab in a key or value, keeps a CRLF file's `\r`, keeps the spaces of `[ name ]`, and takes no indented `[name]` for a header ([ref](reference/synth.md#how-a-value-is-read)) | ini-files `config.adb` `Get_Value` | **conforms to an upstream defect**: read as synth reads it, each such line named in a note |
-| A header with no `]` raises `Constraint_Error`, so synth refuses to run ([ref](reference/synth.md#how-a-value-is-read)) | ini-files `config.adb` `Get_Value` | **conforms to an upstream defect**: an error line in the banner says synth will refuse to run |
+| A header with no `]` raises `Constraint_Error`, so synth refuses to run ([ref](reference/synth.md#how-a-value-is-read)) | ini-files `config.adb` `Get_Value` | **differs on purpose**: the user's own input, not optique's business; optique skips the line and says nothing |
 | An unreadable synth.ini makes synth refuse to run ([ref](reference/synth.md#configuration-file)) | `parameters.adb` `load_configuration` | matches: optique stops with an error; bytes that are not UTF-8 are decoded lossily |
 | `Directory_options` (default `/var/db/ports`) as `PORT_DBDIR`, `options.local` included ([ref](reference/synth.md#options)) | `parameters.adb`, `replicant.adb` | matches |
 | Missing `Directory_portsdir`: `$PORTSDIR`, `make -V PORTSDIR`, `/usr/dports`, `/usr/ports`, the first that exists ([ref](reference/synth.md#how-missing-keys-are-filled)) | `parameters.adb` `determine_portsdirs` | matches, with a note naming the source; synth's stop on a make query that fails over a missing tree is a defect not copied: **differs on purpose**, optique moves to the next candidate |
