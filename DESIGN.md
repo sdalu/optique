@@ -217,9 +217,22 @@ and its entries that the changed paths leave alone start the new file
   takes the entries owning a port there (`../Makefile.inc` is probed).
 - Everything goes for a new `Mk/*.mk` (`bsd.local.mk` is `.sinclude`d) and
   for a top-level file not known to be unread (PORTSDIR's `Makefile.inc`
-  is probed). `MOVED`, `UPDATING`, `UIDs`, `GIDs` and the like, `Mk/`
-  scripts, `Tools/`, `Templates/` and `Keywords/` reach make only through a
-  target, never while it parses (none appears in a `!=` or `:sh` in `Mk/`).
+  is probed). `MOVED`, `UPDATING`, `UIDs`, `GIDs` and the like, `Tools/`,
+  `Templates/` and `Keywords/` reach make only through a target, never
+  while it parses.
+- A script under `Mk/` that make runs while parsing counts as a change to
+  the makefile running it (`parse_time_readers`). `Uses/cargo.mk` runs
+  three awk scripts in a `${:!...!}` through `${_CARGO_AWK}`, and the
+  crates they list add `BUILD_DEPENDS` and `LIB_DEPENDS` (cmake, libgit2,
+  openssl, ...), so a change to one of them takes every cargo port. A
+  script is found run while parsing when a command make runs then (`VAR!=
+  cmd`, `${:!cmd!}`, `${VAR:sh}`) names it, the variables it uses expanded
+  from `Mk/`'s assignments; recipe lines are skipped. On the tree those are
+  cargo's three scripts and no other of the 38 non-makefiles in `Mk/`, so
+  the fifteen script changes of three months (`do-fetch.sh`, `qa.sh`, ...,
+  all run by targets) take nothing. Matching a script's name anywhere in
+  `Mk/` was rejected: `bsd.port.mk` names all fifteen, which would have
+  made each a cold scan.
 
 Another port's file is matched by name, not by directory: every python
 port reads `lang/python312/Makefile.version`, and that port's `pkg-plist`

@@ -260,8 +260,13 @@ a new
 or a top-level file other than
 .Pa MOVED , UPDATING , CHANGES , UIDs , GIDs
 and the like, takes them all.
-Scripts under
-.Pa Mk/ ,
+A script under
+.Pa Mk/
+that
+.Nm make
+runs while it parses
+.Pq Pa Uses/cargo.mk Ns 's awk scripts
+counts as its makefile; the other scripts,
 .Pa Tools/ , Templates/
 and
 .Pa Keywords/

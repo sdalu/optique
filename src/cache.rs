@@ -251,7 +251,9 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
         let old = g.commit.filter(|old| same && old != new)?;
         Some((text, old))
     })?;
-    let changes = git_changes(portsdir, &old, new)?;
+    let mut changes = git_changes(portsdir, &old, new)?;
+    let changed = changes.len();
+    changes.extend(parse_time_readers(portsdir, &changes).into_iter().map(|mk| ('M', mk)));
     let invalidation = Invalidation::of(&changes);
     let from = short(&old);
     if let Some(path) = &invalidation.all {
@@ -269,9 +271,8 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
         }
     }
     let note = format!(
-        "cache: {} entries carried over from tree {from}, {dropped} dropped by {} changed paths",
+        "cache: {} entries carried over from tree {from}, {dropped} dropped by {changed} changed paths",
         lines.len(),
-        changes.len()
     );
     Some(Carried { lines, note })
 }
@@ -305,6 +306,157 @@ fn git_changes(portsdir: &Path, old: &str, new: &str) -> Option<Vec<(char, Strin
     Some(changes)
 }
 
+/// The `Mk/*.mk` files that run one of the changed files under `Mk/` that
+/// is not itself a makefile (a script) while make parses: such a change
+/// counts as one to the makefile, whose readers it then takes. A script is
+/// run at parse time when a command make runs then (`VAR!= cmd`,
+/// `${:!cmd!}`, `${VAR:sh}`) names it once the variables it uses are
+/// expanded from `Mk/`'s own assignments: `Uses/cargo.mk` runs three awk
+/// scripts through `${_CARGO_AWK}`, and the crates they list add build
+/// dependencies. Most scripts are only run by targets (`do-fetch.sh`,
+/// `qa.sh`), and a change to one takes nothing. `Mk/` is read only when
+/// such a file changed.
+fn parse_time_readers(portsdir: &Path, changes: &[(char, String)]) -> Vec<String> {
+    let scripts: Vec<&str> = changes
+        .iter()
+        .filter(|(_, path)| path.starts_with("Mk/") && !path.ends_with(".mk"))
+        .filter_map(|(_, path)| path.rsplit('/').next())
+        .collect();
+    if scripts.is_empty() {
+        return Vec::new();
+    }
+    let makefiles = mk_files(&portsdir.join("Mk"));
+    let mut assigned: HashMap<String, String> = HashMap::new();
+    let mut commands: Vec<(String, String)> = Vec::new();
+    for (rel, text) in &makefiles {
+        for line in logical_lines(text) {
+            if line.starts_with('\t') {
+                continue; // a target's recipe
+            }
+            if let Some((name, value)) = assignment(&line) {
+                let entry = assigned.entry(name.to_string()).or_default();
+                entry.push(' ');
+                entry.push_str(value);
+            }
+            for command in parse_commands(&line) {
+                commands.push((format!("Mk/{rel}"), command));
+            }
+        }
+    }
+    // `${VAR:sh}` runs VAR's value: its command is in `assigned`.
+    let mut readers: Vec<String> = commands
+        .into_iter()
+        .filter(|(_, command)| {
+            let expanded = expand(command, &assigned, 4);
+            scripts.iter().any(|script| expanded.contains(script))
+        })
+        .map(|(mk, _)| mk)
+        .collect();
+    readers.sort();
+    readers.dedup();
+    readers
+}
+
+/// Every `*.mk` under `dir`, relative to it, with its text.
+fn mk_files(dir: &Path) -> Vec<(String, String)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else if path.extension().is_some_and(|e| e == "mk") {
+                if let (Ok(rel), Ok(text)) = (path.strip_prefix(base), fs::read(&path)) {
+                    let text = String::from_utf8_lossy(&text).into_owned();
+                    out.push((rel.to_string_lossy().into_owned(), text));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// A makefile's lines with their backslash continuations joined.
+fn logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for line in text.lines() {
+        match line.strip_suffix('\\') {
+            Some(head) => {
+                current.push_str(head);
+                current.push(' ');
+            }
+            None => {
+                current.push_str(line);
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// `NAME=value` in any of make's assignment forms (`=`, `+=`, `?=`, `:=`,
+/// `!=`), with the name and the value.
+fn assignment(line: &str) -> Option<(&str, &str)> {
+    let at = line.find('=')?;
+    let name = line[..at].trim_end_matches(['+', '?', ':', '!']).trim();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b"_.-".contains(&b);
+    let ok = !name.is_empty() && name.bytes().all(word);
+    ok.then(|| (name, line[at + 1..].trim()))
+}
+
+/// The commands a line has make run while it parses: a `!=` assignment's
+/// value, every `${...:!cmd!}`, and the variable of every `${VAR:sh}`.
+fn parse_commands(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(at) = line.find("!=") {
+        if assignment(line).is_some_and(|(name, _)| line[..at].trim() == name) {
+            out.push(line[at + 2..].to_string());
+        }
+    }
+    let mut rest = line;
+    while let Some(at) = rest.find(":!") {
+        let tail = &rest[at + 2..];
+        let end = tail.find("!}").or_else(|| tail.find("!:")).unwrap_or(tail.len());
+        out.push(tail[..end].to_string());
+        rest = &tail[end..];
+    }
+    let mut rest = line;
+    while let Some(at) = rest.find(":sh}") {
+        let head = &rest[..at];
+        if let Some(open) = head.rfind("${") {
+            out.push(format!("${{{}}}", &head[open + 2..]));
+        }
+        rest = &rest[at + 4..];
+    }
+    out
+}
+
+/// `text` with each `${NAME}` or `${NAME:...}` followed into what `Mk/`
+/// assigns NAME, kept as well, `depth` levels down.
+fn expand(text: &str, assigned: &HashMap<String, String>, depth: usize) -> String {
+    let mut out = text.to_string();
+    if depth == 0 {
+        return out;
+    }
+    let mut rest = text;
+    while let Some(at) = rest.find("${") {
+        let tail = &rest[at + 2..];
+        let end = tail.find(['}', ':']).unwrap_or(tail.len());
+        if let Some(value) = assigned.get(&tail[..end]) {
+            out.push(' ');
+            out.push_str(&expand(value, assigned, depth - 1));
+        }
+        rest = &tail[end..];
+    }
+    out
+}
+
 /// Top-level files of the tree that no query reads: the framework names
 /// UIDs and GIDs only in a target's shell, and the top Makefile is the
 /// tree's own SUBDIR walk.
@@ -331,8 +483,9 @@ const UNREAD_TOP: [&str; 10] = [
 /// the entries owning a port there (bsd.port.mk probes `../Makefile.inc`).
 /// Everything goes for a top-level file a query may read (PORTSDIR's
 /// `Makefile.inc`, probed too) and for a new `Mk/*.mk` (`bsd.local.mk` is
-/// `.sinclude`d). `Mk/` scripts, `Tools/`, `Templates/` and `Keywords/`
-/// only reach make through a target, never while it parses.
+/// `.sinclude`d). A `Mk/` script run while make parses counts as its
+/// makefile ([`parse_time_readers`]); the rest of `Mk/`, `Tools/`,
+/// `Templates/` and `Keywords/` only reach make through a target.
 struct Invalidation {
     /// The changed path that takes everything.
     all: Option<String>,
@@ -1093,5 +1246,58 @@ mod tests {
         let c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "other conf");
         assert_eq!(c.note(), None);
         assert!(c.lookup(&PortKey::parse("cat/b").unwrap(), &files).is_none());
+    }
+
+    /// A script a parse-time command runs, directly, through a variable,
+    /// or through `:sh`, counts as a change to the makefile running it; one
+    /// a target's recipe runs, or a variable no such command uses, does not.
+    #[test]
+    fn a_script_run_while_parsing_counts_as_its_makefile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mk = tmp.path().join("Mk");
+        std::fs::create_dir_all(mk.join("Uses")).unwrap();
+        std::fs::write(
+            mk.join("Uses/rusty.mk"),
+            "_AWK=\t${AWK} \\\n\t\t-f${SCRIPTSDIR}/common.awk -f\n\
+             .for _a _b in ${:!${_AWK} ${SCRIPTSDIR}/fetch.awk /dev/null!}\n.endfor\n",
+        )
+        .unwrap();
+        let shy = "_V=\t${SH} ${SCRIPTSDIR}/version.sh\nV=\t${_V:sh}\n";
+        std::fs::write(mk.join("Uses/shy.mk"), shy).unwrap();
+        std::fs::write(mk.join("Uses/now.mk"), "X!=\t${SH} ${SCRIPTSDIR}/now.sh\n").unwrap();
+        std::fs::write(
+            mk.join("bsd.port.mk"),
+            "DO_FETCH=\t${SH} ${SCRIPTSDIR}/do-fetch.sh\n\
+             do-fetch:\n\t${SCRIPTSDIR}/qa.sh\n\t${DO_FETCH}\n",
+        )
+        .unwrap();
+        let readers =
+            |script: &str| parse_time_readers(tmp.path(), &[('M', format!("Mk/Scripts/{script}"))]);
+        assert_eq!(readers("common.awk"), ["Mk/Uses/rusty.mk"]);
+        assert_eq!(readers("fetch.awk"), ["Mk/Uses/rusty.mk"]);
+        assert_eq!(readers("version.sh"), ["Mk/Uses/shy.mk"]);
+        assert_eq!(readers("now.sh"), ["Mk/Uses/now.mk"]);
+        assert!(readers("qa.sh").is_empty(), "a recipe line");
+        assert!(readers("do-fetch.sh").is_empty(), "assigned, run only by a recipe");
+        // A makefile change alone reads nothing.
+        assert!(parse_time_readers(tmp.path(), &[('M', "Mk/Uses/rusty.mk".into())]).is_empty());
+    }
+
+    /// On the host's tree, cargo's awk scripts are the ones run while
+    /// parsing (their crates add build dependencies), and the scripts the
+    /// targets run are not.
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn the_trees_parse_time_scripts_are_cargos() {
+        let ports = Path::new("/usr/ports");
+        let readers =
+            |script: &str| parse_time_readers(ports, &[('M', format!("Mk/Scripts/{script}"))]);
+        let cargo = ["cargo-crates-git-fetch.awk", "cargo-crates-git-common.awk", "split-url.awk"];
+        for script in cargo {
+            assert_eq!(readers(script), ["Mk/Uses/cargo.mk"], "{script}");
+        }
+        for script in ["qa.sh", "do-fetch.sh", "do-depends.sh", "checksum.sh", "makesum.sh"] {
+            assert!(readers(script).is_empty(), "{script}");
+        }
     }
 }

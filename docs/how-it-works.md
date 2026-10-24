@@ -140,8 +140,11 @@ make read for it (`.MAKE.MAKEFILES`), and goes when:
   (`../Makefile.inc` is probed).
 
 A new `Mk/*.mk`, or a top-level file other than `MOVED`, `UPDATING`,
-`CHANGES`, `UIDs`, `GIDs` and the like, takes every entry. `Mk/` scripts,
-`Tools/`, `Templates/` and `Keywords/` take none: only targets read them.
+`CHANGES`, `UIDs`, `GIDs` and the like, takes every entry. A `Mk/` script
+make runs while it parses (`Uses/cargo.mk`'s awk scripts, whose crates add
+build dependencies) counts as a change to the makefile running it; the
+other scripts, `Tools/`, `Templates/` and `Keywords/` take none, since
+only targets read them.
 On a thousand-port closure a day's update re-queried 3 ports and a week's
 44. The banner says how many entries were carried over. Without git, or
 when git cannot list the changes (the old commit gone), nothing is carried
