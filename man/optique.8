@@ -2145,8 +2145,8 @@ Disagreements confined to options one flavor does not even have, such as those
 removed by
 .Va OPTIONS_EXCLUDE ,
 are structural and not reported.
-An option only a non-default flavor has, which the file therefore never
-records
+With the default flavor in the closure, an option only a non-default
+flavor has, which the file therefore never records
 .Po
 .Ql AOSD
 of
@@ -2171,7 +2171,7 @@ does ICU, is on for that flavor with or without the file, as
 has it.
 When only non-default flavors of the origin are in the closure, the one with
 the most options stands for the default flavor, and each option goes in with
-the value of a flavor that has it; none ever drops what it does not see: the
+the value of a flavor that has it, staged and edited like any other; none ever drops what it does not see: the
 file is up to date when everything each of them has is unchanged, none of its
 options counts as obsolete, and a write keeps the list entry and
 .Ql SET/UNSET
@@ -2270,7 +2270,8 @@ an error, so a plan can be replayed: the second run writes nothing.
 A flavor sharing the default flavor's file is asked about the file's options,
 as
 .Cm scan
-lists them, those it excludes included; an option only it has, which the file
+lists them, those it excludes included, each changed under the owning
+flavor's rules; an option only it has, which a file the default flavor owns
 never records, is refused.
 .Pp
 The report always goes to standard output as JSON

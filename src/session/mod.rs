@@ -261,9 +261,10 @@ impl Session {
             // A file optique cannot model claims nothing: no saved choices,
             // and make's own PORT_OPTIONS as the state, which no edit
             // changes (`edit_refusal`).
+            let others = sharing(&self.ports, &info.options_name, &owner.key);
             let (saved, baseline) = match unmanaged_file(&combined) {
                 Some(_) => (None, owner.options.effective.clone()),
-                None => saved_baseline(owner, files),
+                None => saved_baseline(owner, &others, files),
             };
             self.locals.insert(info.options_name.clone(), combined);
             self.states.insert(
@@ -289,6 +290,7 @@ impl Session {
         files: &OptionsFiles,
     ) -> (Vec<PortKey>, Vec<PortKey>) {
         self.aliases.extend(result.aliases);
+        let owners_before = self.readers();
         let mut added_keys = Vec::new();
         for (key, info) in result.ports {
             if self.ports.insert(key.clone(), info).is_none() {
@@ -326,6 +328,7 @@ impl Session {
         self.moved_states.retain(|k, _| reachable.contains(k));
         // The GC may have dropped an owner whose sibling flavor stays.
         self.rebuild_owners();
+        self.rebase_new_owners(&owners_before, files);
         self.refresh_unmanaged();
         added_keys.retain(|k| self.ports.contains_key(k));
         (added_keys, removed)
@@ -379,7 +382,10 @@ impl Session {
     pub fn unstored<'a>(&'a self, info: &'a PortInfo, opt: &str) -> Option<&'a PortInfo> {
         let owner = self.owner_info(info);
         let theirs = |i: &PortInfo| i.options.complete.iter().any(|o| o == opt);
-        (owner.key != info.key && theirs(info) && !theirs(owner)).then_some(owner)
+        // Only the default flavor writes its own view alone; another owner
+        // writes every flavor's options (`apply::planned_file`).
+        (owner.key != info.key && is_preferred(owner) && theirs(info) && !theirs(owner))
+            .then_some(owner)
     }
 
     /// The port's dependencies, resolved to closure keys; unknown ones are
@@ -414,7 +420,8 @@ impl Session {
             }
             state.baseline = if files.own(name).is_some() {
                 // A file apply wrote has a line for every option.
-                close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
+                let others = sharing(&self.ports, name, &owner.key);
+                shared_enabled(owner, &others, saved.as_ref())
             } else {
                 // Removed under -m: what make builds with no file but its
                 // options.local, which is what the removal was judged
@@ -424,6 +431,61 @@ impl Session {
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
             self.locals.insert(name.to_string(), combined);
+        }
+    }
+
+    /// Each shared file's owner and the flavors reading it.
+    fn readers(&self) -> HashMap<String, (PortKey, BTreeSet<PortKey>)> {
+        self.owners
+            .iter()
+            .map(|(name, owner)| {
+                let keys = sharing(&self.ports, name, owner)
+                    .into_iter()
+                    .map(|i| i.key.clone())
+                    .collect();
+                (name.clone(), (owner.clone(), keys))
+            })
+            .collect()
+    }
+
+    /// A file whose owner or readers changed in a merge (the default flavor
+    /// came in or went, a flavor with options of its own joined an owner
+    /// that writes them all) had its state built from another view: its
+    /// baseline is built again, and the edits staged on the old one carried
+    /// over as edits, each option turned on or off since the old baseline
+    /// turned so on the new.
+    fn rebase_new_owners(
+        &mut self,
+        before: &HashMap<String, (PortKey, BTreeSet<PortKey>)>,
+        files: &OptionsFiles,
+    ) {
+        let now = self.readers();
+        let changed: Vec<(String, PortKey)> = now
+            .into_iter()
+            .filter(|(name, readers)| before.get(name).is_some_and(|old| old != readers))
+            .map(|(name, (owner, _))| (name, owner))
+            .collect();
+        for (name, key) in changed {
+            let Some(owner) = self.ports.get(&key) else {
+                continue;
+            };
+            if unmanaged_file(&files.combined(&name)).is_some() {
+                continue;
+            }
+            let others = sharing(&self.ports, &name, &key);
+            let (_, baseline) = saved_baseline(owner, &others, files);
+            let Some(state) = self.states.get_mut(&name) else {
+                continue;
+            };
+            let on: Vec<String> = state.staged.difference(&state.baseline).cloned().collect();
+            let off: Vec<String> = state.baseline.difference(&state.staged).cloned().collect();
+            let mut staged = baseline.clone();
+            staged.extend(on);
+            for o in &off {
+                staged.remove(o);
+            }
+            state.baseline = baseline;
+            state.staged = close_implies(owner, staged);
         }
     }
 
@@ -660,8 +722,20 @@ impl Session {
             .filter(|opt| o.is_forced(opt) || self.local_decides(owner, opt))
             .cloned()
             .collect();
+        let mut defaults = port_defaults(o);
+        // An owner that is no default flavor writes every flavor's options:
+        // each other one's own options take that flavor's defaults.
+        if !is_preferred(owner) {
+            for other in sharing(&self.ports, &owner.options_name, &owner.key) {
+                defaults.extend(
+                    port_defaults(&other.options)
+                        .into_iter()
+                        .filter(|d| !o.complete.contains(d)),
+                );
+            }
+        }
         if let Some(state) = self.states.get_mut(&owner.options_name) {
-            let mut staged = port_defaults(o);
+            let mut staged = defaults;
             for opt in &locked {
                 if state.staged.contains(opt) {
                     staged.insert(opt.clone());
@@ -1187,9 +1261,11 @@ pub fn signed_options(complete: &[String], on: &BTreeSet<String>) -> String {
 }
 
 /// The saved file of the port owning an options file, and the baseline it
-/// gives: the file read as make reads it, IMPLIES-closed.
+/// gives: the file read as make reads it, IMPLIES-closed. `others` are the
+/// other flavors in the closure sharing the file ([`sharing`]).
 fn saved_baseline(
     owner: &PortInfo,
+    others: &[&PortInfo],
     files: &OptionsFiles,
 ) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
     let saved = files.saved(&owner.options_name);
@@ -1200,9 +1276,50 @@ fn saved_baseline(
     let baseline = if owner.options.r#override.is_some() {
         nofile_effective(owner)
     } else {
-        close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
+        shared_enabled(owner, others, saved.as_ref())
     };
     (saved, baseline)
+}
+
+/// The enabled set a shared file's state starts from: the owner's view,
+/// and, when the owner is no default flavor, every option another flavor
+/// sharing the file has besides, at that flavor's value: such an owner
+/// writes them all (`apply::planned_file`), so the state must hold them.
+fn shared_enabled(
+    owner: &PortInfo,
+    others: &[&PortInfo],
+    saved: Option<&SavedOptionsFile>,
+) -> BTreeSet<String> {
+    let mut set = apply::sync_enabled_set(owner, saved);
+    if !is_preferred(owner) {
+        for other in others {
+            let theirs = apply::sync_enabled_set(other, saved);
+            set.extend(
+                theirs
+                    .into_iter()
+                    .filter(|o| !owner.options.complete.contains(o)),
+            );
+        }
+    }
+    close_implies(owner, set)
+}
+
+/// The closure's flavors reading the file `name`, but `except`: ports with
+/// options whose OPTIONS_FILE make.conf did not move.
+fn sharing<'a>(
+    ports: &'a BTreeMap<PortKey, PortInfo>,
+    name: &str,
+    except: &PortKey,
+) -> Vec<&'a PortInfo> {
+    ports
+        .values()
+        .filter(|i| {
+            i.options_name == name
+                && i.key != *except
+                && i.options.has_options()
+                && moved(i).is_none()
+        })
+        .collect()
 }
 
 /// OPTIONS_DEFAULT restricted to the options the port has.

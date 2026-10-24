@@ -577,9 +577,13 @@ flavor with the most options, the first met on ties. Flavors mostly
 exclude options, so the widest view covers the others'
 (`editors/emacs@pgtk`'s holds `@nox`'s), and an edit to an option only it
 has reaches the shared staged set. Not always: multimedia/audacious-plugins
-@gtk3 adds `AOSD`, which the default `@qt6` lacks. An option the owner has
-not is never written, so it reads at that flavor's own outcome and an edit
-to it is refused (`Session::unstored`), rather than accepted and dropped. Rejected: letting `apply` fall back to the first flavor it
+@gtk3 adds `AOSD`, which the default `@qt6` lacks. With the default flavor
+as owner such an option is never written, so it reads at that flavor's own
+outcome and an edit to it is refused (`Session::unstored`), rather than
+accepted and dropped. Any other owner writes every flavor's options, so
+the shared state holds them all, each at its flavor's value, and is built
+again when a refresh changes the file's owner or readers
+(`Session::rebase_new_owners`), the staged edits carried over as edits. Rejected: letting `apply` fall back to the first flavor it
 meets while the session followed the widest, which judged the file from
 one view and wrote it from another. A flavor whose
 `OPTIONS_FILE` names another file reads none of the file and is neither

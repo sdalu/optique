@@ -1457,6 +1457,80 @@ fn merge_gc_reassigns_the_owner_of_a_shared_file() {
     );
 }
 
+/// A refresh bringing in the default flavor hands it the shared file: the
+/// state is built again from its view, X11 and Y at their defaults rather
+/// than missing (and written off), and an edit staged on the old owner's
+/// view carried over.
+#[test]
+fn merge_rebuilds_the_state_when_the_default_flavor_takes_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let flavor = |f: &str, complete: &[&str]| {
+        let mut info = linked_info(&format!("misc/flav@{f}"), &[], complete);
+        info.options.defaults = complete.iter().map(ToString::to_string).collect();
+        info.options.effective = info.options.defaults.clone();
+        info.flavors = vec!["full".into(), "nox".into()];
+        info.options_name = "misc_flav".into();
+        info
+    };
+    let root_key = PortKey::parse("cat/root").unwrap();
+    let mut ports = BTreeMap::new();
+    ports.insert(
+        root_key.clone(),
+        linked_info("cat/root", &["misc/flav@nox"], &["R"]),
+    );
+    let nox = flavor("nox", &["A", "B"]);
+    let nox_key = nox.key.clone();
+    ports.insert(nox_key.clone(), nox);
+    let files = OptionsFiles::new(tmp.path());
+    let mut s = Session::new(
+        ports,
+        HashMap::new(),
+        std::slice::from_ref(&root_key),
+        &files,
+        false,
+    );
+    s.toggle(&nox_key, "B").unwrap(); // B off, an edit
+
+    let mut result = crate::query::scanner::ScanResult::default();
+    result.ports.insert(
+        root_key.clone(),
+        linked_info("cat/root", &["misc/flav@nox", "misc/flav@full"], &["R"]),
+    );
+    let full = flavor("full", &["A", "B", "X11", "Y"]);
+    result.ports.insert(full.key.clone(), full);
+    s.merge(result, &files);
+    assert_eq!(s.owners["misc_flav"].to_string(), "misc/flav@full");
+    let st = &s.states["misc_flav"];
+    assert_eq!(st.baseline, set(&["A", "B", "X11", "Y"]));
+    assert_eq!(st.staged, set(&["A", "X11", "Y"]), "B's edit kept");
+}
+
+/// An owner that is no default flavor writes every flavor's options, so an
+/// option only another flavor has is the file's: not "unstored", and held
+/// in the state at that flavor's value.
+#[test]
+fn a_non_default_owner_holds_every_flavors_options() {
+    let mk = |flavor: &str, complete: &[&str]| {
+        let mut info = linked_info(&format!("cat/x@{flavor}"), &[], complete);
+        info.options.defaults = complete.iter().map(ToString::to_string).collect();
+        info.options.effective = info.options.defaults.clone();
+        info.flavors = vec!["a".into(), "b".into(), "c".into()];
+        info.options_name = "cat_x".into();
+        info
+    };
+    let mut ports = BTreeMap::new();
+    for info in [mk("b", &["BASE", "X"]), mk("c", &["BASE", "Y", "Z"])] {
+        ports.insert(info.key.clone(), info);
+    }
+    let b = PortKey::parse("cat/x@b").unwrap();
+    let mut s = session_for(ports);
+    assert_eq!(s.owners["cat_x"].to_string(), "cat/x@c");
+    let info = s.ports[&b].clone();
+    assert!(s.unstored(&info, "X").is_none());
+    assert!(s.states["cat_x"].staged.contains("X"), "X at @b's default");
+    s.toggle(&b, "X").unwrap();
+}
+
 #[test]
 fn why_chain_and_dependents() {
     let tmp = tempfile::tempdir().unwrap();

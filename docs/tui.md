@@ -421,8 +421,8 @@ way only when the other flavor lacks it.
 `Space` and `d` leave alone what the options file cannot decide, and say
 why in the status bar: an option `*_FORCE`, `WITH`/`WITHOUT` or an UNSET
 entry of the port's `options.local` decides, an option only a non-default
-flavor has (the shared file, written from the owning flavor's view, never
-records it; it shows that flavor's own outcome), and every option of a port
+flavor has while the default flavor owns the shared file (written from
+that view, it never records it; it shows that flavor's own outcome), and every option of a port
 under make.conf's `OPTIONS_OVERRIDE` or whose options file optique leaves
 to make (the `UNMANAGED:` line's reason).
 

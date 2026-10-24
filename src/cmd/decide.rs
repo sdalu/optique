@@ -56,6 +56,9 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         .named
         .iter()
         .filter_map(|k| sess.ports.get(k))
+        // A flavor make.conf gives a file of its own writes nothing: its
+        // OPTIONS_NAME names the shared file it does not read.
+        .filter(|i| session::moved(i).is_none())
         .map(|i| i.options_name.clone())
         .collect();
     let staged = sess.ports.iter().filter_map(|(key, info)| {

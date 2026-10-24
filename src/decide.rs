@@ -145,6 +145,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
         // this flavor excludes (OPTIONS_EXCLUDE) is still the file's, and
         // `scan` reports it for the flavor; one only this flavor has is
         // refused by `toggle` (`Session::unstored`).
+        let owner_key = sess.owner_info(&info).key.clone();
         let file_options = sess.owner_info(&info).options.complete.clone();
         let owner_has = |opt: &str| {
             file_options
@@ -167,7 +168,15 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
             if sess.is_staged(&info, opt) == *on {
                 continue;
             }
-            match sess.toggle(&key, opt) {
+            // An option this flavor excludes is the owner's: toggled under
+            // the owner's rules (its IMPLIES, its groups), which make applies
+            // to the file.
+            let by = if info.options.complete.iter().any(|o| o == opt) {
+                &key
+            } else {
+                &owner_key
+            };
+            match sess.toggle(by, opt) {
                 Ok(()) => changed = true,
                 Err(reason) => {
                     outcome.rejected.push((key.clone(), opt.clone(), reason));
@@ -337,6 +346,34 @@ mod tests {
         let key = PortKey::parse(origin).unwrap();
         let info = &sess.ports[&key];
         sess.state(info).unwrap().staged.iter().cloned().collect()
+    }
+
+    /// An option a flavor excludes is the shared file's, changed under the
+    /// owner's rules: net/wireshark@nox11 cannot turn GUI off while RTP,
+    /// which implies it, is on.
+    #[test]
+    fn an_excluded_option_follows_the_owners_implies() {
+        use crate::model::options::OptionDef;
+        let rtp = OptionDef {
+            implies: vec!["GUI".into()],
+            ..Default::default()
+        };
+        let flavored = |flavor: &str, complete: &[&str], defs| {
+            let mut info = port("net/wireshark", complete, complete, defs);
+            info.key = PortKey::parse(&format!("net/wireshark@{flavor}")).unwrap();
+            info.canonical = info.key.clone();
+            info.flavors = vec!["default".into(), "nox11".into()];
+            info.options_name = "net_wireshark".into();
+            info
+        };
+        let (mut sess, _tmp) = session(vec![
+            flavored("default", &["GUI", "RTP", "SSL"], &[("RTP", rtp)]),
+            flavored("nox11", &["SSL"], &[]),
+        ]);
+        let plan = Plan::parse(r#"{"net/wireshark@nox11": {"GUI": false}}"#).unwrap();
+        let out = apply_plan(&mut sess, &plan);
+        assert!(!out.complete(), "{out:?}");
+        assert!(out.rejected[0].2.contains("implied by RTP"), "{out:?}");
     }
 
     #[test]
