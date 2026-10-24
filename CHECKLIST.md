@@ -23,7 +23,7 @@ Run in order; a red gate is answered before anything else.
       changed screen or a ports tree update: `make screens`.
 - [ ] `man/optique.8` -- does a changed flag, key, JSON key or exit status read
       the same here as in the README?
-- [ ] `src/tui/ui.rs` help overlay -- does a changed key or marker appear in
+- [ ] `src/tui/ui/popups.rs` help overlay -- does a changed key or marker appear in
       the `?` help as well as in the README and the man page?
 - [ ] `DESIGN.md` -- did this round change a decision it records, or make
       one it should?
