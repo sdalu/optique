@@ -476,15 +476,44 @@ fn make_conf_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<St
     v
 }
 
-/// Does poudriere.conf turn `PACKAGE_BUILDING` off? The files are read in
-/// poudriere(8)'s own order (`include_poudriere_confs` in its common.sh): its
-/// poudriere.conf, poudriere.d's, then the set, tree and jail ones of
-/// poudriere.d for what the command line names. A tree counts only when `-p`
-/// gave it: poudriere takes the names from its arguments, not from defaults.
+/// The value poudriere.conf gives `name`, None when unset or empty. The
+/// files are read in poudriere(8)'s own order (`include_poudriere_confs` in
+/// its common.sh): its poudriere.conf, poudriere.d's, then the set, tree and
+/// jail ones of poudriere.d for what the command line names. A tree counts
+/// only when `-p` gave it: poudriere takes the names from its arguments, not
+/// from defaults.
 ///
 /// The files are shell, sourced in turn, so the last assignment wins and an
 /// empty value unsets. Only plain assignment lines are read (`export` and
 /// quotes allowed); a value set by shell logic is not seen, but nothing runs.
+fn poudriere_conf_value(
+    poudriere_conf: &Path,
+    poudriere_d: &Path,
+    jail: Option<&str>,
+    tree: Option<&str>,
+    set: Option<&str>,
+    name: &str,
+) -> Option<String> {
+    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
+    files.extend(
+        poudriere_conf_layers(jail, tree, set)
+            .into_iter()
+            .map(|layer| poudriere_d.join(format!("{layer}-poudriere.conf"))),
+    );
+    let mut value = None;
+    for file in files {
+        let Ok(text) = fs::read_to_string(&file) else { continue };
+        for line in text.lines() {
+            if let Some(v) = shell_assignment(line, name) {
+                value = (!v.is_empty()).then(|| v.to_string());
+            }
+        }
+    }
+    value
+}
+
+/// Does poudriere.conf turn `PACKAGE_BUILDING` off
+/// ([`poudriere_conf_value`])?
 fn no_package_building(
     poudriere_conf: &Path,
     poudriere_d: &Path,
@@ -492,28 +521,20 @@ fn no_package_building(
     tree: Option<&str>,
     set: Option<&str>,
 ) -> bool {
-    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
-    files.extend(
-        poudriere_conf_layers(jail, tree, set)
-            .into_iter()
-            .map(|name| poudriere_d.join(format!("{name}-poudriere.conf"))),
-    );
-    let mut set_on = false;
-    for file in files {
-        let Ok(text) = fs::read_to_string(&file) else { continue };
-        for line in text.lines() {
-            if let Some(value) = shell_assignment(line, "NO_PACKAGE_BUILDING") {
-                set_on = !value.is_empty();
-            }
-        }
-    }
-    set_on
+    poudriere_conf_value(
+        poudriere_conf,
+        poudriere_d,
+        jail,
+        tree,
+        set,
+        "NO_PACKAGE_BUILDING",
+    )
+    .is_some()
 }
 
 /// Does poudriere.conf set `FLAVOR_DEFAULT_ALL=yes`, which makes poudriere
 /// build every flavor of a bare origin listed (common.sh ~7037, ~8573,
-/// ~11233)? Read from the same files, in the same order and the same way,
-/// as [`no_package_building`]; only the exact value `yes` counts.
+/// ~11233)? Only the exact value `yes` counts.
 fn flavor_default_all(
     poudriere_conf: &Path,
     poudriere_d: &Path,
@@ -521,29 +542,21 @@ fn flavor_default_all(
     tree: Option<&str>,
     set: Option<&str>,
 ) -> bool {
-    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
-    files.extend(
-        poudriere_conf_layers(jail, tree, set)
-            .into_iter()
-            .map(|name| poudriere_d.join(format!("{name}-poudriere.conf"))),
-    );
-    let mut value = String::new();
-    for file in files {
-        let Ok(text) = fs::read_to_string(&file) else { continue };
-        for line in text.lines() {
-            if let Some(v) = shell_assignment(line, "FLAVOR_DEFAULT_ALL") {
-                value = v.to_string();
-            }
-        }
-    }
-    value == "yes"
+    poudriere_conf_value(
+        poudriere_conf,
+        poudriere_d,
+        jail,
+        tree,
+        set,
+        "FLAVOR_DEFAULT_ALL",
+    )
+    .as_deref()
+        == Some("yes")
 }
 
-/// poudriere.conf's `CCACHE_DIR`, read the same files in the same order as
-/// [`no_package_building`] (plain assignments only; the last one read wins,
-/// an empty value unsets): what `setup_ccache` (common.sh:3591-3600) checks
-/// with `[ -d "${CCACHE_DIR:-/nonexistent}" ]` before appending its two
-/// lines to the jail's make.conf.
+/// poudriere.conf's `CCACHE_DIR`: what `setup_ccache` (common.sh:3591-3600)
+/// checks with `[ -d "${CCACHE_DIR:-/nonexistent}" ]` before appending its
+/// two lines to the jail's make.conf.
 fn ccache_dir(
     poudriere_conf: &Path,
     poudriere_d: &Path,
@@ -551,22 +564,7 @@ fn ccache_dir(
     tree: Option<&str>,
     set: Option<&str>,
 ) -> Option<String> {
-    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
-    files.extend(
-        poudriere_conf_layers(jail, tree, set)
-            .into_iter()
-            .map(|name| poudriere_d.join(format!("{name}-poudriere.conf"))),
-    );
-    let mut value: Option<String> = None;
-    for file in files {
-        let Ok(text) = fs::read_to_string(&file) else { continue };
-        for line in text.lines() {
-            if let Some(v) = shell_assignment(line, "CCACHE_DIR") {
-                value = (!v.is_empty()).then(|| v.to_string());
-            }
-        }
-    }
-    value
+    poudriere_conf_value(poudriere_conf, poudriere_d, jail, tree, set, "CCACHE_DIR")
 }
 
 /// The per-name poudriere.conf layers, in poudriere(8)'s reading order:
