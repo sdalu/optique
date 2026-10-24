@@ -8,6 +8,42 @@ relative to the synth source tree. `Definitions.software_framework` is the
 constant `ports_collection` (`src/definitions.ads`), so the pkgsrc branches
 of the code are dead in this build and left out.
 
+One run, from the configuration to the build:
+
+```text
+synth.ini ─▸ profile ─▸ Directory_*         (host)
+                │
+                ▾
+ensure_port_index ──────▸ /var/cache/synth/<profile>-index
+                │         one origin[@flavor] per line
+                ▾
+store_origins: arguments, a file, or installed packages
+                │         each must match an index line
+                ▾
+scanner chroot SL09 ────▸ one make -V run per port, depth first
+                │         15 values by line; *_DEPENDS ▸ blocked_by
+                ▾
+limited_cached_options_check
+                │         Directory_options/<cat>_<port>/options
+                │         vs the scanned option names
+                ▾  any stale file: stop
+limited_sanity_check ───▸ per package in Directory_packages/All:
+                │         file name, options, ABI; then dependencies,
+                │         repeated until nothing changes
+                ▾
+ignored ports and their dependents removed; build the rest
+```
+
+Contents:
+
+- [Configuration file](#configuration-file)
+- [The build environment](#the-build-environment)
+- [Options](#options)
+- [The scan](#the-scan)
+- [The rebuild decision](#the-rebuild-decision)
+- [Limits visible in the code](#limits-visible-in-the-code)
+- [Sources](#sources)
+
 ## Configuration file
 
 The configuration is one INI file, `/usr/local/etc/synth/synth.ini`
@@ -92,13 +128,17 @@ header is appended, even when a header of that name already exists.
 `Parameters.load_specific_profile` then reads every key. The constant
 defaults are those of the example above; the others are computed:
 
-| Key                       | Default when absent or empty                             |
-|---------------------------|----------------------------------------------------------|
-| `Directory_portsdir`      | `determine_portsdirs` (below)                            |
-| `Directory_distfiles`     | `make -C <portsdir>/devel/gmake -V DISTDIR` on the host  |
-| `Operating_system`        | `make -C <portsdir>/devel/gmake -V OPSYS` on the host    |
-| `Number_of_builders`, `Max_jobs_per_builder` | `default_parallelism`, by CPU count   |
-| `Tmpfs_workdir`, `Tmpfs_localbase` | true if physical memory / builders >= 1280 MiB  |
+| Key                    | Default when absent or empty          |
+| :--------------------- | :------------------------------------ |
+| `Directory_portsdir`   | `determine_portsdirs` (below)         |
+| `Directory_distfiles`  | `make -V DISTDIR` on the host (1)     |
+| `Operating_system`     | `make -V OPSYS` on the host (1)       |
+| `Number_of_builders`   | `default_parallelism`, by CPU count   |
+| `Max_jobs_per_builder` | same                                  |
+| `Tmpfs_workdir`        | true if memory / builders >= 1280 MiB |
+| `Tmpfs_localbase`      | same                                  |
+
+(1) Run as `make -C <portsdir>/devel/gmake -V <var>`.
 
 `Directory_repository` is never read: it is always `Directory_packages`
 plus `/All`, and only written back. The two `make` queries (`query_generic`)
@@ -114,9 +154,10 @@ in order:
 3. `/usr/dports`, then `/usr/ports`, whichever exists first.
 
 `Operating_system` must be `FreeBSD` or `DragonFly` (`opsys_ok`), or synth
-stops. `default_parallelism` maps the CPU count (`PortScan.set_cores`, capped at 64)
-to builders and jobs: 1 to 1/1, 2-3 to 2/2, 4-5 to 3/3, 6-7 to 4/3, 8-9 to
-6/4, 10-11 to 8/4, and above that three quarters of the cores with 5 jobs.
+stops. `default_parallelism` maps the CPU count (`PortScan.set_cores`,
+capped at 64) to builders and jobs: 1 to 1/1, 2-3 to 2/2, 4-5 to 3/3, 6-7
+to 4/3, 8-9 to 6/4, 10-11 to 8/4, and above that three quarters of the
+cores with 5 jobs.
 
 When any of the 16 profile keys is not set (`all_params_present`), the whole
 profile section is rewritten from the loaded record with
@@ -138,21 +179,25 @@ exist, and `Directory_ccache` too unless it is `disabled`.
 
 `Replicant.launch_slave` builds each builder, and the scanner, as a tmpfs
 at `<Directory_buildbase>/SL<nn>`; the scanner is number 9
-(`PortScan.scan_slave`, `ss_base` `/SL09`). `/bin`, `/sbin`, `/lib`,
-`/libexec` and `/usr/{bin,include,lib,libdata,libexec,sbin,share}` are
-null-mounted read-only from `Directory_system`. The rest, read-only unless
-stated:
+(`PortScan.scan_slave`, `ss_base` `/SL09`), and fills it with null mounts:
 
-| Inside the chroot                    | Source                                       |
-|--------------------------------------|----------------------------------------------|
-| `/xports`                            | `Directory_portsdir`                         |
-| `/options`                           | `Directory_options`                          |
-| `/packages`                          | `Directory_packages`, read-write             |
-| `/distfiles`                         | `Directory_distfiles`, read-write            |
-| `/construction`                      | tmpfs if `Tmpfs_workdir`, else `SL<nn>_work` |
-| `/usr/local`                         | tmpfs if `Tmpfs_localbase`, else a directory |
-| `/ccache`                            | `Directory_ccache`, read-write, if it exists |
-| `/usr/src`, `/usr/lib32`, `/boot`    | from `Directory_system`, if they exist       |
+```text
+<Directory_buildbase>/SL<nn>          tmpfs; the scanner is SL09
+├── bin sbin lib libexec           ro ◂ Directory_system
+├── usr/bin include lib libdata    ro ◂ Directory_system
+│       libexec sbin share
+├── usr/src usr/lib32 boot         ro ◂ Directory_system, if they exist
+├── etc/                              created, filled by launch_slave
+├── xports                         ro ◂ Directory_portsdir
+├── options                        ro ◂ Directory_options
+├── packages                       rw ◂ Directory_packages
+├── distfiles                      rw ◂ Directory_distfiles
+├── construction                   rw   tmpfs if Tmpfs_workdir,
+│                                       else SL<nn>_work
+├── usr/local                      rw   tmpfs if Tmpfs_localbase,
+│                                       else a directory
+└── ccache                         rw ◂ Directory_ccache, if it exists
+```
 
 With `Directory_system` equal to `/` the host paths are used directly
 (`clean_mount_point`). `/etc` is not mounted: it is created empty and filled
@@ -258,12 +303,13 @@ each line is examined:
   `OPTIONS_FILE_UNSET+=` line);
 - other lines are ignored.
 
-The port passes when every such name is in its `options` map and the number
-of such lines (not of distinct names) equals the size of the map. Whether a name was under `SET` or
-`UNSET` is not compared with the port's current selection. One failing port
-is enough: synth prints "Cached options obsolete: <origin>" for each, sets
-the exit status to failure, suggests `make -C <portsdir>/<origin> config` or
-`rmconfig`, and stops the command. The file is left as it is.
+The port passes when every such name is in its `options` map and the
+number of such lines (not of distinct names) equals the size of the map.
+Whether a name was under `SET` or `UNSET` is not compared with the port's
+current selection. One failing port is enough: synth prints "Cached options
+obsolete: <origin>" for each, sets the exit status to failure, suggests
+`make -C <portsdir>/<origin> config` or `rmconfig`, and stops the command.
+The file is left as it is.
 
 ### Checking existing packages
 
@@ -342,20 +388,20 @@ Standard output and standard error go to one file (`Unix.external_command`,
 `synexec.c`), `/tmp/synth.scanner.<lot>.out` on the host (lot 09 for
 single-port scans), and lines are assigned by position:
 
-| Line | Variable              | Use                                                       |
-|------|-----------------------|-----------------------------------------------------------|
-| 1    | `PKGVERSION`          | `port_version`                                            |
-| 2    | `PKGFILE:T`           | `package_name`, the expected package file                 |
-| 3    | `MAKE_JOBS_NUMBER`    | `jobs`; `Number_of_builders` if it does not parse         |
-| 4    | `IGNORE`              | `ignore_reason`; non-blank marks the port ignored         |
-| 5-7  | `FETCH/EXTRACT/PATCH` | dependencies                                              |
-| 8    | `BUILD_DEPENDS`       | dependencies                                              |
-| 9-10 | `LIB/RUN_DEPENDS`     | dependencies, also recorded as library/run                |
-| 11   | `SELECTED_OPTIONS`    | options map, value true                                   |
-| 12   | `DESELECTED_OPTIONS`  | options map, value false                                  |
-| 13   | `USE_LINUX`           | non-blank requests linprocfs                              |
-| 14   | `FLAVORS`             | flavor list                                               |
-| 15   | `LIB_DEPENDS_ALL`     | dependencies, as build type                               |
+| Line | Variable              | Use                                        |
+| :--- | :-------------------- | :----------------------------------------- |
+| 1    | `PKGVERSION`          | `port_version`                             |
+| 2    | `PKGFILE:T`           | `package_name`, the expected package file  |
+| 3    | `MAKE_JOBS_NUMBER`    | `jobs`; `Number_of_builders` if unparsable |
+| 4    | `IGNORE`              | `ignore_reason`; non-blank: port ignored   |
+| 5-7  | `FETCH/EXTRACT/PATCH` | dependencies                               |
+| 8    | `BUILD_DEPENDS`       | dependencies                               |
+| 9-10 | `LIB/RUN_DEPENDS`     | dependencies, also recorded as library/run |
+| 11   | `SELECTED_OPTIONS`    | options map, value true                    |
+| 12   | `DESELECTED_OPTIONS`  | options map, value false                   |
+| 13   | `USE_LINUX`           | non-blank requests linprocfs               |
+| 14   | `FLAVORS`             | flavor list                                |
+| 15   | `LIB_DEPENDS_ALL`     | dependencies, as build type                |
 
 A port is marked scanned even if the file had fewer lines. A non-zero exit
 of `make` raises `bmake_execution`.

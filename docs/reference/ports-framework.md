@@ -6,6 +6,43 @@ comes from one parse: `sys.mk` and the make.conf it pulls in, the port's
 `Makefile`, then the framework under `Mk/`. This page follows that parse,
 as the files listed under [Sources](#sources) implement it.
 
+The files of one parse, in the order make reads them:
+
+```text
+make -C <category>/<port>
+ │
+ ▾
+/usr/share/mk/sys.mk ─────────▸ ${__MAKE_CONF}, default /etc/make.conf
+ │                              local.sys.mk
+ ▾
+<port>/Makefile
+ │ .include <bsd.port.mk>      (or <bsd.port.options.mk>, earlier)
+ ▾
+/usr/share/mk/bsd.port.mk ────▸ PORTSDIR probe, bsd.own.mk
+ │
+ ▾
+${PORTSDIR}/Mk/bsd.port.mk
+ ├─ options section ──────────▸ ${PKGORIGIN:S/\//_/}_VARS
+ │                              bsd.options.mk
+ │                               ├─ ${OPTIONS_FILE}
+ │                               └─ ${OPTIONS_FILE}.local
+ ├─ pre-makefile section ─────▸ FLAVOR, ${FLAVOR}_*, Uses/*.mk
+ └─ post-makefile section ────▸ *_DEPENDS_ALL, config targets,
+                                pre-check-config
+```
+
+Contents:
+
+- [Finding make.conf](#finding-makeconf)
+- [Naming the options file](#naming-the-options-file)
+- [The option list](#the-option-list)
+- [How PORT_OPTIONS is built](#how-port_options-is-built)
+- [Option helpers](#option-helpers)
+- [The config targets](#the-config-targets)
+- [Dependencies](#dependencies)
+- [Querying with make -V](#querying-with-make--v)
+- [Sources](#sources)
+
 ## Finding make.conf
 
 `make` reads the system makefile `sys.mk` before any other file (make(1),
@@ -46,16 +83,17 @@ probes `.`, `..`, `../..` and `../../..` under `.CURDIR` for
 `:tA`, sets `_WITHOUT_SRCCONF` (so `bsd.own.mk` skips `/etc/src.conf`),
 includes `bsd.own.mk`, then `${PORTSDIR}/Mk/bsd.port.mk`.
 
-Defaults, all `?=` and so overridable from make.conf:
+Defaults, all `?=` and so overridable from make.conf, set in
+`bsd.port.mk` unless another file is named:
 
-| Variable | Default | Set in |
-| :-- | :-- | :-- |
-| `PORTSDIR` | `/usr/ports` | `bsd.port.mk`, top, before `bsd.commands.mk` |
-| `LOCALBASE` | `/usr/local` | same block |
-| `PORT_DBDIR` | `/var/db/ports` | `bsd.port.mk`, options section, after `_VARS` |
-| `DIALOG4PORTS` | `${LOCALBASE}/bin/portconfig` | `bsd.commands.mk` |
-| `PKG_INFO` | `${PKG_BIN} info -g` | `bsd.commands.mk` |
-| `PKG_ORIGIN` | `ports-mgmt/pkg` | `bsd.port.mk`, pre-makefile section |
+| Variable       | Default                       | Set in               |
+| :------------- | :---------------------------- | :------------------- |
+| `PORTSDIR`     | `/usr/ports`                  | top of the file      |
+| `LOCALBASE`    | `/usr/local`                  | same block           |
+| `PORT_DBDIR`   | `/var/db/ports`               | options section      |
+| `DIALOG4PORTS` | `${LOCALBASE}/bin/portconfig` | `bsd.commands.mk`    |
+| `PKG_INFO`     | `${PKG_BIN} info -g`          | `bsd.commands.mk`    |
+| `PKG_ORIGIN`   | `ports-mgmt/pkg`              | pre-makefile section |
 
 `ARCH`, `OPSYS`, `_OSRELEASE` and `OSVERSION` come from `uname -p`, `-s`,
 `-r` and `/usr/include/sys/param.h` unless defined. Once `PKGORIGIN` is
@@ -125,12 +163,12 @@ they assign is visible to the rest of the parse.
    remaining group, single, radio, multi, group in turn. Later in the file,
    `NO_OPTIONS_SORT` resets `ALL_OPTIONS` to the unsorted `OPTIONS_DEFINE`.
 
-| Kind | Variables | Rule enforced by `pre-check-config` |
-| :-- | :-- | :-- |
-| single | `OPTIONS_SINGLE`, `OPTIONS_SINGLE_<G>` | exactly one member on |
-| radio | `OPTIONS_RADIO`, `OPTIONS_RADIO_<G>` | at most one member on |
-| multi | `OPTIONS_MULTI`, `OPTIONS_MULTI_<G>` | at least one member on |
-| group | `OPTIONS_GROUP`, `OPTIONS_GROUP_<G>` | none |
+| Kind   | Variables                              | `pre-check-config` wants |
+| :----- | :------------------------------------- | :----------------------- |
+| single | `OPTIONS_SINGLE`, `OPTIONS_SINGLE_<G>` | exactly one member on    |
+| radio  | `OPTIONS_RADIO`, `OPTIONS_RADIO_<G>`   | at most one member on    |
+| multi  | `OPTIONS_MULTI`, `OPTIONS_MULTI_<G>`   | at least one member on   |
+| group  | `OPTIONS_GROUP`, `OPTIONS_GROUP_<G>`   | nothing                  |
 
 A single or multi group whose name `<G>` is also in `ALL_OPTIONS` is
 conditional on that option (see [the config targets](#the-config-targets)).
@@ -171,6 +209,28 @@ step overriding the earlier ones:
 13. `OPTIONS_SLAVE` is appended; the list is sorted and uniqued.
 
 The header comment of `bsd.options.mk` and ports(7) (Example 4) agree.
+
+The same order by who sets each layer, with the part `OPTIONS_OVERRIDE`
+replaces:
+
+```text
+ step  variables                              set by
+┌────┬──────────────────────────────────────┬──────────────┐
+│  1 │ DOCS NLS EXAMPLES IPV6 (if listed)   │ framework    │ ┐
+│  2 │ minus _ALL_EXCLUDE                   │ port         │ │
+│  4 │ OPTIONS_DEFAULT                      │ port         │ │ replaced
+│  5 │ OPTIONS_SET, OPTIONS_UNSET           │ make.conf    │ │ whole by
+│  6 │ ${OPTIONS_NAME}_SET, _UNSET          │ make.conf    │ │ OPTIONS_
+│  7 │ options, then options.local, read    │ PORT_DBDIR   │ │ OVERRIDE
+│8, 9│ OPTIONS_FILE_SET, OPTIONS_FILE_UNSET │ options file │ ┘
+├────┼──────────────────────────────────────┼──────────────┤
+│ 10 │ OPTIONS_SET_FORCE ... _UNSET_FORCE   │ make.conf    │
+│ 11 │ WITH, WITHOUT                        │ command line │
+│ 12 │ IMPLIES closure                      │ port         │
+│ 13 │ OPTIONS_SLAVE appended               │ port         │
+└────┴──────────────────────────────────────┴──────────────┘
+  later rows win; NEW_OPTIONS loses every name rows 5-11 mention
+```
 
 ### How the words are matched
 
@@ -228,19 +288,20 @@ With `PORT_OPTIONS` final, `bsd.options.mk` walks
 `_SUBPACKAGES_OFF`, then for the rest: `${opt}_X` applies to an option
 that is on, `${opt}_X_OFF` to one that is off.
 
-| Helper | On | Off |
-| :-- | :-- | :-- |
-| `${opt}_<FLAG>` (`_OPTIONS_FLAGS`) | `<FLAG>+=` value | `_OFF` form, same |
-| `${opt}_<KIND>_DEPENDS` | `<KIND>_DEPENDS+=` value | `_OFF` form, same |
-| `${opt}_USE= FOO=a,b` | `USE_FOO+= a b` | `_USE_OFF` |
-| `${opt}_VARS= X=v` or `X+=v` | `X= v` or `X+= v` | `_VARS_OFF` |
-| `${opt}_CONFIGURE_ENABLE= x` | `--enable-x` | `--disable-x` |
-| `${opt}_CONFIGURE_WITH= x` | `--with-x` | `--without-x` |
-| `${opt}_CMAKE_BOOL`, `_MESON_TRUE`, ... | `true`, `yes`, `enabled` | the opposite |
+| Helper                       | On                       | Off           |
+| :--------------------------- | :----------------------- | :------------ |
+| `${opt}_<FLAG>`              | `<FLAG>+=` value         | `_OFF` form   |
+| `${opt}_<KIND>_DEPENDS`      | `<KIND>_DEPENDS+=` value | `_OFF` form   |
+| `${opt}_USE= FOO=a,b`        | `USE_FOO+= a b`          | `_USE_OFF`    |
+| `${opt}_VARS= X=v`, `X+=v`   | `X= v` or `X+= v`        | `_VARS_OFF`   |
+| `${opt}_CONFIGURE_ENABLE= x` | `--enable-x`             | `--disable-x` |
+| `${opt}_CONFIGURE_WITH= x`   | `--with-x`               | `--without-x` |
+| `${opt}_CMAKE_BOOL`, ...     | `true`, `yes`, `enabled` | the opposite  |
 
-`_OPTIONS_FLAGS` includes `USES`, `BROKEN`, `IGNORE`, `CATEGORIES`,
-`DISTFILES`, `PLIST_FILES`, `CFLAGS` and more. `_OPTIONS_DEPENDS` is `PKG
-FETCH EXTRACT PATCH BUILD_RUN BUILD LIB RUN TEST`, so every dependency
+`<FLAG>` is any word of `_OPTIONS_FLAGS`, which includes `USES`,
+`BROKEN`, `IGNORE`, `CATEGORIES`, `DISTFILES`, `PLIST_FILES`, `CFLAGS` and
+more. `_OPTIONS_DEPENDS` is
+`PKG FETCH EXTRACT PATCH BUILD_RUN BUILD LIB RUN TEST`, so every dependency
 kind has an option form; `${opt}_<KIND>_DEPENDS.p` feeds subpackage `p`.
 With `OPTIONS_SUB`, each option adds `OPT=""`/`NO_OPT="@comment "` (or the
 reverse) to `PLIST_SUB` and `SUB_LIST`. Each option also queues
@@ -287,18 +348,19 @@ That pruning happens after the helpers ran. On `mail/faces`
 step 650 of `_SANITY_SEQ`, so every stage that runs `check-sanity` stops on
 an invalid configuration.
 
-| Target | What it does |
-| :-- | :-- |
-| `config` | `pre-config do-config`; prints "Skipping" if `NO_DIALOG` is set |
-| `config-conditional` | `make config` if `NEW_OPTIONS` is not empty |
-| `config-recursive` | `config-conditional` in the port and `ALL-DEPENDS-FLAVORS-LIST` |
-| `showconfig` | `check-config`, then each option as `NAME=on` or `=off` |
-| `rmconfig` | removes `OPTIONS_FILE`, tries `rmdir` on its directory |
-| `*-recursive` | `showconfig`, `rmconfig` over the same list |
-| `sanity-config` | after `_check-config`, offers to re-run `make config` |
+| Target               | What it does                                          |
+| :------------------- | :---------------------------------------------------- |
+| `config`             | `pre-config do-config`; "Skipping" under `NO_DIALOG`  |
+| `config-conditional` | `make config` if `NEW_OPTIONS` is not empty           |
+| `config-recursive`   | `config-conditional` on the port and closure (1)      |
+| `showconfig`         | `check-config`, then `NAME=on` or `=off` per option   |
+| `rmconfig`           | removes `OPTIONS_FILE`, then `rmdir`s its directory   |
+| `*-recursive`        | `showconfig`, `rmconfig` over the same list           |
+| `sanity-config`      | after `_check-config`, offers to re-run `make config` |
 
-`config-recursive` computes its list once, before the loop; choices made
-in the dialogs it opens do not extend it.
+(1) The closure is `ALL-DEPENDS-FLAVORS-LIST`. `config-recursive` computes
+it once, before the loop; choices made in the dialogs it opens do not
+extend it.
 
 `pre-config` builds `D4P_ENV` (`PORT_OPTIONS`, `ALL_OPTIONS`, groups and
 members, `NEW_OPTIONS`, every `_DESC`, `DIALOG4PORTS`, the `D4P*` layout
@@ -340,11 +402,11 @@ target") when the port has no `OPTIONS_DEFINE`, `_SINGLE`, `_MULTI`,
 `_GROUP` or `_RADIO`, or when `CONFIG_DONE_<PKGBASE>`, `PACKAGE_BUILDING`
 or `BATCH` is defined.
 
-| Knob | Effect |
-| :-- | :-- |
-| `BATCH` | `_OPTIONS_OK`; `IGNORE` on `IS_INTERACTIVE` ports |
-| `PACKAGE_BUILDING` | `_OPTIONS_OK`; the pkg(8) version check is skipped |
-| `NO_DIALOG` | `config` does nothing, so `config-conditional` opens nothing |
+| Knob               | Effect                                               |
+| :----------------- | :--------------------------------------------------- |
+| `BATCH`            | `_OPTIONS_OK`; `IGNORE` on `IS_INTERACTIVE` ports    |
+| `PACKAGE_BUILDING` | `_OPTIONS_OK`; the pkg(8) version check is skipped   |
+| `NO_DIALOG`        | `config` does nothing, nor does `config-conditional` |
 
 None changes `PORT_OPTIONS`: an unconfigured port builds with defaults.
 
@@ -417,14 +479,18 @@ empty by then.
 
 `Scripts/depends-list.sh`, wrapped as `DEPENDS-LIST`, prints origins.
 
-| Target / variable | Input | Recursive |
-| :-- | :-- | :-- |
-| `all-depends-list` (`ALL-DEPENDS-LIST`) | `_UNIFIED_DEPENDS` | yes |
-| `ALL-DEPENDS-FLAVORS-LIST` | `_UNIFIED_DEPENDS` | yes, with `@flavor` |
-| `build-depends-list` | `PKG EXTRACT PATCH FETCH BUILD LIB` `_ALL` | no |
-| `run-depends-list` | `LIB RUN` `_ALL` | no |
-| `test-depends-list` | `TEST_DEPENDS_ALL` | no |
-| `package-depends-list` | `LIB RUN` `_ALL`, with `CHILD_DEPENDS` | yes |
+| Target or variable         | Kinds (`<KIND>_DEPENDS_ALL`)      | Recursive |
+| :------------------------- | :-------------------------------- | :-------- |
+| `all-depends-list`         | `_UNIFIED_DEPENDS` (2)            | yes       |
+| `ALL-DEPENDS-FLAVORS-LIST` | `_UNIFIED_DEPENDS` (2)            | yes       |
+| `build-depends-list`       | PKG EXTRACT PATCH FETCH BUILD LIB | no        |
+| `run-depends-list`         | LIB RUN                           | no        |
+| `test-depends-list`        | TEST                              | no        |
+| `package-depends-list`     | LIB RUN, with `CHILD_DEPENDS`     | yes       |
+
+(2) Every kind but TEST. `all-depends-list` is the target form of the
+`ALL-DEPENDS-LIST` command; `ALL-DEPENDS-FLAVORS-LIST` prints each entry
+as `origin@flavor`.
 
 Recursing, `depends-list.sh` runs `make -C <dir> -V _UNIFIED_DEPENDS` in
 each dependency, `FLAVOR` exported when the entry had one, and follows
@@ -446,16 +512,19 @@ makefiles have been read" (make(1)), fully expanded since `sys.mk` and
 `bsd.port.mk` set `.MAKE.EXPAND_VARIABLES= yes`. The whole parse runs:
 make.conf, options files, `!=` shell assignments and `pre-check-config`.
 
-| Variable | Holds |
-| :-- | :-- |
-| `OPTIONS_NAME`, `OPTIONS_FILE` | where the options are saved |
-| `ALL_OPTIONS`, `COMPLETE_OPTIONS_LIST` | plain options; plus group members |
-| `OPTIONS_<type>`, `OPTIONS_<type>_<G>`, `OPTIONS_DEFAULT` | after exclusion |
-| `PORT_OPTIONS`, `NEW_OPTIONS` | on (after pruning); not yet named |
-| `SELECTED_OPTIONS`, `DESELECTED_OPTIONS` | on and off, sorted |
-| `<opt>_DESC`, `<opt>_IMPLIES`, `<opt>_PREVENTS` | per option |
-| `<KIND>_DEPENDS_ALL`, `_UNIFIED_DEPENDS` | dependency entries |
-| `FLAVORS`, `FLAVOR`, `PKGNAME`, `PKGORIGIN`, `IGNORE`, `BROKEN` | identity, refusal |
+| Variable                                        | Holds                    |
+| :---------------------------------------------- | :----------------------- |
+| `OPTIONS_NAME`, `OPTIONS_FILE`                  | where options are saved  |
+| `ALL_OPTIONS`                                   | plain options            |
+| `COMPLETE_OPTIONS_LIST`                         | plus group members       |
+| `OPTIONS_<type>`, `_<type>_<G>`, `_DEFAULT`     | after exclusion          |
+| `PORT_OPTIONS`                                  | on, after pruning        |
+| `NEW_OPTIONS`                                   | not named by any setting |
+| `SELECTED_OPTIONS`, `DESELECTED_OPTIONS`        | on and off, sorted       |
+| `<opt>_DESC`, `<opt>_IMPLIES`, `<opt>_PREVENTS` | per option               |
+| `<KIND>_DEPENDS_ALL`, `_UNIFIED_DEPENDS`        | dependency entries       |
+| `FLAVORS`, `FLAVOR`, `PKGNAME`, `PKGORIGIN`     | identity                 |
+| `IGNORE`, `BROKEN`                              | refusal                  |
 
 Pitfalls:
 

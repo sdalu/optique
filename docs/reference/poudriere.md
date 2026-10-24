@@ -7,6 +7,33 @@ incremental build deletes a package, at the revision under
 [Sources](#sources). Functions live in `src/share/poudriere/common.sh`
 unless another file is named.
 
+Where the files a build reads end up:
+
+```text
+host ${POUDRIERED}          reference jail          each builder
+┌────────────────────┐      ┌─────────────────┐     ┌──────────────────┐
+│ make.conf          │ cat  │                 │     │                  │
+│ ... 8 layers, in   ├─────▸│ /etc/make.conf  ├────▸│ clone of the     │
+│ the order below    │      │                 │     │ reference jail   │
+├────────────────────┤      ├─────────────────┤     ├──────────────────┤
+│ first existing     │ copy │ /var/db/ports   │ ro  │ /var/db/ports    │
+│ <cand>-options     ├─────▸│ (a copy)        ├────▸│ (null mount)     │
+└────────────────────┘      └─────────────────┘     └──────────────────┘
+```
+
+Contents:
+
+- [Configuration files](#configuration-files)
+- [make.conf for a build](#makeconf-for-a-build)
+- [Options directories](#options-directories)
+- [Environment of the metadata queries](#environment-of-the-metadata-queries)
+- [Ports to build](#ports-to-build)
+- [Gathering metadata](#gathering-metadata)
+- [The build queue](#the-build-queue)
+- [Incremental rebuild](#incremental-rebuild)
+- [Tests on options and dependencies](#tests-on-options-and-dependencies)
+- [Sources](#sources)
+
 ## Configuration files
 
 `POUDRIERE_ETC` is the configuration root: `-e etcdir` in
@@ -81,6 +108,23 @@ order:
    `export` and quotes, in `/etc/make.conf.ports_env`; make.conf then
    gets a `#### Misc Poudriere ####` block with
    `.include "/etc/make.conf.ports_env"`, `GID=0` and `UID=0`.
+
+The same sequence against the queries that read it:
+
+```text
+jail_start                             /etc/make.conf of the reference jail
+ ├─ jail's own make.conf               ┐
+ ├─ .sinclude make.nxb.conf (QEMU)     │
+ ├─ prelude: BATCH, PACKAGE_BUILDING…  │ seen by every
+ ├─ setup_makeconf: *-make.conf layers │ metadata query
+ ├─ setup_ccache                       │
+ └─ setup_ports_env, UID=0, GID=0      ┘
+prepare_ports
+ ├─ gather_port_vars ────────────────▸ one make -V run per originspec
+ ├─ incremental checks, deletions
+ └─ DISABLE_MAKE_JOBS=poudriere,       not seen by any query
+    UID/GID dropped (BUILD_AS_NON_ROOT)
+```
 
 All of this exists before the ports are gathered. Two edits come only
 at the end of `prepare_ports`, after the dependency computation and the
@@ -165,22 +209,23 @@ present only when given. The tree part comes from `PTNAME_TMP`, set
 only by an explicit `-p`: without `-p` the tree is left out, and
 `-p default` writes `<jail>-default-options`. `-o name` replaces the
 whole name: the directory is `POUDRIERED/name`, with no `-options`
-suffix, whereas a build only looks for names ending in `-options`. Without `-o`, when
-`<jail>-<set>-options` exists and the new directory does not, it warns
-that those options will no longer be used and asks for confirmation on
-a terminal. The directory is created if missing.
+suffix, whereas a build only looks for names ending in `-options`.
+Without `-o`, when `<jail>-<set>-options` exists and the new directory
+does not, it warns that those options will no longer be used and asks
+for confirmation on a terminal. The directory is created if missing.
 
 The command is chosen by the flags, which are mutually exclusive:
 
-| Flag | Target | Recursive target | Needs dialog4ports/portconfig |
-|------|--------|------------------|-------------------------------|
-| none, `-C` | `config-conditional` | `config-recursive` | yes |
-| `-c` | `config` | `config-recursive` | yes |
-| `-r` | `rmconfig` | `rmconfig-recursive` | no |
-| `-s` | `showconfig` | `showconfig-recursive` | no |
+| Flag       | Target               | Recursive target       | Dialog (1) |
+| ---------- | -------------------- | ---------------------- | ---------- |
+| none, `-C` | `config-conditional` | `config-recursive`     | yes        |
+| `-c`       | `config`             | `config-recursive`     | yes        |
+| `-r`       | `rmconfig`           | `rmconfig-recursive`   | no         |
+| `-s`       | `showconfig`         | `showconfig-recursive` | no         |
 
-`portconfig` is preferred to `dialog4ports`. `-j` and `-a` are checked
-for compatibility; either gives the architecture for `setup_makeconf`.
+(1) Needs `portconfig`, or else `dialog4ports`.
+
+`-j` and `-a` are checked for compatibility; either gives the architecture for `setup_makeconf`.
 
 The make.conf is a temporary file built by `setup_makeconf` for the
 given jail, tree (`PTNAME`, `default` when `-p` is absent) and set,
@@ -276,12 +321,12 @@ origin behave as `@all`, and `-a` builds every flavor
 
 `gather_port_vars` drives the walk with four directory queues:
 
-| Queue | Holds |
-|-------|-------|
-| `gqueue` | originspecs to query (`gather_port_vars_port`) |
-| `dqueue` | ports already queried whose dependencies must be queued |
+| Queue    | Holds                                                        |
+| -------- | ------------------------------------------------------------ |
+| `gqueue` | originspecs to query (`gather_port_vars_port`)               |
+| `dqueue` | ports already queried whose dependencies must be queued      |
 | `mqueue` | default-flavor lookups needed only to learn a port's flavors |
-| `fqueue` | non-default flavors, held until their default was queried |
+| `fqueue` | non-default flavors, held until their default was queried    |
 
 A listed origin goes into `gqueue` with the reverse dependency
 `listed`. A listed flavored origin goes into `fqueue`, and its plain
@@ -292,21 +337,42 @@ is queued, since the category walk reaches every default origin and
 `dqueue`, then `gqueue`, then promotes `mqueue`, then `fqueue`, until
 all four are empty. Each originspec is queried once.
 
+The queues and what moves between them:
+
+```text
+                         ┌──────────┐  make -V   ┌──────────┐
+listed origin ──────────▸│  gqueue  ├───────────▸│  dqueue  │
+plain of listed @flavor ▸│          │  IGNORE:   └────┬─────┘
+                         └──────────┘  no deps        │ each _PDEPS
+                            ▴  ▴  ▴                   │ entry
+                            │  │  └───── plain dep ───┤
+                            │  │  ┌──────────┐        │
+                            │  └──┤  mqueue  │◂───────┤ plain of @flavor dep
+                            │     └──────────┘        │
+                            │     ┌──────────┐        │
+                            └─────┤  fqueue  │◂───────┘ @flavor dep
+listed origin@flavor ────────────▸│          │
+                                  └──────────┘
+```
+
+`mqueue` moves into `gqueue` only once `gqueue` and `dqueue` are both
+empty, and `fqueue` only after that.
+
 ### The single make run per port
 
 `deps_fetch_vars` asks for everything in one `port_var_fetch`:
 
-| Expression | Kept as |
-|------------|---------|
-| `PKGNAME` (`PKGNAME.<subpkg>` with `SUBPACKAGES`) | the package name |
-| `FLAVOR`, `FLAVORS` | only with the `FLAVORS` feature |
-| `_DEPEND_SPECIALS`, `PKGCATEGORY`, `PREFIX` | specials, category check |
-| `IGNORE`, `FORBIDDEN`, `NO_ARCH:Dyes` | ignore reason and flags |
-| `DIST_SUBDIR`, `ALLFILES` | distfiles |
-| `NEED_ROOT` | only with `BUILD_AS_NON_ROOT=yes` |
-| `LIB_DEPENDS`, `RUN_DEPENDS` (`*_ALL` with `SUBPACKAGES`) | raw, for `CHECK_CHANGED_DEPS` |
-| sorted `+OPT`/`-OPT` list | for `CHECK_CHANGED_OPTIONS` |
-| `_BDEPS`, `_RDEPS`, `_PDEPS` reduced to origins | build, run, all deps |
+| Expression (`*_ALL` forms with `SUBPACKAGES`) | Kept as                      |
+| :-------------------------------------------- | :--------------------------- |
+| `PKGNAME` (`PKGNAME.<subpkg>`)                | the package name             |
+| `FLAVOR`, `FLAVORS`                           | with the `FLAVORS` feature   |
+| `_DEPEND_SPECIALS`, `PKGCATEGORY`, `PREFIX`   | specials, category check     |
+| `IGNORE`, `FORBIDDEN`, `NO_ARCH:Dyes`         | ignore reason and flags      |
+| `DIST_SUBDIR`, `ALLFILES`                     | distfiles                    |
+| `NEED_ROOT`                                   | with `BUILD_AS_NON_ROOT=yes` |
+| `LIB_DEPENDS`, `RUN_DEPENDS`                  | raw, `CHECK_CHANGED_DEPS`    |
+| sorted `+OPT`/`-OPT` list                     | `CHECK_CHANGED_OPTIONS`      |
+| `_BDEPS`, `_RDEPS`, `_PDEPS` as origins       | build, run, all deps         |
 
 The option list is computed on the command line:
 
@@ -325,8 +391,13 @@ variables are asked for when `CHECK_CHANGED_DEPS` is not `no`.
 `_BDEPS` joins `PKG_DEPENDS`, `EXTRACT_DEPENDS`, `PATCH_DEPENDS`,
 `FETCH_DEPENDS`, `BUILD_DEPENDS` and `LIB_DEPENDS`; `_RDEPS` joins
 `LIB_DEPENDS` and `RUN_DEPENDS`; `_PDEPS` all seven (the `*_ALL` forms
-with `SUBPACKAGES`). Each is reduced with `:C,([^:]*):([^:]*):?.*,\2,:C,^${PORTSDIR}/,,:O:u`: the
-second colon field (the origin, with any `@flavor`), stripped of
+with `SUBPACKAGES`). Each is reduced with
+
+```make
+:C,([^:]*):([^:]*):?.*,\2,:C,^${PORTSDIR}/,,:O:u
+```
+
+that is, to the second colon field (the origin, with any `@flavor`), stripped of
 `${PORTSDIR}/`, sorted and unique. `TEST_DEPENDS` is never read, by
 `bulk -t` and `testport` included.
 
@@ -381,6 +452,19 @@ the run list, both `build:P → run:D` and `run:P → run:D`. So
 `LIB_DEPENDS` and `RUN_DEPENDS` must be installable before a port
 builds, and run dependencies are transitive for installation. A
 dependency whose `PKGNAME` is unknown is fatal.
+
+```text
+D in P's build list (PKG EXTRACT PATCH FETCH BUILD LIB_DEPENDS):
+
+  build:D ──▸ run:D ──▸ build:P ──▸ run:P
+
+D in P's run list (LIB_DEPENDS, RUN_DEPENDS):
+
+  build:D ──▸ run:D ──┬─▸ build:P ──▸ run:P
+                      └──────────────────▴
+
+  A ──▸ B: job A must finish before job B starts
+```
 
 With `CHECK_CHANGED_DEPS` on, it also checks that the package name in
 each versioned `RUN_DEPENDS` entry (`name>=ver:origin`) is that of the
@@ -465,22 +549,25 @@ dependencies and `PKG_NO_VERSION_FOR_DEPS=no`.
 dependency's package through a make.conf option (`misc_foo_SET= RENAME`)
 and expects its dependent rebuilt by the package-base check (15).
 
-## Tests touching options and dependencies
+## Tests on options and dependencies
 
-| Test file | What it pins |
-|-----------|--------------|
-| `options-smoke.sh`, `options-overlays.sh` | `options -s -n` passes |
-| `options-badorigin.sh` | `options -s -n` on a bad origin fails |
-| `port_var_fetch.sh` | assignments, empty values clear, origin reduction |
-| `originspec.sh` | `originspec_encode` and `originspec_decode` |
-| `bulk-build-ignored.sh` | `IGNORE` holds even with `-T` |
-| `bulk-ignore-*.sh`, `bulk-skipped-and-needed-dep.sh` | ignored ports, skipped dependents |
-| `bulk-flavor-*.sh` | `@flavor`, `@all`, `FLAVOR_DEFAULT_ALL`, metadata lookups |
-| `bulk-flavor-nonexistent.sh`, `bulk-build-specific-bad-flavor.sh` | bad flavor fails |
-| `bulk-MOVED-*.sh` | `MOVED` applied to listed origins, flavor kept |
-| `bulk-overlay-*.sh`, `bulk-no-overlay-specific.sh` | which tree's copy of a port is used |
-| `bulk-build-inc-*.sh` | incremental deletion, orphaned build deps |
-| `bulk-build-FORCE_REBUILD_PACKAGES.sh` | forced rebuild by package base |
+| Test file (in `test/`)                    | What it pins                    |
+| :---------------------------------------- | :------------------------------ |
+| `options-smoke.sh`, `options-overlays.sh` | `options -s -n` passes          |
+| `options-badorigin.sh`                    | ... and fails on a bad origin   |
+| `port_var_fetch.sh`                       | assignments, origin reduction   |
+| `originspec.sh`                           | originspec encode and decode    |
+| `bulk-build-ignored.sh`                   | `IGNORE` holds even with `-T`   |
+| `bulk-ignore-*.sh`                        | ignored ports, their dependents |
+| `bulk-skipped-and-needed-dep.sh`          | skipped dependents              |
+| `bulk-flavor-*.sh`                        | `@flavor`, `@all`, metadata     |
+| `bulk-flavor-nonexistent.sh`              | a bad flavor fails              |
+| `bulk-build-specific-bad-flavor.sh`       | same                            |
+| `bulk-MOVED-*.sh`                         | `MOVED` on listed origins       |
+| `bulk-overlay-*.sh`                       | which tree's copy is used       |
+| `bulk-no-overlay-specific.sh`             | same                            |
+| `bulk-build-inc-*.sh`                     | incremental deletion, trimming  |
+| `bulk-build-FORCE_REBUILD_PACKAGES.sh`    | forced rebuild by package base  |
 
 `set_make_conf` and `set_poudriere_conf` in `test/common.bulk.sh` write
 `<jail>-<tree>-<set>-make.conf` and `-poudriere.conf`. Its `do_options`
