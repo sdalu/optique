@@ -65,6 +65,7 @@ interfaces sit side by side on the session.
 | `query/scanner.rs` | The closure, breadth first from roots taken as given: cache, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
 | `query/refresher.rs` | The TUI's background re-scans over the staging dir | `spawn`, `RefreshEvent` |
 | `cache/mod.rs` | Query results on disk, one generation per tree × make.conf, a new commit's starting with what the diff leaves of the last | `Cache`, `CacheEntry`, `tree_key`, `Invalidation`, `SCHEMA` |
+| `cache/makeconf.rs` | What an edit to make.conf's option policy reaches: which variables it touched, if nothing else, and which entries their new values change | `option_edit`, `Reach` |
 | `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does, originspecs looked up as `check_moved` does | `Moved::load_all`, `Moved::resolve`, `MovedResult`, `ListedMove` |
 | `deps.rs` | Alias resolution, dependency loops | `resolve`, `detect` (Tarjan), `DepLoop` |
 | `model/origin.rs` | `category/port[@flavor]` | `PortKey::parse` |

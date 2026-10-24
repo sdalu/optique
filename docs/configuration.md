@@ -355,8 +355,9 @@ optique scan -z server -O myoverlay -f list
 literal counterpart, as `-P` is of `-p`. Both keep command-line order:
 the first shadows the next and the main tree. Neither needs `Mk/`: an
 overlay holds a handful of ports. They reach make as `OVERLAYS+=` lines
-where poudriere writes them in the jail's make.conf, after its own lines
-and before the poudriere.d layers, with the host's paths; the overlay
+where poudriere writes them in the jail's make.conf, after its
+`USE_PACKAGE_DEPENDS` and `BATCH` lines, before `PACKAGE_BUILDING` and the
+poudriere.d layers, with the host's paths; the overlay
 list is then what make reports for that make.conf, so an `OVERLAYS` set
 by a layer counts too, and the startup banner lists them in order.
 

@@ -248,8 +248,8 @@ it: a flavor whose `OPTIONS_FILE` moved reads none of it and is left out,
 and an entry no flavor reads is kept. Under `--unused` or `--redundant`, an entry the moved
 `OPTIONS_FILE` of a queried port lies in is kept whatever its name says,
 which covers a make.conf moving it for some ports only:
-`misc_flav-nox: make reads misc/flav@nox's options from it (make.conf
-OPTIONS_FILE); kept`.
+`misc_flav-nox: make reads misc/flav@nox's options from it
+(OPTIONS_FILE); kept`.
 
 A make.conf `PORT_DBDIR` sending the build elsewhere
 ([configuration.md](configuration.md#a-makeconf-moving-the-options))

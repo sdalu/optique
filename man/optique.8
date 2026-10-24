@@ -1433,7 +1433,12 @@ while a line that starts with a blank or a bullet
 .Ql \&* ,
 .Ql \(bu
 .Pc ,
-holds a run of two spaces or more (not after a full stop), or starts with
+holds a run of two spaces or more (not after a full stop,
+.Ql \&! ,
+.Ql \&?
+or
+.Ql \&: ) ,
+or starts with
 .Ql WWW\&:
 keeps a line of its own, wrapped under its indent.
 The popup is 76% of the screen wide but at least 84 columns, so an 80-column
@@ -1749,7 +1754,11 @@ under
 why synth would refuse to build with the saved file, null otherwise; see
 .Sx SYNTH
 .Pc .
-Non-ok ports come first, then alphabetical order.
+The ports shown as problems come first, then alphabetical order; under
+.Fl m ,
+an unconfigured or stale port its defaults and
+.Pa make.conf
+settle sorts with the ok ones.
 Each element of
 .Va loops
 has
