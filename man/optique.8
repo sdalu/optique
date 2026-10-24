@@ -1513,8 +1513,20 @@ discards them, an older draft included, and quits;
 .Ic Esc
 or any other key stays in the interface.
 The next session on the same options directory restores the draft's staged
-edits, dropping options that meanwhile vanished from a port and re-querying the
-restored ports so their dependencies reappear, and its first message leads
+edits, dropping options that meanwhile vanished from a port, leaving at the
+value it has one the port gained since or one a
+.Pa make.conf
+knob or
+.Pa options.local
+decides, closing
+.Va IMPLIES ,
+and re-querying the restored ports so their dependencies reappear; a draft
+from an older
+.Nm ,
+which recorded no option list, is not restored.
+Edits to a port a refresh dropped from the closure count for neither the
+prompt nor the draft.
+The next session's first message leads
 with the draft, as in
 .Ql restored draft (2 ports, 5m ago, U per port reverts) ,
 the last part dropped first on a narrow screen.

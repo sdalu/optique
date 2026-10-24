@@ -1047,10 +1047,14 @@ impl Session {
     /// Returns how many states changed.
     pub fn restore_draft(&mut self, draft: &crate::draft::Draft) -> usize {
         let mut changed = 0;
+        let empty = BTreeSet::new();
         for (options_name, enabled) in &draft.staged {
-            // Judge against the file OWNER's option list, like the baseline:
-            // that is the view apply writes the file from.
-            let filtered = {
+            let known = draft.known.get(options_name).unwrap_or(&empty);
+            // Judge against the options the file holds now, as the state
+            // does: one the draft never knew (the port gained it since), or
+            // one a make.conf knob or options.local decides, keeps the value
+            // it has; the rest take the draft's, IMPLIES closed after.
+            let restored = {
                 let Some(owner) = self
                     .owners
                     .get(options_name)
@@ -1062,26 +1066,65 @@ impl Session {
                 if self.unmanaged(owner).is_some() {
                     continue;
                 }
-                enabled
-                    .iter()
-                    .filter(|opt| owner.options.complete.contains(*opt))
-                    .cloned()
-                    .collect::<BTreeSet<String>>()
+                let Some(state) = self.states.get(options_name) else {
+                    continue;
+                };
+                let mut set = BTreeSet::new();
+                for opt in self.file_options(options_name) {
+                    let keep = !known.contains(&opt)
+                        || owner.options.is_forced(&opt)
+                        || self.local_decides(owner, &opt);
+                    let on = if keep {
+                        state.staged.contains(&opt)
+                    } else {
+                        enabled.contains(&opt)
+                    };
+                    if on {
+                        set.insert(opt);
+                    }
+                }
+                close_implies(owner, set)
             };
             let Some(state) = self.states.get_mut(options_name) else {
                 continue;
             };
-            if state.staged != filtered {
-                state.staged = filtered;
+            if state.staged != restored {
+                state.staged = restored;
                 changed += 1;
             }
         }
         changed
     }
 
-    /// Any staged edit or pending baseline write (unconfigured/stale)?
+    /// The options a shared file's state holds: its owner's, and every
+    /// other flavor's under an owner that is no default flavor
+    /// ([`shared_enabled`]).
+    pub fn file_options(&self, name: &str) -> BTreeSet<String> {
+        let Some(owner) = self.owners.get(name).and_then(|k| self.ports.get(k)) else {
+            return BTreeSet::new();
+        };
+        let mut opts: BTreeSet<String> = owner.options.complete.iter().cloned().collect();
+        if !is_preferred(owner) {
+            for other in sharing(&self.ports, name, &owner.key) {
+                opts.extend(other.options.complete.iter().cloned());
+            }
+        }
+        opts
+    }
+
+    /// Does a port in the closure read the file `name`? A state outlives its
+    /// ports (a flip-flop keeps its edits), but one no port reads is none of
+    /// this session's business.
+    pub fn reads(&self, name: &str) -> bool {
+        self.owners.contains_key(name)
+    }
+
+    /// Any staged edit or pending baseline write (unconfigured/stale) on a
+    /// file a port in the closure reads?
     pub fn dirty(&self) -> bool {
-        self.states.values().any(|s| s.staged != s.baseline)
+        self.states
+            .iter()
+            .any(|(name, s)| s.staged != s.baseline && self.reads(name))
     }
 }
 

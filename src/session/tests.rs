@@ -2276,18 +2276,19 @@ fn a_group_is_conditional_by_all_options() {
     );
 }
 
-fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
+/// A draft staging `enabled` for each name, saved when its file had the
+/// options `known`.
+fn draft_with(entries: &[(&str, &[&str], &[&str])]) -> crate::draft::Draft {
     crate::draft::Draft {
         options_dir: std::path::PathBuf::from("/nonexistent"),
         saved_at_secs: 0,
         staged: entries
             .iter()
-            .map(|(name, opts)| {
-                (
-                    name.to_string(),
-                    opts.iter().map(ToString::to_string).collect(),
-                )
-            })
+            .map(|(name, on, _)| (name.to_string(), set(on)))
+            .collect(),
+        known: entries
+            .iter()
+            .map(|(name, _, known)| (name.to_string(), set(known)))
             .collect(),
     }
 }
@@ -2296,7 +2297,7 @@ fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
 fn restore_draft_filters_options_gone_from_the_port() {
     let (ports, key) = mk_port(&["A", "B"], &["B"], vec![], vec![]);
     let mut s = session_for(ports);
-    let draft = draft_with(&[("cat_port", &["A", "GONE"])]);
+    let draft = draft_with(&[("cat_port", &["A", "GONE"], &["A", "B", "GONE"])]);
     assert_eq!(s.restore_draft(&draft), 1);
     let st = s.state(&s.ports[&key]).unwrap();
     assert_eq!(
@@ -2309,12 +2310,55 @@ fn restore_draft_filters_options_gone_from_the_port() {
     assert_eq!(s.restore_draft(&draft), 0);
 }
 
+/// An option the port gained since the draft was saved is no choice the
+/// draft made: it keeps its default rather than being staged off. One a
+/// make.conf knob decides keeps its value, and IMPLIES closes the rest.
+#[test]
+fn restore_draft_leaves_what_it_never_knew() {
+    let defs = vec![(
+        "A",
+        OptionDef {
+            implies: vec!["C".into()],
+            ..Default::default()
+        },
+    )];
+    let (mut ports, key) = mk_port(&["A", "B", "C", "NEW", "F"], &["NEW", "F"], vec![], defs);
+    ports
+        .get_mut(&key)
+        .unwrap()
+        .options
+        .force_set
+        .insert("F".into());
+    let mut s = session_for(ports);
+    let draft = draft_with(&[("cat_port", &["A"], &["A", "B", "C", "F"])]);
+    s.restore_draft(&draft);
+    let st = s.state(&s.ports[&key]).unwrap();
+    assert_eq!(st.staged, set(&["A", "C", "F", "NEW"]));
+}
+
+/// A state whose ports all left the closure is kept (a flip-flop keeps its
+/// edits) but makes nothing dirty: no listed port shows it, and no apply
+/// writes it.
+#[test]
+fn a_state_no_port_reads_is_not_dirty() {
+    let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
+    let mut s = session_for(ports);
+    s.toggle(&key, "A").unwrap();
+    assert!(s.dirty());
+    s.ports.clear();
+    s.owners.clear();
+    assert!(!s.dirty());
+}
+
 #[test]
 fn restore_draft_drops_unknown_options_names() {
     let (ports, key) = mk_port(&["A"], &["A"], vec![], vec![]);
     let mut s = session_for(ports);
     let before = s.state(&s.ports[&key]).unwrap().staged.clone();
-    assert_eq!(s.restore_draft(&draft_with(&[("other_port", &["A"])])), 0);
+    assert_eq!(
+        s.restore_draft(&draft_with(&[("other_port", &["A"], &["A"])])),
+        0
+    );
     assert_eq!(s.state(&s.ports[&key]).unwrap().staged, before);
 }
 
@@ -2371,7 +2415,10 @@ fn an_unmanageable_file_is_left_to_make() {
     assert!(!s.mc_deviates(&info, "B"));
     assert_eq!(s.toggle(&key, "B").unwrap_err(), why);
     s.reset_to_defaults(&key);
-    assert_eq!(s.restore_draft(&draft_with(&[("cat_port", &["B"])])), 0);
+    assert_eq!(
+        s.restore_draft(&draft_with(&[("cat_port", &["B"], &["B"])])),
+        0
+    );
     assert!(!s.edited(&info));
     for o in crate::report::option_reports(&s, &info) {
         assert!(

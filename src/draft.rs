@@ -24,6 +24,10 @@ pub struct Draft {
     pub saved_at_secs: u64,
     /// OPTIONS_NAME -> enabled option set.
     pub staged: BTreeMap<String, BTreeSet<String>>,
+    /// OPTIONS_NAME -> the options the file had when the draft was saved:
+    /// one the port gained since is no choice the draft made, and keeps
+    /// the value it has at restore.
+    pub known: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Draft {
@@ -50,13 +54,18 @@ pub fn save_in(cache_dir: &Path, session: &Session, options_dir: &Path) -> Resul
     let staged: BTreeMap<String, BTreeSet<String>> = session
         .states
         .iter()
-        .filter(|(_, state)| state.staged != state.baseline)
+        .filter(|(name, state)| state.staged != state.baseline && session.reads(name))
         .map(|(name, state)| (name.clone(), state.staged.clone()))
+        .collect();
+    let known = staged
+        .keys()
+        .map(|name| (name.clone(), session.file_options(name)))
         .collect();
     let draft = Draft {
         options_dir: options_dir.to_path_buf(),
         saved_at_secs: now_secs(),
         staged,
+        known,
     };
     let path = draft_path_in(cache_dir, options_dir);
     let dir = path.parent().expect("draft path always has a parent");
@@ -121,10 +130,21 @@ mod tests {
         items.iter().map(ToString::to_string).collect()
     }
 
-    /// A session with only `states` filled in: that is all save() reads.
+    /// A session with `states` filled in, each read by a port of that
+    /// OPTIONS_NAME owning it: that is all save() reads.
     fn session_with(states: Vec<(&str, OptState)>) -> Session {
+        let mut ports = BTreeMap::new();
+        let mut owners = HashMap::new();
+        for (name, _) in &states {
+            let origin = name.replacen('_', "/", 1);
+            let key = crate::model::origin::PortKey::parse(&origin).unwrap();
+            let mut info = crate::model::port::PortInfo::stub(&origin);
+            info.options_name = name.to_string();
+            ports.insert(key.clone(), info);
+            owners.insert(name.to_string(), key);
+        }
         Session {
-            ports: BTreeMap::new(),
+            ports,
             states: states
                 .into_iter()
                 .map(|(n, s)| (n.to_string(), s))
@@ -132,7 +152,7 @@ mod tests {
             moved_states: HashMap::new(),
             aliases: HashMap::new(),
             roots: Vec::new(),
-            owners: HashMap::new(),
+            owners,
             minimal: false,
             blacklist: Default::default(),
             locals: HashMap::new(),

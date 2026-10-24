@@ -603,15 +603,21 @@ had become identical.
 after the interface is gone; the quit dialog shows how many were
 stopped, and the count is also reported on stderr.
 
-Quitting with staged, unapplied changes opens a prompt first,
+Quitting with staged, unapplied changes to a port still in the closure
+opens a prompt first (edits to a port a refresh dropped are kept for the
+session, should it come back, but no longer count),
 `Keep staged edits as a draft?`: `y` (or a second `Ctrl-C`) keeps them
 as a **draft** under `~/.cache/optique/drafts/`, one file per options
 directory, named after a hash of its path, and quits; `n` discards them,
 an older draft included, and quits; `Esc` or any other key stays in the
 interface. The next TUI launch
 on the same options directory restores the draft's staged edits —
-options that vanished from a port meanwhile are dropped, and the
-restored ports are re-queried so their dependencies reappear — and its
+options that vanished from a port meanwhile are dropped, one the port
+gained since, or one a make.conf knob or `options.local` now decides,
+keeps the value it has, IMPLIES closes the rest as a toggle would, and
+the restored ports are re-queried so their dependencies reappear (a
+draft saved by an older optique, which recorded no option list, is not
+restored) — and its
 first message says so: `restored draft (2 ports, 5m ago, …)`, ahead of
 what else the closure needs (see [Messages](#messages)). The draft
 is cleared as soon as the changes are applied (they are on disk by then)
