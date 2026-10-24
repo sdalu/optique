@@ -481,9 +481,11 @@ starts afresh.
 The current generation and the most recent other one are kept; older ones,
 and those of another cache format, are removed when a generation is opened.
 .Fl -no-cache
-neither reads nor writes the cache;
+neither reads nor writes the cache, leaving it as it was;
+.Fl -no-carry-over
+starts a new generation empty;
 .Fl -clear-cache
-deletes every generation first.
+deletes every generation first, the run then filling a fresh one.
 What the cache cannot see is listed under
 .Sx CAVEATS .
 .Ss Global options
@@ -897,10 +899,16 @@ The list's title counts the ports listed and, when there are any, the
 optionless ones it never shows, as in
 .Ql Ports (21 \[u00B7] 20 optionless) ,
 then the views narrowing it
-.Pq Ql \[em] needs attention , Ql \[em] in a dependency loop .
+.Po
+.Ql \[em] needs attention ,
+.Ql \[em] in a dependency loop
+.Pc .
 When it does not fit, the optionless count goes first, the views being kept
 before it, then the views are named in short
-.Pq Ql \[em] attention , Ql \[em] in a loop ,
+.Po
+.Ql \[em] attention ,
+.Ql \[em] in a loop
+.Pc ,
 then the rest is cut with
 .Ql \[u2026]
 at a word.
@@ -974,9 +982,13 @@ never reads that list; apply still rewrites such a file.
 New options can thus be found down the pane's left edge.
 Each row then carries the
 staged value, the port default
-.Pq Ql on No or Ql off ,
+.Po
+.Ql on
+or
+.Ql off
+.Pc ,
 and then a second
-.Ql on Ns / Ns Ql off :
+.Ql on/off :
 what
 .Pa make.conf
 says of the option, whatever decides its value now, the options file
@@ -1710,7 +1722,13 @@ has
 .Pq Ar origin Ns Oo @ Ns Ar flavor Oc ,
 .Va pkgname ,
 .Va status
-.Pq Ql conflict , Ql unconfigured , Ql stale No or Ql ok ,
+.Po
+.Ql conflict ,
+.Ql unconfigured ,
+.Ql stale
+or
+.Ql ok
+.Pc ,
 .Va undecided ,
 .Va added
 and
@@ -1889,7 +1907,11 @@ and a null
 is
 .Bro Va name , Va kind , Va members Brc
 with the kind
-.Ql group , Ql multi , Ql single No or Ql radio ;
+.Ql group ,
+.Ql multi ,
+.Ql single
+or
+.Ql radio ;
 .Va adds_deps
 lists the port origins the option declares as dependencies.
 That is everything a decision needs without running
@@ -2107,7 +2129,7 @@ the most options stands for the default flavor, and each option goes in with
 the value of a flavor that has it; none ever drops what it does not see: the
 file is up to date when everything each of them has is unchanged, none of its
 options counts as obsolete, and a write keeps the list entry and
-.Ql SET Ns / Ns Ql UNSET
+.Ql SET/UNSET
 line of every option those flavors lack as they were, since none can tell an
 option it lacks from one the port removed; the default flavor's next write
 drops the latter.
@@ -2446,7 +2468,12 @@ has
 .Pq its absolute path ,
 .Va new_file ,
 .Va diff
-.Pq Ql +OPT No and Ql -OPT No for options the file already knew ,
+.Po
+.Ql +OPT
+and
+.Ql -OPT
+for options the file already knew
+.Pc ,
 .Va adopted
 .Pq options the port gained since, each Bro Va name , Va on Brc ; empty for a new file, whose whole state is Va enabled ,
 .Va dropped
@@ -2610,7 +2637,12 @@ and
 .Va OPTIONS_SLAVE .
 .Nm
 then treats the port as fully decided
-.Pq never Ql unconfigured No or Ql stale
+.Po
+never
+.Ql unconfigured
+or
+.Ql stale
+.Pc
 and never touches its options file, written or removed, under
 .Cm sync ,
 .Cm decide
