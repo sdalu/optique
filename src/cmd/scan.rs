@@ -323,7 +323,7 @@ fn port_report(r: &Row) -> report::PortReport {
         mc_covered: r.mc_covered(),
         blacklisted: r.blacklisted,
         in_loop: r.in_loop,
-        options_file: format!("{}/options", r.options_name),
+        options_file: optfiles::key_label(&r.options_name),
         overlay: r.overlay.map(|o| o.path.display().to_string()),
         synth_refuses: r.synth_refuses.clone(),
         violations: r.detail.as_ref().map(|d| d.violations.clone()),

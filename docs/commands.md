@@ -157,19 +157,23 @@ assigns only while the file leaves that list out (so a write turning
 every option on would bring it to life); one where either file has
 a line it cannot model — an assignment to anything but the SET and UNSET
 lists and the bookkeeping `make config` writes, a `!=`, a directive, a `$`
-expansion, or a line that is no assignment; and one `make.conf` moves away
-by setting `OPTIONS_FILE`. A warning names the file and line, or the
-moved path. The port shows make's own outcome, every option locked with no
+expansion, or a line that is no assignment; and one a port reads none of,
+its `OPTIONS_FILE`, set by `make.conf` or its own Makefile, naming a file
+outside the options dir. A warning names the file and line, or the moved
+path. An `OPTIONS_FILE` one entry deep in the options dir is an options
+file like any other, read with its `.local` and written by `sync` and
+`decide`: `devel/git@lite` reads `devel_git/lite-options`, which its
+Makefile names. The port shows make's own outcome, every option locked with no
 make.conf verdict, is never unconfigured or stale, and takes no edit.
 
-A make.conf moving `OPTIONS_FILE` for one flavor only (`.if ${FLAVOR:U}
-== nox`) leaves that flavor alone, as above, with its own outcome; the
+An `OPTIONS_FILE` outside the options dir for one flavor only (a make.conf
+`.if ${FLAVOR:U} == nox`) leaves that flavor alone, as above, with its own outcome; the
 other flavors still read the shared file, which stays theirs to write,
 judged from the default flavor's view (or the widest one present)
 whichever flavor the list names first. The warning then names the port:
-`make.conf sets OPTIONS_FILE to <path> for misc/flav@nox: make reads that
-file, not misc_flav/options, for it, and optique leaves its options
-alone`.
+`OPTIONS_FILE is <path> for misc/flav@nox, outside the options dir: make
+reads that file, not misc_flav/options, for it, and optique leaves its
+options alone`.
 
 `--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in

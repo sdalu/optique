@@ -36,6 +36,73 @@ enum Read {
     Unreadable,
 }
 
+/// The options file a port reads, named by its place in the options dir:
+/// the entry's name alone (`devel_git`) for the framework's own
+/// `<entry>/options`, `<entry>/<file>` for another file in the entry, which
+/// a port's Makefile (devel/git's flavors read `devel_git/lite-options`) or
+/// make.conf names as `OPTIONS_FILE`. Every map keyed on a port's file uses
+/// this key, `PortInfo::options_name`.
+pub fn key_file(key: &str) -> PathBuf {
+    if key.contains('/') {
+        PathBuf::from(key)
+    } else {
+        Path::new(key).join("options")
+    }
+}
+
+/// The entry directory `key`'s file is in.
+pub fn key_entry(key: &str) -> &str {
+    key.split_once('/').map_or(key, |(entry, _)| entry)
+}
+
+/// How a message or the JSON names `key`'s file: `devel_git/options`,
+/// `devel_git/lite-options`.
+pub fn key_label(key: &str) -> String {
+    key_file(key).display().to_string()
+}
+
+/// The `.local` make reads after `key`'s file, relative to the options dir.
+pub fn key_local_file(key: &str) -> PathBuf {
+    local_of(&key_file(key))
+}
+
+/// `path` with `.local` appended, as bsd.options.mk names the file it reads
+/// after `path`.
+fn local_of(path: &Path) -> PathBuf {
+    let mut local = path.as_os_str().to_owned();
+    local.push(".local");
+    PathBuf::from(local)
+}
+
+/// The key ([`key_file`]) of `options_file`, an `OPTIONS_FILE` as make
+/// expanded it, when it lies one entry deep in `port_dbdir`, the
+/// `PORT_DBDIR` the query was given: `<entry>/options` is the entry's own
+/// key, `<entry>/<file>` that path. None for a file anywhere else, which
+/// optique does not manage, or for a `.local` name, which make would read
+/// as the file's own `.local` too.
+pub fn options_file_key(port_dbdir: &Path, options_file: &str) -> Option<String> {
+    use std::path::Component;
+    let rel = Path::new(options_file).strip_prefix(port_dbdir).ok()?;
+    let parts: Vec<&str> = rel
+        .components()
+        .map(|c| match c {
+            Component::Normal(s) => s.to_str(),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let [entry, file] = parts.as_slice() else {
+        return None;
+    };
+    if file.ends_with(".local") {
+        return None;
+    }
+    Some(if *file == "options" {
+        (*entry).to_string()
+    } else {
+        format!("{entry}/{file}")
+    })
+}
+
 pub struct OptionsFiles {
     dir: PathBuf,
     memo: RefCell<HashMap<String, Read>>,
@@ -64,20 +131,21 @@ impl OptionsFiles {
         &self.dir
     }
 
-    /// `<dir>/<options_name>`, the entry holding the file.
+    /// The entry holding the file `options_name` names ([`key_entry`]).
     pub fn entry_dir(&self, options_name: &str) -> PathBuf {
-        self.dir.join(options_name)
+        self.dir.join(key_entry(options_name))
     }
 
-    /// `<dir>/<options_name>/options`.
+    /// The file `options_name` names ([`key_file`]).
     pub fn path(&self, options_name: &str) -> PathBuf {
-        self.entry_dir(options_name).join("options")
+        self.dir.join(key_file(options_name))
     }
 
-    /// `<dir>/<options_name>/options.local`, which make reads after the
-    /// options file.
+    /// The `.local` make reads after that file (bsd.options.mk's
+    /// `.sinclude "${OPTIONS_FILE}.local"`): `<entry>/options.local` for
+    /// the framework's own file.
     pub fn local_path(&self, options_name: &str) -> PathBuf {
-        self.entry_dir(options_name).join("options.local")
+        local_of(&self.path(options_name))
     }
 
     fn read(&self, options_name: &str) -> Read {
@@ -429,5 +497,65 @@ OPTIONS_FILE_UNSET+=B
             "read again after forget"
         );
         assert_eq!(files.local_reads(), 2);
+    }
+
+    /// A port's file is named by its place in the options dir: the entry
+    /// for the framework's own `options`, `<entry>/<file>` for another file
+    /// of the entry; an OPTIONS_FILE anywhere else has no key.
+    #[test]
+    fn keys_name_files_one_entry_deep() {
+        assert_eq!(key_file("devel_git"), Path::new("devel_git/options"));
+        assert_eq!(
+            key_file("devel_git/lite-options"),
+            Path::new("devel_git/lite-options")
+        );
+        assert_eq!(
+            key_local_file("devel_git"),
+            Path::new("devel_git/options.local")
+        );
+        assert_eq!(
+            key_local_file("devel_git/lite-options"),
+            Path::new("devel_git/lite-options.local")
+        );
+        assert_eq!(key_entry("devel_git/lite-options"), "devel_git");
+        assert_eq!(key_label("devel_git"), "devel_git/options");
+
+        let db = Path::new("/db");
+        let key = |file: &str| options_file_key(db, file);
+        assert_eq!(
+            key("/db/devel_git/lite-options").as_deref(),
+            Some("devel_git/lite-options")
+        );
+        assert_eq!(
+            key("/db/mail_dovecot24-x/options").as_deref(),
+            Some("mail_dovecot24-x")
+        );
+        for elsewhere in [
+            "/db/options",
+            "/db/a/b/options",
+            "/db/../a/options",
+            "/db/a/options.local",
+            "/dbx/a/options",
+            "/elsewhere/a/options",
+        ] {
+            assert_eq!(key(elsewhere), None, "{elsewhere}");
+        }
+    }
+
+    /// A key one entry deep reads its file and the `.local` after it.
+    #[test]
+    fn a_key_one_entry_deep_reads_its_file_and_local() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("devel_git")).unwrap();
+        fs::write(tmp.path().join("devel_git/options"), "default\n").unwrap();
+        fs::write(tmp.path().join("devel_git/lite-options"), "lite\n").unwrap();
+        fs::write(tmp.path().join("devel_git/lite-options.local"), "local\n").unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let key = "devel_git/lite-options";
+        assert_eq!(files.bytes(key).as_deref(), Some(&b"lite\n"[..]));
+        assert_eq!(files.local_bytes(key).as_deref(), Some(&b"local\n"[..]));
+        assert_eq!(files.bytes("devel_git").as_deref(), Some(&b"default\n"[..]));
+        assert_eq!(files.local_bytes("devel_git"), None);
+        assert_eq!(files.entry_dir(key), tmp.path().join("devel_git"));
     }
 }

@@ -188,9 +188,9 @@ creates; guessing a local build from `-o /var/db/ports`; reading
 
 Results are cached under `~/.cache/optique/`, keyed on the ports tree's
 canonical path and git HEAD, the make.conf hash, and the content of the
-options file and of the `options.local` bsd.options.mk reads after it, or,
-when make.conf moves `OPTIONS_FILE`, of the file it names and its
-`.local` (`src/cache/mod.rs`), with a schema number bumped whenever the parsed
+options file the port reads and of the `.local` bsd.options.mk reads after
+it, or, when `OPTIONS_FILE` lies outside the options dir, of the file it
+names and its `.local` (`src/cache/mod.rs`), with a schema number bumped whenever the parsed
 shape changes. The path is part of the key because two trees at one
 commit are not one tree: poudriere's `-p default` and `-p dev`, or a
 clone, hold their own uncommitted edits, and an entry holds absolute
@@ -409,7 +409,7 @@ SET and UNSET lists and the bookkeeping `make config` writes
 (`src/optionsfile.rs`). A file with any other line, in it or in its
 `options.local` (another variable, `!=`, a directive, a `$` expansion, a
 line that is no assignment), an `options.local` assigning a list afresh
-or with `?=`, or a make.conf `OPTIONS_FILE` pointing elsewhere is unmanaged
+or with `?=`, or an `OPTIONS_FILE` outside the options dir is unmanaged
 (`session::unmanaged_file`, `session::moved`): never written or removed, by `clean` either,
 its port shown with make's own `PORT_OPTIONS`, every option locked, and
 no make.conf verdict, since the layers make dumps after reading the file
@@ -426,8 +426,26 @@ holds now, its line named. Rejected: counting it as a reset only when it
 assigns against the current file, which judged the write by a reading
 the write itself changes.
 
+Which file a port reads is where make reads it. An `OPTIONS_FILE` one
+entry deep in the options dir, set by make.conf or by the port's own
+Makefile, is an options file like any other: `<entry>/options` is that
+entry's, `<entry>/<file>` is keyed by that path (`optfiles::key_file`), read
+with its `.local`, and written, judged and owned like the others
+(`makerunner::adopt_options_file`). Eight ports in the tree set it
+themselves: devel/git, mail/postfix, net-p2p/transmission-components and
+www/py-autobahn give each flavor but the default a file of its own
+(`devel_git/lite-options`), mail/dovecot24 and multimedia/avidemux name
+another entry. The key is kept relative, so that the cache holds one answer
+whether the query read the options dir or the TUI's staging copy.
+Rejected: leaving every port whose `OPTIONS_FILE` is not
+`<OPTIONS_NAME>/options` unmanaged, on the belief that only make.conf moves
+it, which locked those eight ports' flavors and blamed make.conf for it;
+and naming every write's temporary file `.options.optique.tmp`, which two
+files of one entry written in one pass shared, the second rename failing
+after the first had put the wrong content in place.
+
 `OPTIONS_FILE` is moved per port, a make.conf `.if ${FLAVOR:U} == nox`
-moving it for one flavor. Such a flavor reads none of the shared file, so
+moving it, outside the options dir, for one flavor. Such a flavor reads none of the shared file, so
 it is left out of that file's readers everywhere (`session::moved`): it
 owns nothing, takes no part in the write, in `-m` or `clean --redundant`
 redundancy or the divergence warning, and shows its own `PORT_OPTIONS`,
@@ -461,9 +479,10 @@ that an entry's name is its port's: under per-flavor files
 `editors_emacs-nox` is `editors/emacs@nox`'s file, not a vanished port's.
 So `clean` then removes nothing as vanished or unused, and the same when
 the probe failed; `--redundant` still judges managed live ports. Under
-`--unused` and `--redundant`, the entry a queried port's moved file lies
-in is also kept: that needs no make.conf value and covers a move made per
-port, which a probe outside any port cannot see. Rejected: guessing the
+`--unused` and `--redundant`, the entry a queried port reads is also kept,
+whatever its name says, and so is the entry a moved file lies deeper in:
+that needs no make.conf value and covers a move made per port, which a
+probe outside any port cannot see. Rejected: guessing the
 names a moved `OPTIONS_FILE` yields (per-flavor suffixes and the like),
 which works only for the spellings guessed and deletes a file make reads
 for any other.
@@ -476,9 +495,9 @@ overrides, and locking it refused edits make would have honoured.
 ## Flavors sharing one options file: the default flavor owns it
 
 Flavors of one origin can share an `OPTIONS_NAME` and so an options file, but
-compute different option sets for it (`devel/git@lite` excludes options and
-changes defaults from `devel/git`'s view; so does `editors/emacs@nox`
-against `@full`). The file is owned by the default flavor, written and
+compute different option sets for it (`editors/emacs@nox` excludes options
+from `@full`'s view; `devel/git@lite` would, but devel/git gives it a file
+of its own, "An options file optique cannot model is left to make"). The file is owned by the default flavor, written and
 judged from its view — exactly what `make config` on the plain origin
 produces — and a divergent flavor's difference is reported as a warning,
 not an error (`src/apply/mod.rs`, `src/session/mod.rs`).
@@ -490,9 +509,9 @@ options, so the widest view covers the others' (`editors/emacs@pgtk`'s
 holds `@nox`'s), and an edit to an option only it has reaches the shared
 staged set. Rejected: letting `apply` fall back to the first flavor it
 meets while the session followed the widest, which judged the file from
-one view and wrote it from another. A flavor make.conf moves
-`OPTIONS_FILE` for reads none of the file and is neither owner nor
-writer ("An options file optique cannot model is left to make").
+one view and wrote it from another. A flavor whose
+`OPTIONS_FILE` names another file reads none of the file and is neither
+owner nor writer ("An options file optique cannot model is left to make").
 
 Such an owner writes from its own view but drops nothing it does not see:
 it cannot tell an option it lacks (the default flavor's) from one the port

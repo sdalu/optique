@@ -656,7 +656,13 @@ fn write_temp(w: &PendingWrite) -> Result<Staged> {
     let dir = w.path.parent().context("options path has no parent")?;
     let new_dir = (!dir.exists()).then(|| dir.to_path_buf());
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    let tmp = dir.join(".options.optique.tmp");
+    // Named after the file: two files of one entry (`options`, a flavor's
+    // `lite-options`) are written in one pass, each through its own.
+    let name = w
+        .path
+        .file_name()
+        .context("options path has no file name")?;
+    let tmp = dir.join(format!(".{}.optique.tmp", name.to_string_lossy()));
     let staged = Staged { tmp, new_dir };
     let mut f = match fs::File::create(&staged.tmp) {
         Ok(f) => f,

@@ -1825,7 +1825,7 @@ reads no file, with
 .Ql options file ,
 .Ql options.local
 or
-.Ql make.conf OPTIONS_FILE ,
+.Ql OPTIONS_FILE ,
 whichever makes it so, no
 .Va makeconf
 and a null
@@ -1963,20 +1963,30 @@ or
 .Ic .include ,
 a
 .Ql $
-expansion, or any line that is no assignment; and one
+expansion, or any line that is no assignment; and one a port reads none
+of, its
+.Va OPTIONS_FILE ,
+set by
 .Pa make.conf
-moves away by setting
-.Va OPTIONS_FILE
-to anything but
-.Pa <PORT_DBDIR>/<OPTIONS_NAME>/options ,
-since
+or by its own Makefile, naming a file outside the options directory, since
 .Xr make 1
-then reads neither it nor its
+then reads neither the options directory's file nor its
 .Pa options.local .
-A warning names the file and line, or the
+A warning names the file and line, or that
+.Va OPTIONS_FILE .
+An
 .Va OPTIONS_FILE
-.Pa make.conf
-sets.
+one entry deep in the options directory is an options file like any other,
+read with its
+.Pa .local
+and written by
+.Cm sync
+and
+.Cm decide :
+.Pa devel_git/lite-options ,
+which the Makefile of devel/git names for its lite flavor, or another
+entry's
+.Pa options .
 No command writes or removes such a file,
 .Cm clean
 included; its port shows the options
@@ -1987,14 +1997,12 @@ is locked, with no
 verdict
 .Pq see Cm scan Fl -options ;
 and edits to it are refused.
-A
-.Pa make.conf
-moving
+An
 .Va OPTIONS_FILE
-for one flavor only leaves that flavor so, with its own outcome, while the
+outside the options directory for one flavor only leaves that flavor so, with its own outcome, while the
 flavors still reading the shared file keep it managed, owned as below
 whichever flavor the closure names first; the warning then names the port:
-.Dl warning: make.conf sets OPTIONS_FILE to /elsewhere for misc/flav@nox: make reads that file, not misc_flav/options, for it, and optique leaves its options alone
+.Dl warning: OPTIONS_FILE is /elsewhere for misc/flav@nox, outside the options dir: make reads that file, not misc_flav/options, for it, and optique leaves its options alone
 .Pp
 .Cm sync
 then reports every file it changed.
@@ -2060,12 +2068,10 @@ queries every flavor in the port's
 one
 .Xr make 1
 query each, and keeps the file when one of them cannot be queried.
-A flavor
-.Pa make.conf
-moves
+A flavor whose
 .Va OPTIONS_FILE
-for reads none of the file and is not judged; a file no flavor reads is
-kept.
+names another file reads none of the file and is not judged; a file no
+flavor reads is kept.
 .Pp
 With
 .Fl n
@@ -2197,12 +2203,14 @@ Under
 .Fl u
 or
 .Fl r ,
-an entry that the moved
+an entry whose file a port queried reads, through an
 .Va OPTIONS_FILE
-of a port queried lies in is kept whatever its name says, which covers a
+set by
 .Pa make.conf
-moving it for some ports only:
-.Dl warning: misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept
+or its Makefile, is kept whatever its name says, which covers a
+.Pa make.conf
+moving it for some ports only; one deeper in the entry is named:
+.Dl warning: misc_flav-nox: make reads misc/flav@nox's options from it (OPTIONS_FILE); kept
 .Bl -tag -width Ds
 .It Fl r , Fl -redundant
 Also remove files whose recorded configuration is exactly what defaults plus

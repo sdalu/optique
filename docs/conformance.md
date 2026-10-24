@@ -58,7 +58,7 @@ Verdicts:
 | The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=`, a trailing backslash, `#` comments and `\#` ([ref](reference/ports-framework.md#how-the-words-are-matched)) | `bsd.options.mk` (`.include`) | matches |
 | What the file or `options.local` assigns besides `OPTIONS_FILE_SET`/`UNSET` counts only after the inclusion (SET/UNSET lists and `OPTIONS_OVERRIDE` inert, FORCE and `WITH` live); a `!=` runs on every query; directives and `${VAR}` are evaluated ([ref](reference/ports-framework.md#how-the-words-are-matched)) | `bsd.options.mk` | matches by leaving such a file to make: it is unmanaged, warned about with its line, never written or removed, its port shown as make computes it, its options locked |
 | `options.local` read after the options file; its SET entries are defaults the file's UNSET overrides, its UNSET entries win over the file ([ref](reference/ports-framework.md#how-the-words-are-matched)) | `bsd.options.mk` (`.sinclude ${OPTIONS_FILE}.local`) | matches; never written; an option its UNSET entries match is locked (`locked_by: "options.local"`); one assigning a list afresh, or with `?=` (which assigns only while the file leaves that list out, so a write can bring it to life), makes the file unmanaged; `-m` and `clean --redundant` judge a file redundant only when `options.local` alone gives the same outcome |
-| `OPTIONS_FILE?=` moved by make.conf ([ref](reference/ports-framework.md#naming-the-options-file)) | `bsd.options.mk` | matches by leaving the port alone: warned about, unmanaged; moved for some flavors only, those are left alone and the others still read, and manage, the shared file; `clean` removes no entry as vanished or unused while make.conf sets it (asked once per run, from `ports-mgmt/pkg` without reading its Makefile), and under `--unused`/`--redundant` keeps the entry a queried port's moved file lies in |
+| `OPTIONS_FILE` moved by make.conf (`?=`) or set by the port's Makefile (devel/git, mail/postfix and six more give a flavor its own file) ([ref](reference/ports-framework.md#naming-the-options-file)) | `bsd.options.mk` | matches: one entry deep in the options dir it is an options file like any other (`devel_git/lite-options`, another entry's `options`), read with its `.local`, written and judged as such; anywhere else the port is left alone: warned about, unmanaged; moved for some flavors only, those are left alone and the others still read, and manage, the shared file; `clean` removes no entry as vanished or unused while make.conf sets it (asked once per run, from `ports-mgmt/pkg` without reading its Makefile), and under `--unused`/`--redundant` keeps the entry a queried port reads |
 | `OPTIONS_NAME`, `PORT_DBDIR`, `PORTSDIR` ([ref](reference/ports-framework.md#naming-the-options-file)) | `bsd.options.mk`, `bsd.port.mk` | `OPTIONS_NAME` matches (dumped); `PORT_DBDIR` and `PORTSDIR` are passed on the command line, which overrides make.conf; `PORT_DBDIR` matches by reporting it: a make.conf one other than where the build reads options (the options dir, a poudriere jail's `/var/db/ports`, synth's `/options`), asked once per run from `ports-mgmt/pkg` without reading its Makefile (so a `.CURDIR` test in make.conf answers as for a build) and, for a local build, with the environment's `PORT_DBDIR` a make.conf `?=` defers to, is an error in the banner and in `scan`'s `errors` |
 | `OPTIONS_NAME` ignores the flavor: flavors share one file ([ref](reference/ports-framework.md#naming-the-options-file)) | `bsd.options.mk` | matches; who writes it: **differs on purpose** ("Flavors sharing one options file") |
 | What `make config` writes: header, `_OPTIONS_READ`, list, one SET/UNSET line per option ([ref](reference/ports-framework.md#the-config-targets)) | `bsd.port.mk` `do-config` | **differs on purpose**: no `_OPTIONS_READ` (nothing reads it) and a pkgname comment of 20 bytes or more, so that synth's line probe never aborts on a file optique wrote (synth table) |
@@ -164,7 +164,8 @@ Two kinds of tests pin the table:
   - `tests/fixture.rs`: a conditional group (`misc/cond`, after
     mail/faces), an `OPTIONS_SLAVE` flavor (`misc/slavey`, after
     databases/sqlite3@icu), three flavors sharing a file (`misc/flav`,
-    after editors/emacs), a forced group member (`misc/forced`), a
+    after editors/emacs), a flavor its Makefile gives a file of its own
+    (`misc/flavfile`, after devel/git), a forced group member (`misc/forced`), a
     Latin-1 make.conf, a dependency on a moved origin, a listed moved
     origin flagged, followed under `--follow-moved`, kept by a local build
     while in the tree, and flagged under `-s`; a listed subpackage through
@@ -178,7 +179,8 @@ Two kinds of tests pin the table:
   - `tests/fixture_model.rs`: new options counted by line; a hand-written
     file, `:=`/`?=`, a continued line; `options.local` after the file,
     without one, kept by `-m`, locking `decide` by UNSET only, its SET a
-    default; a file optique cannot model, a moved `OPTIONS_FILE`; UNSET
+    default; a file optique cannot model, an `OPTIONS_FILE` moved within the
+    options dir, managed; UNSET
     patterns and SET globs (`misc/model-globs`); PREVENTS patterns and an
     unlisted IMPLIES target (`misc/model-patterns`); an `OPTIONS_SLAVE`
     option's PREVENTS (`misc/model-slave-prevents`); the PREVENTS of an

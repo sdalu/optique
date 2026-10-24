@@ -2199,13 +2199,13 @@ fn a_moved_options_file_is_left_alone() {
     let mut s = session_in(ports, tmp.path());
     let info = s.ports[&key].clone();
     assert_eq!(s.status(&info), UiStatus::Ok);
-    let why = "make.conf sets OPTIONS_FILE to /elsewhere/options, not the options file optique manages; edit it there";
+    let why = "OPTIONS_FILE is /elsewhere/options, outside the options dir optique manages; edit it there";
     assert_eq!(s.toggle(&key, "A").unwrap_err(), why);
     let reports = crate::report::option_reports(&s, &info);
     assert!(
         reports
             .iter()
-            .all(|o| o.locked_by.as_deref() == Some("make.conf OPTIONS_FILE"))
+            .all(|o| o.locked_by.as_deref() == Some("OPTIONS_FILE"))
     );
     let planned = apply::plan_writes(
         std::iter::once((&key, &info, set(&["A"]))),
@@ -2248,7 +2248,7 @@ fn a_flavor_moving_options_file_leaves_the_shared_file_to_its_owner() {
         assert_eq!(s.unmanaged(&o), None, "default {default}");
         assert_eq!(
             s.unmanaged(&m).map(|u| u.by),
-            Some("make.conf OPTIONS_FILE"),
+            Some("OPTIONS_FILE"),
             "default {default}"
         );
         assert_eq!(s.status(&o), UiStatus::Unconfigured, "default {default}");
@@ -2278,12 +2278,7 @@ fn a_flavor_moving_options_file_leaves_the_shared_file_to_its_owner() {
             "default {default}"
         );
         for r in crate::report::option_reports(&s, &m) {
-            assert_eq!(
-                r.locked_by.as_deref(),
-                Some("make.conf OPTIONS_FILE"),
-                "{}",
-                r.name
-            );
+            assert_eq!(r.locked_by.as_deref(), Some("OPTIONS_FILE"), "{}", r.name);
             assert_eq!(r.staged, r.name == "B", "{}", r.name);
         }
         let staged = s

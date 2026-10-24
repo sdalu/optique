@@ -92,21 +92,24 @@ pub(crate) fn outranks(candidate: &PortInfo, owner: &PortInfo) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unmanaged {
     /// What makes it so, as `locked_by` names it: `options file`,
-    /// `options.local` or `make.conf OPTIONS_FILE`.
+    /// `options.local` or `OPTIONS_FILE`.
     pub by: &'static str,
     /// The reason, in full.
     pub why: String,
 }
 
-/// Why the port reads none of the options file optique manages: make.conf
-/// moved OPTIONS_FILE for it (`PortOptions::moved_file`), so make reads
-/// another file, and `${OPTIONS_FILE}.local` with it. Such a flavor is no
+/// Why the port reads none of the options file optique manages: its
+/// OPTIONS_FILE, set by make.conf or its own Makefile, lies outside the
+/// options dir (`PortOptions::moved_file`), so make reads another file, and
+/// `${OPTIONS_FILE}.local` with it. Such a flavor is no
 /// reader of the shared file: its own edits are refused and its state is
 /// make's own, while the flavors still reading the file keep it managed.
 pub(crate) fn moved(info: &PortInfo) -> Option<Unmanaged> {
     info.options.moved_file.as_ref().map(|path| Unmanaged {
-        by: "make.conf OPTIONS_FILE",
-        why: format!("make.conf sets OPTIONS_FILE to {path}, not the options file optique manages; edit it there"),
+        by: "OPTIONS_FILE",
+        why: format!(
+            "OPTIONS_FILE is {path}, outside the options dir optique manages; edit it there"
+        ),
     })
 }
 

@@ -378,13 +378,15 @@ fn say_overridden(paint: bool, result: &ScanResult) {
     }
 }
 
-/// The ports make.conf moves OPTIONS_FILE for, each said once; returns the
-/// options files make still reads.
+/// The ports whose OPTIONS_FILE lies outside the options dir, each said
+/// once; returns the options files make still reads.
 fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeSet<&str> {
-    // bsd.options.mk:183: make.conf moved OPTIONS_FILE, so make reads
-    // neither the file optique manages nor its options.local. Per port: a
-    // flavor moved elsewhere leaves the shared file to those still reading
-    // it (`session::moved`).
+    // bsd.options.mk:183: OPTIONS_FILE names a file outside the options dir
+    // (make.conf, or the port's Makefile, set it), so make reads neither the
+    // file optique manages nor its options.local. Per port: a flavor moved
+    // elsewhere leaves the shared file to those still reading it
+    // (`session::moved`). One inside the options dir is a file optique
+    // manages like any other (`makerunner::adopt_options_file`).
     let with_options = || result.ports.values().filter(|i| i.options.has_options());
     let read: std::collections::BTreeSet<&str> = with_options()
         .filter(|i| i.options.moved_file.is_none())
@@ -404,15 +406,17 @@ fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeS
         for (port, path) in moved {
             if read.contains(name) {
                 eprintln!(
-                    "{} make.conf sets OPTIONS_FILE to {path} for {port}: make reads that file, not \
-                     {name}/options, for it, and optique leaves its options alone",
+                    "{} OPTIONS_FILE is {path} for {port}, outside the options dir: make reads \
+                     that file, not {}, for it, and optique leaves its options alone",
                     tint(paint, ansi::YELLOW, "warning:"),
+                    optfiles::key_label(name),
                 );
             } else if said.insert(*path) {
                 eprintln!(
-                    "{} make.conf sets OPTIONS_FILE to {path}: make does not read {name}/options, \
+                    "{} OPTIONS_FILE is {path}, outside the options dir: make does not read {}, \
                      and optique leaves it alone",
                     tint(paint, ansi::YELLOW, "warning:"),
+                    optfiles::key_label(name),
                 );
             }
         }
@@ -445,14 +449,19 @@ fn say_options_files(
             continue;
         }
         let both = files.combined(name);
+        let file = optfiles::key_label(name);
         // make reads every line of both files, a `!=` running its shell
         // command; a line optique cannot model leaves the file to the user
         // (apply::plan_writes), each line named once.
         for u in &both.unmodeled {
             eprintln!(
-                "{} {name}/{} line {} {}: optique leaves {name}/options alone",
+                "{} {} line {} {}: optique leaves {file} alone",
                 tint(paint, ansi::YELLOW, "warning:"),
-                u.file,
+                if u.file == "options" {
+                    file.clone()
+                } else {
+                    format!("{file}.local")
+                },
                 u.line,
                 u.what,
             );
@@ -463,10 +472,7 @@ fn say_options_files(
         // An options.local assigning a list afresh drops the file's lines:
         // optique leaves the file alone (apply::plan_writes), said once.
         if let Some((_, why)) = both.unmanaged() {
-            eprintln!(
-                "{} {name}/options: {why}",
-                tint(paint, ansi::YELLOW, "warning:")
-            );
+            eprintln!("{} {file}: {why}", tint(paint, ansi::YELLOW, "warning:"));
             continue;
         }
         let mut adds = Vec::new();
@@ -480,7 +486,7 @@ fn say_options_files(
         }
         if !adds.is_empty() {
             eprintln!(
-                "{} {name}/options.local also {}; sync leaves it alone",
+                "{} {file}.local also {}; sync leaves it alone",
                 tint(paint, ansi::CYAN, "note:"),
                 adds.join(" and ")
             );
@@ -491,7 +497,7 @@ fn say_options_files(
         let unlined = saved.unlined();
         if !unlined.is_empty() {
             eprintln!(
-                "{} {name}/options has no SET or UNSET line for {}: make reads them at \
+                "{} {file} has no SET or UNSET line for {}: make reads them at \
                  their defaults; sync writes them out",
                 tint(paint, ansi::YELLOW, "warning:"),
                 unlined.join(" ")

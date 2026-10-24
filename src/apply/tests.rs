@@ -1160,3 +1160,34 @@ fn a_plan_without_skipped_files_keeps_the_others() {
     );
     assert_eq!(kept.removals[0].options_name, "cat_three");
 }
+
+/// Two files of one entry, a port's `options` and a flavor's own
+/// `lite-options`, written in one pass: each goes through a temporary file
+/// of its own and lands with its own content.
+#[test]
+fn two_files_of_one_entry_are_written_in_one_pass() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = |name: &str, file: &str, content: &str| PendingWrite {
+        key: PortKey::parse("devel/git").unwrap(),
+        options_name: name.into(),
+        path: tmp.path().join("devel_git").join(file),
+        old: None,
+        enabled: BTreeSet::new(),
+        complete: vec![],
+        kept: vec![],
+        content: content.into(),
+    };
+    let summary = apply(&[
+        w("devel_git", "options", "default\n"),
+        w("devel_git/lite-options", "lite-options", "lite\n"),
+    ]);
+    assert_eq!(
+        (summary.written, summary.failed.len()),
+        (2, 0),
+        "{:?}",
+        summary.failed
+    );
+    let read = |file: &str| fs::read_to_string(tmp.path().join("devel_git").join(file)).unwrap();
+    assert_eq!(read("options"), "default\n");
+    assert_eq!(read("lite-options"), "lite\n");
+}

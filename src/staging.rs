@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::optfiles::OptionsFiles;
+use crate::optfiles::{OptionsFiles, key_file, key_local_file};
 
 /// Staging PORT_DBDIR: a private copy of the options files that background
 /// re-queries read, so staged edits take effect without touching the real
@@ -50,8 +50,8 @@ impl StagingDb {
     /// whatever the file is: a staged edit goes with it too.
     pub fn seed_local(&self, files: &OptionsFiles, options_name: &str) -> Result<()> {
         if let Some(content) = files.local_bytes(options_name) {
-            let path = self.root.join(options_name).join("options.local");
-            fs::create_dir_all(self.root.join(options_name))
+            let path = self.root.join(key_local_file(options_name));
+            fs::create_dir_all(path.parent().unwrap_or(&self.root))
                 .and_then(|()| fs::write(&path, &content))
                 .with_context(|| format!("writing {}", path.display()))?;
         }
@@ -60,8 +60,8 @@ impl StagingDb {
 
     /// Does staging hold anything make reads for this OPTIONS_NAME?
     pub fn has(&self, options_name: &str) -> bool {
-        let dir = self.root.join(options_name);
-        dir.join("options").is_file() || dir.join("options.local").is_file()
+        self.root.join(key_file(options_name)).is_file()
+            || self.root.join(key_local_file(options_name)).is_file()
     }
 
     pub fn path(&self) -> &Path {
@@ -70,9 +70,10 @@ impl StagingDb {
 
     /// (Over)write one staged options file.
     pub fn write(&self, options_name: &str, content: &[u8]) -> Result<()> {
-        let dir = self.root.join(options_name);
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        fs::write(dir.join("options"), content)
+        let path = self.root.join(key_file(options_name));
+        let dir = path.parent().unwrap_or(&self.root);
+        fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        fs::write(&path, content)
             .with_context(|| format!("writing staged options for {options_name}"))
     }
 }

@@ -7,9 +7,10 @@
 //! The ports: misc/cond (a SINGLE group named after an option, as
 //! mail/faces), misc/slavey (a flavor turning an option on through
 //! OPTIONS_SLAVE, as databases/sqlite3@icu), misc/flav (three flavors
-//! sharing one file, as editors/emacs), misc/forced (a SINGLE group whose
-//! make.conf forces a member on), and a ports-mgmt/pkg stub every port
-//! depends on.
+//! sharing one file, as editors/emacs), misc/flavfile (a flavor whose own
+//! Makefile names it an options file of its own, as devel/git@lite),
+//! misc/forced (a SINGLE group whose make.conf forces a member on), and a
+//! ports-mgmt/pkg stub every port depends on.
 
 mod common;
 
@@ -527,19 +528,54 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
     }
 
     // Moved for this port only, where no probe outside a port sees it:
-    // --unused still keeps the entry the closure's port has make read,
-    // while the vanished one goes.
+    // the entry it moves to is @nox's own (`misc_flav-nox`), so --unused
+    // keeps it as the closure's, with no note, while the vanished one goes.
     let conf = format!(".if ${{.CURDIR:M*/misc/flav}}\n{conf}.endif\n");
     fs::write(&f.make_conf, conf).unwrap();
     let out = f.run("clean", &["--unused", "misc/flav@nox"]);
     let err = stderr(&out);
     assert!(!err.contains("make.conf sets OPTIONS_FILE ("), "{err}");
-    assert!(
-        err.contains("warning: misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"),
-        "{err}"
-    );
+    assert!(!err.contains("(OPTIONS_FILE); kept"), "{err}");
     assert!(f.file("misc_flav-nox").exists(), "{err}");
     assert!(!f.file("misc_gone").exists(), "{err}");
+}
+
+/// devel/git's Makefile gives every flavor but the default an options file
+/// of its own, `${PORT_DBDIR}/${OPTIONS_NAME}/${FLAVOR}-options`: misc/
+/// flavfile@lite reads misc_flavfile/lite-options. That file is managed like
+/// any other: no warning, both flavors unconfigured and editable, sync
+/// writes each flavor's own file, and an edit to one flavor reaches that
+/// flavor's file alone.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_flavor_the_port_gives_its_own_file_is_managed() {
+    let f = Fixture::new();
+    let lite = f.options.join("misc_flavfile/lite-options");
+    let out = f.make("misc/flavfile", &["FLAVOR=lite", "-V", "OPTIONS_FILE"]);
+    assert_eq!(stdout(&out).trim(), lite.display().to_string());
+    let order = ["misc/flavfile", "misc/flavfile@lite"];
+    let default = f.scan_port(&order, "misc/flavfile@default");
+    assert_eq!(default["status"], "unconfigured", "{default}");
+    assert_eq!(
+        default["options_file"], "misc_flavfile/options",
+        "{default}"
+    );
+    let port = f.scan_port(&order, "misc/flavfile@lite");
+    assert_eq!(port["status"], "unconfigured", "{port}");
+    assert_eq!(port["options_file"], "misc_flavfile/lite-options", "{port}");
+    assert_eq!(option(&port, "A")["locked"], false, "{port}");
+
+    let out = f.run("sync", &order);
+    let err = stderr(&out);
+    assert!(!err.contains("OPTIONS_FILE"), "{err}");
+    assert!(f.file("misc_flavfile").is_file(), "{err}");
+    assert!(lite.is_file(), "sync wrote @lite's own file: {err}");
+
+    let plan = f.decide(&order, r#"{"misc/flavfile@lite": {"A": false}}"#);
+    assert_eq!(plan["applied"], true, "{plan}");
+    let out = f.make("misc/flavfile", &["FLAVOR=lite", "-V", "PORT_OPTIONS"]);
+    assert_eq!(stdout(&out).trim(), "", "@lite reads its own file");
+    assert_eq!(f.make_v("misc/flavfile", "PORT_OPTIONS"), ["A", "X11"]);
 }
 
 /// A make.conf moving OPTIONS_FILE: make reads the moved file, so an edit
@@ -608,7 +644,7 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
         assert_eq!(nox["status"], "ok", "{order:?}: {nox}");
         assert_eq!(
             option(&nox, "A")["locked_by"],
-            "make.conf OPTIONS_FILE",
+            "OPTIONS_FILE",
             "{order:?}: {nox}"
         );
 
@@ -616,8 +652,8 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
         let err = stderr(&out);
         assert!(
             err.contains(
-                "warning: make.conf sets OPTIONS_FILE to /nonexistent/nox/options for misc/flav@nox: \
-                 make reads that file, not misc_flav/options, for it"
+                "warning: OPTIONS_FILE is /nonexistent/nox/options for misc/flav@nox, outside the \
+                 options dir: make reads that file, not misc_flav/options, for it"
             ),
             "{order:?}: {err}"
         );
@@ -653,7 +689,7 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
         );
         assert_eq!(
             rejected[0]["reason"],
-            "make.conf sets OPTIONS_FILE to /nonexistent/nox/options, not the options file optique manages; \
+            "OPTIONS_FILE is /nonexistent/nox/options, outside the options dir optique manages; \
              edit it there",
             "{order:?}: {plan}"
         );

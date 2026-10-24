@@ -105,11 +105,13 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             scanned.flagged_moves()
         );
     }
+    // The entries the closure reads: a key one entry deep
+    // (`devel_git/lite-options`) uses its entry.
     let used = scanned
         .result
         .ports
         .values()
-        .map(|i| i.options_name.clone())
+        .map(|i| optfiles::key_entry(&i.options_name).to_string())
         .collect();
     // Sorted by port, so the port each note names is the same every run.
     let mut infos: Vec<&PortInfo> = scanned.result.ports.values().collect();

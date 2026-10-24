@@ -118,7 +118,7 @@ pub struct OptionReport {
     /// Why, when it is locked: a `*_FORCE` knob, `options.local` (an UNSET
     /// entry there), the option that implies it, or what makes the options
     /// file one optique cannot manage (`options file`, `options.local`,
-    /// `make.conf OPTIONS_FILE`), which locks every option.
+    /// `OPTIONS_FILE`), which locks every option.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_by: Option<String>,
     /// The staged value contradicts what make.conf asks for.

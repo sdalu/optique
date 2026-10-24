@@ -245,9 +245,9 @@ list` under `--follow-moved`, `…, not followed; fix the list, or
 --follow-moved` when the port is in the closure on another account),
 `UNMANAGED:` and why
 for an options file optique leaves to make (a line it cannot model, an
-`options.local` resetting a list or assigning one with `?=`, or a
-make.conf `OPTIONS_FILE` moving it, for that flavor alone when it moves
-it for one; see [commands](commands.md#sync)), shown with make's own
+`options.local` resetting a list or assigning one with `?=`, or an
+`OPTIONS_FILE` outside the options dir, for that flavor alone when only
+it reads one; see [commands](commands.md#sync)), shown with make's own
 outcome, as make reads the file, even for a port a refresh just pulled
 in, a `CONFLICT:` per rule the staged
 options break, and `STALE:` when the port's option list

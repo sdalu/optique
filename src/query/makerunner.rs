@@ -335,7 +335,26 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     }
     let mut info = parse::parse_dump(key, &text)?;
     info.makefiles = tree_files(&info.makefiles, &portdir, &ctx.portsdir);
+    adopt_options_file(&mut info, &ctx.port_dbdir);
     Ok(info)
+}
+
+/// A dumped `OPTIONS_FILE` one entry deep in the options dir the query read
+/// (`port_dbdir`) is an options file like any other, only not at
+/// `<OPTIONS_NAME>/options`: the port's Makefile names it (devel/git's
+/// flavors, `devel_git/lite-options`; dovecot24's suffixed entry) or
+/// make.conf does. It becomes the port's key ([`optfiles::key_file`]),
+/// kept relative so that the cache holds one answer whichever directory,
+/// options dir or the TUI's staging copy, the query was given; any other
+/// `OPTIONS_FILE` stays moved, a file optique leaves alone.
+fn adopt_options_file(info: &mut PortInfo, port_dbdir: &Path) {
+    let Some(file) = &info.options.moved_file else {
+        return;
+    };
+    if let Some(key) = crate::optfiles::options_file_key(port_dbdir, file) {
+        info.options_name = key;
+        info.options.moved_file = None;
+    }
 }
 
 /// The files of `.MAKE.MAKEFILES` (`made`) that lie in the main tree,

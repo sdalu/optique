@@ -131,7 +131,7 @@ re-running `make`:
 [^5]: an options file optique cannot model is left to make
     ([commands](commands.md#sync)): every option of its port reports
     `locked: true` with `locked_by` `"options file"`, `"options.local"` or
-    `"make.conf OPTIONS_FILE"`, whichever makes it so, ahead of any other
+    `"OPTIONS_FILE"` (one outside the options dir), whichever makes it so, ahead of any other
     reason but an `OPTIONS_OVERRIDE`, under which make reads no file and
     the port reports as in [^1]; no `makeconf` and a `null` `saved`;
     `staged` is make's own outcome, `undecided` is empty, `status` is never

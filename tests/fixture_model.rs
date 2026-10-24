@@ -614,13 +614,16 @@ fn an_options_file_optique_cannot_model_is_left_to_make() {
     assert_eq!(flagged(&port, "staged"), make, "{port}");
 }
 
-/// bsd.options.mk:183 assigns OPTIONS_FILE with `?=`: make.conf moves it,
-/// and make reads neither the file optique manages nor its options.local.
-/// optique warns, reads the port as configured, and sync writes nothing.
-/// PORT_DBDIR, given on make's command line, stays what optique passes.
+/// bsd.options.mk:183 assigns OPTIONS_FILE with `?=`: make.conf moves it.
+/// Moved within the options dir, to another file of the port's entry, it
+/// is an options file like any other: no warning, the port unconfigured
+/// and editable, and sync writes the file make reads, never
+/// `misc_cond/options`. PORT_DBDIR, given on make's command line, stays
+/// what optique passes, so `${PORT_DBDIR}` in make.conf names the options
+/// dir whatever make.conf assigns it.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
-fn a_moved_options_file_leaves_the_port_alone() {
+fn a_moved_options_file_in_the_options_dir_is_managed() {
     let f = Fixture::new();
     let origin = "misc/cond";
     std::fs::write(
@@ -628,17 +631,14 @@ fn a_moved_options_file_leaves_the_port_alone() {
         "PORT_DBDIR=/nonexistent\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/moved\n",
     )
     .unwrap();
-    let moved = f.options.join("misc_cond/moved").display().to_string();
+    let moved = f.options.join("misc_cond/moved");
     assert_eq!(
         f.make_v(origin, "OPTIONS_FILE"),
-        std::slice::from_ref(&moved)
+        [moved.display().to_string()]
     );
     let out = f.run("scan", &["--json", "--options", origin]);
     let stderr = common::stderr(&out);
-    assert!(
-        stderr.contains(&format!("make.conf sets OPTIONS_FILE to {moved}")),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("OPTIONS_FILE is"), "{stderr}");
     let report = common::json(&out);
     let port = report["ports"]
         .as_array()
@@ -646,13 +646,14 @@ fn a_moved_options_file_leaves_the_port_alone() {
         .iter()
         .find(|p| p["port"] == origin)
         .unwrap();
-    assert_eq!(port["status"], "ok", "{port}");
-    assert_eq!(
-        common::option(port, "DOCS")["locked_by"],
-        "make.conf OPTIONS_FILE",
+    assert_eq!(port["status"], "unconfigured", "{port}");
+    assert_eq!(port["options_file"], "misc_cond/moved", "{port}");
+    assert!(
+        common::option(port, "DOCS")["locked_by"].is_null(),
         "{port}"
     );
     f.run("sync", &[origin]);
+    assert!(moved.is_file(), "sync wrote the file make reads");
     assert!(
         !f.file("misc_cond").exists(),
         "sync wrote the file make does not read"

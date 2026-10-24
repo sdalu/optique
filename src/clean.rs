@@ -153,7 +153,12 @@ pub fn prune(
     match used {
         Some(used) => {
             let (live, unused) = split_unused(live, used);
-            let mut removals = vanished;
+            // An entry no port is named after that a port's OPTIONS_FILE
+            // has make read (`mail_dovecot24-<suffix>`) is that port's.
+            let mut removals: Vec<Removal> = vanished
+                .into_iter()
+                .filter(|r| !used.contains(&r.options_name))
+                .collect();
             removals.extend(unused);
             Pruned {
                 removals,
@@ -212,7 +217,7 @@ pub fn keep_read(
     removals.retain(|r| match read.get(&r.options_name) {
         Some(port) => {
             notes.push(format!(
-                "{}: make reads {port}'s options from it (make.conf OPTIONS_FILE); kept",
+                "{}: make reads {port}'s options from it (OPTIONS_FILE); kept",
                 r.options_name
             ));
             false
@@ -242,14 +247,18 @@ pub fn redundancy_diff(
     out
 }
 
-/// Delete the options file and (when empty) its directory.
-/// A sibling `options.local` is never touched and keeps the directory.
+/// Delete the options file and (when empty) its directory: `options`, or
+/// the file a key one entry deep names (`optfiles::key_file`). Its
+/// `.local` is never touched and keeps the directory.
 ///
 /// A file that cannot be read is left in place, with the reason as the
 /// error: deleting needs only the directory's write permission, so nothing
 /// else would stop the removal of a file whose content nobody has seen.
 pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
-    let file = removal.dir.join("options");
+    let name = crate::optfiles::key_file(&removal.options_name);
+    let file = removal
+        .dir
+        .join(name.file_name().unwrap_or("options".as_ref()));
     if let Err(e) = fs::File::open(&file)
         && e.kind() != std::io::ErrorKind::NotFound
     {
@@ -259,10 +268,12 @@ pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
         ));
     }
     fs::remove_file(&file)?;
-    if removal.dir.join("options.local").is_file() {
+    let local = crate::optfiles::key_local_file(&removal.options_name);
+    if let Some(local) = local.file_name().filter(|l| removal.dir.join(l).is_file()) {
         return Ok(Some(format!(
-            "{}: kept options.local (user-managed)",
-            removal.options_name
+            "{}: kept {} (user-managed)",
+            removal.options_name,
+            local.to_string_lossy()
         )));
     }
     let _ = fs::remove_dir(&removal.dir); // non-empty dirs are left alone
@@ -617,9 +628,7 @@ mod tests {
         );
         assert_eq!(
             notes,
-            [
-                "misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"
-            ]
+            ["misc_flav-nox: make reads misc/flav@nox's options from it (OPTIONS_FILE); kept"]
         );
     }
 }
