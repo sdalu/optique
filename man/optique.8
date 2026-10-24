@@ -1177,9 +1177,9 @@ Ports that have one advertise it with a
 marker at the right of the option pane's title, and
 .Ic h
 opens it from either pane.
-Whether the file exists is settled when the port is queried \(em a cache
-generation is one ports-tree commit, so it cannot appear or vanish behind a
-cached entry \(em but its contents are read from disk every time the popup is
+Whether the file exists is settled when the port is queried \(em a cached
+entry outlives a tree update only when nothing in the port's directory
+changed, so it cannot appear or vanish behind one \(em but its contents are read from disk every time the popup is
 opened, so edits show up without restarting
 .Nm .
 .Pp
@@ -2822,6 +2822,19 @@ is used; an empty or relative
 .Ev XDG_CACHE_HOME
 is ignored.
 Stale generations are pruned automatically.
+When a git tree moves to another commit, the new generation starts with the
+entries of the previous one made under the same
+.Pa make.conf
+and overlays that the commits in between leave alone, as
+.Ql git diff-tree
+lists them: an entry goes when a file
+.Nm make
+read for the port changed, or anything in the port's own directory or its
+master's; a new
+.Pa Mk/*.mk
+or an unknown top-level file takes them all.
+The startup banner says how many were carried over.
+Without git, nothing is carried over.
 A change to a file a
 .Pa make.conf
 includes does not start a new generation; clear the cache with

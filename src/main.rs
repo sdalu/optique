@@ -840,8 +840,8 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
     if cli.no_cache {
         cache::Cache::disabled()
     } else {
-        let tree_key = cache::trees_key(&settings.portsdir, &settings.overlay_paths());
-        cache::Cache::open(&cache::default_cache_dir(), &tree_key, &settings.conf_hash)
+        let trees = cache::trees(&settings.portsdir, &settings.overlay_paths());
+        cache::Cache::open_trees(&cache::default_cache_dir(), &trees, &settings.conf_hash)
     }
 }
 
@@ -973,7 +973,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             settings.portsdir.display(),
             jobs
         );
-        for note in rs.notes.iter().chain(settings.notes.iter()) {
+        let notes = rs.notes.iter().chain(settings.notes.iter()).map(String::as_str);
+        for note in notes.chain(cache.note()) {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
         for refusal in &settings.refusals {

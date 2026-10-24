@@ -195,6 +195,61 @@ alone decides is cached with the query: whether a port ships a `pkg-help`
 file is settled at query time, since it cannot change behind a cached entry,
 while the file's contents are read at every open.
 
+### A tree update keeps the entries it leaves alone
+
+A new commit used to mean a new, empty generation, so every `git pull`
+paid a full cold scan. synth judges its flavor index port by port, by the
+mtimes of each port's directory; optique now does the same per entry, from
+what make itself read. The wrapper dumps `.MAKE.MAKEFILES`, and each entry
+keeps the main tree's files in it (`PortInfo::makefiles`). A generation
+file starts with a header naming its commit, overlays and make.conf hash.
+When a new generation of a git tree opens, the latest earlier one made for
+the same make.conf and overlays is diffed against it (`git diff-tree`),
+and its entries that the changed paths leave alone start the new file
+(`cache::Invalidation`):
+
+- An entry goes when make read a changed file for it.
+- It also goes when anything changed in a directory it owns, its own and,
+  for a slave, its master's (the directories whose `Makefile` it read).
+  bsd.port.mk probes there with `exists()` for what it never includes:
+  `pkg-help`, `Makefile.local`, `Makefile.${ARCH}`, `files/`.
+- A change to a category's own files, other than its SUBDIR `Makefile`,
+  takes the entries owning a port there (`../Makefile.inc` is probed).
+- Everything goes for a new `Mk/*.mk` (`bsd.local.mk` is `.sinclude`d) and
+  for a top-level file not known to be unread (PORTSDIR's `Makefile.inc`
+  is probed). `MOVED`, `UPDATING`, `UIDs`, `GIDs` and the like, `Mk/`
+  scripts, `Tools/`, `Templates/` and `Keywords/` reach make only through a
+  target, never while it parses (none appears in a `!=` or `:sh` in `Mk/`).
+
+Another port's file is matched by name, not by directory: every python
+port reads `lang/python312/Makefile.version`, and that port's `pkg-plist`
+changing must not take them all. On the 841-port closure, a day of commits
+(182, 1,024 paths) left 838 entries and a week (999 commits, 6,078 paths,
+five `Mk/` files) left 797, the scan taking 1.1 and 2.0 seconds instead of
+29, with the JSON byte-identical to a `--no-cache` scan of the new tree
+both times. A month that touched `bsd.port.mk` carries nothing over, as it
+should.
+
+git is run only when a generation is new, and its failure (git missing,
+the old commit gone, a shallow clone) only means a cold scan, as before.
+The tree is usually root's and optique not, which git refuses as dubious
+ownership, so `safe.directory=*` is given: `diff-tree` reads no work tree
+and runs no hook, and optique runs the tree's Makefiles anyway. A tree
+without git and an overlay that changed carry nothing over.
+
+Known gaps: an `exists()` probe of another port's directory
+(`Mk/Uses/python.mk` and `zig.mk` check that their interpreter's port is
+there) is not tracked, so a port appearing behind such a probe is not
+noticed; a port vanishing is, by the dependency on it failing. Uncommitted
+edits to the tree were already invisible to the key.
+
+Rejected: synth's directory mtimes, which miss an edit made in place and
+cannot tell what a port reads outside its directory; fingerprinting every
+file make read at each lookup, which stats some twenty files per port on
+every warm run, and on NFS pays a round trip for each; and a directory per
+dependency rather than a file, which re-queried every python port for any
+change to python's port.
+
 ## The framework's host values are probed once per run
 
 Every query used to pay for bsd.port.mk working out the host again: about

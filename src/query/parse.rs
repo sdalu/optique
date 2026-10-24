@@ -25,6 +25,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut descr = String::new();
     let mut build_deps = String::new();
     let mut default_versions: Vec<String> = Vec::new();
+    let mut makefiles: Vec<String> = Vec::new();
     let mut saw_sentinel = false;
 
     for line in text.lines() {
@@ -69,6 +70,8 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "WITH" => opts.with = words(value),
             "WITHOUT" => opts.without = words(value),
             "DEFAULT_VERSIONS" => default_versions = words(value),
+            // As make names them; `makerunner` keeps the main tree's.
+            "MAKEFILES" => makefiles = words(value),
             "BROKEN" => broken = value.trim().to_string(),
             "IGNORE" => ignore = value.trim().to_string(),
             "DEPRECATED" => deprecated = value.trim().to_string(),
@@ -195,6 +198,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         about: PortAbout { pkg_descr: existing_file(descr), ..about },
         default_versions,
         warnings,
+        makefiles,
     })
 }
 

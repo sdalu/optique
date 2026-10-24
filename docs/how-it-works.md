@@ -94,7 +94,13 @@ bsd.port.mk works out about the host (release, arch, CPU count), probed
 once per run and then given to every query, so an upgraded host starts a
 new generation. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
-only ports whose inputs changed are queried again.
+only ports whose inputs changed are queried again. When the tree moves to
+another git commit, the new generation starts with the entries of the
+previous one that the commits in between leave alone: an entry goes when
+a file make read for the port changed, or anything in the port's own
+directory (or its master's), so a daily update re-queries a handful of
+ports rather than all of them. The banner says how many entries were
+carried over.
 
 Each options file is read once per run, whoever needs it: the cache check,
 the session, the TUI's staging copy and the write planning all share that

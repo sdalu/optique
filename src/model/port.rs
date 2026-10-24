@@ -45,7 +45,8 @@ pub struct PortInfo {
     /// The port's pkg-help file (`${PKGHELP}`, i.e. `${PKGDIR}/pkg-help`) when
     /// it exists — the free-form port notes `make config` offers behind its
     /// Help button. Only a minority of ports ship one. Existence is settled at
-    /// query time: a cache generation is one ports-tree commit, so the file
+    /// query time: an entry is carried over a tree update only when nothing
+    /// in the port's directory changed (`cache::Invalidation`), so the file
     /// cannot appear or vanish under a cached entry.
     #[serde(default)]
     pub pkg_help: Option<String>,
@@ -55,6 +56,11 @@ pub struct PortInfo {
     pub default_versions: Vec<String>,
     /// Non-fatal oddities (unparsable dep entries, ...).
     pub warnings: Vec<String>,
+    /// The main tree's files make read for the query (`.MAKE.MAKEFILES`),
+    /// relative to it, sorted: what a cache entry is carried over a tree
+    /// update on (`cache::Invalidation`).
+    #[serde(default)]
+    pub makefiles: Vec<String>,
 }
 
 impl PortInfo {
@@ -89,6 +95,7 @@ impl PortInfo {
             about: PortAbout::default(),
             default_versions: vec![],
             warnings: vec![],
+            makefiles: vec![],
         }
     }
 }

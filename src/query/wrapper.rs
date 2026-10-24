@@ -119,6 +119,7 @@ pub const WRAPPER: &str = "\
 .info OPTIQUE|OPT_DEP|${_o}|uses|${${_o}_USES}
 .  endif
 .endfor
+.info OPTIQUE|MAKEFILES|${.MAKE.MAKEFILES:U}
 optique-config: .PHONY
 \t@true
 ";

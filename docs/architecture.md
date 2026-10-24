@@ -53,7 +53,7 @@ interfaces sit side by side on the session.
 | `query/parse.rs` | The dump into a `PortInfo` | `parse_dump`, `parse_depends` |
 | `query/scanner.rs` | The closure, breadth first: cache, MOVED for the roots, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
 | `query/refresher.rs` | The TUI's background re-scans over the staging dir | `spawn`, `RefreshEvent` |
-| `cache.rs` | Query results on disk, one generation per tree × make.conf | `Cache`, `CacheEntry`, `tree_key`, `SCHEMA` |
+| `cache.rs` | Query results on disk, one generation per tree × make.conf, a new commit's starting with what the diff leaves of the last | `Cache`, `CacheEntry`, `tree_key`, `Invalidation`, `SCHEMA` |
 | `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does | `Moved::load_all`, `Moved::resolve` |
 | `deps.rs` | Alias resolution, dependency loops | `resolve`, `detect` (Tarjan), `DepLoop` |
 | `model/origin.rs` | `category/port[@flavor]` | `PortKey::parse` |

@@ -258,7 +258,38 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
             cause.map_or_else(|| parse::last_lines(&text, 5, " | "), |l| l.trim().to_string());
         anyhow::bail!("make failed ({}): {why}", out.status);
     }
-    parse::parse_dump(key, &text)
+    let mut info = parse::parse_dump(key, &text)?;
+    info.makefiles = tree_files(&info.makefiles, &portdir, &ctx.portsdir);
+    Ok(info)
+}
+
+/// The files of `.MAKE.MAKEFILES` (`made`) that lie in the main tree,
+/// relative to it, sorted: a relative name is the port directory's, `..`
+/// is resolved by name, as make names a slave's master (`cat/slave/../
+/// master/Makefile`), and the tree is matched as given and as resolved,
+/// PORTSDIR reaching make canonicalised and PORTDIR not.
+fn tree_files(made: &[String], portdir: &Path, portsdir: &Path) -> Vec<String> {
+    let trees = [portsdir.canonicalize().ok(), Some(portsdir.to_path_buf())];
+    let mut files: Vec<String> = made
+        .iter()
+        .filter_map(|name| {
+            let mut path = PathBuf::new();
+            for part in portdir.join(name).components() {
+                match part {
+                    std::path::Component::ParentDir => {
+                        path.pop();
+                    }
+                    std::path::Component::CurDir => {}
+                    other => path.push(other),
+                }
+            }
+            let rel = trees.iter().flatten().find_map(|tree| path.strip_prefix(tree).ok())?;
+            Some(rel.to_str()?.to_string())
+        })
+        .collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 /// An options file make could not open: bsd.options.mk includes it once it
@@ -512,6 +543,32 @@ mod tests {
         assert_eq!(root, [("USER", "root".into()), ("HOME", "/root".into())]);
         assert_eq!(identity_env(Identity::Invoker, invoker), [("USER", "alice".into())]);
         assert!(identity_env(Identity::Invoker, |_| None).is_empty());
+    }
+
+    /// Of what make read, the main tree's files are kept, relative to it:
+    /// the port's own named relatively, a master's through `..`, the tree
+    /// as given or resolved; the rest (the make.conf, sys.mk, the options
+    /// file) is left out.
+    #[test]
+    fn tree_files_keeps_the_main_trees_files_relative_to_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        std::fs::create_dir_all(ports.join("cat/slave")).unwrap();
+        let real = ports.canonicalize().unwrap();
+        let made: Vec<String> = [
+            "/dev/stdin".to_string(),
+            "/usr/share/mk/sys.mk".to_string(),
+            format!("{}/cat/slave/Makefile", ports.display()),
+            format!("{}/cat/slave/../master/Makefile", ports.display()),
+            format!("{}/Mk/bsd.port.mk", real.display()),
+            "Makefile.local".to_string(),
+            "/var/db/ports/cat_slave/options".to_string(),
+        ]
+        .into();
+        let got = tree_files(&made, &ports.join("cat/slave"), &ports);
+        let want =
+            ["Mk/bsd.port.mk", "cat/master/Makefile", "cat/slave/Makefile", "cat/slave/Makefile.local"];
+        assert_eq!(got, want);
     }
 
     /// A tree whose Mk/bsd.port.mk is `framework`, and a context on it.
