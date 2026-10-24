@@ -59,6 +59,9 @@ enum Op {
     Shell,
 }
 
+/// What make splits words on and trims: ASCII blanks, never Unicode's.
+const MAKE_BLANKS: &[char] = &[' ', '\t', '\n', '\r', '\x0c'];
+
 /// The variable a line assigns, how, and the value; None for a line that
 /// assigns nothing.
 fn assignment(line: &str) -> Option<(&str, Op, &str)> {
@@ -147,7 +150,7 @@ impl SavedOptionsFile {
             // A `#` starts a comment, at the head of a line or after a value;
             // `\#` is a literal `#`, as make reads it.
             let line = strip_comment(&line);
-            let line = line.trim();
+            let line = line.trim_matches(MAKE_BLANKS);
             if line.is_empty() {
                 continue;
             }
@@ -166,13 +169,20 @@ impl SavedOptionsFile {
             // options file holds: inert while the file assigns the list,
             // it resets it once a write leaves the list out (`render`
             // writes no UNSET line when every option is on). No write of
-            // the file can say what make then reads.
+            // the file can say what make then reads. In the options file
+            // itself it assigns or not by what the port's Makefile set
+            // before (devel/subversion's `OPTIONS_FILE_SET?=""`), which
+            // the file does not show.
             let list = matches!(name, "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET");
-            if lists_only && list && op == Op::IfUnset {
+            if list && op == Op::IfUnset {
                 self.unmodeled.push(Unmodeled {
                     file,
                     line: n,
-                    what: format!("assigns {name} with ?=, which a write of the options file can turn on or off"),
+                    what: if lists_only {
+                        format!("assigns {name} with ?=, which a write of the options file can turn on or off")
+                    } else {
+                        format!("assigns {name} with ?=, which assigns nothing where the port's Makefile set it first")
+                    },
                 });
             }
             let read = match name {
@@ -193,10 +203,15 @@ impl SavedOptionsFile {
                 // make runs the command; optique cannot (`unmodeled`).
                 Op::Shell => continue,
             };
-            let words = value.split_whitespace().map(str::to_string);
+            // make's blanks, not Unicode's: a no-break space a copy and
+            // paste brings in is part of the word, as is a vertical tab.
+            let words = value
+                .split(MAKE_BLANKS)
+                .filter(|w| !w.is_empty())
+                .map(str::to_string);
             match name {
                 "_OPTIONS_READ" => {
-                    let v = value.trim();
+                    let v = value.trim_matches(MAKE_BLANKS);
                     if append && !self.options_read.is_empty() {
                         self.options_read = format!("{} {v}", self.options_read);
                     } else {
@@ -423,6 +438,12 @@ fn strip_comment(line: &str) -> String {
                 out.push('#');
                 chars.next();
             }
+            // An escaped backslash is kept whole, and escapes nothing
+            // after it: `E\\#F` is `E\\` and a comment.
+            '\\' if chars.peek() == Some(&'\\') => {
+                out.push_str("\\\\");
+                chars.next();
+            }
             '#' => break,
             c => out.push(c),
         }
@@ -514,6 +535,18 @@ OPTIONS_FILE_UNSET+=FLITE
         let set: Vec<&str> = f.set.iter().map(String::as_str).collect();
         let unset: Vec<&str> = f.unset.iter().map(String::as_str).collect();
         assert_eq!((set, unset), (vec!["A#B", "C"], vec!["E"]));
+        // An escaped backslash escapes no `#` after it: make reads `E\\`.
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=E\\\\#F G\n");
+        assert_eq!(f.set, ["E\\\\".to_string()].into());
+    }
+
+    /// Words split on make's blanks: a no-break space or a vertical tab is
+    /// part of the word, which matches no option.
+    #[test]
+    fn words_split_on_make_blanks_only() {
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_UNSET+=X\u{a0}Y H\x0bI\tJ\n");
+        let unset: Vec<&str> = f.unset.iter().map(String::as_str).collect();
+        assert_eq!(unset, ["H\x0bI", "J", "X\u{a0}Y"]);
     }
 
     #[test]
@@ -535,7 +568,17 @@ OPTIONS_FILE_UNSET+=FLITE
             "the first `?=` assigns, the second not"
         );
         assert!(f.complete.is_empty());
-        assert_eq!(places(&f), [("options", 6)]);
+        // A list's `?=` in the file assigns or not by what the port's
+        // Makefile set first: recorded, as is the `!=`.
+        assert_eq!(
+            places(&f),
+            [
+                ("options", 3),
+                ("options", 4),
+                ("options", 5),
+                ("options", 6)
+            ]
+        );
         // options.local carries on: its `?=` meets a variable the file
         // assigned, and is recorded, as whether it does depends on the file.
         let l = f
@@ -544,7 +587,14 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(l.unset, words(&["I"]));
         assert_eq!(
             places(&l),
-            [("options", 6), ("options.local", 1), ("options.local", 3)]
+            [
+                ("options", 3),
+                ("options", 4),
+                ("options", 5),
+                ("options", 6),
+                ("options.local", 1),
+                ("options.local", 3)
+            ]
         );
         // With no options file, options.local's `?=` assigns.
         let l = SavedOptionsFile::default().with_local("OPTIONS_FILE_SET?=H\n");
@@ -633,11 +683,12 @@ OPTIONS_FILE_UNSET+=FLITE
         }
         assert_eq!(all_on.local_unset, ["C".to_string()].into(), "it assigned");
         assert!(inert.local_unset.is_empty(), "it did not");
-        assert!(
+        assert_eq!(
             SavedOptionsFile::parse("OPTIONS_FILE_SET?=A\n")
                 .unmanaged()
-                .is_none(),
-            "the file's own `?=`"
+                .map(|(file, _)| file),
+            Some("options"),
+            "the file's own `?=`: devel/subversion sets the list first"
         );
     }
 

@@ -95,11 +95,13 @@ impl PendingWrite {
                 .map(|o| (o.clone(), cur.contains(o.as_str())))
                 .collect(),
             // An entry is dropped once it matches no option of the port,
-            // as scan judges an obsolete one (Session::stale_delta).
+            // as scan judges an obsolete one (Session::stale_delta). One
+            // options.local holds stays there: the write leaves it alone.
             dropped: mentioned
                 .iter()
                 .filter(|e| !now_known.iter().any(|c| str_match(c, e)))
                 .filter(|e| !self.kept.iter().any(|k| k == *e))
+                .filter(|e| !old.local_set.contains(**e) && !old.local_unset.contains(**e))
                 .map(ToString::to_string)
                 .collect(),
         }
@@ -477,8 +479,13 @@ fn planned_file(
         }
     }
     if let Some(old) = old {
+        // A pattern (`OPTIONS_FILE_UNSET+=A*`) is no option another flavor
+        // lacks: kept, make would apply it after every SET line, and take
+        // off the options of this view it matches, edited on or not.
+        let view = file.complete.clone();
+        let covers = |o: &String| view.iter().any(|c| str_match(c, o));
         for o in old.complete.iter().chain(old.recorded()) {
-            if !file.complete.contains(o) {
+            if !file.complete.contains(o) && !covers(o) {
                 file.complete.push(o.clone());
                 if old.set.contains(o) {
                     file.set.insert(o.clone());

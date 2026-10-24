@@ -119,6 +119,15 @@ fn changes_read_pattern_entries_as_make_does() {
     assert_eq!(c.adopted, [("C".to_string(), true)]);
 }
 
+/// An obsolete entry options.local holds is not dropped: the write leaves
+/// options.local as it is, and the entry with it.
+#[test]
+fn an_options_local_entry_is_not_dropped() {
+    let mut p = pending(Some("OPTIONS_FILE_UNSET+=B\n"), &["B"], &[]);
+    p.old = p.old.map(|o| o.with_local("OPTIONS_FILE_UNSET+=GONE\n"));
+    assert!(p.changes().dropped.is_empty(), "{:?}", p.changes());
+}
+
 /// A brand-new file adopts every option, at the value it is written with.
 #[test]
 fn a_new_file_adopts_every_option() {
@@ -612,6 +621,42 @@ fn a_non_default_flavor_keeps_the_options_it_lacks() {
     assert_eq!(written.complete, ["A", "B", "X11", "GTK"]);
     assert_eq!(written.set, set(&["A", "B", "X11"]));
     assert_eq!(written.unset, set(&["GTK"]));
+}
+
+/// A hand-written UNSET pattern is no option the non-default flavor lacks:
+/// carried over, make would apply it after the SET lines and take off the
+/// option just turned on.
+#[test]
+fn a_non_default_flavor_does_not_carry_a_pattern_over() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut b = mk_info(&["A1", "OTHER"], &[]);
+    b.key = PortKey::parse("cat/foo@b").unwrap();
+    b.canonical = b.key.clone();
+    b.flavors = vec!["a".into(), "b".into()];
+    b.options_name = "cat_foo".into();
+    fs::create_dir_all(tmp.path().join("cat_foo")).unwrap();
+    fs::write(
+        tmp.path().join("cat_foo/options"),
+        "_OPTIONS_READ=foo-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A1 OTHER\n\
+         OPTIONS_FILE_UNSET+=A1\nOPTIONS_FILE_UNSET+=OTHER\nOPTIONS_FILE_UNSET+=A*\n",
+    )
+    .unwrap();
+    let planned = plan_writes(
+        std::iter::once((&b.key, &b, ["A1".to_string()].into())),
+        &OptionsFiles::new(tmp.path()),
+        false,
+    );
+    assert_eq!(planned.writes.len(), 1);
+    let written = SavedOptionsFile::parse(&planned.writes[0].content);
+    assert!(
+        !written.unset.contains("A*"),
+        "{}",
+        planned.writes[0].content
+    );
+    assert_eq!(
+        crate::session::effective_with(&b, Some(&written)),
+        ["A1".to_string()].into()
+    );
 }
 
 /// Under -m the file goes when the file it would write gives the no-file
