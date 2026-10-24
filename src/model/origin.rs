@@ -27,6 +27,30 @@ impl PortKey {
         }
         Some(PortKey { origin: origin.to_string(), flavor })
     }
+
+    /// A dependency's `origin[@flavor][~subpkg]` as the framework's
+    /// `Mk/Scripts/do-depends.sh` splits it: an `@` is tested first and its
+    /// flavor runs to the end, a `~subpkg` after it staying part of that
+    /// flavor (a framework defect that changes which flavor is built, so it
+    /// is followed); without an `@`, a `~subpkg` is dropped. Every
+    /// subpackage comes out of the one port build, with one options file,
+    /// so the origin is what has options.
+    pub fn parse_dependency(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.contains('@') {
+            return Self::parse(s);
+        }
+        Self::parse(s.rsplit_once('~').filter(|(_, sub)| !sub.contains('/')).map_or(s, |(o, _)| o))
+    }
+
+    /// A listed `origin[@flavor][~subpkg]` as poudriere's
+    /// `originspec_decode` splits it: the `~subpkg` first, dropped, then the
+    /// `@flavor`. A subpackage names one of the packages the port's build
+    /// makes, all from one options file.
+    pub fn parse_listed(s: &str) -> Option<Self> {
+        let s = s.trim();
+        Self::parse(s.split_once('~').map_or(s, |(o, _)| o))
+    }
 }
 
 impl fmt::Display for PortKey {
@@ -72,6 +96,24 @@ mod tests {
         assert_eq!(k.origin, "devel/py-Automat");
         assert_eq!(k.flavor.as_deref(), Some("py312"));
         assert_eq!(k.to_string(), "devel/py-Automat@py312");
+    }
+
+    /// A subpackage is dropped where it names the port: a dependency's
+    /// `origin~sub`, and a listed `origin~sub` or `origin@fl~sub`. A
+    /// dependency's `origin@fl~sub` keeps `fl~sub` as its flavor, as
+    /// do-depends.sh splits it.
+    #[test]
+    fn subpackages_name_their_port() {
+        let dep = |s| PortKey::parse_dependency(s).map(|k| k.to_string());
+        assert_eq!(dep("devel/bar~lib").as_deref(), Some("devel/bar"));
+        assert_eq!(dep("devel/bar@py311~lib").as_deref(), Some("devel/bar@py311~lib"));
+        assert_eq!(dep("devel/bar@py311").as_deref(), Some("devel/bar@py311"));
+        assert_eq!(dep("devel/bar").as_deref(), Some("devel/bar"));
+        let listed = |s| PortKey::parse_listed(s).map(|k| k.to_string());
+        assert_eq!(listed("devel/bar~lib").as_deref(), Some("devel/bar"));
+        assert_eq!(listed("devel/bar@py311~lib").as_deref(), Some("devel/bar@py311"));
+        assert_eq!(listed("devel/bar@all").as_deref(), Some("devel/bar@all"));
+        assert!(PortKey::parse("devel/bar~lib").is_none(), "plain parse still refuses it");
     }
 
     #[test]

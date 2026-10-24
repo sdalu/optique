@@ -357,15 +357,23 @@ fn leading_or_trailing_slash_on_the_command_line_is_accepted() {
     }
 }
 
-/// `~subpackage` is a documented known gap (docs/conformance.md): a bare
-/// origin on the command line with a '~' in it is refused like any other
-/// malformed origin, exit 2, pinned rather than fixed.
+/// A listed `origin~subpackage` names its port, as poudriere splits the
+/// subpackage off: no longer refused as a malformed origin.
 #[test]
-fn subpackage_tilde_on_the_command_line_is_refused() {
-    let out = optique().args(["scan", "cat/port~sub"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+fn subpackage_tilde_on_the_command_line_names_its_port() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = optique()
+        .env("XDG_CACHE_HOME", tmp.path())
+        .args(["scan", "-l", "-o"])
+        .arg(tmp.path().join("options"))
+        .arg("-P")
+        .arg(tmp.path().join("ports"))
+        .arg("cat/port~sub")
+        .output()
+        .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("malformed port origin"), "{err}");
+    assert_ne!(out.status.code(), Some(2), "{err}");
+    assert!(!err.contains("malformed port origin"), "{err}");
 }
 
 #[test]

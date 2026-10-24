@@ -202,7 +202,9 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     })
 }
 
-/// Parse `_UNIFIED_DEPENDS`: whitespace-separated `spec:origin[@flavor][:target]`.
+/// Parse `_UNIFIED_DEPENDS`: whitespace-separated
+/// `spec:origin[@flavor][~subpkg][:target]`, each origin read as
+/// do-depends.sh reads it (`PortKey::parse_dependency`).
 pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
     let mut edges: Vec<DepEdge> = Vec::new();
     let mut warnings = Vec::new();
@@ -211,7 +213,7 @@ pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
         let fields: Vec<&str> = entry.split(':').collect();
         // The origin is the first field after the spec that parses as one;
         // specs may be absolute paths (no ':' inside in practice).
-        let target = fields.iter().skip(1).find_map(|f| PortKey::parse(f));
+        let target = fields.iter().skip(1).find_map(|f| PortKey::parse_dependency(f));
         match target {
             Some(t) => {
                 if seen.insert(t.clone()) {
@@ -275,6 +277,11 @@ mod tests {
         let (edges, _) = parse_depends("a.so:x/y b>0:x/y c:x/y@f");
         assert_eq!(edges.len(), 2, "same origin deduped, flavored is distinct");
         // Path specs with slashes must not be mistaken for origins.
+        // A subpackage names its port; after a flavor it stays in it.
+        let (edges, warns) = parse_depends("bar>0:devel/bar~lib baz>0:devel/baz@fl~lib");
+        let targets: Vec<String> = edges.iter().map(|e| e.target.to_string()).collect();
+        assert_eq!(targets, ["devel/bar", "devel/baz@fl~lib"]);
+        assert!(warns.is_empty(), "{warns:?}");
         let (edges, _) = parse_depends("/usr/local/bin/gmake:devel/gmake");
         assert_eq!(edges[0].target.to_string(), "devel/gmake");
         assert_eq!(edges[0].spec, "/usr/local/bin/gmake");

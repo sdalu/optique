@@ -66,7 +66,7 @@ Verdicts:
 | `rmconfig` keeps a directory holding `options.local` ([ref](reference/ports-framework.md#the-config-targets)) | `bsd.port.mk` | matches (`clean`) |
 | Dependencies: `<KIND>_DEPENDS_ALL` and `_UNIFIED_DEPENDS` ([ref](reference/ports-framework.md#assembly)) | `bsd.port.mk` | matches: read from make's dump |
 | A port defining its own `depends` target has no `<KIND>_DEPENDS_ALL` or `_UNIFIED_DEPENDS` ([ref](reference/ports-framework.md#assembly)) | `bsd.port.mk` | **conforms to an upstream defect**: such a port shows no dependencies, as poudriere reads the same lists |
-| `origin@flavor~subpkg` split at the `@` only, the `~subpkg` staying in the flavor ([ref](reference/ports-framework.md#kinds-and-syntax)) | `Mk/Scripts/do-depends.sh` | **conforms to an upstream defect** for `origin@flavor~subpkg`; `origin~subpkg` without a flavor: **known gap** (the edge is dropped with a warning) |
+| `origin@flavor~subpkg` split at the `@` only, the `~subpkg` staying in the flavor ([ref](reference/ports-framework.md#kinds-and-syntax)) | `Mk/Scripts/do-depends.sh` | **conforms to an upstream defect** for `origin@flavor~subpkg`; `origin~subpkg` without a flavor matches: the dependency is on `origin`, whose one options file every subpackage shares |
 | `all-depends-list` without `DEPENDS_SHOW_FLAVOR` merges a port's flavors ([ref](reference/ports-framework.md#lists-and-closures)) | `Mk/Scripts/depends-list.sh` | not modelled: optique never uses it, walking each flavor itself |
 | `bsd.options.desc.mk` loaded only for `*config*` targets ([ref](reference/ports-framework.md#querying-with-make--v)) | `bsd.port.mk` | matches: the wrapper's target is `optique-config` |
 
@@ -96,7 +96,7 @@ Verdicts:
 | `TEST_DEPENDS` never gathered without `bulk -t` ([ref](reference/poudriere.md#gathering-metadata)) | `common.sh` | matches on a current tree; on a tree before ports `e7679b71cf89`, whose unified list folds them in, test-only dependencies are walked too, but never checked nor counted in a loop |
 | Origins: first word of a list line, `#` lines skipped, one leading and one trailing `/` trimmed ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` list reading | matches |
 | `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` flavor expansion | matches, MOVED read for the listed originspec first (`old@all` is `new@all` once followed) |
-| `origin~subpackage` | `common.sh` | **known gap**: refused, or read as part of the flavor after `@` |
+| A listed `origin[@flavor]~subpackage` ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` `originspec_decode` | matches: the subpackage is split off first and dropped, the port rooted as `origin[@flavor]`, its options being the origin's |
 | `-a` (every port) | `bulk.sh` | **known gap**: no `-a`; a full list roots only default flavors |
 | MOVED applied to listed origins only: removed or expired is an error ([ref](reference/poudriere.md#moved)) | `_listed_ports`, `check_moved` | matches |
 | MOVED renames a listed origin, and poudriere builds the target, saying so ([ref](reference/poudriere.md#moved)) | `_listed_ports`, `check_moved` | **differs on purpose**: flagged, neither origin scanned, pending in `scan`'s exit status, the list needing a fix; `--follow-moved` matches, the target configured and the rename noted |

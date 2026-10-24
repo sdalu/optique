@@ -525,7 +525,9 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         // common typo (common.sh ~9603-9607, ~9590-9600).
         let spec = spec.strip_prefix('/').unwrap_or(spec);
         let spec = spec.strip_suffix('/').unwrap_or(spec);
-        match PortKey::parse(spec) {
+        // A `~subpkg` is dropped, as poudriere's `originspec_decode` splits
+        // it off before the flavor: the port's options are the origin's.
+        match PortKey::parse_listed(spec) {
             Some(k) => {
                 // `origin@all` and `origin@-` are kept as given: the scan
                 // reads them (`roots::expand`).
@@ -674,16 +676,13 @@ mod tests {
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
 
-    /// `origin~subpackage` is read nowhere in optique: a documented known
-    /// gap (docs/conformance.md), pinned here rather than fixed. A bare
-    /// origin with a '~' is rejected like any malformed one; after '@' the
-    /// '~' is read as part of the flavor, whole.
+    /// A listed `origin~sub` or `origin@fl~sub` roots its port, the
+    /// subpackage dropped as poudriere splits it off first.
     #[test]
-    fn subpackage_tilde_is_pinned_not_handled() {
-        assert!(PortKey::parse("cat/port~sub").is_none());
-        let k = PortKey::parse("cat/port@fl~sub").unwrap();
-        assert_eq!(k.origin, "cat/port");
-        assert_eq!(k.flavor.as_deref(), Some("fl~sub"));
+    fn a_listed_subpackage_roots_its_port() {
+        let roots = collect_roots(&["cat/port~sub".to_string(), "cat/other@fl~sub".to_string()], &[]).unwrap();
+        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        assert_eq!(names, ["cat/port", "cat/other@fl"]);
     }
 
     #[test]
