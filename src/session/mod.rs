@@ -542,7 +542,7 @@ impl Session {
             // checked.
             let mut after = state.staged.clone();
             after.remove(opt);
-            let outcome = staged_effective(info, &after);
+            let outcome = staged_effective(info, &after, self.locals.get(&info.options_name));
             let (unchecked, _) = unchecked_groups(opts, outcome.clone());
             if let Some(g) = opts
                 .group_of(opt)
@@ -650,8 +650,26 @@ impl Session {
             .get(&info.options_name)
             .and_then(|k| self.ports.get(k))
             .unwrap_or(info);
+        // What the options file cannot decide keeps the value it has: an
+        // option options.local's UNSET entries or a make.conf knob decide,
+        // which `Space` refuses too (`toggle`).
+        let o = &owner.options;
+        let locked: Vec<String> = o
+            .complete
+            .iter()
+            .filter(|opt| o.is_forced(opt) || self.local_decides(owner, opt))
+            .cloned()
+            .collect();
         if let Some(state) = self.states.get_mut(&owner.options_name) {
-            state.staged = close_implies(owner, port_defaults(&owner.options));
+            let mut staged = port_defaults(o);
+            for opt in &locked {
+                if state.staged.contains(opt) {
+                    staged.insert(opt.clone());
+                } else {
+                    staged.remove(opt);
+                }
+            }
+            state.staged = close_implies(owner, staged);
         }
     }
 
@@ -698,7 +716,8 @@ impl Session {
         let o = &info.options;
         // Judged on what make computes from the staged set as the options
         // file: *_FORCE overrides it, IMPLIES closes it.
-        let (unchecked, checked) = unchecked_groups(o, staged_effective(info, staged));
+        let local = self.locals.get(&info.options_name);
+        let (unchecked, checked) = unchecked_groups(o, staged_effective(info, staged, local));
         let staged = &checked;
         let mut out = Vec::new();
         // bsd.port.mk's pre-check-config: each PREVENTS word of an option
@@ -873,7 +892,8 @@ impl Session {
         // Both sides as make ends up: a member of a conditional group whose
         // option is off is dropped from either.
         let nofile_on = nofile_effective(info).contains(opt);
-        staged_effective(info, &state.staged).contains(opt) != nofile_on
+        staged_effective(info, &state.staged, self.locals.get(&info.options_name)).contains(opt)
+            != nofile_on
     }
 
     /// All options of the port that deviate from the global make.conf policy.
@@ -1003,10 +1023,16 @@ pub struct Conflict {
     pub cause: Option<String>,
 }
 
-/// What make computes with the staged set written as the options file.
-fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<String> {
+/// What make computes with the staged set written as the options file,
+/// `local` (the entry's options.local, as `Session::locals` holds it) read
+/// after it: every SET entry of either before any UNSET one.
+fn staged_effective(
+    info: &PortInfo,
+    staged: &BTreeSet<String>,
+    local: Option<&SavedOptionsFile>,
+) -> BTreeSet<String> {
     let complete = &info.options.complete;
-    let file = SavedOptionsFile {
+    let mut file = SavedOptionsFile {
         complete: complete.clone(),
         set: staged.clone(),
         unset: complete
@@ -1016,6 +1042,10 @@ fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<Stri
             .collect(),
         ..Default::default()
     };
+    if let Some(local) = local {
+        file.set.extend(local.local_set.iter().cloned());
+        file.unset.extend(local.local_unset.iter().cloned());
+    }
     effective_with(info, Some(&file))
 }
 
@@ -1381,21 +1411,45 @@ fn apply_layer(
 
 /// Transitive IMPLIES closure of an enabled set, restricted to the port's
 /// known options (mirrors bsd.options.mk, which force-adds implied options).
+/// make runs IMPLIES after the `*_FORCE` knobs and WITH/WITHOUT
+/// (bsd.options.mk:411), so the options that imply are those `set` has and
+/// no knob forces off, and those a knob forces on ([`impliers`]); what they
+/// imply goes in, and implies in turn, forced off or not.
 pub(crate) fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> {
     let complete: BTreeSet<&str> = info.options.complete.iter().map(String::as_str).collect();
-    // Each option is expanded once: when it enters the set.
-    let mut todo: Vec<String> = set.iter().cloned().collect();
+    let mut active = impliers(info, &set);
+    // Each option is expanded once: when it turns active.
+    let mut todo: Vec<String> = active.iter().cloned().collect();
     while let Some(opt) = todo.pop() {
         let Some(def) = info.options.defs.get(&opt) else {
             continue;
         };
         for imp in &def.implies {
-            if complete.contains(imp.as_str()) && set.insert(imp.clone()) {
-                todo.push(imp.clone());
+            if complete.contains(imp.as_str()) {
+                set.insert(imp.clone());
+                if active.insert(imp.clone()) {
+                    todo.push(imp.clone());
+                }
             }
         }
     }
     set
+}
+
+/// The options of `set` on once make's knobs have run, which is what IMPLIES
+/// starts from: those no `*_FORCE` knob or WITHOUT turns off, and those one
+/// turns on, whatever `set` says.
+fn impliers(info: &PortInfo, set: &BTreeSet<String>) -> BTreeSet<String> {
+    let o = &info.options;
+    set.iter()
+        .filter(|opt| o.forced_value(opt) != Some(false))
+        .chain(
+            o.complete
+                .iter()
+                .filter(|opt| o.forced_value(opt) == Some(true)),
+        )
+        .cloned()
+        .collect()
 }
 
 /// Rebuild a BFS path by following predecessors back to the root, then
@@ -1411,7 +1465,7 @@ fn walk_back(pred: &HashMap<PortKey, Option<PortKey>>, end: PortKey) -> Vec<Port
 
 /// Find an enabled option (other than `opt`) whose IMPLIES closure contains `opt`.
 fn implier_of(info: &PortInfo, staged: &BTreeSet<String>, opt: &str) -> Option<String> {
-    for candidate in staged {
+    for candidate in &impliers(info, staged) {
         if candidate == opt {
             continue;
         }

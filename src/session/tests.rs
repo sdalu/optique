@@ -588,6 +588,47 @@ fn with_and_without_come_after_force() {
     assert!(s.toggle(&key, "A2").unwrap_err().contains("WITH/WITHOUT"));
 }
 
+/// IMPLIES runs after the FORCE knobs (bsd.options.mk:411): an option the
+/// file sets and a knob forces off implies nothing, one a knob forces on
+/// implies what it names whatever the file says.
+#[test]
+fn implies_follows_the_force_knobs() {
+    let defs = vec![(
+        "A",
+        OptionDef {
+            implies: vec!["B".into()],
+            ..Default::default()
+        },
+    )];
+    let (mut ports, key) = mk_port(&["A", "B", "C"], &[], vec![], defs.clone());
+    ports
+        .get_mut(&key)
+        .unwrap()
+        .options
+        .force_unset
+        .insert("A".into());
+    let info = ports[&key].clone();
+    assert_eq!(close_implies(&info, set(&["A"])), set(&["A"]), "A is off");
+    let mut s = session_for(ports);
+    s.toggle(&key, "B").unwrap();
+    s.toggle(&key, "B").expect("no forced-off A holds B on");
+
+    let (mut ports, key) = mk_port(&["A", "B", "C"], &[], vec![], defs);
+    ports
+        .get_mut(&key)
+        .unwrap()
+        .options
+        .force_set
+        .insert("A".into());
+    let info = ports[&key].clone();
+    assert_eq!(close_implies(&info, set(&[])), set(&["B"]), "A is on");
+    let s = session_for(ports);
+    let staged = s.state(&s.ports[&key]).unwrap().staged.clone();
+    assert!(staged.contains("B"), "{staged:?}");
+    let mut s = s;
+    assert!(s.toggle(&key, "B").unwrap_err().contains("implied by A"));
+}
+
 /// bsd.options.mk:300-304: OPTIONS_OVERRIDE, defined, replaces the whole
 /// decision below it — OPTIONS_DEFAULT (here D, never read), the global
 /// SET/UNSET pair and the options file are not read — but what follows
@@ -734,6 +775,44 @@ fn toggle_is_refused_under_override() {
     assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
     let err = s.toggle(&key, "B").unwrap_err();
     assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
+}
+
+/// `d` leaves what options.local decides as it is, and a conflict is judged
+/// with options.local read after the file, as make reads it: the default
+/// HEIMDAL, which options.local unsets, is not staged on in place of MIT,
+/// and a staged set that leaves the single group nothing but HEIMDAL is a
+/// conflict.
+#[test]
+fn reset_and_conflicts_read_options_local() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    std::fs::write(
+        tmp.path().join("cat_port/options"),
+        "OPTIONS_FILE_SET+=MIT\nOPTIONS_FILE_UNSET+=HEIMDAL BASE\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("cat_port/options.local"),
+        "OPTIONS_FILE_UNSET+=HEIMDAL\n",
+    )
+    .unwrap();
+    let g = OptionGroup {
+        kind: GroupKind::Single,
+        name: "G".into(),
+        desc: String::new(),
+        members: vec!["MIT".into(), "HEIMDAL".into(), "BASE".into()],
+    };
+    let (ports, key) = mk_port(&["MIT", "HEIMDAL", "BASE"], &["HEIMDAL"], vec![g], vec![]);
+    let roots: Vec<PortKey> = ports.keys().cloned().collect();
+    let files = OptionsFiles::new(tmp.path());
+    let mut s = Session::new(ports, HashMap::new(), &roots, &files, false);
+    let info = s.ports[&key].clone();
+    s.reset_to_defaults(&key);
+    let staged = s.state(&info).unwrap().staged.clone();
+    assert!(!staged.contains("HEIMDAL"), "{staged:?}");
+    // Staged HEIMDAL alone: options.local takes it off, the group is empty.
+    s.states.get_mut("cat_port").unwrap().staged = set(&["HEIMDAL"]);
+    assert!(!s.conflicts(&info).is_empty());
 }
 
 /// bsd.options.mk:352-363: every OPTIONS_FILE_SET entry, options.local's
