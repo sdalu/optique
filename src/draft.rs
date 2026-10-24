@@ -118,6 +118,7 @@ mod tests {
         Session {
             ports: BTreeMap::new(),
             states: states.into_iter().map(|(n, s)| (n.to_string(), s)).collect(),
+            moved_states: HashMap::new(),
             aliases: HashMap::new(),
             roots: Vec::new(),
             owners: HashMap::new(),

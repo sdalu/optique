@@ -19,7 +19,11 @@
 /// The per-option records cover the OPTIONS_SLAVE options too: they are not
 /// in COMPLETE_OPTIONS_LIST, yet bsd.options.mk:447 puts them in
 /// PORT_OPTIONS and pre-check-config (bsd.port.mk ~4987) checks the
-/// PREVENTS of every option there.
+/// PREVENTS of every option there. So do they cover what an option of the
+/// list implies (`_OPTIQUE_IMPLIED`): bsd.options.mk:410-440 puts it in
+/// PORT_OPTIONS listed or not, an option OPTIONS_EXCLUDE took out say, and
+/// its PREVENTS is checked all the same. Only a listed option's IMPLIES is
+/// followed, so one level is all there is.
 ///
 /// OPTIONS_OVERRIDE is dumped only when `defined`, value and all
 /// (bsd.options.mk:300-304): an absent line means undefined, an empty one
@@ -80,7 +84,11 @@ pub const WRAPPER: &str = "\
 .for _g in ${OPTIONS_MULTI:U}
 .info OPTIQUE|MULTI|${_g}|${OPTIONS_MULTI_${_g}:U}
 .endfor
-.for _o in ${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} ${OPTIONS_GROUP:U} ${OPTIONS_SINGLE:U} ${OPTIONS_RADIO:U} ${OPTIONS_MULTI:U}
+_OPTIQUE_IMPLIED=
+.for _o in ${COMPLETE_OPTIONS_LIST:U}
+_OPTIQUE_IMPLIED+=	${${_o}_IMPLIES:U}
+.endfor
+.for _o in ${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} ${_OPTIQUE_IMPLIED:O:u} ${OPTIONS_GROUP:U} ${OPTIONS_SINGLE:U} ${OPTIONS_RADIO:U} ${OPTIONS_MULTI:U}
 .info OPTIQUE|DESC|${_o}|${${_o}_DESC:U}
 .  if defined(${_o}_IMPLIES)
 .info OPTIQUE|IMPLIES|${_o}|${${_o}_IMPLIES}
@@ -157,13 +165,40 @@ optique-probe:
 mod tests {
     use super::WRAPPER;
 
+    /// The wrapper's lines, and where the loop dumping the per-option
+    /// records starts: the line before the first `DESC` record.
+    fn records_loop() -> (usize, Vec<&'static str>) {
+        let lines: Vec<&str> = WRAPPER.lines().collect();
+        let desc = lines.iter().position(|l| l.starts_with(".info OPTIQUE|DESC|")).unwrap();
+        (desc - 1, lines)
+    }
+
     /// pre-check-config checks the PREVENTS of every option in PORT_OPTIONS,
     /// OPTIONS_SLAVE ones included: their records are dumped with the
     /// others.
     #[test]
     fn options_slave_options_get_their_records() {
-        let for_line = WRAPPER.lines().find(|l| l.starts_with(".for _o in ")).unwrap();
+        let (i, lines) = records_loop();
+        let for_line = lines[i];
         assert!(for_line.contains("${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} "), "{for_line}");
+    }
+
+    /// bsd.options.mk:410-440 puts what a listed option implies in
+    /// PORT_OPTIONS, excluded or not listed at all, and pre-check-config
+    /// checks its PREVENTS: the implied options get their records too.
+    #[test]
+    fn implied_options_get_their_records() {
+        let (i, lines) = records_loop();
+        assert!(lines[i].contains(" ${_OPTIQUE_IMPLIED:O:u} "), "{}", lines[i]);
+        assert_eq!(
+            lines[i - 4..i],
+            [
+                "_OPTIQUE_IMPLIED=",
+                ".for _o in ${COMPLETE_OPTIONS_LIST:U}",
+                "_OPTIQUE_IMPLIED+=\t${${_o}_IMPLIES:U}",
+                ".endfor"
+            ]
+        );
     }
 
     /// bsd.options.mk:300-304: OPTIONS_OVERRIDE must be dumped only under

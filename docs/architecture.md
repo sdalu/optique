@@ -61,7 +61,7 @@ interfaces sit side by side on the session.
 | `model/options.rs` | Its options and every make.conf layer naming them; bmake patterns | `PortOptions`, `OptionDef`, `OptionGroup`, `str_match`, `mc_value`, `forced_value`, `provenance` |
 | `optionsfile.rs` | One options file (and its `options.local`) read as the makefile it is, each line it cannot model recorded; written as `make config` writes it, less what trips synth | `SavedOptionsFile`, `parse`, `with_local`, `unmanaged`, `render`, `decides` |
 | `optfiles.rs` | Every options file of the options dir, each read from disk once | `OptionsFiles` |
-| `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_by`, `toggle` |
+| `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_file`, `moved`, `toggle` |
 | `apply.rs` | What to write and remove, and writing it atomically | `plan_writes`, `PendingWrite`, `plan_stale_removals`, `apply`, `commit` |
 | `clean.rs` | Classifying options-dir entries | `classify_entries`, `split_unused`, `prune`, `read_through_moved`, `keep_read`, `redundancy_diff`, `remove_all` |
 | `decide.rs` | A JSON plan applied to a session | `Plan`, `apply_plan` |
@@ -281,7 +281,7 @@ Then:
 
 | Question | Function | Rule |
 | :-- | :-- | :-- |
-| Unmanaged | `unmanaged_by` | make.conf moved `OPTIONS_FILE`, a line `unmodeled`, or an `options.local` resetting a list: no `saved`, make's own `PORT_OPTIONS` as the state, every option locked, no make.conf verdict |
+| Unmanaged | `unmanaged_file`, `moved` | make.conf moved `OPTIONS_FILE` for the port (its own state in `moved_states`, the shared file left to the other flavors), a line `unmodeled` (an `options.local` `?=` to a list among them), or an `options.local` resetting a list: no `saved`, make's own `PORT_OPTIONS` as the state, every option locked, no make.conf verdict |
 | Status | `status` | conflict if the staged outcome breaks PREVENTS or a checked group; ok under `OPTIONS_OVERRIDE` or for an unmanaged file; else unconfigured (no file), stale (options new or gone), ok |
 | New option | `SavedOptionsFile::decides` | no SET entry naming it, nor UNSET entry matching it, in the file or `options.local` (make's NEW_OPTIONS, less its SET-glob defect) |
 | Owed a decision | `undecided_options` | new, and no make.conf layer, implied-by-forced or group choice settles it; none under `-m` |
@@ -293,10 +293,12 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 
 ## Writing files
 
-`apply::plan_writes` groups the ports by options file and, for each:
+`apply::plan_writes` groups the ports by options file, leaving out a
+flavor make.conf moves `OPTIONS_FILE` for (`session::moved`), and, for
+each:
 
 1. leaves it alone under `OPTIONS_OVERRIDE` or when it is unmanaged
-   (`session::unmanaged_by`);
+   (`session::unmanaged_file`);
 2. picks the writer as the session picks the owner (`session::outranks`):
    the default flavor, else the flavor with the most options, the first
    on ties, whose file is then the union of every present flavor's

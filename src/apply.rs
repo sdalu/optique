@@ -203,7 +203,9 @@ pub fn plan_writes<'a>(
 ) -> PlannedWrites {
     let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
-        if !info.options.has_options() {
+        // A flavor make.conf moves OPTIONS_FILE for reads none of the
+        // shared file (`session::moved`): it neither writes nor judges it.
+        if !info.options.has_options() || crate::session::moved(info).is_some() {
             continue;
         }
         let preferred = crate::session::is_preferred(info);
@@ -225,11 +227,12 @@ pub fn plan_writes<'a>(
         if cands.iter().any(|c| c.info.options.r#override.is_some()) {
             continue;
         }
-        // A file optique cannot model (`session::unmanaged_by`: OPTIONS_FILE
-        // moved, a line it cannot read, an options.local resetting a list):
-        // no write or removal of it can say what make ends up with, and a
-        // write would drop its lines (the startup warning names it).
-        if crate::session::unmanaged_by(cands.iter().map(|c| c.info), &files.combined(options_name)).is_some() {
+        // A file optique cannot model (`session::unmanaged_file`: a line it
+        // cannot read, an options.local resetting a list or assigning one
+        // with `?=`): no write or removal of it can say what make ends up
+        // with, and a write would drop its lines (the startup warning names
+        // it).
+        if crate::session::unmanaged_file(&files.combined(options_name)).is_some() {
             continue;
         }
         // The file's owner writes it, by the session's rule
@@ -281,11 +284,13 @@ pub fn plan_writes<'a>(
         let enabled = &chosen.enabled;
         // The default flavor answers for the file; without it, every flavor
         // here must find it up to date.
+        // Both sides read with options.local, as make reads either.
+        let local = |file| files.under_local(options_name, file);
         let current = |old: &SavedOptionsFile| {
             if chosen.preferred {
-                up_to_date(old, info, enabled)
+                up_to_date(old, info, enabled, &local)
             } else {
-                cands.iter().all(|c| up_to_date(old, c.info, &c.enabled))
+                cands.iter().all(|c| up_to_date(old, c.info, &c.enabled, &local))
             }
         };
         if old.as_ref().is_some_and(current) {
@@ -366,7 +371,16 @@ fn divergence_warning(options_name: &str, chosen: &Candidate, other: &Candidate)
 /// A non-default flavor writing the file sees only its own options: the
 /// file's list may be a superset of them (the default flavor's view), and
 /// only its own options need a line; the rest is not its to judge.
-fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String>) -> bool {
+///
+/// `old` is read with its options.local, and `local` reads the would-be
+/// file the same way: a SET glob there (`OPTIONS_FILE_SET+=C*`) changes
+/// both sides alike, and only one side read with it would never match.
+fn up_to_date(
+    old: &SavedOptionsFile,
+    info: &PortInfo,
+    enabled: &BTreeSet<String>,
+    local: &dyn Fn(SavedOptionsFile) -> SavedOptionsFile,
+) -> bool {
     let list_ok = if crate::session::is_preferred(info) {
         old.complete.iter().collect::<BTreeSet<_>>()
             == info.options.complete.iter().collect::<BTreeSet<_>>()
@@ -380,7 +394,7 @@ fn up_to_date(old: &SavedOptionsFile, info: &PortInfo, enabled: &BTreeSet<String
     if !list_ok {
         return false;
     }
-    let would = written_file(info, enabled);
+    let would = local(written_file(info, enabled));
     crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
 }
 
@@ -492,9 +506,10 @@ pub fn plan_stale_removals(
     // non-default flavor lacking them (glib20@bootstrap, gobject-introspection
     // @bootstrap) says nothing of the default flavor, which may still read
     // the file when it is not in the closure.
+    // Nor can one make.conf moves OPTIONS_FILE for, which reads another file.
     let optionless: BTreeSet<&str> = ports
         .values()
-        .filter(|i| crate::session::is_preferred(i))
+        .filter(|i| crate::session::is_preferred(i) && crate::session::moved(i).is_none())
         .map(|i| i.options_name.as_str())
         .filter(|name| !with_options.contains(name))
         .collect();
@@ -502,10 +517,7 @@ pub fn plan_stale_removals(
         .into_iter()
         .filter(|name| files.bytes(name).is_some())
         // Nor one optique cannot model, which is not its to remove.
-        .filter(|name| {
-            let readers = ports.values().filter(|i| i.options_name == *name);
-            crate::session::unmanaged_by(readers, &files.combined(name)).is_none()
-        })
+        .filter(|name| crate::session::unmanaged_file(&files.combined(name)).is_none())
         .map(|name| crate::clean::Removal {
             options_name: name.to_string(),
             dir: files.entry_dir(name),
@@ -841,6 +853,29 @@ mod tests {
         assert_eq!(sess.status(&info), crate::session::UiStatus::Ok);
         let planned = plan_writes(std::iter::once((&info.key.clone(), &info, staged)), &files, false);
         assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+    }
+
+    /// An options.local SET glob (`OPTIONS_FILE_SET+=C*`) joins the file's
+    /// SET list as make reads it, though it turns nothing on: the file
+    /// written for A, A2 and B, read with it, is up to date, and the next
+    /// plan writes nothing. The would-be file is read with options.local
+    /// as the old one is.
+    #[test]
+    fn an_options_local_set_glob_leaves_a_written_file_up_to_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = mk_info(&["A", "A2", "B", "C"], &["A", "A2", "B"]);
+        info.options.defaults = ["A", "A2", "B"].iter().map(|o| o.to_string()).collect();
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=C*\n").unwrap();
+        let enabled: BTreeSet<String> = info.options.defaults.iter().cloned().collect();
+        let plan = || {
+            plan_writes(std::iter::once((&info.key, &info, enabled.clone())), &OptionsFiles::new(tmp.path()), false)
+        };
+        let first = plan();
+        assert_eq!(first.writes.len(), 1, "no file yet");
+        fs::write(tmp.path().join("cat_port/options"), &first.writes[0].content).unwrap();
+        let second = plan();
+        assert!(second.writes.is_empty(), "{:?}", second.writes.iter().map(|w| &w.content).collect::<Vec<_>>());
     }
 
     /// bsd.options.mk:342 reads options.local whether or not the options

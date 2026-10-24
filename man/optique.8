@@ -965,7 +965,11 @@ layer names the option, or when the port's options file is one
 leaves to
 .Xr make 1
 .Pq see Cm sync ,
-whose own assignments those layers may hold.
+whose own assignments those layers may hold, unless an
+.Va OPTIONS_OVERRIDE
+has
+.Xr make 1
+read no file at all.
 Options auto-enabled through an
 .Va IMPLIES
 chain are locked and marked
@@ -1565,7 +1569,11 @@ pre-check-config matches it; an option an
 .Va IMPLIES
 names goes in whether the port lists it or not, as
 .Pa bsd.options.mk
-adds it.
+adds it, and its own
+.Va PREVENTS
+is checked, an option
+.Va OPTIONS_EXCLUDE
+took out included.
 Every flagged port also lists the options that
 .Pa make.conf
 does
@@ -1808,7 +1816,11 @@ Every option of a port whose options file
 leaves to
 .Xr make 1
 .Pq see Cm sync
-is locked, before anything else, with
+is locked, before anything but an
+.Va OPTIONS_OVERRIDE ,
+under which
+.Xr make 1
+reads no file, with
 .Va locked_by
 .Ql options file ,
 .Ql options.local
@@ -1925,13 +1937,15 @@ or
 .Va OPTIONS_FILE_UNSET
 afresh
 .Po
-.Ql = ,
+.Ql =
+or
 .Ql :=
-or a
-.Ql ?=
-that takes effect
 .Pc ,
-dropping the file's lines for that list; one where either file holds a line
+dropping the file's lines for that list, or with
+.Ql ?= ,
+which assigns only while the options file leaves that list unassigned, so
+that a write turning every option on, with no UNSET line, would bring it to
+life; one where either file holds a line
 .Nm
 cannot model \(em an assignment to any variable but those two lists and the
 .Va _OPTIONS_READ
@@ -1973,6 +1987,14 @@ is locked, with no
 verdict
 .Pq see Cm scan Fl -options ;
 and edits to it are refused.
+A
+.Pa make.conf
+moving
+.Va OPTIONS_FILE
+for one flavor only leaves that flavor so, with its own outcome, while the
+flavors still reading the shared file keep it managed, owned as below
+whichever flavor the closure names first; the warning then names the port:
+.Dl warning: make.conf sets OPTIONS_FILE to /elsewhere for misc/flav@nox: make reads that file, not misc_flav/options, for it, and optique leaves its options alone
 .Pp
 .Cm sync
 then reports every file it changed.
@@ -2038,6 +2060,12 @@ queries every flavor in the port's
 one
 .Xr make 1
 query each, and keeps the file when one of them cannot be queried.
+A flavor
+.Pa make.conf
+moves
+.Va OPTIONS_FILE
+for reads none of the file and is not judged; a file no flavor reads is
+kept.
 .Pp
 With
 .Fl n

@@ -221,7 +221,8 @@ options file included: the value of the last layer naming it, in the
 framework's order (the global knob, then the per-port one, then the
 `*_FORCE` knobs, then `WITH`/`WITHOUT`, the later winning), left blank only when no layer names
 the option, or for every option of a port whose options file optique
-leaves to make (the layers may then hold the file's own assignments), and
+leaves to make (the layers may then hold the file's own assignments)
+unless an `OPTIONS_OVERRIDE` has make read no file at all, and
 otherwise coloured by that layer — green for the
 global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
 `${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob or a
@@ -244,8 +245,11 @@ list` under `--follow-moved`, `…, not followed; fix the list, or
 --follow-moved` when the port is in the closure on another account),
 `UNMANAGED:` and why
 for an options file optique leaves to make (a line it cannot model, an
-`options.local` resetting a list, or a make.conf `OPTIONS_FILE` moving it;
-see [commands](commands.md#sync)), a `CONFLICT:` per rule the staged
+`options.local` resetting a list or assigning one with `?=`, or a
+make.conf `OPTIONS_FILE` moving it, for that flavor alone when it moves
+it for one; see [commands](commands.md#sync)), shown with make's own
+outcome, as make reads the file, even for a port a refresh just pulled
+in, a `CONFLICT:` per rule the staged
 options break, and `STALE:` when the port's option list
 changed since its file was written, naming the options added and those
 gone — `STALE: new A B · obsolete X`, each part only when it has options.

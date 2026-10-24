@@ -1953,6 +1953,13 @@ impl App {
             self.pending.remove(&key);
             let Some(info) = self.session.ports.get(&key) else { continue };
             let Some(state) = self.session.state(info) else { continue };
+            // A flavor make.conf moves OPTIONS_FILE for reads a file of its
+            // own, not the staged one: its state is no content for the
+            // shared file the other flavors are queried with.
+            if crate::session::moved(info).is_some() {
+                batch.push(key);
+                continue;
+            }
             let options_name = info.options_name.clone();
             let staged = state.staged.clone();
             // A newcomer left as its file has it gets the file itself, byte
@@ -2102,6 +2109,10 @@ impl App {
             // staging never had: it is copied in and the port queried again.
             for key in &added {
                 let Some(info) = self.session.ports.get(key) else { continue };
+                // One reading a file of its own was queried with it.
+                if crate::session::moved(info).is_some() {
+                    continue;
+                }
                 let name = &info.options_name;
                 let real = self.options_files.bytes(name).is_some()
                     || self.options_files.local_bytes(name).is_some();

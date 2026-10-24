@@ -458,15 +458,26 @@ fn find_redundant(
         }
         // Answers arrive in any order; the reason names the same flavor each run.
         f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
+        // A flavor make.conf moves OPTIONS_FILE for reads none of the file
+        // (`session::moved`); the file is judged for the others alone, and
+        // kept when none is left.
+        let (moved, readers): (Vec<PortInfo>, Vec<PortInfo>) =
+            f.infos.into_iter().partition(|i| session::moved(i).is_some());
+        if readers.is_empty() {
+            if let (true, Some(u)) = (cli.verbose, moved.first().and_then(session::moved)) {
+                found.kept.push((f.entry.options_name.clone(), u.why));
+            }
+            return;
+        }
         // A file optique cannot model: not its to remove.
-        if let Some(u) = session::unmanaged_by(&f.infos, &files.combined(&f.entry.options_name)) {
+        if let Some(u) = session::unmanaged_file(&files.combined(&f.entry.options_name)) {
             if cli.verbose {
                 found.kept.push((f.entry.options_name.clone(), u.why));
             }
             return;
         }
         let local = files.under_local(&f.entry.options_name, Default::default());
-        match shared_file_deviation(&f.infos, &local) {
+        match shared_file_deviation(&readers, &local) {
             None => found.removals.push(clean::Removal {
                 options_name: f.entry.options_name.clone(),
                 dir: f.entry.dir.clone(),
@@ -536,9 +547,12 @@ fn find_redundant(
                     .map(|f| PortKey::new(key.origin.clone(), Some(f.clone())))
                     .collect();
                 let f = Flavors { entry, infos: vec![info], waiting: others.len(), failed: None };
-                // A deviating default flavor settles it: no need to ask the others.
+                // A deviating default flavor settles it: no need to ask the
+                // others. Not one reading a file of its own (`session::moved`).
                 let local = files.under_local(&entry.options_name, Default::default());
-                if others.is_empty() || shared_file_deviation(&f.infos, &local).is_some() {
+                let deviates = session::moved(&f.infos[0]).is_none()
+                    && shared_file_deviation(&f.infos, &local).is_some();
+                if others.is_empty() || deviates {
                     settle(f, &mut found, &mut warn);
                     continue;
                 }
@@ -606,11 +620,11 @@ fn shared_file_deviation(infos: &[model::port::PortInfo], local: &optionsfile::S
     if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {
         return Some(format!("{}: make.conf OPTIONS_OVERRIDE decides it, left alone", info.key));
     }
-    infos.iter().enumerate().find_map(|(i, info)| {
+    infos.iter().find_map(|info| {
         let diff = clean::redundancy_diff(info, local);
         if diff.is_empty() {
             None
-        } else if i == 0 {
+        } else if info.is_default_flavor() {
             Some(format!("deviates from defaults + make.conf: {}", diff.join(" ")))
         } else {
             Some(format!("deviates from defaults + make.conf for {}: {}", info.key, diff.join(" ")))
@@ -1149,19 +1163,35 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         );
     }
     // bsd.options.mk:183: make.conf moved OPTIONS_FILE, so make reads
-    // neither the file optique manages nor its options.local.
-    let mut moved_files: std::collections::BTreeMap<&str, &str> = Default::default();
-    for info in result.ports.values().filter(|i| i.options.has_options()) {
+    // neither the file optique manages nor its options.local. Per port: a
+    // flavor moved elsewhere leaves the shared file to those still reading
+    // it (`session::moved`).
+    let with_options = || result.ports.values().filter(|i| i.options.has_options());
+    let read: std::collections::BTreeSet<&str> =
+        with_options().filter(|i| i.options.moved_file.is_none()).map(|i| i.options_name.as_str()).collect();
+    let mut moved_files: std::collections::BTreeMap<&str, Vec<(String, &str)>> = Default::default();
+    for info in with_options() {
         if let Some(path) = &info.options.moved_file {
-            moved_files.entry(info.options_name.as_str()).or_insert(path);
+            moved_files.entry(info.options_name.as_str()).or_default().push((info.canonical.to_string(), path));
         }
     }
-    for (name, path) in &moved_files {
-        eprintln!(
-            "{} make.conf sets OPTIONS_FILE to {path}: make does not read {name}/options, \
-             and optique leaves it alone",
-            tint(paint, ansi::YELLOW, "warning:"),
-        );
+    for (name, moved) in &moved_files {
+        let mut said = std::collections::BTreeSet::new();
+        for (port, path) in moved {
+            if read.contains(name) {
+                eprintln!(
+                    "{} make.conf sets OPTIONS_FILE to {path} for {port}: make reads that file, not \
+                     {name}/options, for it, and optique leaves its options alone",
+                    tint(paint, ansi::YELLOW, "warning:"),
+                );
+            } else if said.insert(*path) {
+                eprintln!(
+                    "{} make.conf sets OPTIONS_FILE to {path}: make does not read {name}/options, \
+                     and optique leaves it alone",
+                    tint(paint, ansi::YELLOW, "warning:"),
+                );
+            }
+        }
     }
 
     // A file missing lines reads as its defaults today and follows them
@@ -1177,7 +1207,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         // and so does optique; sync never writes it. Its lines join the
         // file's, UNSET winning across both, so it overrides nothing by
         // itself: the note says what it adds.
-        if moved_files.contains_key(name) {
+        if !read.contains(name) {
             continue;
         }
         let both = files.combined(name);

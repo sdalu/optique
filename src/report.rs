@@ -328,7 +328,9 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
     // locked by what makes it so, and no make.conf verdict, since the
     // layers make dumps after reading the file may hold its own (inert)
     // assignments. Its saved values are not known either (`saved` is None).
-    let unmanaged = sess.unmanaged(owner);
+    // Under an OPTIONS_OVERRIDE make reads no file at all (bsd.options.mk:
+    // 300-304), so the override is the reason, as `edit_refusal` has it.
+    let unmanaged = if opts.r#override.is_some() { None } else { sess.unmanaged(owner) };
     opts.complete
         .iter()
         .map(|name| {

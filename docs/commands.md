@@ -109,7 +109,8 @@ list changed since the file was written) or `conflict` (the options make
 computes from the saved ones, `*_FORCE` included, violate a group rule or
 `PREVENTS`, which `make check-config` checks for an `OPTIONS_SLAVE` option
 too; a `PREVENTS` word is a pattern, as make matches it, and what an option
-`IMPLIES` goes in whether the port lists it or not). A flagged port also lists what
+`IMPLIES` goes in whether the port lists it or not, its own `PREVENTS`
+checked, an option `OPTIONS_EXCLUDE` took out included). A flagged port also lists what
 `make.conf` leaves `undecided`, or is marked `[mc-covered ≈]` when `make.conf`
 settles every option by itself. An unconfigured or stale `mc-covered` port
 does not count against the exit gate (a conflict still does, and so does,
@@ -151,13 +152,24 @@ sets or unsets.
 
 optique leaves to make, never writing or removing it (`clean` included),
 an options file it cannot model: one whose `options.local` assigns a SET
-or UNSET list afresh, dropping the file's lines; one where either file has
+or UNSET list afresh, dropping the file's lines, or with `?=`, which
+assigns only while the file leaves that list out (so a write turning
+every option on would bring it to life); one where either file has
 a line it cannot model — an assignment to anything but the SET and UNSET
 lists and the bookkeeping `make config` writes, a `!=`, a directive, a `$`
 expansion, or a line that is no assignment; and one `make.conf` moves away
 by setting `OPTIONS_FILE`. A warning names the file and line, or the
 moved path. The port shows make's own outcome, every option locked with no
 make.conf verdict, is never unconfigured or stale, and takes no edit.
+
+A make.conf moving `OPTIONS_FILE` for one flavor only (`.if ${FLAVOR:U}
+== nox`) leaves that flavor alone, as above, with its own outcome; the
+other flavors still read the shared file, which stays theirs to write,
+judged from the default flavor's view (or the widest one present)
+whichever flavor the list names first. The warning then names the port:
+`make.conf sets OPTIONS_FILE to <path> for misc/flav@nox: make reads that
+file, not misc_flav/options, for it, and optique leaves its options
+alone`.
 
 `--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in
@@ -227,8 +239,9 @@ warning: make.conf sets OPTIONS_FILE (<value>): optique cannot tell which option
 
 and the same, beginning `make could not say whether make.conf sets
 OPTIONS_FILE`, when make could not be asked. `--redundant` still judges
-the entries of live ports optique manages (a port whose `OPTIONS_FILE`
-moved is not one). Under `--unused` or `--redundant`, an entry the moved
+the entries of live ports optique manages, each for the flavors reading
+it: a flavor whose `OPTIONS_FILE` moved reads none of it and is left out,
+and an entry no flavor reads is kept. Under `--unused` or `--redundant`, an entry the moved
 `OPTIONS_FILE` of a queried port lies in is kept whatever its name says,
 which covers a make.conf moving it for some ports only:
 `misc_flav-nox: make reads misc/flav@nox's options from it (make.conf

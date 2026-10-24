@@ -419,3 +419,144 @@ fn a_moved_options_file_edit_is_not_served_from_cache() {
     let port = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "misc/cond").unwrap();
     assert_eq!(option(port, "DOCS")["staged"], false, "{port}");
 }
+
+/// A make.conf moving OPTIONS_FILE for misc/flav@nox alone: @nox reads
+/// a file of its own, @full still reads misc_flav/options. So @nox is left
+/// to make, its edit refused, while the shared file stays @full's to
+/// manage: unconfigured in scan, written by sync and by decide, whichever
+/// order the closure meets the flavors in, and judged redundant for @full
+/// alone. The warning names @nox, and does not say make reads the shared
+/// file for nobody.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
+    let f = Fixture::new();
+    fs::write(&f.make_conf, ".if ${FLAVOR:U} == nox\nOPTIONS_FILE=/nonexistent/nox/options\n.endif\n").unwrap();
+    let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "OPTIONS_FILE"]);
+    assert_eq!(stdout(&out).trim(), "/nonexistent/nox/options");
+    for order in [["misc/flav", "misc/flav@nox"], ["misc/flav@nox", "misc/flav"]] {
+        let full = f.scan_port(&order, "misc/flav@full");
+        assert_eq!(full["status"], "unconfigured", "{order:?}: {full}");
+        assert_eq!(common::option(&full, "A")["locked"], false, "{order:?}: {full}");
+        let nox = f.scan_port(&order, "misc/flav@nox");
+        assert_eq!(nox["status"], "ok", "{order:?}: {nox}");
+        assert_eq!(common::option(&nox, "A")["locked_by"], "make.conf OPTIONS_FILE", "{order:?}: {nox}");
+
+        let out = f.run("sync", &order);
+        let err = stderr(&out);
+        assert!(
+            err.contains(
+                "warning: make.conf sets OPTIONS_FILE to /nonexistent/nox/options for misc/flav@nox: \
+                 make reads that file, not misc_flav/options, for it"
+            ),
+            "{order:?}: {err}"
+        );
+        assert!(!err.contains("make does not read misc_flav/options"), "{order:?}: {err}");
+        assert!(f.file("misc_flav").exists(), "{order:?}: sync writes @full's file: {err}");
+        fs::remove_file(f.file("misc_flav")).unwrap();
+
+        let plan = f.decide(&order, r#"{"misc/flav": {"A": false}}"#);
+        assert_eq!(plan["applied"], true, "{order:?}: {plan}");
+        assert_eq!(f.make_v("misc/flav", "PORT_OPTIONS"), ["X11", "Y"], "{order:?}");
+        let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "PORT_OPTIONS"]);
+        assert_eq!(stdout(&out).trim(), "A", "{order:?}: @nox reads its own file");
+        let plan = f.decide(&order, r#"{"misc/flav@nox": {"A": false}}"#);
+        let rejected = &plan["rejected"];
+        assert_eq!(rejected.as_array().map(Vec::len), Some(1), "{order:?}: {plan}");
+        assert_eq!(
+            rejected[0]["reason"],
+            "make.conf sets OPTIONS_FILE to /nonexistent/nox/options, not the options file optique manages; \
+             edit it there",
+            "{order:?}: {plan}"
+        );
+        // @full's view alone judges the file: back at its defaults, -m
+        // removes it.
+        let plan = f.decide(&["-m", order[0], order[1]], r#"{"misc/flav": {"A": true}}"#);
+        assert_eq!(plan["applied"], true, "{order:?}: {plan}");
+        assert!(!f.file("misc_flav").exists(), "{order:?}: {plan}");
+    }
+}
+
+/// bsd.options.mk:341-363: a `?=` in options.local assigns only while the
+/// options file leaves the list unassigned. With misc/model-globs's file
+/// unsetting C, `OPTIONS_FILE_UNSET?=C` there is inert; once a write turns
+/// every option on, the file has no UNSET line and the same `?=` turns C
+/// off. So such a line leaves the file unmanaged, whatever it holds now:
+/// scan reports make's own outcome, decide refuses, nothing is written.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_options_local_ifunset_leaves_the_file_unmanaged() {
+    let f = Fixture::new();
+    let origin = "misc/model-globs";
+    let file = "_FILE_COMPLETE_OPTIONS_LIST=A A2 B C\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=A2\n\
+                OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=C\n";
+    f.write_file("misc_model-globs", file);
+    fs::write(f.options.join("misc_model-globs/options.local"), "OPTIONS_FILE_UNSET?=C\n").unwrap();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["A", "A2", "B"]);
+
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["status"], "ok", "{port}");
+    let c = common::option(&port, "C");
+    assert_eq!((&c["staged"], &c["locked_by"]), (&serde_json::json!(false), &serde_json::json!("options.local")), "{c}");
+
+    let out = f.run("sync", &[origin]);
+    let err = stderr(&out);
+    assert!(
+        err.contains("misc_model-globs/options.local line 1 assigns OPTIONS_FILE_UNSET with ?="),
+        "{err}"
+    );
+    let plan = f.decide(&[origin], r#"{"misc/model-globs": {"C": true}}"#);
+    assert_eq!(plan["rejected"].as_array().map(Vec::len), Some(1), "{plan}");
+    assert_eq!(fs::read_to_string(f.file("misc_model-globs")).unwrap(), file);
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
+}
+
+/// In the TUI, misc/condep comes in once misc/cond's SOX is on, first
+/// queried against the staging options dir, which does not hold its file
+/// yet. Its file is one optique cannot manage (a FOO line), so the pane
+/// shows make's own outcome, X on as scan has it, not the first query's.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_newcomer_with_an_unmanaged_file_shows_makes_outcome_with_it() {
+    use std::io::Write as _;
+    let f = Fixture::new();
+    f.write_file("misc_condep", "OPTIONS_FILE_SET+=X\nFOO=bar\n");
+    assert_eq!(f.make_v("misc/condep", "PORT_OPTIONS"), ["X"]);
+    let script = "key tab\nkey space\nkey down\nkey down\nkey down\nkey space\nsettle\nsettle\n\
+                  key tab\nkey /\nkeys condep\nkey enter\nsettle\ndump\nquit\n";
+    let mut child = f
+        .optique("tui")
+        .arg("--drive")
+        .arg("misc/cond")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let screen = stdout(&out);
+    assert!(screen.contains("condep-1.0") && screen.contains("UNMANAGED: "), "{screen}\n{}", stderr(&out));
+    assert!(screen.contains("[x] X"), "{screen}");
+}
+
+/// An options.local SET glob (`OPTIONS_FILE_SET+=C*`) turns nothing on and
+/// joins the file's list as make reads it: the file sync writes is up to
+/// date on the next run, which writes nothing.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_options_local_set_glob_leaves_a_written_file_up_to_date() {
+    let f = Fixture::new();
+    let origin = "misc/model-globs";
+    fs::create_dir_all(f.options.join("misc_model-globs")).unwrap();
+    fs::write(f.options.join("misc_model-globs/options.local"), "OPTIONS_FILE_SET+=C*\n").unwrap();
+    let out = f.run("sync", &[origin]);
+    assert!(stdout(&out).contains("new file"), "{}", stdout(&out));
+    let written = fs::read_to_string(f.file("misc_model-globs")).unwrap();
+    for _ in 0..2 {
+        let out = f.run("sync", &[origin]);
+        assert!(stderr(&out).contains("nothing to write"), "{}\n{}", stdout(&out), stderr(&out));
+        assert_eq!(fs::read_to_string(f.file("misc_model-globs")).unwrap(), written);
+    }
+}

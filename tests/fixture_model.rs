@@ -178,6 +178,32 @@ fn an_options_slave_options_prevents_are_checked() {
     assert_eq!(flagged(&port, "staged"), ["Y"], "{port}");
 }
 
+/// bsd.options.mk:410-440 puts what a listed option implies in PORT_OPTIONS
+/// whether listed or not: C, a group member escaping the exclusion pass,
+/// implies FOO, which OPTIONS_EXCLUDE took out, and pre-check-config checks
+/// FOO's own PREVENTS of the default B1. check-config fails, and optique
+/// reports the conflict, then settles it as make does once B1 is off.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_implied_excluded_options_prevents_is_checked() {
+    let f = Fixture::new();
+    let origin = "misc/model-implied-prevents";
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["B1", "C", "FOO"]);
+    assert_eq!(f.make_v(origin, "COMPLETE_OPTIONS_LIST"), ["B1", "C"]);
+    let check = f.make(origin, &["check-config"]);
+    assert!(!check.status.success(), "check-config passes: {}", common::stdout(&check));
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["status"], "conflict", "{port}");
+    assert_eq!(port["violations"], serde_json::json!(["FOO conflicts with B1: mutually exclusive"]), "{port}");
+
+    let plan = f.decide(&[origin], r#"{"misc/model-implied-prevents": {"B1": false}}"#);
+    assert_eq!(plan["applied"], true, "{plan}");
+    let check = f.make(origin, &["check-config"]);
+    assert!(check.status.success(), "check-config fails: {}", common::stdout(&check));
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["violations"], serde_json::json!([]), "{port}");
+}
+
 /// bsd.options.mk:300-304: a make.conf OPTIONS_OVERRIDE replaces the whole
 /// decision — defaults, make.conf SET/UNSET and the options file are not
 /// read, PORT_OPTIONS becomes its value as given. The file here says the
@@ -262,9 +288,10 @@ fn with_and_without_pin_like_force() {
 /// make reads `:=` as `=` and `?=` only for a variable no earlier line
 /// assigned, the options file and options.local read as one makefile. The
 /// file resets SET to AUDIO NAS, its `?=SOX` assigns nothing, its
-/// `?=DOCS` does (UNSET had no value); options.local's `?=NAS` meets an
-/// UNSET the file assigned. make has AUDIO and NAS on and SOX new; so does
-/// optique.
+/// `?=DOCS` does (UNSET had no value). make has AUDIO and NAS on and SOX
+/// new; so does optique. options.local's `?=NAS` then meets an UNSET the
+/// file assigned and changes nothing, but would once a write left UNSET
+/// out: the file is left to make, its outcome unchanged.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn colon_and_question_assignments_are_read_as_make_reads_them() {
@@ -275,7 +302,6 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
         "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_SET?=SOX\n\
          OPTIONS_FILE_UNSET?=DOCS\n",
     );
-    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET ?= NAS\n").unwrap();
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, ["AUDIO", "NAS"]);
     let new = f.make_v(origin, "NEW_OPTIONS");
@@ -283,6 +309,12 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
     let port = f.scan_port(&[origin], origin);
     assert_eq!(flagged(&port, "staged"), make, "{port}");
     assert_eq!(flagged(&port, "new"), new, "{port}");
+
+    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET ?= NAS\n").unwrap();
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(common::option(&port, "NAS")["locked_by"], "options.local", "{port}");
 }
 
 /// bsd.options.mk:343 `.sinclude`s options.local whether or not the

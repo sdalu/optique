@@ -38,6 +38,11 @@ pub struct Session {
     pub ports: BTreeMap<PortKey, PortInfo>,
     /// OPTIONS_NAME -> editable state.
     pub states: HashMap<String, OptState>,
+    /// Canonical key -> the state of a flavor make.conf gives an
+    /// OPTIONS_FILE of its own (`moved`): it reads none of the shared
+    /// file, so it keeps out of that file's state, and its own is make's
+    /// PORT_OPTIONS, which no edit changes.
+    pub moved_states: HashMap<PortKey, OptState>,
     /// Requested key -> canonical key (dep edges may use either form).
     pub aliases: HashMap<PortKey, PortKey>,
     /// Canonical roots the closure is anchored on (for reachability GC).
@@ -92,23 +97,26 @@ pub struct Unmanaged {
     pub why: String,
 }
 
-/// Whether optique can manage the options file these ports read, `combined`
-/// being the file with its options.local read after it
-/// (`OptionsFiles::combined`). It cannot when make.conf moved OPTIONS_FILE
-/// for one of them (`PortOptions::moved_file`): make reads another file,
-/// and `${OPTIONS_FILE}.local` with it. Nor when a line of either file is
-/// one optique cannot model, or options.local resets a list
-/// (`SavedOptionsFile::unmanaged`).
-pub(crate) fn unmanaged_by<'a>(
-    infos: impl IntoIterator<Item = &'a PortInfo>,
-    combined: &SavedOptionsFile,
-) -> Option<Unmanaged> {
-    if let Some(path) = infos.into_iter().find_map(|i| i.options.moved_file.as_ref()) {
-        return Some(Unmanaged {
-            by: "make.conf OPTIONS_FILE",
-            why: format!("make.conf sets OPTIONS_FILE to {path}, not the options file optique manages; edit it there"),
-        });
-    }
+/// Why the port reads none of the options file optique manages: make.conf
+/// moved OPTIONS_FILE for it (`PortOptions::moved_file`), so make reads
+/// another file, and `${OPTIONS_FILE}.local` with it. Such a flavor is no
+/// reader of the shared file: its own edits are refused and its state is
+/// make's own, while the flavors still reading the file keep it managed.
+pub(crate) fn moved(info: &PortInfo) -> Option<Unmanaged> {
+    info.options.moved_file.as_ref().map(|path| Unmanaged {
+        by: "make.conf OPTIONS_FILE",
+        why: format!("make.conf sets OPTIONS_FILE to {path}, not the options file optique manages; edit it there"),
+    })
+}
+
+/// Whether optique can manage an options file, `combined` being the file
+/// with its options.local read after it (`OptionsFiles::combined`). It
+/// cannot when a line of either file is one optique cannot model, or
+/// options.local assigns a list afresh or with `?=`
+/// (`SavedOptionsFile::unmanaged`). Who reads the file is the caller's to
+/// say: a flavor make.conf moves OPTIONS_FILE for reads none of it
+/// (`moved`).
+pub(crate) fn unmanaged_file(combined: &SavedOptionsFile) -> Option<Unmanaged> {
     combined.unmanaged().map(|(file, why)| Unmanaged {
         by: if file == "options.local" { "options.local" } else { "options file" },
         why,
@@ -126,6 +134,7 @@ impl Session {
         let mut session = Session {
             ports,
             states: HashMap::new(),
+            moved_states: HashMap::new(),
             aliases,
             roots: Vec::new(),
             owners: HashMap::new(),
@@ -154,11 +163,12 @@ impl Session {
     /// Recompute the owner of every shared options file (`outranks`: the
     /// default flavor, else the widest view). Without the default flavor in
     /// the closure the widest view stands for it, so an edit to an option
-    /// only it has reaches the shared staged set.
+    /// only it has reaches the shared staged set. A flavor make.conf moves
+    /// OPTIONS_FILE for reads none of the shared file, and owns none of it.
     fn rebuild_owners(&mut self) {
         let mut owners: HashMap<String, PortKey> = HashMap::new();
         for (key, info) in &self.ports {
-            if !info.options.has_options() {
+            if !info.options.has_options() || moved(info).is_some() {
                 continue;
             }
             match owners.get(&info.options_name).and_then(|k| self.ports.get(k)) {
@@ -172,8 +182,12 @@ impl Session {
     }
 
     /// The port whose view owns this port's options file (itself when it is
-    /// the owner or no other flavor is known).
+    /// the owner or no other flavor is known, and when make.conf moved its
+    /// OPTIONS_FILE: the file it reads is its own).
     pub fn owner_info<'a>(&'a self, info: &'a PortInfo) -> &'a PortInfo {
+        if moved(info).is_some() {
+            return info;
+        }
         self.owners
             .get(&info.options_name)
             .and_then(|k| self.ports.get(k))
@@ -203,6 +217,16 @@ impl Session {
         if !info.options.has_options() {
             return;
         }
+        // A flavor reading a file of its own: make's PORT_OPTIONS, fresh
+        // from each query, as no edit changes it (`edit_refusal`).
+        if moved(info).is_some() {
+            let effective = info.options.effective.clone();
+            self.moved_states.insert(
+                info.canonical.clone(),
+                OptState { saved: None, staged: effective.clone(), baseline: effective },
+            );
+            return;
+        }
         if !self.states.contains_key(&info.options_name) {
             // The baseline follows the file OWNER's view (default flavor):
             // that's what apply will write.
@@ -211,7 +235,7 @@ impl Session {
             // A file optique cannot model claims nothing: no saved choices,
             // and make's own PORT_OPTIONS as the state, which no edit
             // changes (`edit_refusal`).
-            let (saved, baseline) = match unmanaged_by([info, owner], &combined) {
+            let (saved, baseline) = match unmanaged_file(&combined) {
                 Some(_) => (None, owner.options.effective.clone()),
                 None => saved_baseline(owner, files),
             };
@@ -263,13 +287,37 @@ impl Session {
         let removed: Vec<PortKey> =
             self.ports.keys().filter(|k| !reachable.contains(*k)).cloned().collect();
         self.ports.retain(|k, _| reachable.contains(k));
+        self.moved_states.retain(|k, _| reachable.contains(k));
         // The GC may have dropped an owner whose sibling flavor stays.
         self.rebuild_owners();
+        self.refresh_unmanaged();
         added_keys.retain(|k| self.ports.contains_key(k));
         (added_keys, removed)
     }
 
+    /// Give every file optique cannot manage its owner's fresh PORT_OPTIONS
+    /// as the state. A newcomer is first queried against the staging
+    /// options dir, which does not hold its file yet; the state it got then
+    /// is make's outcome without the file, and the seeded re-query brings
+    /// the real one. Such a state takes no edit, so nothing staged is lost.
+    fn refresh_unmanaged(&mut self) {
+        for (name, state) in self.states.iter_mut() {
+            if !self.locals.get(name).is_some_and(|l| unmanaged_file(l).is_some()) {
+                continue;
+            }
+            let Some(owner) = self.owners.get(name).and_then(|k| self.ports.get(k)) else { continue };
+            state.baseline = owner.options.effective.clone();
+            state.staged = state.baseline.clone();
+        }
+    }
+
+    /// The state the port shows: its options file's, shared by the flavors
+    /// reading it, or, for a flavor make.conf moves OPTIONS_FILE for, its
+    /// own (`moved_states`).
     pub fn state(&self, info: &PortInfo) -> Option<&OptState> {
+        if moved(info).is_some() {
+            return self.moved_states.get(&info.canonical);
+        }
         self.states.get(&info.options_name)
     }
 
@@ -297,7 +345,7 @@ impl Session {
             };
             let saved = files.saved(name);
             let combined = files.combined(name);
-            if unmanaged_by([owner], &combined).is_some() {
+            if unmanaged_file(&combined).is_some() {
                 // Never written or removed by optique; kept as `ensure_state` has it.
                 state.saved = None;
                 state.baseline = owner.options.effective.clone();
@@ -326,13 +374,14 @@ impl Session {
         self.locals.get(&info.options_name).is_some_and(|l| l.local_decides(opt))
     }
 
-    /// Why the port's options file is one optique cannot manage
-    /// (`unmanaged_by`), judged for the port and the flavor owning its
-    /// file: nothing is written or removed for it, no edit is taken, and
-    /// its state is make's own PORT_OPTIONS.
+    /// Why the port's options file is one optique cannot manage: make.conf
+    /// moved OPTIONS_FILE for this port (`moved`), or the shared file holds
+    /// what optique cannot model (`unmanaged_file`). Nothing is written or
+    /// removed for it, no edit is taken, and its state is make's own
+    /// PORT_OPTIONS. A flavor moved elsewhere leaves the shared file to the
+    /// flavors still reading it.
     pub fn unmanaged(&self, info: &PortInfo) -> Option<Unmanaged> {
-        let combined = self.locals.get(&info.options_name)?;
-        unmanaged_by([info, self.owner_info(info)], combined)
+        moved(info).or_else(|| self.locals.get(&info.options_name).and_then(unmanaged_file))
     }
 
     /// The listed origins MOVED moves to this port: its key, or, for one
@@ -476,11 +525,12 @@ impl Session {
             if !info.options.complete.iter().any(|o| o == opt) {
                 continue;
             }
-            let options_name = info.options_name.clone();
-            if !visited.insert(options_name.clone()) {
+            // A flavor reading a file of its own shares no state: it is
+            // refused by itself, and leaves the shared file to the others.
+            if moved(info).is_none() && !visited.insert(info.options_name.clone()) {
                 continue;
             }
-            let Some(state) = self.states.get(&options_name) else { continue };
+            let Some(state) = self.state(info) else { continue };
             if state.staged.contains(opt) == on {
                 continue; // already the wanted value; not an error
             }
@@ -509,7 +559,9 @@ impl Session {
     }
 
     pub fn revert(&mut self, key: &PortKey) {
-        if let Some(info) = self.ports.get(key) {
+        // A flavor reading a file of its own has nothing to revert, and the
+        // shared state is not its own.
+        if let Some(info) = self.ports.get(key).filter(|i| moved(i).is_none()) {
             if let Some(state) = self.states.get_mut(&info.options_name) {
                 state.staged = state.baseline.clone();
             }
@@ -615,7 +667,7 @@ impl Session {
         if info.options.r#override.is_some() {
             return UiStatus::Ok;
         }
-        // Nor can a file optique cannot model (`unmanaged_by`): it is not
+        // Nor can a file optique cannot model (`unmanaged`): it is not
         // written, and what make makes of it is make's alone.
         if self.unmanaged(info).is_some() {
             return UiStatus::Ok;
@@ -2934,6 +2986,109 @@ mod tests {
         let planned =
             apply::plan_writes(std::iter::once((&key, &info, set(&["A"]))), &OptionsFiles::new(tmp.path()), false);
         assert!(planned.writes.is_empty());
+    }
+
+    /// bsd.options.mk:183: make.conf moves OPTIONS_FILE for one flavor
+    /// only. It reads a file of its own, so it is no reader of the shared
+    /// one: its edits are refused and its state is its own PORT_OPTIONS,
+    /// while the default flavor owns, judges and writes the shared file.
+    /// Whichever flavor the closure meets first.
+    #[test]
+    fn a_flavor_moving_options_file_leaves_the_shared_file_to_its_owner() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (default, moved_flavor) in [("a", "b"), ("b", "a")] {
+            let flavor = |f: &str| {
+                let mut info = PortInfo::stub(&format!("cat/x@{f}"));
+                info.flavors = vec![default.into(), moved_flavor.into()];
+                info.options_name = "cat_x".into();
+                info.options.complete = vec!["A".into(), "B".into()];
+                info.options.defaults = set(&["A"]);
+                info.options.effective = set(&["A"]);
+                info
+            };
+            let mut moved_info = flavor(moved_flavor);
+            moved_info.options.moved_file = Some("/elsewhere/options".into());
+            moved_info.options.effective = set(&["B"]);
+            let (owner, other) = (flavor(default).key, moved_info.key.clone());
+            let ports: BTreeMap<PortKey, PortInfo> =
+                [(owner.clone(), flavor(default)), (other.clone(), moved_info)].into();
+            let mut s = session_in(ports, tmp.path());
+            assert_eq!(s.owners["cat_x"], owner, "default {default}");
+            let (o, m) = (s.ports[&owner].clone(), s.ports[&other].clone());
+            assert_eq!(s.unmanaged(&o), None, "default {default}");
+            assert_eq!(s.unmanaged(&m).map(|u| u.by), Some("make.conf OPTIONS_FILE"), "default {default}");
+            assert_eq!(s.status(&o), UiStatus::Unconfigured, "default {default}");
+            assert_eq!(s.status(&m), UiStatus::Ok, "default {default}");
+            assert_eq!(s.state(&m).unwrap().staged, set(&["B"]), "its own outcome, default {default}");
+            assert!(s.toggle(&other, "A").is_err(), "default {default}");
+            s.revert(&other);
+            s.toggle(&owner, "B").unwrap();
+            assert_eq!(s.state(&o).unwrap().staged, set(&["A", "B"]), "default {default}");
+            assert_eq!(s.state(&m).unwrap().staged, set(&["B"]), "default {default}");
+            let (changed, skipped) = s.bulk_set(&[other.clone(), owner.clone()], "A", false);
+            assert_eq!((changed, skipped.len()), (vec![owner.clone()], 0), "default {default}");
+            for r in crate::report::option_reports(&s, &m) {
+                assert_eq!(r.locked_by.as_deref(), Some("make.conf OPTIONS_FILE"), "{}", r.name);
+                assert_eq!(r.staged, r.name == "B", "{}", r.name);
+            }
+            let staged = s.ports.iter().map(|(k, i)| (k, i, s.state(i).unwrap().staged.clone()));
+            let planned = apply::plan_writes(staged, &OptionsFiles::new(tmp.path()), false);
+            assert_eq!(planned.writes.len(), 1, "default {default}");
+            assert_eq!(planned.writes[0].key, owner, "default {default}");
+            assert_eq!(planned.writes[0].enabled, set(&["B"]), "default {default}");
+            assert!(planned.warnings.is_empty(), "{:?}", planned.warnings);
+        }
+    }
+
+    /// A newcomer in the TUI is first queried against the staging options
+    /// dir, which does not hold its file yet, then again with it. For a
+    /// file optique cannot manage, the state follows the owner's fresh
+    /// PORT_OPTIONS on every merge: it takes no edit, so nothing staged is
+    /// lost, and the first query's outcome without the file does not stay.
+    #[test]
+    fn merge_gives_an_unmanaged_file_its_owners_fresh_outcome() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_SET+=X\nFOO=bar\n").unwrap();
+        let files = OptionsFiles::new(tmp.path());
+        let (ports, key) = mk_port(&["X"], &[], vec![], vec![]);
+        let mut s = session_in(ports, tmp.path());
+        assert_eq!(s.state(&s.ports[&key]).unwrap().staged, set(&[]), "queried without the file");
+        let mut seeded = s.ports[&key].clone();
+        seeded.options.effective = set(&["X"]);
+        let mut result = crate::query::scanner::ScanResult::default();
+        result.ports.insert(key.clone(), seeded);
+        s.merge(result, &files);
+        let info = s.ports[&key].clone();
+        let st = s.state(&info).unwrap();
+        assert_eq!((&st.baseline, &st.staged), (&set(&["X"]), &set(&["X"])));
+        assert!(!s.edited(&info) && !s.dirty());
+    }
+
+    /// bsd.options.mk:300-304: under an OPTIONS_OVERRIDE make reads no
+    /// options file, so a file optique cannot manage is not the reason the
+    /// port takes no edit: the report names the override, as the refusal
+    /// does, scope and all.
+    #[test]
+    fn report_prefers_the_override_over_an_unmanaged_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_SET+=A\nFOO=bar\n").unwrap();
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.r#override = Some(set(&["B"]));
+            o.effective = set(&["B"]);
+        }
+        let s = session_in(ports, tmp.path());
+        let info = s.ports[&key].clone();
+        assert!(s.unmanaged(&info).is_some());
+        assert!(s.edit_refusal(&key).unwrap().starts_with("OPTIONS_OVERRIDE"));
+        for r in crate::report::option_reports(&s, &info) {
+            assert_eq!(r.locked_by.as_deref(), Some("make.conf OPTIONS_OVERRIDE"), "{}", r.name);
+            let mc = r.makeconf.as_ref().unwrap();
+            assert_eq!((mc.value, mc.scope), (r.name == "B", "override"), "{}", r.name);
+        }
     }
 
     /// bsd.options.mk:312-409: an UNSET word of any make.conf layer settles

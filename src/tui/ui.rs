@@ -1089,8 +1089,9 @@ fn option_line(
     let locked = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
     let overridden = opts.r#override.as_ref().map(|o| o.contains(opt));
     // Blank for a file optique cannot manage: the layers make dumped after
-    // reading it may hold its own assignments.
-    let unmanaged = app.session.unmanaged(info).is_some();
+    // reading it may hold its own assignments. Not under an override, which
+    // has make read no file at all.
+    let unmanaged = overridden.is_none() && app.session.unmanaged(info).is_some();
     let (mc, mc_style) = match (opts.mc_value(opt).filter(|_| !unmanaged), overridden.filter(|_| !unmanaged)) {
         (Some((v, McLayer::Force | McLayer::With)), _) => (on_off(v), locked),
         (_, Some(v)) => (on_off(v), locked),
@@ -2100,7 +2101,9 @@ fn draw_opt_info(f: &mut Frame, app: &mut App) {
             format!(
                 " · default: {} · source: {}",
                 on_off(opts.defaults.contains(opt)),
-                match app.session.unmanaged(info) {
+                // An override has make read no file: it, not the file, is
+                // the source (bsd.options.mk:300-304).
+                match app.session.unmanaged(info).filter(|_| opts.r#override.is_none()) {
                     Some(u) => format!("make, {} not managed (locked)", u.by),
                     None => provenance_label(opts.provenance(opt, file_state(app, info, opt))).to_string(),
                 }

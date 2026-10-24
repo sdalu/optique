@@ -132,10 +132,14 @@ re-running `make`:
     ([commands](commands.md#sync)): every option of its port reports
     `locked: true` with `locked_by` `"options file"`, `"options.local"` or
     `"make.conf OPTIONS_FILE"`, whichever makes it so, ahead of any other
-    reason, no `makeconf` and a `null` `saved`; `staged` is make's own
-    outcome, `undecided` is empty, `status` is never `stale` or
-    `unconfigured`, `decide` refuses its options, and no command writes or
-    removes the file.
+    reason but an `OPTIONS_OVERRIDE`, under which make reads no file and
+    the port reports as in [^1]; no `makeconf` and a `null` `saved`;
+    `staged` is make's own outcome, `undecided` is empty, `status` is never
+    `stale` or `unconfigured`, `decide` refuses its options, and no command
+    writes or removes the file. A make.conf moving `OPTIONS_FILE` for one
+    flavor reports that flavor so, with its own outcome, and leaves the
+    file it no longer reads to the other flavors, reported and written as
+    usual.
 
 ## Plans for `decide`
 

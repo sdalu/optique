@@ -408,14 +408,35 @@ optique reads an options file as the makefile it is but models only the
 SET and UNSET lists and the bookkeeping `make config` writes
 (`src/optionsfile.rs`). A file with any other line, in it or in its
 `options.local` (another variable, `!=`, a directive, a `$` expansion, a
-line that is no assignment), an `options.local` assigning a list afresh,
-or a make.conf `OPTIONS_FILE` pointing elsewhere is unmanaged
-(`session::unmanaged_by`): never written or removed, by `clean` either,
+line that is no assignment), an `options.local` assigning a list afresh
+or with `?=`, or a make.conf `OPTIONS_FILE` pointing elsewhere is unmanaged
+(`session::unmanaged_file`, `session::moved`): never written or removed, by `clean` either,
 its port shown with make's own `PORT_OPTIONS`, every option locked, and
 no make.conf verdict, since the layers make dumps after reading the file
 may hold its own assignments. Rejected: ignoring such a line with a
 warning, as `!=` once was, which let a write drop it and judged the port
 from a reading make does not share.
+
+An `options.local` `?=` to a list assigns only while the options file
+leaves that list unassigned, and a file optique writes with every option
+on has no UNSET line: `OPTIONS_FILE_UNSET?=C` is inert until such a write,
+then turns C off, so optique would report C on and write a file make
+reads otherwise. So the `?=` leaves the file unmanaged whatever the file
+holds now, its line named. Rejected: counting it as a reset only when it
+assigns against the current file, which judged the write by a reading
+the write itself changes.
+
+`OPTIONS_FILE` is moved per port, a make.conf `.if ${FLAVOR:U} == nox`
+moving it for one flavor. Such a flavor reads none of the shared file, so
+it is left out of that file's readers everywhere (`session::moved`): it
+owns nothing, takes no part in the write, in `-m` or `clean --redundant`
+redundancy or the divergence warning, and shows its own `PORT_OPTIONS`,
+its edits refused. The flavors still reading the file keep it managed.
+Rejected: leaving the whole shared file unmanaged when any flavor moved
+it, which the session judged only for the port and its owner and apply
+for every candidate, so `scan` said unconfigured while `sync` and
+`decide` wrote nothing, and which flavor the list named first decided
+it.
 
 The queries' own command line hides two make.conf settings from them:
 `PORT_DBDIR`, which optique passes there and a build does not, and
@@ -469,7 +490,9 @@ options, so the widest view covers the others' (`editors/emacs@pgtk`'s
 holds `@nox`'s), and an edit to an option only it has reaches the shared
 staged set. Rejected: letting `apply` fall back to the first flavor it
 meets while the session followed the widest, which judged the file from
-one view and wrote it from another.
+one view and wrote it from another. A flavor make.conf moves
+`OPTIONS_FILE` for reads none of the file and is neither owner nor
+writer ("An options file optique cannot model is left to make").
 
 Such an owner writes from its own view but drops nothing it does not see:
 it cannot tell an option it lacks (the default flavor's) from one the port

@@ -17,15 +17,17 @@ pub struct SavedOptionsFile {
     pub assigned: BTreeSet<String>,
     /// Each line optique cannot model, in the order read: a `!=`, a make
     /// directive, a `$` expansion, an assignment to a variable other than
-    /// the SET and UNSET lists and the bookkeeping make config writes. Any
-    /// one makes the file unmanageable (`unmanaged`).
+    /// the SET and UNSET lists and the bookkeeping make config writes, and
+    /// a `?=` to one of those lists in options.local. Any one makes the
+    /// file unmanageable (`unmanaged`).
     pub unmodeled: Vec<Unmodeled>,
     /// The SET and UNSET entries `options.local` contributes, as they stand
     /// once it is read (`with_local`): a `?=` that assigns nothing adds none.
     pub local_set: BTreeSet<String>,
     pub local_unset: BTreeSet<String>,
-    /// The lists `options.local` assigns afresh (`=`, `:=`, a `?=` that
-    /// assigns), dropping what the options file put in them, in order.
+    /// The lists `options.local` assigns afresh (`=`, `:=`), dropping what
+    /// the options file put in them, in order. A `?=` there is in
+    /// `unmodeled`: whether it assigns depends on the options file.
     pub local_resets: Vec<String>,
 }
 
@@ -138,6 +140,19 @@ impl SavedOptionsFile {
                 self.unmodeled.push(Unmodeled { file, line: n, what });
             }
             let Some((name, op, value)) = parsed else { continue };
+            // A `?=` to a list in options.local assigns or not by what the
+            // options file holds: inert while the file assigns the list,
+            // it resets it once a write leaves the list out (`render`
+            // writes no UNSET line when every option is on). No write of
+            // the file can say what make then reads.
+            let list = matches!(name, "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET");
+            if lists_only && list && op == Op::IfUnset {
+                self.unmodeled.push(Unmodeled {
+                    file,
+                    line: n,
+                    what: format!("assigns {name} with ?=, which a write of the options file can turn on or off"),
+                });
+            }
             let read = match name {
                 "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => true,
                 "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST" => !lists_only,
@@ -177,7 +192,8 @@ impl SavedOptionsFile {
                     let mut lists = vec![if set { &mut self.set } else { &mut self.unset }];
                     if lists_only {
                         lists.push(if set { &mut self.local_set } else { &mut self.local_unset });
-                        if !append && !self.local_resets.iter().any(|r| r == name) {
+                        // A `?=` is recorded as unmodeled above, line and all.
+                        if !append && op != Op::IfUnset && !self.local_resets.iter().any(|r| r == name) {
                             self.local_resets.push(name.to_string());
                         }
                     }
@@ -226,7 +242,8 @@ impl SavedOptionsFile {
     /// options.local assigns OPTIONS_FILE_SET or OPTIONS_FILE_UNSET afresh,
     /// so make drops what the file put in that list (bsd.options.mk:341-363)
     /// and no write of the file can say what the port ends up with; or a
-    /// line of either is one optique cannot model (`unmodeled`). Its lines
+    /// line of either is one optique cannot model (`unmodeled`), an
+    /// options.local `?=` to a list among them. Its lines
     /// would be lost to a write, and what make makes of them is not known.
     pub fn unmanaged(&self) -> Option<(&'static str, String)> {
         if !self.local_resets.is_empty() {
@@ -455,11 +472,12 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.unset, words(&["E"]), "the first `?=` assigns, the second not");
         assert!(f.complete.is_empty());
         assert_eq!(places(&f), [("options", 6)]);
-        // options.local carries on: its `?=` meets a variable the file assigned.
+        // options.local carries on: its `?=` meets a variable the file
+        // assigned, and is recorded, as whether it does depends on the file.
         let l = f.with_local("OPTIONS_FILE_SET?=H\nOPTIONS_FILE_UNSET:=I\nOPTIONS_FILE_SET != echo J\n");
         assert_eq!(l.set, words(&["B", "C"]));
         assert_eq!(l.unset, words(&["I"]));
-        assert_eq!(places(&l), [("options", 6), ("options.local", 3)]);
+        assert_eq!(places(&l), [("options", 6), ("options.local", 1), ("options.local", 3)]);
         // With no options file, options.local's `?=` assigns.
         let l = SavedOptionsFile::default().with_local("OPTIONS_FILE_SET?=H\n");
         assert_eq!(l.set, words(&["H"]));
@@ -491,8 +509,7 @@ OPTIONS_FILE_UNSET+=FLITE
     }
 
     /// An options.local that assigns a list afresh drops the file's lines
-    /// for it: `=` and `:=` always, `?=` only when the file left the list
-    /// unassigned; `+=` never.
+    /// for it: `=` and `:=` always; `+=` never.
     #[test]
     fn options_local_resets_are_recorded() {
         let file = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\n");
@@ -500,8 +517,7 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(resets("OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=A\n"), Vec::<String>::new());
         assert_eq!(resets("OPTIONS_FILE_SET=B\n"), ["OPTIONS_FILE_SET"]);
         assert_eq!(resets("OPTIONS_FILE_UNSET:=B\nOPTIONS_FILE_UNSET=C\n"), ["OPTIONS_FILE_UNSET"]);
-        assert_eq!(resets("OPTIONS_FILE_SET?=B\nOPTIONS_FILE_UNSET?=C\n"), ["OPTIONS_FILE_UNSET"]);
-        let f = file.with_local("OPTIONS_FILE_UNSET?=C\nOPTIONS_FILE_SET=B\n");
+        let f = file.with_local("OPTIONS_FILE_UNSET=C\nOPTIONS_FILE_SET=B\n");
         assert_eq!(
             f.unmanaged().map(|(_, why)| why).as_deref(),
             Some(
@@ -510,6 +526,34 @@ OPTIONS_FILE_UNSET+=FLITE
             )
         );
         assert_eq!(SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").unmanaged(), None, "the file's own `=`");
+    }
+
+    /// A `?=` to a list in options.local assigns only while the options
+    /// file leaves that list unassigned, and `render` writes no UNSET line
+    /// when every option is on: the same line is inert before a write and
+    /// turns an option off after it. So it leaves the file unmanaged
+    /// whatever the file holds now, the line named; it is still read as
+    /// make reads it.
+    #[test]
+    fn an_options_local_ifunset_leaves_the_file_unmanaged() {
+        let why = "options.local line 2 assigns OPTIONS_FILE_UNSET with ?=, which a write of the \
+                   options file can turn on or off: optique leaves the options file alone; edit it by hand";
+        let local = "OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET?=C\n";
+        let inert = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=C\n").with_local(local);
+        let all_on = SavedOptionsFile::parse(&render(
+            "port-1.0",
+            &["A".into(), "C".into()],
+            &["A".to_string(), "C".to_string()].into(),
+        ))
+        .with_local(local);
+        for (f, c) in [(&inert, Some(false)), (&all_on, Some(false))] {
+            assert_eq!(f.unmanaged(), Some(("options.local", why.to_string())));
+            assert_eq!(f.value("C"), c);
+            assert!(f.local_resets.is_empty());
+        }
+        assert_eq!(all_on.local_unset, ["C".to_string()].into(), "it assigned");
+        assert!(inert.local_unset.is_empty(), "it did not");
+        assert!(SavedOptionsFile::parse("OPTIONS_FILE_SET?=A\n").unmanaged().is_none(), "the file's own `?=`");
     }
 
     /// Where each unmodeled line is.
