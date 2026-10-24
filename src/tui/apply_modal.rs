@@ -47,8 +47,9 @@ impl ApplyModal {
 /// What an apply did: its result box and the message left once the box
 /// closes both read it.
 pub struct ApplyDone {
-    /// Ports whose options file could not be written, and why. Apply is
-    /// all-or-nothing: with any, nothing was written and nothing removed.
+    /// Ports whose options file could not be written, and why. With any,
+    /// nothing was removed, and nothing written unless a rename failed
+    /// after others had landed (`written`).
     pub failed: Vec<(PortKey, String)>,
     pub written: usize,
     /// Ports in conflict left out (`s`), their edits still staged.
@@ -65,7 +66,7 @@ impl ApplyDone {
     /// a failure's reasons are as `apply` gave them, paths whole.
     pub fn lines(&self, dir: &str) -> Vec<String> {
         if !self.failed.is_empty() {
-            let mut lines = vec![format!("nothing written to {dir}")];
+            let mut lines = vec![self.failed_head(dir)];
             lines.extend(self.failed.iter().map(|(key, msg)| format!("{key}: {msg}")));
             return lines;
         }
@@ -91,13 +92,26 @@ impl ApplyDone {
         lines
     }
 
+    /// A failed apply's first line: nothing written to `dir`, or, when a
+    /// rename failed after others had landed, how many were.
+    pub fn failed_head(&self, dir: &str) -> String {
+        match self.written {
+            0 => format!("nothing written to {dir}"),
+            n => format!("{n} file(s) written to {dir}, then apply stopped"),
+        }
+    }
+
     /// The status-bar message left once the result box closes, and whether
     /// it is an error: what was written, or why nothing was, its paths cut
     /// to their last component.
     pub fn message(&self) -> (String, bool) {
         if let Some((_, reason)) = self.failed.first() {
             let reason = trim_reason(&ui::elide_paths(reason, 0));
-            return (format!("apply failed: nothing written — {reason}"), true);
+            let what = match self.written {
+                0 => "nothing written".to_string(),
+                n => format!("only {n} file(s) written"),
+            };
+            return (format!("apply failed: {what} — {reason}"), true);
         }
         let mut msg = format!("{} file(s) written", self.written);
         if self.removed > 0 {
@@ -153,9 +167,21 @@ pub(super) fn commit_apply(app: &mut App, skip_conflicting: bool) {
         rm_failed: done.removed.failed,
         notes: done.removed.notes,
     };
-    // apply is all-or-nothing: after a failed write nothing is on disk, so
-    // nothing is removed either, and the edits stay staged (and in the
-    // draft) to be applied again.
+    // After a failed write nothing is on disk, so nothing is removed either,
+    // and the edits stay staged (and in the draft) to be applied again. A
+    // rename failing after others landed leaves those on disk (the first
+    // `written`, apply renaming in order): they are read again, the rest
+    // staged as before.
+    if !result.failed.is_empty() && result.written > 0 {
+        let landed: Vec<&str> = planned.writes[..result.written]
+            .iter()
+            .map(|w| w.options_name.as_str())
+            .collect();
+        app.options_files.forget(landed.iter().copied());
+        app.session
+            .reload_saved(&app.options_files, landed.iter().copied());
+        app.blame.clear();
+    }
     if result.failed.is_empty() {
         // Only the files apply touched are read again; the rest are as the
         // scan read them, and a skipped port keeps its edits staged.

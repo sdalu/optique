@@ -141,7 +141,7 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   those that change nothing (`--redundant`, one query per flavor sharing
   a file), never one optique cannot model; `--unused` refuses on any scan
   error but a make.conf `PORT_DBDIR`, and on a listed origin MOVED moves
-  that was not followed. While make.conf sets `OPTIONS_FILE`, `clean::prune`
+  that was not followed. While make.conf sets `OPTIONS_FILE` or `OPTIONS_NAME`, `clean::prune`
   holds every vanished and unused entry; `clean::keep_read` keeps the
   entry a queried port's moved file lies in.
 - **tui** adds a staging copy of the options dir, a refresher thread

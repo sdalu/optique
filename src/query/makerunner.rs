@@ -203,14 +203,15 @@ fn bare_make(identity: Identity, make_conf: Option<&Path>) -> Command {
 /// the environment's `PORT_DBDIR` for a build on the host, goes into make's
 /// environment, so that make.conf's `PORT_DBDIR?=` defers to it as in the
 /// user's own make. `PORT_DBDIR` comes expanded, as a build uses it;
-/// `OPTIONS_FILE` as written, its `${OPTIONS_NAME}` meaning nothing outside
-/// a port. Empty is unset; None when make cannot be asked or fails.
+/// `OPTIONS_FILE` and `OPTIONS_NAME` as written, their `${OPTIONS_NAME}` and
+/// `${PKGORIGIN}` meaning nothing outside a port. Empty is unset; None when
+/// make cannot be asked or fails.
 pub fn options_place(
     identity: Identity,
     make_conf: Option<&Path>,
     dir: &Path,
     port_dbdir: Option<&std::ffi::OsStr>,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     let mut cmd = bare_make(identity, make_conf);
     if let Some(value) = port_dbdir {
         cmd.env("PORT_DBDIR", value);
@@ -226,6 +227,8 @@ pub fn options_place(
             "${PORT_DBDIR}",
             "-V",
             "OPTIONS_FILE",
+            "-V",
+            "OPTIONS_NAME",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -233,7 +236,7 @@ pub fn options_place(
     let out = cmd.output().ok().filter(|o| o.status.success())?;
     let text = String::from_utf8_lossy(&out.stdout);
     let mut lines = text.lines().map(|l| l.trim().to_string());
-    Some((lines.next()?, lines.next()?))
+    Some((lines.next()?, lines.next()?, lines.next()?))
 }
 
 /// The values make gives `vars`, in order, under the make.conf at
@@ -332,13 +335,15 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     // every exit path, including early ?-returns.
     let _active = ActiveMake::register(child.id());
     // The wrapper is far smaller than the pipe buffer, so a plain write
-    // before reading the output cannot deadlock.
-    child
+    // before reading the output cannot deadlock. A failed one (make killed
+    // under it) still waits, so the child is reaped.
+    let fed = child
         .stdin
         .take()
         .expect("stdin piped")
-        .write_all(wrapper::WRAPPER.as_bytes())?;
+        .write_all(wrapper::WRAPPER.as_bytes());
     let out = child.wait_with_output()?;
+    fed?;
 
     let mut text = String::from_utf8_lossy(&out.stderr).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stdout));

@@ -1387,6 +1387,8 @@ key:
 .Ql 2 file(s) written ,
 with how many files were removed and ports skipped, or
 .Ql apply failed: nothing written
+.Pq Ql only 1 file(s) written
+when a rename failed after others had landed
 and the first reason.
 .It Ic i
 In the option pane, show details for the selected option: description, group,
@@ -2266,7 +2268,10 @@ A
 .Pa make.conf
 setting
 .Va OPTIONS_FILE
-.Pq other than bsd.options.mk's own Ql ${PORT_DBDIR}/${OPTIONS_NAME}/options
+.Pq other than bsd.options.mk's own Ql ${PORT_DBDIR}/${OPTIONS_NAME}/options ,
+or
+.Va OPTIONS_NAME
+.Pq other than its Ql ${PKGORIGIN:S/\e//_/} ,
 breaks that mapping: with per-flavor files,
 .Pa editors_emacs-nox
 is the file of
@@ -2275,8 +2280,12 @@ not of a vanished
 .Pa editors/emacs-nox .
 Then no entry is removed as vanished or unused, with one warning:
 .Dl warning: make.conf sets OPTIONS_FILE (value): optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused
+.Po
+.Dq make.conf sets OPTIONS_NAME (value)
+for the other
+.Pc
 and the same, beginning
-.Dq make could not say whether make.conf sets OPTIONS_FILE ,
+.Dq make could not say whether make.conf sets OPTIONS_FILE or OPTIONS_NAME ,
 when
 .Xr make 1
 could not be asked.
@@ -3464,6 +3473,10 @@ A file
 .Cm sync
 cannot write stops it from writing or removing any other: every file is
 written aside first and renamed into place only once all of them were.
+A rename that still fails
+.Pq a directory where the file goes
+stops the pass there: the files renamed before it stay, counted as written,
+and nothing is removed.
 Invalid command line usage exits 2.
 .Sh EXAMPLES
 Review the closure of two ports interactively for the poudriere set

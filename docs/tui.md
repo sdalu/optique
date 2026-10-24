@@ -558,7 +558,8 @@ its reason, the path in it cut to its last components, and the edits
 stay staged. Once the result is closed, the status bar says what the
 apply did until the next key: `2 file(s) written`, followed by
 `, 1 removed` and `, 1 skipped: conflicting` when it did so, or in red
-`apply failed: nothing written — ` and the first reason.
+`apply failed: nothing written — ` and the first reason (`only 1 file(s)
+written` when a rename failed after others had landed).
 
 A port whose staged options still violate their constraints (`✗`) makes
 its file conflicting: the build's `check-config` would fail on it. When

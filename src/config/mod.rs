@@ -123,28 +123,40 @@ pub struct OptionsPlace {
     pub port_dbdir: Option<String>,
     /// As written: its `${OPTIONS_NAME}` is a port's.
     pub options_file: Option<String>,
+    /// As written: its `${PKGORIGIN}` is a port's.
+    pub options_name: Option<String>,
 }
 
 /// bsd.options.mk's own `OPTIONS_FILE?=`: a make.conf spelling it out
 /// moves nothing.
 const DEFAULT_OPTIONS_FILE: &str = "${PORT_DBDIR}/${OPTIONS_NAME}/options";
 
+/// bsd.options.mk's own `OPTIONS_NAME?=`, the name clean maps back to an
+/// origin.
+const DEFAULT_OPTIONS_NAME: &str = "${PKGORIGIN:S/\\//_/}";
+
 /// Why clean cannot tell which options-dir entries make reads, so removes
 /// none as vanished or unused, from `place`: make.conf relocates options
-/// files, or make could not say whether it does. None when the entries are
-/// named as bsd.options.mk names them.
+/// files or renames them (`OPTIONS_NAME`), or make could not say whether it
+/// does. None when the entries are named as bsd.options.mk names them.
 pub fn relocated_options(place: Option<&OptionsPlace>) -> Option<String> {
     let tail = "optique cannot tell which options-dir entries make reads, \
                 so none is removed as vanished or unused";
     match place {
         None => Some(format!(
-            "make could not say whether make.conf sets OPTIONS_FILE: {tail}"
+            "make could not say whether make.conf sets OPTIONS_FILE or OPTIONS_NAME: {tail}"
         )),
         Some(OptionsPlace {
             options_file: Some(file),
             ..
         }) if file != DEFAULT_OPTIONS_FILE => {
             Some(format!("make.conf sets OPTIONS_FILE ({file}): {tail}"))
+        }
+        Some(OptionsPlace {
+            options_name: Some(name),
+            ..
+        }) if name != DEFAULT_OPTIONS_NAME => {
+            Some(format!("make.conf sets OPTIONS_NAME ({name}): {tail}"))
         }
         Some(_) => None,
     }
@@ -657,13 +669,15 @@ fn with_options_place(
         env_port_dbdir.as_deref(),
     );
     let nonempty = |v: String| (!v.is_empty()).then_some(v);
-    settings.options_place = probed.map(|(port_dbdir, options_file)| OptionsPlace {
+    settings.options_place = probed.map(|(port_dbdir, options_file, options_name)| OptionsPlace {
         port_dbdir: nonempty(port_dbdir),
         options_file: nonempty(options_file),
+        options_name: nonempty(options_name),
     });
     if settings.options_place.is_none() {
         settings.notes.push(
-            "make could not say whether make.conf sets PORT_DBDIR or OPTIONS_FILE".to_string(),
+            "make could not say whether make.conf sets PORT_DBDIR, OPTIONS_FILE or OPTIONS_NAME"
+                .to_string(),
         );
     }
     settings
@@ -1318,7 +1332,7 @@ mod tests {
         );
         let set = OptionsPlace {
             port_dbdir: Some(s(&other)),
-            options_file: None,
+            ..OptionsPlace::default()
         };
         assert!(settings(Some(set)).port_dbdir_error().is_some());
     }
@@ -1329,8 +1343,12 @@ mod tests {
     #[test]
     fn relocated_options_follow_the_probe() {
         let file = |f: &str| OptionsPlace {
-            port_dbdir: None,
             options_file: Some(f.to_string()),
+            ..OptionsPlace::default()
+        };
+        let name = |n: &str| OptionsPlace {
+            options_name: Some(n.to_string()),
+            ..OptionsPlace::default()
         };
         assert_eq!(relocated_options(Some(&OptionsPlace::default())), None);
         assert_eq!(relocated_options(Some(&file(DEFAULT_OPTIONS_FILE))), None);
@@ -1344,15 +1362,22 @@ mod tests {
                  optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused"
             )
         );
+        assert!(relocated_options(None).unwrap().starts_with(
+            "make could not say whether make.conf sets OPTIONS_FILE or OPTIONS_NAME: "
+        ));
+        // OPTIONS_NAME renames every entry as surely: www_nginx_mod is no
+        // vanished www/nginx_mod.
+        assert_eq!(relocated_options(Some(&name(DEFAULT_OPTIONS_NAME))), None);
+        let renamed = relocated_options(Some(&name("${PKGORIGIN:S/\\//_/}_${FLAVOR}")));
         assert!(
-            relocated_options(None)
+            renamed
                 .unwrap()
-                .starts_with("make could not say whether make.conf sets OPTIONS_FILE: ")
+                .starts_with("make.conf sets OPTIONS_NAME (${PKGORIGIN:S/\\//_/}_${FLAVOR}): ")
         );
     }
 
     /// The probe reads make.conf outside any port: PORT_DBDIR expanded,
-    /// OPTIONS_FILE as written, empty where unset.
+    /// OPTIONS_FILE and OPTIONS_NAME as written, empty where unset.
     #[test]
     fn options_place_reads_make_conf_alone() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1366,13 +1391,18 @@ mod tests {
                 None,
             )
         };
-        assert_eq!(probe(""), Some((String::new(), String::new())));
-        let moved = "D=/var/db\nPORT_DBDIR=${D}/my\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/x\n";
+        assert_eq!(
+            probe(""),
+            Some((String::new(), String::new(), String::new()))
+        );
+        let moved = "D=/var/db\nPORT_DBDIR=${D}/my\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/x\n\
+                     OPTIONS_NAME=${PKGORIGIN:S/\\//_/}_${FLAVOR}\n";
         assert_eq!(
             probe(moved),
             Some((
                 "/var/db/my".to_string(),
-                "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string()
+                "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string(),
+                "${PKGORIGIN:S/\\//_/}_${FLAVOR}".to_string()
             ))
         );
         assert_eq!(probe(".error broken\n"), None);

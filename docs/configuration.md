@@ -105,7 +105,7 @@ Every query is given the options directory as `PORT_DBDIR` on make's
 command line, where it wins over make.conf; a build is given none. So
 once per run, with the make.conf settled, optique asks make, reading no
 port's Makefile and in the queries' own environment, what that make.conf
-alone sets of `PORT_DBDIR` and `OPTIONS_FILE` (`make -f /dev/null -V
+alone sets of `PORT_DBDIR`, `OPTIONS_FILE` and `OPTIONS_NAME` (`make -f /dev/null -V
 ...`; outside bsd.port.mk nothing else sets them). make runs from a
 port's directory, `ports-mgmt/pkg` (else the tree's top), so that a
 make.conf testing `.CURDIR` (`.if ${.CURDIR:M*/ports/*}`) answers as it
@@ -131,9 +131,10 @@ directory being harmless, only useless. A local build without `-o` takes
 its options directory from that same `PORT_DBDIR`, so it never trips
 this; with `-o` naming another directory it does.
 
-An `OPTIONS_FILE` set there moves options files away from the names
-`clean` maps back to ports, so `clean` removes none as vanished or unused
-([commands.md](commands.md#clean)). Per port, `scan` and `sync` already
+An `OPTIONS_FILE` set there, or an `OPTIONS_NAME` other than
+bsd.options.mk's own `${PKGORIGIN:S/\//_/}`, moves options files away from
+the names `clean` maps back to ports, so `clean` removes none as vanished
+or unused ([commands.md](commands.md#clean)). Per port, `scan` and `sync` already
 see a moved `OPTIONS_FILE` and leave that port to make
 ([commands.md](commands.md#sync)). When make cannot be asked, the banner
 notes it and `clean` acts as if `OPTIONS_FILE` were set.

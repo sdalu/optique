@@ -540,6 +540,64 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
     assert!(!f.file("misc_gone").exists(), "{err}");
 }
 
+/// A make.conf renaming the entries through OPTIONS_NAME rather than
+/// OPTIONS_FILE: `misc_flav-nox` is misc/flav@nox's file all the same, so
+/// plain clean removes no entry as vanished, the stale `misc_gone` included.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_renamed_options_name_keeps_clean_from_removing_entries() {
+    let f = Fixture::new();
+    let conf = "OPTIONS_NAME=${PKGORIGIN:S/\\//_/}${FLAVOR:D-${FLAVOR}}\n";
+    fs::write(&f.make_conf, conf).unwrap();
+    let nox = f
+        .options
+        .join("misc_flav-nox/options")
+        .display()
+        .to_string();
+    let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "OPTIONS_FILE"]);
+    assert_eq!(stdout(&out).trim(), nox);
+    f.write_file(
+        "misc_flav-nox",
+        "_OPTIONS_READ=flav-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_UNSET+=A\n",
+    );
+    f.write_file(
+        "misc_gone",
+        "_OPTIONS_READ=gone-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    );
+    let out = f.run("clean", &[]);
+    let err = stderr(&out);
+    assert!(
+        err.contains(
+            "warning: make.conf sets OPTIONS_NAME (${PKGORIGIN:S/\\//_/}${FLAVOR:D-${FLAVOR}}): "
+        ),
+        "{err}"
+    );
+    assert!(
+        f.file("misc_flav-nox").exists(),
+        "removed the file make reads: {err}"
+    );
+    assert!(
+        f.file("misc_gone").exists(),
+        "removed a vanished entry: {err}"
+    );
+}
+
+/// clean -q drops its banner, as every other command does, and keeps its
+/// warnings.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn clean_quiet_drops_the_banner() {
+    let f = Fixture::new();
+    let out = f.run("clean", &["-n"]);
+    assert!(
+        stderr(&out).contains("optique clean: options dir"),
+        "{}",
+        stderr(&out)
+    );
+    let out = f.run("clean", &["-n", "-q"]);
+    assert!(!stderr(&out).contains("optique clean:"), "{}", stderr(&out));
+}
+
 /// devel/git's Makefile gives every flavor but the default an options file
 /// of its own, `${PORT_DBDIR}/${OPTIONS_NAME}/${FLAVOR}-options`: misc/
 /// flavfile@lite reads misc_flavfile/lite-options. That file is managed like

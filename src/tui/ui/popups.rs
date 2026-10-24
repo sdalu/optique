@@ -31,9 +31,10 @@ pub(super) fn draw_apply_modal(f: &mut Frame, app: &mut App) {
     // Rows of the entries scrolled past (j/k skip whole entries).
     let mut skipped = 0;
     if let Some(done) = modal.done.as_ref().filter(|d| !d.failed.is_empty()) {
-        // Nothing written: the directory once, as the preview gives it,
-        // then each port's reason, its paths cut to fit.
-        let head = |dir: &str| format!("nothing written to {dir}");
+        // Nothing written (or only part, `failed_head`): the directory
+        // once, as the preview gives it, then each port's reason, its paths
+        // cut to fit.
+        let head = |dir: &str| done.failed_head(dir);
         let dir = dir.display().to_string();
         let room = (width as usize).saturating_sub(head("").chars().count());
         lines.push(Line::from(head(&elide_dir(&dir, room))));

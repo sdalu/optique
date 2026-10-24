@@ -633,8 +633,8 @@ fn poudriere_conf_layers(jail: Option<&str>, tree: Option<&str>, set: Option<&st
 }
 
 /// The value a plain shell assignment line gives `name`, if it is one:
-/// `NAME=value`, `export NAME=value`, quoted or not, a trailing ` # comment`
-/// dropped. A commented-out line is no assignment.
+/// `NAME=value`, `export NAME=value`, quoted or not, a trailing comment
+/// dropped ([`comment_start`]). A commented-out line is no assignment.
 fn shell_assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let line = line.trim();
     let line = line
@@ -642,7 +642,7 @@ fn shell_assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
         .map(str::trim_start)
         .unwrap_or(line);
     let value = line.strip_prefix(name)?.strip_prefix('=')?;
-    let value = match value.find(" #") {
+    let value = match comment_start(value) {
         Some(i) => &value[..i],
         None => value,
     }
@@ -653,6 +653,35 @@ fn shell_assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
         .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
         .unwrap_or(value);
     Some(unquoted)
+}
+
+/// Where a trailing comment starts in `value`, as sh reads it: a `#` after
+/// a space or a tab, outside quotes (a `\` in double quotes, or outside
+/// any, escaping the next character).
+fn comment_start(value: &str) -> Option<usize> {
+    let (mut quote, mut escaped, mut blank) = (None, false, false);
+    for (i, c) in value.char_indices() {
+        let literal = escaped;
+        if escaped {
+            escaped = false;
+        } else if quote == Some('\'') {
+            if c == '\'' {
+                quote = None;
+            }
+        } else if c == '\\' {
+            escaped = true;
+        } else if quote == Some('"') {
+            if c == '"' {
+                quote = None;
+            }
+        } else if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if c == '#' && blank {
+            return Some(i);
+        }
+        blank = quote.is_none() && !literal && (c == ' ' || c == '\t');
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1157,6 +1186,17 @@ mod tests {
         );
         assert_eq!(v("NO_PACKAGE_BUILDING_X=yes"), None);
         assert_eq!(v("XNO_PACKAGE_BUILDING=yes"), None);
+        // A tab starts a comment as a space does, as sh reads it.
+        assert_eq!(v("NO_PACKAGE_BUILDING=yes\t# for this box"), Some("yes"));
+        assert_eq!(v("NO_PACKAGE_BUILDING=\t# unset"), Some(""));
+        // Inside quotes, or escaped, a `#` is the value's.
+        assert_eq!(
+            v("NO_PACKAGE_BUILDING=\"/tmp/my cache #1\""),
+            Some("/tmp/my cache #1")
+        );
+        assert_eq!(v("NO_PACKAGE_BUILDING='a # b' # c"), Some("a # b"));
+        assert_eq!(comment_start("a\\ #b"), None, "an escaped blank");
+        assert_eq!(v("NO_PACKAGE_BUILDING=a#b"), Some("a#b"));
     }
 
     /// poudriere's order (include_poudriere_confs): names alone, then pairs,

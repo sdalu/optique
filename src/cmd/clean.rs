@@ -140,15 +140,17 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         _staging,
     } = ctx;
     let paint = stderr_color(cli);
-    eprintln!(
-        "{} options dir {}",
-        tint(paint, ansi::BOLD, "optique clean:"),
-        settings.options_dir.display()
-    );
-    for note in &settings.notes {
-        eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+    if !cli.quiet {
+        eprintln!(
+            "{} options dir {}",
+            tint(paint, ansi::BOLD, "optique clean:"),
+            settings.options_dir.display()
+        );
+        for note in &settings.notes {
+            eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+        }
     }
-    // --unused had run_scan's banner say it already.
+    // Said even under -q, as run_scan does; --unused had it say it already.
     if used.is_none()
         && let Some(e) = settings.port_dbdir_error()
     {
@@ -192,6 +194,8 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             read.entry(entry).or_insert(port);
         }
     }
+    // A held entry the redundancy pass removes after all is not kept.
+    kept_entries.retain(|(name, _)| !removals.iter().any(|r| &r.options_name == name));
     kept_entries.sort();
     if cli.verbose && !args.json {
         for (name, why) in &kept_entries {

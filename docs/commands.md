@@ -232,7 +232,8 @@ removed, whichever option asks; a warning names it as kept.
 
 An entry is mapped back to its port by its name, which make derives from
 `OPTIONS_FILE`. A make.conf setting `OPTIONS_FILE` (to anything but
-bsd.options.mk's own `${PORT_DBDIR}/${OPTIONS_NAME}/options`) breaks the
+bsd.options.mk's own `${PORT_DBDIR}/${OPTIONS_NAME}/options`), or
+`OPTIONS_NAME` (to anything but its `${PKGORIGIN:S/\//_/}`), breaks the
 mapping: with per-flavor files, `editors_emacs-nox` is the file of
 `editors/emacs@nox`, not of a vanished `editors/emacs-nox`. Then no entry
 is removed as vanished or unused, with one warning:
@@ -241,8 +242,9 @@ is removed as vanished or unused, with one warning:
 warning: make.conf sets OPTIONS_FILE (<value>): optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused
 ```
 
-and the same, beginning `make could not say whether make.conf sets
-OPTIONS_FILE`, when make could not be asked. `--redundant` still judges
+(`make.conf sets OPTIONS_NAME (<value>)` for the other), and the same,
+beginning `make could not say whether make.conf sets OPTIONS_FILE or
+OPTIONS_NAME`, when make could not be asked. `--redundant` still judges
 the entries of live ports optique manages, each for the flavors reading
 it: a flavor whose `OPTIONS_FILE` moved reads none of it and is left out,
 and an entry no flavor reads is kept. Under `--unused` or `--redundant`, an entry the moved
@@ -337,7 +339,10 @@ does not count, nor does any blacklisted port; under `-s`, a file synth
 would refuse counts whatever the port's status. Per-file failures during `sync` or `clean` are reported one by
 one and counted in the summary without failing the run. A file `sync`
 cannot write stops it from writing or removing any other: every file is
-written aside first and renamed into place only once all of them were.
+written aside first and renamed into place only once all of them were. A
+rename that still fails (a directory where the file goes) stops the pass
+there: the files renamed before it stay, counted as written, and nothing
+is removed.
 
 For `scan` and `decide`, the exit status answers "is there anything left
 to do" rather than plain success or failure, which is what makes `scan` a

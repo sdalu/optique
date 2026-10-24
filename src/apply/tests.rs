@@ -1088,6 +1088,40 @@ fn decide_write_failure_writes_nothing() {
     );
 }
 
+/// A rename that fails (a directory where the file goes) stops the pass:
+/// the file renamed before it stays and is counted, the one after is not
+/// renamed, and no temporary file is left behind.
+#[test]
+fn rename_failure_stops_the_pass_and_counts_what_landed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = |name: &str| PendingWrite {
+        key: PortKey::parse(&name.replace('_', "/")).unwrap(),
+        options_name: name.into(),
+        path: tmp.path().join(name).join("options"),
+        old: None,
+        enabled: BTreeSet::new(),
+        complete: vec![],
+        kept: vec![],
+        content: "x\n".into(),
+    };
+    fs::create_dir_all(tmp.path().join("textproc_expat2/options")).unwrap();
+    let summary = apply(&[w("sysutils_tmux"), w("textproc_expat2"), w("www_nginx")]);
+    assert_eq!(summary.written, 1);
+    let failed: Vec<String> = summary.failed.iter().map(|(k, _)| k.to_string()).collect();
+    assert_eq!(failed, ["textproc/expat2", "www/nginx"]);
+    assert!(tmp.path().join("sysutils_tmux/options").is_file());
+    assert!(
+        !tmp.path().join("www_nginx/options").exists(),
+        "not renamed"
+    );
+    for name in ["textproc_expat2", "www_nginx"] {
+        assert!(
+            !tmp.path().join(name).join(".options.optique.tmp").exists(),
+            "temp removed"
+        );
+    }
+}
+
 #[test]
 fn apply_writes_atomically() {
     let tmp = tempfile::tempdir().unwrap();

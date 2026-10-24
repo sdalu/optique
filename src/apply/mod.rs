@@ -586,7 +586,9 @@ pub struct ApplySummary {
 /// temporary file is written (tmp + fsync) first, and only once all of them
 /// are does any rename into place. When one cannot be written, the temporary
 /// files already written are removed and nothing is renamed, so a failed pass
-/// leaves the options dir as it was.
+/// leaves the options dir as it was. A rename that fails (its place taken by
+/// a directory) stops the pass there: the files renamed before it stay, as
+/// `written` counts, and the rest are discarded, each failed.
 pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
     let mut summary = ApplySummary {
         written: 0,
@@ -605,7 +607,8 @@ pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
         }
         return summary;
     }
-    for (w, s) in staged {
+    let mut staged = staged.into_iter();
+    for (w, s) in staged.by_ref() {
         match fs::rename(&s.tmp, &w.path) {
             Ok(()) => summary.written += 1,
             Err(e) => {
@@ -614,8 +617,16 @@ pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
                     format!("renaming into place: {}: {e}", w.path.display()),
                 ));
                 s.discard();
+                break;
             }
         }
+    }
+    for (w, s) in staged {
+        summary.failed.push((
+            w.key.clone(),
+            "not renamed into place: an earlier rename failed".to_string(),
+        ));
+        s.discard();
     }
     summary
 }
