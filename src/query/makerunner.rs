@@ -505,7 +505,7 @@ fn descendants(roots: &[u32], table: &[(u32, u32)]) -> Vec<u32> {
 #[cfg(test)]
 pub(crate) fn make_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -709,7 +709,7 @@ mod tests {
         let parent = u32::try_from(unsafe { libc::getppid() }).unwrap();
         assert!(table.contains(&(me, parent)), "{me}/{parent} not in {} records", table.len());
         assert!(table.len() > 10, "a real table: {} records", table.len());
-        let child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        let child = Command::new("sleep").arg("5").spawn().unwrap();
         let mine = descendants(&[me], &process_table());
         let mut child = child;
         let _ = child.kill();
@@ -733,7 +733,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let pattern = format!("^sleep {}$", nap.replace('.', "\\."));
         let sleeping = || {
-            std::process::Command::new("pgrep")
+            Command::new("pgrep")
                 .args(["-f", &pattern])
                 .output()
                 .map(|o| !o.stdout.is_empty())

@@ -317,7 +317,7 @@ fn plain_name(name: &str) -> bool {
 fn unmodeled_line(line: &str, parsed: Option<(&str, Op, &str)>) -> Option<String> {
     let Some((name, op, value)) = parsed else {
         return Some(if let Some(rest) = line.strip_prefix('.') {
-            let word: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            let word: String = rest.trim_start().chars().take_while(char::is_ascii_alphanumeric).collect();
             format!("is a make directive (.{word})")
         } else if line.contains('$') {
             "expands a variable ($)".to_string()
@@ -437,7 +437,7 @@ OPTIONS_FILE_UNSET+=FLITE
              _FILE_COMPLETE_OPTIONS_LIST = A B\n_FILE_COMPLETE_OPTIONS_LIST+=X\n\
              # OPTIONS_FILE_SET+=W\nOPTIONS_FILE_UNSET+=Y # not V\n",
         );
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         assert_eq!(f.set, words(&["X", "Y"]));
         assert_eq!(f.unset, words(&["C", "D", "Y"]));
         assert_eq!(f.complete, ["A", "B", "X"]);
@@ -467,7 +467,7 @@ OPTIONS_FILE_UNSET+=FLITE
              OPTIONS_FILE_UNSET ?= E\nOPTIONS_FILE_UNSET?=F\n\
              _FILE_COMPLETE_OPTIONS_LIST!=echo G\n",
         );
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         assert_eq!(f.set, words(&["B", "C"]), "`:=` resets, `?=` after it assigns nothing");
         assert_eq!(f.unset, words(&["E"]), "the first `?=` assigns, the second not");
         assert!(f.complete.is_empty());
@@ -504,7 +504,7 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.local_set, ["C".to_string()].into());
         let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\n")
             .with_local("OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n");
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         assert_eq!((f.local_set, f.local_unset), (words(&["B"]), words(&["A"])));
     }
 
@@ -645,7 +645,7 @@ OPTIONS_FILE_UNSET+=FLITE
              OPTIONS_FILE_SET+=E\\\n   F\\\n\nOPTIONS_FILE_SET+=G\nOPTIONS_FILE_UNSET+=H\\\\\n\
              OPTIONS_FILE_UNSET+=I\n_FILE_COMPLETE_OPTIONS_LIST!=echo \\\n J\n",
         );
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         assert_eq!(f.set, words(&["A", "B", "E", "F", "G"]));
         assert_eq!(f.unset, words(&["C", "H\\\\", "I"]));
         assert_eq!(places(&f), [("options", 11)]);

@@ -125,7 +125,7 @@ fn about_lines_keeps_bullets_apart() {
     let mut info = PortInfo::stub("cat/port");
     info.about.comment = "A port".into();
     let text = "Use it to:\n- avoid this\n- avoid that, a long\n  continuation\n";
-    let shown: Vec<String> = about_lines(&info, text, 40).iter().map(|l| l.to_string()).collect();
+    let shown: Vec<String> = about_lines(&info, text, 40).iter().map(ToString::to_string).collect();
     assert_eq!(shown, ["A port", "Use it to:", "- avoid this", "- avoid that, a long continuation"]);
 }
 

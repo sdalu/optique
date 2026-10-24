@@ -6,8 +6,8 @@ fn mk_info(complete: &[&str], effective: &[&str]) -> PortInfo {
         pkgname: "port-1.0".into(),
         options_name: "cat_port".into(),
         options: PortOptions {
-            complete: complete.iter().map(|s| s.to_string()).collect(),
-            effective: effective.iter().map(|s| s.to_string()).collect(),
+            complete: complete.iter().map(ToString::to_string).collect(),
+            effective: effective.iter().map(ToString::to_string).collect(),
             ..Default::default()
         },
         ..PortInfo::stub("cat/port")
@@ -24,7 +24,7 @@ fn sync_keeps_choices_and_adopts_new() {
     );
     let enabled = sync_enabled_set(&info, Some(&saved));
     // A kept on, B kept off (even though effective would differ), C adopted, D dropped.
-    assert_eq!(enabled, ["A", "C"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(enabled, ["A", "C"].iter().map(ToString::to_string).collect());
 }
 
 /// A file written before `_FILE_COMPLETE_OPTIONS_LIST` existed knows
@@ -34,7 +34,7 @@ fn sync_keeps_choices_a_file_knows_only_from_its_set_lines() {
     let info = mk_info(&["A", "B"], &["B"]);
     let saved = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
     let enabled = sync_enabled_set(&info, Some(&saved));
-    assert_eq!(enabled, ["A"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(enabled, ["A"].iter().map(ToString::to_string).collect());
 }
 
 /// bsd.options.mk applies OPTIONS_FILE_SET then OPTIONS_FILE_UNSET, so
@@ -52,7 +52,7 @@ fn sync_lets_unset_win_and_leaves_complete_only_options_to_make() {
          OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n",
     );
     let enabled = sync_enabled_set(&info, Some(&saved));
-    assert_eq!(enabled, ["B", "C"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(enabled, ["B", "C"].iter().map(ToString::to_string).collect());
     // Nobody decided C or D: the file says nothing about them.
     assert_eq!(crate::session::undecided_options(&info, Some(&saved), false), ["C", "D"]);
 }
@@ -63,8 +63,8 @@ fn pending(old: Option<&str>, complete: &[&str], enabled: &[&str]) -> PendingWri
         options_name: "cat_port".into(),
         path: PathBuf::from("/nonexistent/cat_port/options"),
         old: old.map(SavedOptionsFile::parse),
-        enabled: enabled.iter().map(|s| s.to_string()).collect(),
-        complete: complete.iter().map(|s| s.to_string()).collect(),
+        enabled: enabled.iter().map(ToString::to_string).collect(),
+        complete: complete.iter().map(ToString::to_string).collect(),
         kept: vec![],
         content: String::new(),
     }
@@ -121,7 +121,7 @@ fn a_dropped_option_is_not_turned_off() {
 fn unconfigured_takes_effective() {
     let info = mk_info(&["A", "B"], &["B"]);
     let enabled = sync_enabled_set(&info, None);
-    assert_eq!(enabled, ["B"].iter().map(|s| s.to_string()).collect());
+    assert_eq!(enabled, ["B"].iter().map(ToString::to_string).collect());
 }
 
 /// Same option list, different choices: the file is rewritten.
@@ -235,7 +235,7 @@ fn options_local_is_read_with_the_file() {
 fn an_options_local_set_glob_leaves_a_written_file_up_to_date() {
     let tmp = tempfile::tempdir().unwrap();
     let mut info = mk_info(&["A", "A2", "B", "C"], &["A", "A2", "B"]);
-    info.options.defaults = ["A", "A2", "B"].iter().map(|o| o.to_string()).collect();
+    info.options.defaults = ["A", "A2", "B"].iter().map(ToString::to_string).collect();
     fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
     fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=C*\n").unwrap();
     let enabled: BTreeSet<String> = info.options.defaults.iter().cloned().collect();
@@ -322,7 +322,7 @@ fn plan_reads_the_file_as_make_does() {
     fs::create_dir_all(&dir).unwrap();
     let plan = |file: &str, enabled: &[&str]| {
         fs::write(dir.join("options"), file).unwrap();
-        let enabled: BTreeSet<String> = enabled.iter().map(|s| s.to_string()).collect();
+        let enabled: BTreeSet<String> = enabled.iter().map(ToString::to_string).collect();
         let files = OptionsFiles::new(tmp.path());
         plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false)
     };
@@ -377,7 +377,7 @@ fn plan_writes_an_option_implied_only_by_an_unset_default() {
     )
     .unwrap();
     let plan = |enabled: &[&str]| {
-        let enabled: BTreeSet<String> = enabled.iter().map(|s| s.to_string()).collect();
+        let enabled: BTreeSet<String> = enabled.iter().map(ToString::to_string).collect();
         let files = OptionsFiles::new(tmp.path());
         plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false)
     };
@@ -475,7 +475,7 @@ fn a_non_default_flavor_keeps_the_options_it_lacks() {
          OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\nOPTIONS_FILE_SET+=X11\nOPTIONS_FILE_UNSET+=GTK\n",
     )
     .unwrap();
-    let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+    let set = |opts: &[&str]| opts.iter().map(ToString::to_string).collect::<BTreeSet<String>>();
     let plan = |enabled: BTreeSet<String>| {
         plan_writes(std::iter::once((&nox.key, &nox, enabled)), &OptionsFiles::new(tmp.path()), false)
     };
@@ -505,7 +505,7 @@ fn minimal_mode_judges_the_file_it_would_write() {
     let mut info = mk_info(&["A", "B"], &["A", "S"]);
     info.options.defaults = ["A".to_string()].into();
     info.options.slave = ["S".to_string()].into();
-    let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+    let set = |opts: &[&str]| opts.iter().map(ToString::to_string).collect::<BTreeSet<String>>();
     let plan = |enabled: BTreeSet<String>| {
         plan_writes(std::iter::once((&info.key, &info, enabled)), &OptionsFiles::new(tmp.path()), true)
     };
@@ -566,7 +566,7 @@ fn two_lone_flavors_each_write_what_they_have() {
         "_FILE_COMPLETE_OPTIONS_LIST=A Y\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=Y\n",
     )
     .unwrap();
-    let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+    let set = |opts: &[&str]| opts.iter().map(ToString::to_string).collect::<BTreeSet<String>>();
     let p = plan_writes(
         [(&nox.key, &nox, set(&["A"])), (&pgtk.key, &pgtk, set(&["A", "Y"]))].into_iter(),
         &OptionsFiles::new(tmp.path()),
@@ -592,7 +592,7 @@ fn without_the_default_flavor_the_widest_view_writes_the_file() {
         i.options_name = "editors_emacs".into();
         i
     };
-    let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+    let set = |opts: &[&str]| opts.iter().map(ToString::to_string).collect::<BTreeSet<String>>();
     // @nox first and narrower, @pgtk second and wider; they disagree on B.
     let nox = flavor("nox", &["A", "B"]);
     let pgtk = flavor("pgtk", &["A", "B", "Y"]);
@@ -638,7 +638,7 @@ fn describe_covers_all_change_kinds() {
     let w = PendingWrite {
         key: PortKey::parse("cat/port").unwrap(),
         options_name: "cat_port".into(),
-        path: std::path::PathBuf::from("/nonexistent"),
+        path: PathBuf::from("/nonexistent"),
         old: Some(old),
         // A turned off, B turned on, NEWOPT adopted on, GONE dropped.
         enabled: ["B".to_string(), "NEWOPT".to_string()].into(),
@@ -667,10 +667,10 @@ fn describe_new_file_counts_every_option() {
 #[test]
 fn stale_removal_spares_files_shared_with_optioned_flavors() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("devel_glib20")).unwrap();
-    std::fs::write(tmp.path().join("devel_glib20/options"), "# x\n").unwrap();
-    std::fs::create_dir_all(tmp.path().join("print_indexinfo")).unwrap();
-    std::fs::write(tmp.path().join("print_indexinfo/options"), "# x\n").unwrap();
+    fs::create_dir_all(tmp.path().join("devel_glib20")).unwrap();
+    fs::write(tmp.path().join("devel_glib20/options"), "# x\n").unwrap();
+    fs::create_dir_all(tmp.path().join("print_indexinfo")).unwrap();
+    fs::write(tmp.path().join("print_indexinfo/options"), "# x\n").unwrap();
 
     // glib20@default has options; glib20@bootstrap shares the file and
     // has none. indexinfo has none at all.
@@ -703,8 +703,8 @@ fn stale_removal_spares_files_shared_with_optioned_flavors() {
 #[test]
 fn stale_removal_needs_the_default_flavors_view() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("devel_gi")).unwrap();
-    std::fs::write(tmp.path().join("devel_gi/options"), "# x\n").unwrap();
+    fs::create_dir_all(tmp.path().join("devel_gi")).unwrap();
+    fs::write(tmp.path().join("devel_gi/options"), "# x\n").unwrap();
     let flavored = |flavor: &str| {
         let mut i = mk_info(&[], &[]);
         i.key = PortKey::parse(&format!("devel/gi@{flavor}")).unwrap();
@@ -844,7 +844,7 @@ fn apply_reports_failures() {
         key: PortKey::parse("cat/port").unwrap(),
         options_name: "cat_port".into(),
         // Parent is a file, not a dir -> create_dir_all fails.
-        path: std::path::PathBuf::from("/dev/null/cat_port/options"),
+        path: PathBuf::from("/dev/null/cat_port/options"),
         old: None,
         enabled: BTreeSet::new(),
         complete: vec![],
@@ -915,7 +915,7 @@ fn a_plan_without_skipped_files_keeps_the_others() {
         fs::create_dir_all(tmp.path().join(name)).unwrap();
         fs::write(tmp.path().join(name).join("options"), "# x\n").unwrap();
     }
-    let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+    let set = |opts: &[&str]| opts.iter().map(ToString::to_string).collect::<BTreeSet<String>>();
     let enabled = [set(&["A", "B"]), set(&["A", "B"]), set(&["A"])];
     let plan = || {
         plan_writes(

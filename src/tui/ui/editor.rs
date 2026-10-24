@@ -149,7 +149,7 @@ fn editor_footer(
     origin: &str,
     room: usize,
 ) -> (Option<String>, Option<String>) {
-    let label = crate::config::overlay_of(&app.overlays, origin).map(|o| o.label());
+    let label = crate::config::overlay_of(&app.overlays, origin).map(crate::config::Overlay::label);
     let changes = app
         .session
         .state(info)

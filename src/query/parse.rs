@@ -321,7 +321,7 @@ mod tests {
         let got = parse_subpackage_deps(
             "a>0:devel/a~lib b>0:devel/b@fl~lib c>0:devel/c c.so:devel/c~lib d:devel/d~x d.so:devel/d",
         );
-        let got: Vec<String> = got.iter().map(|k| k.to_string()).collect();
+        let got: Vec<String> = got.iter().map(ToString::to_string).collect();
         assert_eq!(got, ["devel/a", "devel/d"]);
     }
 
@@ -344,7 +344,7 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let tmp = tempfile::tempdir().unwrap();
         let present = tmp.path().join("pkg-help");
         std::fs::write(&present, "notes\n").unwrap();
-        let dump = |path: &std::path::Path| {
+        let dump = |path: &Path| {
             format!(
                 "make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0\n\
                  make: /dev/stdin:3: OPTIQUE|PKGHELP|{}\n",
@@ -367,7 +367,7 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let tmp = tempfile::tempdir().unwrap();
         let present = tmp.path().join("pkg-descr");
         std::fs::write(&present, "What foo is.\n").unwrap();
-        let dump = |path: &std::path::Path| {
+        let dump = |path: &Path| {
             format!(
                 "make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0\n\
                  make: /dev/stdin:3: OPTIQUE|COMMENT|Does foo things \n\
@@ -415,7 +415,7 @@ OPTIQUE|SINGLE|ONE|C D
 OPTIQUE|RADIO|MAYBE|E F
 OPTIQUE|MULTI|SOME|G H
 ";
-        let set = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let set = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         let key = PortKey::parse("cat/foo").unwrap();
         let info = parse_dump(&key, text).unwrap();
         let o = &info.options;

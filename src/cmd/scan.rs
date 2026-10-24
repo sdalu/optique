@@ -18,7 +18,7 @@ use super::{run_scan, RootSet};
 /// open (`mc_covered` false). Blacklisted ports never do — they are never
 /// built here.
 fn needs_attention(
-    status: &session::UiStatus,
+    status: &UiStatus,
     blacklisted: bool,
     mc_covered: bool,
     synth_refuses: bool,
@@ -40,7 +40,7 @@ fn needs_attention(
 /// and make.conf the decision and they leave nothing open for this
 /// unconfigured or stale port. Rows sort on it, so the ones shown as
 /// problems come first.
-fn shown_ok(status: &session::UiStatus, minimal: bool, covered: bool) -> bool {
+fn shown_ok(status: &UiStatus, minimal: bool, covered: bool) -> bool {
     match status {
         UiStatus::Ok => true,
         UiStatus::Unconfigured | UiStatus::Stale => minimal && covered,
@@ -206,8 +206,8 @@ pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<
             loops: dep_loops
                 .iter()
                 .map(|dl| report::LoopReport {
-                    ports: dl.members.iter().map(|k| k.to_string()).collect(),
-                    cycle: dl.cycle.iter().map(|k| k.to_string()).collect(),
+                    ports: dl.members.iter().map(ToString::to_string).collect(),
+                    cycle: dl.cycle.iter().map(ToString::to_string).collect(),
                     blacklisted: loop_blacklisted(dl),
                 })
                 .collect(),

@@ -26,7 +26,7 @@ fn flav_ports(f: &Fixture, args: &[&str]) -> BTreeSet<String> {
 }
 
 fn set(keys: &[&str]) -> BTreeSet<String> {
-    keys.iter().map(|k| k.to_string()).collect()
+    keys.iter().map(ToString::to_string).collect()
 }
 
 /// `origin@all` roots every flavor of the port, `origin@-` its default

@@ -100,7 +100,7 @@ mod tests {
         let files = OptionsFiles::new(&real);
         let names: Vec<String> = ["cat_odd", "cat_plain", "cat_absent", "cat_local"]
             .iter()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .collect();
         // What the scan did: hash every file for the cache.
         let both = |f: &OptionsFiles, n: &String| (f.hash(n), f.local_hash(n));

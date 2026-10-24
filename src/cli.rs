@@ -598,7 +598,7 @@ mod tests {
                 a.get_long().into_iter().chain(aliases).map(|l| format!("--{l}")).collect::<Vec<_>>()
             })
             .collect();
-        assert_eq!(longs, VALUE_LONGS.iter().map(|l| l.to_string()).collect());
+        assert_eq!(longs, VALUE_LONGS.iter().map(ToString::to_string).collect());
         let mut subs: Vec<&str> = root.get_subcommands().map(clap::Command::get_name).collect();
         subs.push("help");
         subs.sort_unstable();

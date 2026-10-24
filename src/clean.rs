@@ -35,7 +35,7 @@ pub fn origin_from_options_name(name: &str) -> Option<String> {
 pub fn classify_entries(
     options_dir: &Path,
     portsdir: &Path,
-    overlays: &[std::path::PathBuf],
+    overlays: &[PathBuf],
     moved: &Moved,
 ) -> (Vec<Removal>, Vec<LiveEntry>, Vec<String>) {
     // A port lives in the main tree or any overlay; only absent from all of
@@ -293,14 +293,14 @@ mod tests {
         let portsdir = tmp.path().join("ports");
         let optdir = tmp.path().join("options");
         // Live port: cat/alive.
-        std::fs::create_dir_all(portsdir.join("cat/alive")).unwrap();
-        std::fs::write(portsdir.join("cat/alive/Makefile"), "# port\n").unwrap();
+        fs::create_dir_all(portsdir.join("cat/alive")).unwrap();
+        fs::write(portsdir.join("cat/alive/Makefile"), "# port\n").unwrap();
         for name in ["cat_alive", "cat_gone", "cat_plain", "cat_renamed", "weird"] {
-            std::fs::create_dir_all(optdir.join(name)).unwrap();
-            std::fs::write(optdir.join(name).join("options"), "x\n").unwrap();
+            fs::create_dir_all(optdir.join(name)).unwrap();
+            fs::write(optdir.join(name).join("options"), "x\n").unwrap();
         }
         // A dir without an options file must be ignored entirely.
-        std::fs::create_dir_all(optdir.join("cat_emptydir")).unwrap();
+        fs::create_dir_all(optdir.join("cat_emptydir")).unwrap();
 
         let moved = Moved::parse(
             "cat/gone||2026-01-01|expired\ncat/plain||2026-01-01|\n\
@@ -321,8 +321,8 @@ mod tests {
 
         // cat/plain lives in an overlay: not vanished.
         let overlay = tmp.path().join("overlay");
-        std::fs::create_dir_all(overlay.join("cat/plain")).unwrap();
-        std::fs::write(overlay.join("cat/plain/Makefile"), "# port\n").unwrap();
+        fs::create_dir_all(overlay.join("cat/plain")).unwrap();
+        fs::write(overlay.join("cat/plain/Makefile"), "# port\n").unwrap();
         let (removals, live, _) = classify_entries(&optdir, &portsdir, &[overlay], &moved);
         let live: Vec<String> = live.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(live, ["cat/alive", "cat/plain"]);
@@ -406,15 +406,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("cat_port");
-        std::fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).unwrap();
         let file = dir.join("options");
-        std::fs::write(&file, "OPTIONS_FILE_SET+=A\n").unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let unreadable = std::fs::read(&file).is_err(); // root reads anyway
+        fs::write(&file, "OPTIONS_FILE_SET+=A\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = fs::read(&file).is_err(); // root reads anyway
         let removal =
             Removal { options_name: "cat_port".into(), dir: dir.clone(), reason: "test".into() };
         let result = remove_entry(&removal);
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).ok();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).ok();
         if unreadable {
             let err = result.unwrap_err().to_string();
             assert!(err.contains("left in place"), "{err}");

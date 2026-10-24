@@ -72,12 +72,12 @@ impl PendingWrite {
             turned_on: now_known
                 .iter()
                 .filter(|o| old.decides(o) && cur.contains(**o) && !was_on(o))
-                .map(|o| o.to_string())
+                .map(ToString::to_string)
                 .collect(),
             turned_off: now_known
                 .iter()
                 .filter(|o| old.decides(o) && was_on(o) && !cur.contains(**o))
-                .map(|o| o.to_string())
+                .map(ToString::to_string)
                 .collect(),
             // Kept in the port's own option order, like the file itself.
             adopted: self
@@ -92,7 +92,7 @@ impl PendingWrite {
                 .iter()
                 .filter(|e| !now_known.iter().any(|c| str_match(c, e)))
                 .filter(|e| !self.kept.iter().any(|k| k == *e))
-                .map(|e| e.to_string())
+                .map(ToString::to_string)
                 .collect(),
         }
     }

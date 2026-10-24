@@ -264,11 +264,11 @@ mod tests {
     ) -> crate::model::port::PortInfo {
         use crate::model::options::PortOptions;
         let effective: std::collections::BTreeSet<String> =
-            defaults.iter().map(|s| s.to_string()).collect();
+            defaults.iter().map(ToString::to_string).collect();
         crate::model::port::PortInfo {
             options: PortOptions {
-                complete: complete.iter().map(|s| s.to_string()).collect(),
-                defaults: defaults.iter().map(|s| s.to_string()).collect(),
+                complete: complete.iter().map(ToString::to_string).collect(),
+                defaults: defaults.iter().map(ToString::to_string).collect(),
                 effective,
                 defs: defs.iter().map(|(n, d)| (n.to_string(), d.clone())).collect(),
                 ..Default::default()
@@ -281,7 +281,7 @@ mod tests {
     /// starts unconfigured and staged at its defaults).
     fn session(ports: Vec<crate::model::port::PortInfo>) -> (Session, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let map: std::collections::BTreeMap<_, _> =
+        let map: BTreeMap<_, _> =
             ports.into_iter().map(|i| (i.canonical.clone(), i)).collect();
         let roots: Vec<PortKey> = map.keys().cloned().collect();
         let files = crate::optfiles::OptionsFiles::new(tmp.path());

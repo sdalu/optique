@@ -235,7 +235,7 @@ mod tests {
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let roots = vec![PortKey::parse("cat/old").unwrap()];
         let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
-        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/old"]);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
     }
@@ -374,7 +374,7 @@ mod tests {
             let roots = [PortKey::parse("cat/root").unwrap()];
             let r = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &Moved::parse(""), &bl, |_| {});
             assert!(r.errors.is_empty(), "{:?}", r.errors);
-            (r.queried, r.ports.keys().map(|k| k.to_string()).collect::<Vec<_>>())
+            (r.queried, r.ports.keys().map(ToString::to_string).collect::<Vec<_>>())
         };
         assert_eq!(walk(""), (3, vec!["cat/leaf".into(), "cat/mid".into(), "cat/root".into()]));
         assert_eq!(walk("cat/root\n"), (1, vec!["cat/root".to_string()]));
@@ -452,7 +452,7 @@ mod tests {
                 "cat/a: depends on nonexistent origin cat/never",
             ]
         );
-        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/a", "cat/b"], "cat/new is not queried through cat/old");
         let old = PortKey::parse("cat/old").unwrap();
         assert_eq!(crate::deps::resolve(&result.ports, &result.aliases, &old), None);
@@ -502,7 +502,7 @@ mod tests {
         let moved = Moved::parse("cat/gone|cat/dep|2026-01-01|renamed\n");
         let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &bl, |_| {});
         assert!(result.errors.is_empty(), "{:?}", result.errors);
-        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/dep", "cat/ignored", "cat/listed", "cat/tested"]);
         assert!(result.ports[&PortKey::parse("cat/tested").unwrap()].deps[0].test_only);
     }
@@ -546,7 +546,7 @@ mod tests {
                 "cat/a: depends on nonexistent origin cat/old (moved to cat/new@py311)",
             ]
         );
-        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/a", "cat/new"]);
     }
 

@@ -13,8 +13,8 @@ fn info(origin: &str) -> PortInfo {
 fn lookups_and_inserts_share_one_read_per_file() {
     let tmp = tempfile::tempdir().unwrap();
     let dbdir = tmp.path().join("db");
-    std::fs::create_dir_all(dbdir.join("cat_port")).unwrap();
-    std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+    fs::create_dir_all(dbdir.join("cat_port")).unwrap();
+    fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
     let files = OptionsFiles::new(&dbdir);
 
     let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
@@ -35,8 +35,8 @@ fn lookups_and_inserts_share_one_read_per_file() {
 fn roundtrip_and_options_file_invalidation() {
     let tmp = tempfile::tempdir().unwrap();
     let dbdir = tmp.path().join("db");
-    std::fs::create_dir_all(dbdir.join("cat_port")).unwrap();
-    std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+    fs::create_dir_all(dbdir.join("cat_port")).unwrap();
+    fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
 
     let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
     let i = info("cat/port");
@@ -45,10 +45,10 @@ fn roundtrip_and_options_file_invalidation() {
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
 
     // Changing the options file invalidates the entry.
-    std::fs::write(dbdir.join("cat_port/options"), "v2\n").unwrap();
+    fs::write(dbdir.join("cat_port/options"), "v2\n").unwrap();
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
     // Restoring the exact content revalidates it.
-    std::fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
+    fs::write(dbdir.join("cat_port/options"), "v1\n").unwrap();
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
 }
 
@@ -56,7 +56,7 @@ fn roundtrip_and_options_file_invalidation() {
 fn persists_across_reopen_same_generation_only() {
     let tmp = tempfile::tempdir().unwrap();
     let dbdir = tmp.path().join("db");
-    std::fs::create_dir_all(&dbdir).unwrap();
+    fs::create_dir_all(&dbdir).unwrap();
     let cache_dir = tmp.path().join("cache");
 
     let mut c = Cache::open(&cache_dir, "treeA", "confA");
@@ -81,16 +81,16 @@ fn disabled_never_stores() {
 fn prune_keeps_at_most_two_generations() {
     let tmp = tempfile::tempdir().unwrap();
     let cache_dir = tmp.path().join("cache");
-    std::fs::create_dir_all(&cache_dir).unwrap();
+    fs::create_dir_all(&cache_dir).unwrap();
     for n in [
         format!("v{SCHEMA}-old1-a.jsonl"),
         format!("v{SCHEMA}-old2-b.jsonl"),
         format!("v{SCHEMA}-old3-c.jsonl"),
     ] {
-        std::fs::write(cache_dir.join(n), "\n").unwrap();
+        fs::write(cache_dir.join(n), "\n").unwrap();
     }
     let _c = Cache::open(&cache_dir, "current", "gen");
-    let count = std::fs::read_dir(&cache_dir).unwrap().count();
+    let count = fs::read_dir(&cache_dir).unwrap().count();
     assert!(count <= 2, "expected current + 1 old generation, got {count}");
 }
 
@@ -98,15 +98,15 @@ fn prune_keeps_at_most_two_generations() {
 fn prune_reaps_other_schema_generations() {
     let tmp = tempfile::tempdir().unwrap();
     let cache_dir = tmp.path().join("cache");
-    std::fs::create_dir_all(&cache_dir).unwrap();
+    fs::create_dir_all(&cache_dir).unwrap();
     // Not a cache generation at all (a draft, say): never touched.
-    std::fs::write(cache_dir.join("draft.json"), "{}").unwrap();
+    fs::write(cache_dir.join("draft.json"), "{}").unwrap();
     // Pre-versioning and other-schema files are unreadable: always removed.
-    std::fs::write(cache_dir.join("aaaa-bbbb.jsonl"), "\n").unwrap();
-    std::fs::write(cache_dir.join("v1-cccc-dddd.jsonl"), "\n").unwrap();
-    std::fs::write(cache_dir.join("v999-eeee-ffff.jsonl"), "\n").unwrap();
+    fs::write(cache_dir.join("aaaa-bbbb.jsonl"), "\n").unwrap();
+    fs::write(cache_dir.join("v1-cccc-dddd.jsonl"), "\n").unwrap();
+    fs::write(cache_dir.join("v999-eeee-ffff.jsonl"), "\n").unwrap();
     let _c = Cache::open(&cache_dir, "current", "gen");
-    let names: Vec<String> = std::fs::read_dir(&cache_dir)
+    let names: Vec<String> = fs::read_dir(&cache_dir)
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
@@ -123,13 +123,13 @@ fn prune_reaps_other_schema_generations() {
 fn an_absent_entry_does_not_answer_for_an_unreadable_file() {
     let tmp = tempfile::tempdir().unwrap();
     let dbdir = tmp.path().join("db");
-    std::fs::create_dir_all(&dbdir).unwrap();
+    fs::create_dir_all(&dbdir).unwrap();
     let mut c = Cache::open(&tmp.path().join("cache"), "tree1", "conf1");
     let i = info("cat/port");
     c.insert(&i, &OptionsFiles::new(&dbdir));
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_some());
     // A directory where the file should be: there, and unreadable.
-    std::fs::create_dir_all(dbdir.join("cat_port/options")).unwrap();
+    fs::create_dir_all(dbdir.join("cat_port/options")).unwrap();
     assert!(c.lookup(&i.key, &OptionsFiles::new(&dbdir)).is_none());
 }
 
@@ -138,9 +138,9 @@ fn an_absent_entry_does_not_answer_for_an_unreadable_file() {
 #[test]
 fn clear_counts_what_it_removes() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("v7-a-b.jsonl"), "12345").unwrap();
-    std::fs::write(tmp.path().join("v6-c-d.jsonl"), "123").unwrap();
-    std::fs::write(tmp.path().join("draft.json"), "{}").unwrap();
+    fs::write(tmp.path().join("v7-a-b.jsonl"), "12345").unwrap();
+    fs::write(tmp.path().join("v6-c-d.jsonl"), "123").unwrap();
+    fs::write(tmp.path().join("draft.json"), "{}").unwrap();
     assert_eq!(clear(tmp.path()), (2, 8));
     assert!(tmp.path().join("draft.json").is_file());
     assert_eq!(clear(tmp.path()), (0, 0));
@@ -163,12 +163,12 @@ fn object_id_wants_hex_of_a_hash_length() {
 fn fake_tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let ports = tmp.path().join("ports");
-    std::fs::create_dir_all(ports.join("Mk")).unwrap();
-    std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+    fs::create_dir_all(ports.join("Mk")).unwrap();
+    fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
     for (rel, content) in files {
         let path = ports.join(".git").join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
     }
     (tmp, ports)
 }
@@ -183,11 +183,11 @@ const OTHER: &str = "0123456789abcdef0123456789abcdef01234567";
 fn trees_key_follows_every_overlay() {
     let tmp = tempfile::tempdir().unwrap();
     let (main, over) = (tmp.path().join("main"), tmp.path().join("over"));
-    std::fs::create_dir_all(main.join("Mk")).unwrap();
-    std::fs::write(main.join("Mk/bsd.port.mk"), "").unwrap();
-    std::fs::create_dir_all(over.join("cat/port")).unwrap();
+    fs::create_dir_all(main.join("Mk")).unwrap();
+    fs::write(main.join("Mk/bsd.port.mk"), "").unwrap();
+    fs::create_dir_all(over.join("cat/port")).unwrap();
     let makefile = over.join("cat/port/Makefile");
-    std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+    fs::write(&makefile, "PORTVERSION=1\n").unwrap();
     assert_eq!(trees_key(&main, &[]), trees_key(&main, &[]));
     let before = trees_key(&main, std::slice::from_ref(&over));
     assert_ne!(before, trees_key(&main, &[]));
@@ -202,9 +202,9 @@ fn trees_key_follows_every_overlay() {
 fn trees_key_follows_an_uncommitted_edit_in_a_git_overlay() {
     let (_tmp, over) = fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("refs/heads/main", &format!("{ID}\n"))]);
     let (_tmp2, main) = fake_tree(&[]);
-    std::fs::create_dir_all(over.join("cat/port")).unwrap();
+    fs::create_dir_all(over.join("cat/port")).unwrap();
     let makefile = over.join("cat/port/Makefile");
-    std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+    fs::write(&makefile, "PORTVERSION=1\n").unwrap();
     let before = trees_key(&main, std::slice::from_ref(&over));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
     File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
@@ -217,11 +217,11 @@ fn trees_key_follows_an_uncommitted_edit_in_a_git_overlay() {
 fn trees_key_follows_an_edit_behind_a_symlinked_port() {
     let tmp = tempfile::tempdir().unwrap();
     let (main, over, real) = (tmp.path().join("main"), tmp.path().join("over"), tmp.path().join("real"));
-    std::fs::create_dir_all(&main).unwrap();
-    std::fs::create_dir_all(over.join("cat")).unwrap();
-    std::fs::create_dir_all(&real).unwrap();
+    fs::create_dir_all(&main).unwrap();
+    fs::create_dir_all(over.join("cat")).unwrap();
+    fs::create_dir_all(&real).unwrap();
     let makefile = real.join("Makefile");
-    std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
+    fs::write(&makefile, "PORTVERSION=1\n").unwrap();
     std::os::unix::fs::symlink(&real, over.join("cat/port")).unwrap();
     let before = trees_key(&main, std::slice::from_ref(&over));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
@@ -266,17 +266,17 @@ fn tree_key_follows_a_gitdir_file() {
     // here relative to the ports tree.
     let tmp = tempfile::tempdir().unwrap();
     let ports = tmp.path().join("ports");
-    std::fs::create_dir_all(ports.join("Mk")).unwrap();
-    std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+    fs::create_dir_all(ports.join("Mk")).unwrap();
+    fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
     let real = ports.join("../real-gitdir");
-    std::fs::create_dir_all(real.join("refs/heads")).unwrap();
-    std::fs::write(real.join("HEAD"), "ref: refs/heads/mine\n").unwrap();
-    std::fs::write(real.join("refs/heads/mine"), format!("{ID}\n")).unwrap();
-    std::fs::write(ports.join(".git"), "gitdir: ../real-gitdir\n").unwrap();
+    fs::create_dir_all(real.join("refs/heads")).unwrap();
+    fs::write(real.join("HEAD"), "ref: refs/heads/mine\n").unwrap();
+    fs::write(real.join("refs/heads/mine"), format!("{ID}\n")).unwrap();
+    fs::write(ports.join(".git"), "gitdir: ../real-gitdir\n").unwrap();
     assert_eq!(tree_key(&ports), ID);
 
     // Absolute form too.
-    std::fs::write(
+    fs::write(
         ports.join(".git"),
         format!("gitdir: {}\n", real.canonicalize().unwrap().display()),
     )
@@ -300,7 +300,7 @@ fn tree_key_falls_back_to_mtime_on_garbage() {
     }
 
     let (_tmp, ports) = fake_tree(&[]);
-    std::fs::write(ports.join(".git"), "gitdir: /nonexistent/gitdir\n").unwrap();
+    fs::write(ports.join(".git"), "gitdir: /nonexistent/gitdir\n").unwrap();
     assert!(tree_key(&ports).starts_with("mtime-"));
 }
 
@@ -328,8 +328,8 @@ fn tree_key_matches_git_cli() {
 #[test]
 fn tree_key_falls_back_to_mtime_without_git() {
     let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("Mk")).unwrap();
-    std::fs::write(tmp.path().join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+    fs::create_dir_all(tmp.path().join("Mk")).unwrap();
+    fs::write(tmp.path().join("Mk/bsd.port.mk"), "# fake\n").unwrap();
     let key = tree_key(tmp.path());
     assert!(key.starts_with("mtime-"), "got {key}");
 }
@@ -340,7 +340,7 @@ fn tree_key_falls_back_to_mtime_without_git() {
 fn mtime_keys_one_hour_apart_are_distinct_generations() {
     let tmp = tempfile::tempdir().unwrap();
     let dbdir = tmp.path().join("db");
-    std::fs::create_dir_all(&dbdir).unwrap();
+    fs::create_dir_all(&dbdir).unwrap();
     let cache_dir = tmp.path().join("cache");
     let mut c = Cache::open(&cache_dir, "mtime-1792652400", "conf");
     c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
@@ -355,9 +355,9 @@ fn mtime_keys_one_hour_apart_are_distinct_generations() {
 fn a_moved_only_change_is_a_new_tree_key() {
     let tmp = tempfile::tempdir().unwrap();
     let ports = tmp.path();
-    std::fs::create_dir_all(ports.join("Mk")).unwrap();
-    std::fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
-    std::fs::write(ports.join("MOVED"), "").unwrap();
+    fs::create_dir_all(ports.join("Mk")).unwrap();
+    fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+    fs::write(ports.join("MOVED"), "").unwrap();
     let set_mtime = |secs: u64| {
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
         File::options().write(true).open(ports.join("MOVED")).unwrap().set_modified(t).unwrap();
@@ -384,8 +384,8 @@ fn default_cache_dir_ignores_empty_and_relative_xdg() {
 fn options_hash_absent_vs_present() {
     let tmp = tempfile::tempdir().unwrap();
     assert_eq!(OptionsFiles::new(tmp.path()).hash("cat_port"), "ABSENT");
-    std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
-    std::fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
+    fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
     let h = OptionsFiles::new(tmp.path()).hash("cat_port");
     assert_ne!(h, "ABSENT");
     assert_eq!(h.len(), 64);
@@ -393,7 +393,7 @@ fn options_hash_absent_vs_present() {
 
 /// A port whose make read `makefiles`.
 fn read(origin: &str, makefiles: &[&str]) -> PortInfo {
-    PortInfo { makefiles: makefiles.iter().map(|f| f.to_string()).collect(), ..info(origin) }
+    PortInfo { makefiles: makefiles.iter().map(ToString::to_string).collect(), ..info(origin) }
 }
 
 /// Each kind of change against a slave port that also reads another
@@ -472,11 +472,11 @@ fn a_new_uses_file_takes_everything() {
 fn two_trees(tmp: &Path) -> Option<(PathBuf, PathBuf)> {
     let (ports, clone) = (tmp.join("ports"), tmp.join("clone"));
     for dir in ["Mk", "cat/a", "cat/b"] {
-        std::fs::create_dir_all(ports.join(dir)).unwrap();
+        fs::create_dir_all(ports.join(dir)).unwrap();
     }
-    std::fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
-    std::fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
-    std::fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
+    fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
+    fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
+    fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
     git(&ports, &["init", "-q"])?;
     git(&ports, &["add", "-A"])?;
     git(&ports, &["commit", "-q", "-m", "one"])?;
@@ -523,7 +523,7 @@ fn carry_over_needs_the_same_tree() {
     c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
     drop(c);
 
-    std::fs::write(clone.join("cat/a/pkg-help"), "help\n").unwrap();
+    fs::write(clone.join("cat/a/pkg-help"), "help\n").unwrap();
     git(&clone, &["add", "-A"]).unwrap();
     git(&clone, &["commit", "-q", "-m", "two"]).unwrap();
     let c = Cache::open_trees(&cache_dir, &trees(&clone, &[]), "conf");
@@ -553,11 +553,11 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let ports = tmp.path().join("ports");
     for dir in ["Mk", "cat/a", "cat/b"] {
-        std::fs::create_dir_all(ports.join(dir)).unwrap();
+        fs::create_dir_all(ports.join(dir)).unwrap();
     }
-    std::fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
-    std::fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
-    std::fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
+    fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
+    fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
+    fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
     if git(&ports, &["init", "-q"]).and_then(|()| git(&ports, &["add", "-A"])).is_none()
         || git(&ports, &["commit", "-q", "-m", "one"]).is_none()
     {
@@ -572,7 +572,7 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
     drop(c);
 
-    std::fs::write(ports.join("cat/a/pkg-help"), "help\n").unwrap();
+    fs::write(ports.join("cat/a/pkg-help"), "help\n").unwrap();
     git(&ports, &["add", "-A"]).unwrap();
     git(&ports, &["commit", "-q", "-m", "two"]).unwrap();
     let c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
@@ -595,17 +595,17 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
 fn a_script_run_while_parsing_counts_as_its_makefile() {
     let tmp = tempfile::tempdir().unwrap();
     let mk = tmp.path().join("Mk");
-    std::fs::create_dir_all(mk.join("Uses")).unwrap();
-    std::fs::write(
+    fs::create_dir_all(mk.join("Uses")).unwrap();
+    fs::write(
         mk.join("Uses/rusty.mk"),
         "_AWK=\t${AWK} \\\n\t\t-f${SCRIPTSDIR}/common.awk -f\n\
          .for _a _b in ${:!${_AWK} ${SCRIPTSDIR}/fetch.awk /dev/null!}\n.endfor\n",
     )
     .unwrap();
     let shy = "_V=\t${SH} ${SCRIPTSDIR}/version.sh\nV=\t${_V:sh}\n";
-    std::fs::write(mk.join("Uses/shy.mk"), shy).unwrap();
-    std::fs::write(mk.join("Uses/now.mk"), "X!=\t${SH} ${SCRIPTSDIR}/now.sh\n").unwrap();
-    std::fs::write(
+    fs::write(mk.join("Uses/shy.mk"), shy).unwrap();
+    fs::write(mk.join("Uses/now.mk"), "X!=\t${SH} ${SCRIPTSDIR}/now.sh\n").unwrap();
+    fs::write(
         mk.join("bsd.port.mk"),
         "DO_FETCH=\t${SH} ${SCRIPTSDIR}/do-fetch.sh\n\
          do-fetch:\n\t${SCRIPTSDIR}/qa.sh\n\t${DO_FETCH}\n",

@@ -113,7 +113,7 @@ impl Scanned {
 /// Parallel `make` jobs: -J, else min(16, ncpu).
 fn default_jobs(cli: &Cli) -> usize {
     cli.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
+        std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4).min(16)
     })
 }
 
@@ -132,7 +132,7 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
 fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     let overlays = settings.overlay_paths();
     let trees: Vec<&Path> =
-        std::iter::once(settings.portsdir.as_path()).chain(overlays.iter().map(|p| p.as_path())).collect();
+        std::iter::once(settings.portsdir.as_path()).chain(overlays.iter().map(std::path::PathBuf::as_path)).collect();
     let (moved, warnings) = Moved::load_all(&trees);
     let paint = stderr_color(cli);
     for w in warnings {

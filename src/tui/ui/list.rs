@@ -170,7 +170,7 @@ fn list_title(app: &App, room: usize) -> String {
 /// A list row's `category/name[@flavor]` in `room` columns: whole when it
 /// fits, else the category is cut first (`multim…/ffmpeg@default`, then
 /// `…/ffmpeg@default`), and only then the end of the name and flavor.
-pub(crate) fn fit_port_name(key: &crate::model::origin::PortKey, room: usize) -> String {
+pub(crate) fn fit_port_name(key: &PortKey, room: usize) -> String {
     let full = key.to_string();
     let width = |s: &str| Line::from(s).width();
     if width(&full) <= room {

@@ -16,9 +16,9 @@ fn mk_port(
         pkgname: "port-1.0".into(),
         options_name: "cat_port".into(),
         options: PortOptions {
-            complete: complete.iter().map(|s| s.to_string()).collect(),
-            defaults: defaults.iter().map(|s| s.to_string()).collect(),
-            effective: defaults.iter().map(|s| s.to_string()).collect(),
+            complete: complete.iter().map(ToString::to_string).collect(),
+            defaults: defaults.iter().map(ToString::to_string).collect(),
+            effective: defaults.iter().map(ToString::to_string).collect(),
             groups,
             defs: d,
             ..Default::default()
@@ -37,7 +37,7 @@ fn session_for(ports: BTreeMap<PortKey, PortInfo>) -> Session {
 }
 
 fn set(opts: &[&str]) -> BTreeSet<String> {
-    opts.iter().map(|o| o.to_string()).collect()
+    opts.iter().map(ToString::to_string).collect()
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn group_rules_flag_each_violation() {
         let (ports, key) = mk_port(&["A", "B"], &[], vec![g], vec![]);
         let mut s = session_for(ports);
         let name = s.ports[&key].options_name.clone();
-        s.states.get_mut(&name).unwrap().staged = on.iter().map(|o| o.to_string()).collect();
+        s.states.get_mut(&name).unwrap().staged = on.iter().map(ToString::to_string).collect();
         let v = s.violations(&s.ports[&key]);
         assert_eq!(!v.is_empty(), broken, "{kind:?} with {on:?} on: {v:?}");
     }
@@ -363,7 +363,7 @@ fn per_port_makeconf_knob_beats_the_global_one() {
         o.port_force_set.insert("X11".into());
         // What make itself computes for those layers (PORT_OPTIONS), i.e.
         // the staged set of an unconfigured port.
-        o.effective = ["DOCS", "X11"].iter().map(|s| s.to_string()).collect();
+        o.effective = ["DOCS", "X11"].iter().map(ToString::to_string).collect();
     }
     let info = &ports[&key];
     let eff = nofile_effective(info);
@@ -830,7 +830,7 @@ fn mc_coverage_of_stale_ports() {
 fn linked_info(origin: &str, deps: &[&str], complete: &[&str]) -> PortInfo {
     PortInfo {
         options: PortOptions {
-            complete: complete.iter().map(|s| s.to_string()).collect(),
+            complete: complete.iter().map(ToString::to_string).collect(),
             ..Default::default()
         },
         deps: deps
@@ -934,8 +934,8 @@ fn shared_file_judged_against_owner_flavor() {
             flavors: vec!["full".into(), "nox".into()],
             options_name: "editors_emacs".into(),
             options: PortOptions {
-                complete: complete.iter().map(|s| s.to_string()).collect(),
-                effective: complete.iter().map(|s| s.to_string()).collect(),
+                complete: complete.iter().map(ToString::to_string).collect(),
+                effective: complete.iter().map(ToString::to_string).collect(),
                 ..Default::default()
             },
             ..PortInfo::stub(&key.to_string())
@@ -969,7 +969,7 @@ fn siblings_lists_closure_flavors() {
     // devel/git declares three flavors but only two are in the closure.
     let mk = |origin: &str, flavors: &[&str]| {
         PortInfo {
-            flavors: flavors.iter().map(|s| s.to_string()).collect(),
+            flavors: flavors.iter().map(ToString::to_string).collect(),
             options: PortOptions {
                 complete: vec!["A".into()],
                 ..Default::default()
@@ -1378,7 +1378,7 @@ fn bulk_set_applies_rules_and_dedups_shared_state() {
             flavors: vec!["f1".into(), "f2".into()],
             options_name: options_name.into(),
             options: PortOptions {
-                complete: complete.iter().map(|s| s.to_string()).collect(),
+                complete: complete.iter().map(ToString::to_string).collect(),
                 ..Default::default()
             },
             ..PortInfo::stub(origin)
@@ -1609,7 +1609,7 @@ fn a_group_is_conditional_by_all_options() {
         kind,
         name: name.into(),
         desc: String::new(),
-        members: members.iter().map(|m| m.to_string()).collect(),
+        members: members.iter().map(ToString::to_string).collect(),
     };
     let (mut ports, key) = mk_port(
         &["AUDIO", "NAS", "SOX"],
@@ -1637,7 +1637,7 @@ fn draft_with(entries: &[(&str, &[&str])]) -> crate::draft::Draft {
         staged: entries
             .iter()
             .map(|(name, opts)| {
-                (name.to_string(), opts.iter().map(|o| o.to_string()).collect())
+                (name.to_string(), opts.iter().map(ToString::to_string).collect())
             })
             .collect(),
     }

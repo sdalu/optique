@@ -457,9 +457,9 @@ mod tests {
     /// matches out of NEW_OPTIONS, a defect optique does not follow.
     #[test]
     fn unset_entries_are_patterns() {
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         let o = PortOptions {
-            complete: ["A", "A2", "B", "C"].iter().map(|s| s.to_string()).collect(),
+            complete: ["A", "A2", "B", "C"].iter().map(ToString::to_string).collect(),
             mc_unset: words(&["A*"]),
             port_set: words(&["C*"]),
             force_unset: words(&["[B]"]),
@@ -479,9 +479,9 @@ mod tests {
     /// and pin the option as they do; WITHOUT entries are patterns.
     #[test]
     fn with_and_without_pin_after_force() {
-        let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
+        let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         let o = PortOptions {
-            complete: ["A", "A2", "B", "C"].iter().map(|s| s.to_string()).collect(),
+            complete: ["A", "A2", "B", "C"].iter().map(ToString::to_string).collect(),
             force_unset: words(&["C"]),
             port_force_set: words(&["A"]),
             with: words(&["C"]),

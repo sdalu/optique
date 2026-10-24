@@ -137,7 +137,7 @@ fn a_dependency_on_a_moved_origin_is_an_error() {
     .unwrap();
 
     let out = f.run("scan", &["--json", "misc/brokendep"]);
-    assert_eq!(out.status.code(), Some(1), "{}", common::stderr(&out));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let report = common::json(&out);
     assert_eq!(report["summary"]["errors"], 1, "{report}");
     assert_eq!(report["errors"][0]["subject"], "misc/brokendep", "{report}");
@@ -151,7 +151,7 @@ fn a_dependency_on_a_moved_origin_is_an_error() {
 
 /// A port of the fixture's shape at `origin`, `extra` added to its
 /// Makefile.
-fn add_port(f: &common::Fixture, origin: &str, extra: &str) {
+fn add_port(f: &Fixture, origin: &str, extra: &str) {
     let dir = f.tree.join(origin);
     fs::create_dir_all(&dir).unwrap();
     let name = origin.rsplit('/').next().unwrap();
@@ -183,7 +183,7 @@ fn a_listed_subpackage_is_not_moved_by_check_moved() {
          misc/oldflav2|misc/flav|2026-01-01|Renamed too\n",
     )
     .unwrap();
-    let no_moves = |report: &serde_json::Value| report["moved"].as_array().is_none_or(|a| a.is_empty());
+    let no_moves = |report: &serde_json::Value| report["moved"].as_array().is_none_or(Vec::is_empty);
 
     for listed in ["misc/oldname~sub", "misc/oldflav@nox~sub"] {
         let out = f.run("scan", &["--json", "--follow-moved", listed]);
@@ -437,10 +437,10 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
     for order in [["misc/flav", "misc/flav@nox"], ["misc/flav@nox", "misc/flav"]] {
         let full = f.scan_port(&order, "misc/flav@full");
         assert_eq!(full["status"], "unconfigured", "{order:?}: {full}");
-        assert_eq!(common::option(&full, "A")["locked"], false, "{order:?}: {full}");
+        assert_eq!(option(&full, "A")["locked"], false, "{order:?}: {full}");
         let nox = f.scan_port(&order, "misc/flav@nox");
         assert_eq!(nox["status"], "ok", "{order:?}: {nox}");
-        assert_eq!(common::option(&nox, "A")["locked_by"], "make.conf OPTIONS_FILE", "{order:?}: {nox}");
+        assert_eq!(option(&nox, "A")["locked_by"], "make.conf OPTIONS_FILE", "{order:?}: {nox}");
 
         let out = f.run("sync", &order);
         let err = stderr(&out);
@@ -497,7 +497,7 @@ fn an_options_local_ifunset_leaves_the_file_unmanaged() {
 
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["status"], "ok", "{port}");
-    let c = common::option(&port, "C");
+    let c = option(&port, "C");
     assert_eq!((&c["staged"], &c["locked_by"]), (&serde_json::json!(false), &serde_json::json!("options.local")), "{c}");
 
     let out = f.run("sync", &[origin]);

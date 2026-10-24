@@ -84,7 +84,7 @@ impl DepLoop {
             return None;
         }
         let shown: Vec<String> =
-            extra.iter().take(EXTRA_SHOWN).map(|k| k.to_string()).collect();
+            extra.iter().take(EXTRA_SHOWN).map(ToString::to_string).collect();
         let mut line = shown.join(" ");
         if extra.len() > EXTRA_SHOWN {
             let rest = extra.len() - EXTRA_SHOWN;

@@ -5,6 +5,14 @@ edition = "2024"
 description = "Fast FreeBSD ports options configurator for poudriere, synth and local builds"
 license = "BSD-2-Clause"
 
+# A pared-down policy, not clippy's pedantic group: each lint here is one the
+# tree is clean of and whose fix reads better.
+[lints.rust]
+unused_qualifications = "warn"
+
+[lints.clippy]
+redundant_closure_for_method_calls = "warn"
+
 [dependencies]
 anyhow = "1"
 ratatui = "0.29"

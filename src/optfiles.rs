@@ -371,11 +371,11 @@ OPTIONS_FILE_UNSET+=B
     #[test]
     fn forget_clears_the_options_local_reading_too() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
-        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A\n").unwrap();
+        fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A\n").unwrap();
         let files = OptionsFiles::new(tmp.path());
         assert!(files.local_bytes("cat_port").is_some());
-        std::fs::remove_file(tmp.path().join("cat_port/options.local")).unwrap();
+        fs::remove_file(tmp.path().join("cat_port/options.local")).unwrap();
         files.forget(["cat_port"]);
         assert!(files.local_bytes("cat_port").is_none(), "read again after forget");
         assert_eq!(files.local_reads(), 2);

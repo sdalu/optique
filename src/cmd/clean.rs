@@ -5,11 +5,11 @@ use std::io::Write as _;
 use anyhow::Result;
 
 use crate::cli::Cli;
+use crate::color::{ansi, stderr_color, tint};
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
-use crate::color::{ansi, stderr_color, tint};
 use crate::moved::Moved;
-use crate::{cache, clean, cli, config, model, optfiles, optionsfile, report, session};
+use crate::{cache, clean, cli, config, optfiles, optionsfile, report, session};
 
 use super::{
     default_jobs, load_moved, new_cache, query_ctx, resolve_settings, roots_or_installed, run_scan,
@@ -104,7 +104,7 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     }
     let used = scanned.result.ports.values().map(|i| i.options_name.clone()).collect();
     // Sorted by port, so the port each note names is the same every run.
-    let mut infos: Vec<&model::port::PortInfo> = scanned.result.ports.values().collect();
+    let mut infos: Vec<&PortInfo> = scanned.result.ports.values().collect();
     infos.sort_by(|a, b| a.key.cmp(&b.key));
     let read = clean::read_through_moved(&scanned.settings.options_dir, infos);
     let ctx = CleanCtx {
@@ -509,7 +509,7 @@ impl<'a> RedundancyPass<'a> {
 /// reads it (`infos`, default flavor first, each queried with the file in
 /// place): the first flavor it moves away from defaults + make.conf. None
 /// when the file changes nothing for any of them.
-fn shared_file_deviation(infos: &[model::port::PortInfo], local: &optionsfile::SavedOptionsFile) -> Option<String> {
+fn shared_file_deviation(infos: &[PortInfo], local: &optionsfile::SavedOptionsFile) -> Option<String> {
     // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
     // the file; it is kept, not judged redundant, whatever it says.
     if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {

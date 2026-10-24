@@ -110,7 +110,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn set(items: &[&str]) -> BTreeSet<String> {
-        items.iter().map(|s| s.to_string()).collect()
+        items.iter().map(ToString::to_string).collect()
     }
 
     /// A session with only `states` filled in: that is all save() reads.

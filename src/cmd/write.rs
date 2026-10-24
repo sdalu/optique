@@ -49,7 +49,7 @@ impl WritePass {
 pub(super) fn commit_writes(
     pass: &WritePass,
     ports: &std::collections::BTreeMap<model::origin::PortKey, model::port::PortInfo>,
-    options_dir: &std::path::Path,
+    options_dir: &Path,
     dry_run: bool,
 ) -> report::WriteReport {
     let act = !dry_run && !pass.blocked();

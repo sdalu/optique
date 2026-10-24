@@ -210,7 +210,7 @@ mod tests {
     fn split_raw_origins_forms() {
         let raw: Vec<String> = ["www/nginx", "-f", "list1", "mail/dovecot", "--file=list2"]
             .iter()
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .collect();
         let (origins, files) = split_raw_origins(&raw).unwrap();
         assert_eq!(origins, vec!["www/nginx", "mail/dovecot"]);

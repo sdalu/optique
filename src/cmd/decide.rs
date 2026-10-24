@@ -76,7 +76,7 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
             reason: reason.clone(),
         })
         .collect();
-    pass.unknown = outcome.unknown.iter().map(|k| k.to_string()).collect();
+    pass.unknown = outcome.unknown.iter().map(ToString::to_string).collect();
     // A file that would record a state the port's own constraints forbid is
     // not written, however the plan got there.
     for name in &touched_names {

@@ -289,7 +289,7 @@ mod tests {
         let queried: Vec<String> = keys(&["misc/flav", "misc/flav@-", "misc/x@nox"])
             .iter()
             .filter(|k| wants_all(k, true))
-            .map(|k| k.to_string())
+            .map(ToString::to_string)
             .collect();
         assert_eq!(queried, ["misc/flav"]);
     }
@@ -351,7 +351,7 @@ mod tests {
         let listed = listing(&["math/mumps", "cat/old", "cat/gone", "cat/a", "editors/mg-static@dynamic", "x/y"]);
         let run = |policy, follow| {
             let r = apply_moved(&listed, policy, follow, &moved, exists);
-            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            let roots: Vec<String> = r.roots.iter().map(ToString::to_string).collect();
             let moves: Vec<String> =
                 r.moves.iter().map(|m| format!("{}>{}{}", m.listed, m.to, if m.followed { "" } else { "?" })).collect();
             let errors: Vec<String> = r.errors.iter().map(|(k, _)| k.to_string()).collect();
@@ -386,7 +386,7 @@ mod tests {
 
         for follow in [false, true] {
             let r = apply_moved(&listed, MovedPolicy::Synth, follow, &moved, exists);
-            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            let roots: Vec<String> = r.roots.iter().map(ToString::to_string).collect();
             assert_eq!(roots, ["math/mumps", "editors/mg-static@dynamic", "x/y"]);
             let errs: Vec<String> = r.errors.iter().map(|(k, _)| k.to_string()).collect();
             assert_eq!(errs, ["cat/gone", "cat/a"]);
@@ -436,7 +436,7 @@ mod tests {
         let listed = listing(&["cat/old~sub", "cat/old@fl~sub", "cat/flav@fl~sub", "cat/old"]);
         for policy in [MovedPolicy::Poudriere, MovedPolicy::Local] {
             let r = apply_moved(&listed, policy, true, &moved, exists);
-            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            let roots: Vec<String> = r.roots.iter().map(ToString::to_string).collect();
             assert_eq!(roots, ["cat/old", "cat/new@fl", "cat/flav@fl", "cat/new"], "{policy:?}");
             let moves: Vec<String> = r.moves.iter().map(|m| format!("{}>{}", m.listed, m.to)).collect();
             assert_eq!(moves, ["cat/old@fl>cat/new@fl", "cat/old>cat/new"], "{policy:?}");

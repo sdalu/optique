@@ -508,11 +508,11 @@ fn a_sent_batch_holds_staging_until_its_scan_is_done() {
     app.flush_due_refreshes();
     assert!(!staged("cat_beta").exists(), "written under a running re-scan");
 
-    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while app.refreshing > 0 {
         assert!(Instant::now() < deadline, "the re-scan never reported done");
         app.drain_refresh_events();
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(5));
     }
     app.flush_due_refreshes();
     assert!(staged("cat_beta").is_file());
@@ -537,7 +537,7 @@ fn selected(app: &App) -> String {
 }
 
 fn visible(app: &App) -> Vec<String> {
-    app.visible.iter().map(|k| k.to_string()).collect()
+    app.visible.iter().map(ToString::to_string).collect()
 }
 
 fn staged(app: &App, origin: &str) -> Vec<String> {
@@ -1327,7 +1327,7 @@ fn a_rescan_keeps_the_selected_port_listed_until_the_selection_moves() {
     assert!(app.hide_ok, "t still on");
     assert_eq!(selected(&app), "cat/alpha");
     assert!(app.focus == Focus::Editor, "the pane keeps the focus");
-    assert_eq!(app.editor_port.as_ref().map(|k| k.to_string()).as_deref(), Some("cat/alpha"));
+    assert_eq!(app.editor_port.as_ref().map(ToString::to_string).as_deref(), Some("cat/alpha"));
     hit(&mut app, KeyCode::Char(' '));
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
     assert!(staged(&app, "cat/beta").is_empty(), "the port the pane did not show");
@@ -2718,7 +2718,7 @@ fn enter_on_a_loop_port_jumps_to_it() {
     // cat/alpha is a root, so the entries are: the one-port chain, then
     // the cycle (alpha, beta), then the dependents (beta).
     let entries: Vec<String> =
-        app.why.as_ref().unwrap().entries().iter().map(|k| k.to_string()).collect();
+        app.why.as_ref().unwrap().entries().iter().map(ToString::to_string).collect();
     assert_eq!(entries, ["cat/alpha", "cat/alpha", "cat/beta", "cat/beta"], "{entries:?}");
 
     // Down twice lands on the cycle's second port.
@@ -2789,7 +2789,7 @@ fn a_jump_to_an_optionless_port_leaves_the_view_alone() {
     assert_eq!(app.filter, "zeta", "the filter stays");
     assert_eq!(visible(&app), ["cat/zeta"]);
     assert_eq!(selected(&app), "cat/zeta");
-    assert_eq!(app.editor_port.as_ref().map(|k| k.to_string()).as_deref(), Some("cat/zeta"));
+    assert_eq!(app.editor_port.as_ref().map(ToString::to_string).as_deref(), Some("cat/zeta"));
     let (msg, err) = app.message.clone().unwrap();
     assert_eq!(
         (msg.as_str(), err),
@@ -2844,7 +2844,7 @@ fn the_why_cursor_stays_in_view_on_a_small_terminal() {
             (0..80u16)
                 .map(|x| &buffer[(x, y)])
                 .filter(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
-                .map(|c| c.symbol())
+                .map(ratatui::buffer::Cell::symbol)
                 .collect()
         })
         .collect();
@@ -3815,7 +3815,7 @@ fn alpha_file(tmp: &std::path::Path, complete: &[&str], set: &[&str]) {
 /// written (or not) by the caller.
 fn alpha_app(tmp: &std::path::Path, complete: &[&str]) -> App {
     let mut app = app_for(tmp, &[("cat/alpha", &[])]);
-    alpha_mut(&mut app).options.complete = complete.iter().map(|o| o.to_string()).collect();
+    alpha_mut(&mut app).options.complete = complete.iter().map(ToString::to_string).collect();
     app.rebuild_visible(None);
     app.rebuild_editor();
     app
@@ -3826,7 +3826,7 @@ fn alpha_mut(app: &mut App) -> &mut crate::model::port::PortInfo {
 }
 
 fn stage(app: &mut App, name: &str, on: &[&str]) {
-    app.session.states.get_mut(name).unwrap().staged = on.iter().map(|o| o.to_string()).collect();
+    app.session.states.get_mut(name).unwrap().staged = on.iter().map(ToString::to_string).collect();
 }
 
 /// The option under the cursor.
@@ -4262,7 +4262,7 @@ fn f_from_the_pane_keeps_the_option_or_lands_on_what_needs_attention() {
     let state = |staged: &[&str]| crate::session::OptState {
         saved: None,
         baseline: BTreeSet::new(),
-        staged: staged.iter().map(|o| o.to_string()).collect(),
+        staged: staged.iter().map(ToString::to_string).collect(),
     };
     app.session.states.insert("cat_alpha_a".into(), state(&[]));
     app.session.states.insert("cat_alpha_b".into(), state(&["X", "Y"]));
