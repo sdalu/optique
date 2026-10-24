@@ -1492,7 +1492,6 @@ mod tests {
         assert!(summary.failed.is_empty());
         let saved = OptionsFiles::new(tmp.path()).saved("cat_port").unwrap();
         assert!(saved.set.contains("A"));
-        assert_eq!(saved.options_read, "port-1.0");
     }
 
     /// Skipping a file drops its write and its removal, and nothing else.

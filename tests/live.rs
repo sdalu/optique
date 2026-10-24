@@ -552,7 +552,7 @@ fn clean_removes_gone_ports_only() {
     )
     .unwrap();
     fs::create_dir_all(optdir.join("astro_no-such-port-xyz")).unwrap();
-    fs::write(optdir.join("astro_no-such-port-xyz/options"), "x\n").unwrap();
+    fs::write(optdir.join("astro_no-such-port-xyz/options"), "# x\n").unwrap();
 
     let out = optique(tmp.path(), "clean").arg("-o").arg(&optdir).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
