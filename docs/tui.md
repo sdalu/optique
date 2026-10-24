@@ -642,8 +642,9 @@ the page keys move by what the screen shows.
 
 - `key <spec>` — press one key: an optional `ctrl-`/`alt-` prefix, then a
   single character (case matters: `B` is the bulk key, `b` is not) or a
-  name (`enter esc tab backtab space backspace up down left right pgup
-  pgdn home end f1`…`f12 question slash`)
+  name (`enter esc tab backtab space backspace delete up down left right
+  pgup pgdn home end f1`…`f12 question slash`, with `return`, `escape`,
+  `shift-tab`, `bs`, `del`, `pageup` and `pagedown` as other spellings)
 - `keys <text>` — press each character of `<text>` in turn, spaces
   included, for typing into the filter or bulk prompts
 - `dump` — draw a frame and print it: `screen <W>x<H>`, then one line per
