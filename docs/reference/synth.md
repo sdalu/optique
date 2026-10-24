@@ -520,9 +520,12 @@ two equivalent inputs differently, or contradicts its manual. Each item is
 described where the link points.
 
 Items marked **radical** change what gets built (options, dependencies,
-which origin) or whether the tool runs at all; a tool predicting what
-synth will do follows them, and says so, until they are fixed upstream.
-Unmarked defects change neither and are not to be reproduced.
+which origin), or make synth fail on a file a configuring tool writes
+(an options file); a tool predicting what synth will do follows them,
+and says so, until they are fixed upstream. An item where synth fails on
+its own input (a malformed configuration or list the user wrote) is not
+marked: that input is the user's to fix. Unmarked defects are not to be
+reproduced.
 
 **Crashes and wrong results**
 
@@ -532,7 +535,8 @@ Unmarked defects change neither and are not to be reproduced.
   found and the port always passes. A port that sets its own `OPTIONS_NAME`
   is checked against the wrong file the same way
   ([Cached options check](#cached-options-check)).
-- **Radical.** `passed_options_cache_check` slices bytes 17-18 and 19-20 of
+- **Radical** for a file a configuring tool writes; one the user wrote is
+  the user's. `passed_options_cache_check` slices bytes 17-18 and 19-20 of
   each line without checking its length, so a line shorter than 18 bytes, or
   an 18- or 19-byte line without `+=` at 17-18, raises `Constraint_Error`,
   which nothing on the call path (`limited_cached_options_check`,
@@ -553,10 +557,13 @@ Unmarked defects change neither and are not to be reproduced.
 - When the selected profile has no `Directory_packages`, a blank
   `[<profile>]` header is appended even if one already exists
   ([How missing keys are filled](#how-missing-keys-are-filled)).
-- **Radical.** The INI reader raises `Constraint_Error` on a header with no
-  `]`, keeps the `\r` of a CRLF file in every value, keeps a tab in a key,
-  and takes no indented `[name]` for a header
-  ([How a value is read](#how-a-value-is-read)).
+- **Radical.** The INI reader keeps the `\r` of a CRLF file in every value,
+  keeps a tab in a key, keeps the spaces of `[ name ]`, and takes no
+  indented `[name]` for a header, so another profile, key or path is used
+  than the line seems to say ([How a value is read](#how-a-value-is-read)).
+- The INI reader raises `Constraint_Error` on a header with no `]`, so
+  synth does not run: synth failing on its own input, the user's file to
+  fix ([How a value is read](#how-a-value-is-read)).
 
 **Inconsistent treatment**
 
@@ -564,9 +571,9 @@ Unmarked defects change neither and are not to be reproduced.
   scanner, so a variable it sets can change what a port builds without
   changing what the scan saw
   ([Environment of a make run](#environment-of-a-make-run)).
-- **Radical.** A port list given as arguments loses a trailing `/`; the same
-  origin as a line of a list file keeps it and is refused
-  ([The port list](#the-port-list)).
+- A port list given as arguments loses a trailing `/`; the same origin as
+  a line of a list file keeps it and is refused: synth failing on its own
+  input ([The port list](#the-port-list)).
 - **Radical.** `LIB_DEPENDS_ALL`, the subpackages' library dependencies, is
   parsed as a build dependency, so those entries do not count in `librun`
   and `min_librun`, against which recorded package dependencies are checked

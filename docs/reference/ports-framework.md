@@ -579,9 +579,12 @@ equivalent inputs differently, or leaves a list incomplete. Each item is
 described where the link points.
 
 Items marked **radical** change what gets built (options, dependencies,
-which origin) or whether the build runs at all; a tool predicting what
-the framework will do follows them, and says so, until they are fixed upstream.
-Unmarked defects change neither and are not to be reproduced.
+which origin), or make the framework fail on a file a configuring tool writes
+(an options file); a tool predicting what the framework will do follows them,
+and says so, until they are fixed upstream. An item where the framework fails on
+its own input (a malformed configuration or list the user wrote) is not
+marked: that input is the user's to fix. Unmarked defects are not to be
+reproduced.
 
 **Wrong results**
 

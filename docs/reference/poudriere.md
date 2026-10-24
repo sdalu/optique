@@ -581,14 +581,18 @@ equivalent inputs differently, or contradicts its manual. Each item is
 described where the link points.
 
 Items marked **radical** change what gets built (options, dependencies,
-which origin) or whether the tool runs at all; a tool predicting what
-poudriere will do follows them, and says so, until they are fixed upstream.
-Unmarked defects change neither and are not to be reproduced.
+which origin), or make poudriere fail on a file a configuring tool writes
+(an options file); a tool predicting what poudriere will do follows them,
+and says so, until they are fixed upstream. An item where poudriere fails on
+its own input (a malformed configuration or list the user wrote) is not
+marked: that input is the user's to fix. Unmarked defects are not to be
+reproduced.
 
 **Loops and wrong results**
 
-- **Radical.** A `MOVED` cycle such as `a|b`, `b|a` collapses to `a|a`, and
-  `check_moved` loops forever when `a` does not exist ([MOVED](#moved)).
+- A `MOVED` cycle such as `a|b`, `b|a` collapses to `a|a`, and
+  `check_moved` loops forever when `a` does not exist: poudriere failing on
+  its own input, the tree's MOVED ([MOVED](#moved)).
 - **Radical.** `parse_MOVED.awk` collapses chains in file order, so `A|B`
   followed by `B|C` sends `A` to `C` even when `B` exists again;
   `check_moved` never tests `B` ([MOVED](#moved)).
