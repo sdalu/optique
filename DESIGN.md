@@ -258,15 +258,25 @@ judged from its view — exactly what `make config` on the plain origin
 produces — and a divergent flavor's difference is reported as a warning,
 not an error (`src/apply.rs`, `src/session.rs`).
 
-A non-default flavor alone in the closure writes from its own view but
-drops nothing it does not see: it cannot tell an option it lacks (the
-default flavor's) from one the port removed, and dropping the first loses
-the user's choice for good, while keeping the second is harmless (make
-ignores it, the default flavor's next write drops it). So a file whose list
-is a superset of that flavor's is up to date when everything the flavor has
-is unchanged, and a write keeps the other options' list entries and lines
-as they were. Rejected: querying the default flavor to tell the two apart,
-an extra make query per such origin for a case the rule settles.
+Without the default flavor in the closure, one rule names the owner for
+the session's state and for the write alike (`session::outranks`): the
+flavor with the most options, the first met on ties. Flavors exclude
+options, so the widest view covers the others' (`editors/emacs@pgtk`'s
+holds `@nox`'s), and an edit to an option only it has reaches the shared
+staged set. Rejected: letting `apply` fall back to the first flavor it
+meets while the session followed the widest, which judged the file from
+one view and wrote it from another.
+
+Such an owner writes from its own view but drops nothing it does not see:
+it cannot tell an option it lacks (the default flavor's) from one the port
+removed, and dropping the first loses the user's choice for good, while
+keeping the second is harmless (make ignores it, the default flavor's next
+write drops it). So a file whose list is a superset of that flavor's is up
+to date when everything each present flavor has is unchanged, and a write
+takes the options of the other present flavors with their values and keeps
+the rest of the file's list entries and lines as they were. Rejected:
+querying the default flavor to tell the two apart, an extra make query per
+such origin for a case the rule settles.
 
 Removing the file is the exception: it decides every flavor reading it, and
 a flavor can set its own defaults (`www/sogo@pgsql` adds `PGSQL`), so

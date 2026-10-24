@@ -189,9 +189,10 @@ impl PlannedWrites {
 ///
 /// Flavors of one origin share a single options file, and their computed
 /// option sets may legitimately differ (a flavor can change defaults or
-/// exclude options — e.g. devel/git@lite). The file is written from the
-/// default flavor's point of view, exactly like `make config` on the plain
-/// origin would; divergent non-default flavors are reported as warnings.
+/// exclude options — e.g. devel/git@lite). The file is written from its
+/// owner's point of view — the default flavor, exactly like `make config` on
+/// the plain origin would, else the widest view present, the session's rule
+/// (`session::outranks`); divergent other flavors are reported as warnings.
 /// In `minimal` mode a port whose final enabled set equals the no-file
 /// outcome (defaults + make.conf layers, IMPLIES-closed) is not persisted:
 /// an existing file becomes a removal, a missing one is left missing.
@@ -231,7 +232,13 @@ pub fn plan_writes<'a>(
         if files.combined(options_name).local_reset().is_some() {
             continue;
         }
-        let chosen = cands.iter().find(|c| c.preferred).unwrap_or(&cands[0]);
+        // The file's owner writes it, by the session's rule
+        // (`session::outranks`): the default flavor, else the widest view,
+        // the first on ties.
+        let chosen = cands
+            .iter()
+            .reduce(|owner, c| if crate::session::outranks(c.info, owner.info) { c } else { owner })
+            .expect("a group holds at least one candidate");
         // Read with its options.local, as make reads it; what a write
         // carries over comes from the file alone, which is all it writes.
         // Without an options file there is no old file, options.local or
@@ -332,12 +339,14 @@ fn divergence_warning(options_name: &str, chosen: &Candidate, other: &Candidate)
     if shared_diff.is_empty() {
         return None;
     }
+    let why = if chosen.preferred { "default flavor" } else { "widest view" };
     Some(format!(
-        "{}: flavors disagree on shared options file {} — using {} (default flavor); \
+        "{}: flavors disagree on shared options file {} — using {} ({}); \
          differing shared options: {}",
         other.key,
         options_name,
         chosen.key,
+        why,
         shared_diff.join(" ")
     ))
 }
@@ -1156,6 +1165,56 @@ mod tests {
         let written = SavedOptionsFile::parse(&p.writes[0].content);
         assert_eq!(written.set, set(&["A", "Y"]));
         assert!(written.unset.is_empty());
+    }
+
+    /// Without the default flavor, the write follows the session's owner
+    /// (`session::outranks`): the widest view, wherever it comes in the
+    /// closure, and the first met on ties — not the first candidate.
+    #[test]
+    fn without_the_default_flavor_the_widest_view_writes_the_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let flavor = |name: &str, complete: &[&str]| {
+            let mut i = mk_info(complete, &[]);
+            i.key = PortKey::parse(&format!("editors/emacs@{name}")).unwrap();
+            i.canonical = i.key.clone();
+            i.flavors = vec!["full".into(), "nox".into(), "pgtk".into()];
+            i.options_name = "editors_emacs".into();
+            i
+        };
+        let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
+        // @nox first and narrower, @pgtk second and wider; they disagree on B.
+        let nox = flavor("nox", &["A", "B"]);
+        let pgtk = flavor("pgtk", &["A", "B", "Y"]);
+        let p = plan_writes(
+            [(&nox.key, &nox, set(&["A"])), (&pgtk.key, &pgtk, set(&["A", "B", "Y"]))].into_iter(),
+            &OptionsFiles::new(tmp.path()),
+            false,
+        );
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].key.to_string(), "editors/emacs@pgtk", "the widest view owns the file");
+        let written = SavedOptionsFile::parse(&p.writes[0].content);
+        assert_eq!(written.complete, vec!["A", "B", "Y"]);
+        assert_eq!(written.set, set(&["A", "B", "Y"]), "B as @pgtk has it, not @nox");
+        assert!(written.unset.is_empty());
+        assert_eq!(p.warnings.len(), 1, "{:?}", p.warnings);
+        assert!(p.warnings[0].starts_with("editors/emacs@nox:"), "{}", p.warnings[0]);
+        assert!(p.warnings[0].contains("using editors/emacs@pgtk (widest view)"), "{}", p.warnings[0]);
+
+        // Same width: the first met owns it, and the other's option is kept.
+        let x = flavor("nox", &["A", "B"]);
+        let y = flavor("pgtk", &["A", "Y"]);
+        let p = plan_writes(
+            [(&x.key, &x, set(&["A", "B"])), (&y.key, &y, set(&["A"]))].into_iter(),
+            &OptionsFiles::new(tmp.path()),
+            false,
+        );
+        assert_eq!(p.writes.len(), 1);
+        assert_eq!(p.writes[0].key.to_string(), "editors/emacs@nox", "first on ties");
+        let written = SavedOptionsFile::parse(&p.writes[0].content);
+        assert_eq!(written.complete, vec!["A", "B", "Y"]);
+        assert_eq!(written.set, set(&["A", "B"]));
+        assert_eq!(written.unset, set(&["Y"]));
+        assert!(p.warnings.is_empty(), "{:?}", p.warnings);
     }
 
     #[test]

@@ -225,8 +225,9 @@ flavors reading it:
 | `baseline` | what `sync` would write with no edits |
 | `staged` | the enabled set being edited |
 
-A shared file is judged from its owner's view: the default flavor, else
-the flavor with the most options. Then:
+A shared file is judged from its owner's view (`session::outranks`): the
+default flavor, else the flavor with the most options, the first on ties.
+Then:
 
 | Question | Function | Rule |
 | :-- | :-- | :-- |
@@ -244,9 +245,10 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 `apply::plan_writes` groups the ports by options file and, for each:
 
 1. leaves it alone under `OPTIONS_OVERRIDE` or an `options.local` reset;
-2. picks the writer: the default flavor, else the first flavor present,
-   whose file is then the union of every present flavor's options plus
-   the old file's lines none of them has;
+2. picks the writer as the session picks the owner (`session::outranks`):
+   the default flavor, else the flavor with the most options, the first
+   on ties, whose file is then the union of every present flavor's
+   options plus the old file's lines none of them has;
 3. under `-m`, removes it when, with `options.local` still read, it
    changes nothing for any flavor and holds no line those flavors cannot
    see;

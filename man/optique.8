@@ -1430,13 +1430,13 @@ When
 .Pa make.conf
 defines
 .Va OPTIONS_OVERRIDE
-for the port, even empty, every one of its options reports
-.Ql override
-instead, whatever
-.Va WITH Ns / Ns Va WITHOUT
-or a
+for the port, even empty, every one of its options that no
 .Va *_FORCE
-knob would otherwise say:
+knob or
+.Va WITH Ns / Ns Va WITHOUT
+pins reports
+.Ql override
+instead:
 .Va value
 is whether the option is named in the override,
 .Va locked
@@ -1444,6 +1444,8 @@ is true and
 .Va locked_by
 is
 .Ql make.conf OPTIONS_OVERRIDE ;
+a pinned option reports its pin as above, since bsd.options.mk applies those
+knobs after the override;
 .Va undecided
 is empty for such a port and
 .Va status

@@ -96,10 +96,14 @@ re-running `make`:
     (`bsd.options.mk:300-304`): defined for the port, even empty, it
     replaces the whole decision — defaults, `OPTIONS_SET`/`UNSET`, the
     per-port pair and the options file are not read, and `PORT_OPTIONS`
-    becomes its value as given. Every option of such a port reports
-    `value` (whether it is named in the override), `scope: "override"`,
-    `locked: true` and `locked_by: "make.conf OPTIONS_OVERRIDE"`; `undecided`
-    is always empty for it and `status` is never `stale` or `unconfigured`
+    becomes its value as given. The `*_FORCE` knobs and `WITH`/`WITHOUT`
+    (`bsd.options.mk:367-409`) still run after it, so an option they pin
+    reports its pin as usual (`scope: "force"` or `"with"`, `locked_by:
+    "make.conf *_FORCE"` or `"make.conf WITH/WITHOUT"`); every other option
+    of such a port reports `value` (whether it is named in the override),
+    `scope: "override"`, `locked: true` and `locked_by: "make.conf
+    OPTIONS_OVERRIDE"`. `undecided` is always empty for such a port and
+    `status` is never `stale` or `unconfigured`
     (`conflict` still applies when the outcome breaks a group or `PREVENTS`
     rule). `decide` refuses any value for such a port's options, and `sync`
     never writes or removes its options file.

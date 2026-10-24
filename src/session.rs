@@ -66,6 +66,17 @@ pub(crate) fn is_preferred(info: &PortInfo) -> bool {
     }
 }
 
+/// Does `candidate` take the shared options file from `owner`, the flavor
+/// holding it so far? The one rule for who owns a shared file, used by the
+/// session and by `apply::plan_writes` alike: the default flavor; without
+/// it, the widest view (most options), the first met on ties. Flavors
+/// exclude options, so the widest view covers the others' (editors/emacs@pgtk's
+/// holds @nox's).
+pub(crate) fn outranks(candidate: &PortInfo, owner: &PortInfo) -> bool {
+    !is_preferred(owner)
+        && (is_preferred(candidate) || candidate.options.complete.len() > owner.options.complete.len())
+}
+
 impl Session {
     pub fn new(
         ports: BTreeMap<PortKey, PortInfo>,
@@ -101,29 +112,19 @@ impl Session {
         session
     }
 
-    /// Recompute the owner (default flavor) of every shared options file.
-    /// Without the default flavor in the closure, the flavor with the most
-    /// options stands for it: flavors exclude options, so the widest view
-    /// covers the others' (editors/emacs@pgtk's holds @nox's), and an edit
-    /// to an option only it has reaches the shared staged set.
+    /// Recompute the owner of every shared options file (`outranks`: the
+    /// default flavor, else the widest view). Without the default flavor in
+    /// the closure the widest view stands for it, so an edit to an option
+    /// only it has reaches the shared staged set.
     fn rebuild_owners(&mut self) {
         let mut owners: HashMap<String, PortKey> = HashMap::new();
         for (key, info) in &self.ports {
             if !info.options.has_options() {
                 continue;
             }
-            match owners.get(&info.options_name) {
-                Some(existing) => {
-                    let existing = self.ports.get(existing);
-                    let existing_preferred = existing.is_some_and(is_preferred);
-                    let wider = existing.is_some_and(|e| {
-                        info.options.complete.len() > e.options.complete.len()
-                    });
-                    if !existing_preferred && (is_preferred(info) || wider) {
-                        owners.insert(info.options_name.clone(), key.clone());
-                    }
-                }
-                None => {
+            match owners.get(&info.options_name).and_then(|k| self.ports.get(k)) {
+                Some(existing) if !outranks(info, existing) => {}
+                _ => {
                     owners.insert(info.options_name.clone(), key.clone());
                 }
             }
@@ -1705,11 +1706,18 @@ mod tests {
 
     /// scan --json --options reports every option of an overridden port
     /// with scope "override", locked, and `locked_by` naming it — whatever
-    /// a FORCE knob or IMPLIES chain would otherwise have said.
+    /// the unread SET/UNSET pairs or an IMPLIES chain would otherwise have
+    /// said.
     #[test]
     fn report_scope_is_override_for_every_option() {
         let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
-        ports.get_mut(&key).unwrap().options.r#override = Some(set(&["A"]));
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.r#override = Some(set(&["A"]));
+            // Unread under the override: not what the report says.
+            o.mc_unset.insert("A".into());
+            o.port_set.insert("B".into());
+        }
         let s = session_for(ports);
         let reports = crate::report::option_reports(&s, &s.ports[&key]);
         assert_eq!(reports.len(), 2);
@@ -1719,6 +1727,43 @@ mod tests {
             assert_eq!((m.value, m.scope), (want_on, "override"), "{}", o.name);
             assert!(o.locked, "{}", o.name);
             assert_eq!(o.locked_by.as_deref(), Some("make.conf OPTIONS_OVERRIDE"), "{}", o.name);
+        }
+    }
+
+    /// bsd.options.mk:300-304 replaces the defaults, the SET/UNSET pairs
+    /// and the file, but the *_FORCE knobs (367-395) and WITH/WITHOUT
+    /// (398-409) run after its `.endif` (365): an option they pin ends up
+    /// at the pin, and the report says so — scope "force" or "with", the
+    /// matching `locked_by` — while the others keep the override's verdict.
+    #[test]
+    fn report_lets_force_and_with_pin_over_the_override() {
+        let (mut ports, key) = mk_port(&["A", "B", "C", "D"], &[], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.r#override = Some(set(&["A", "B"]));
+            // B: the override turns it on, FORCE_UNSET turns it back off.
+            o.force_unset.insert("B".into());
+            // C: never in the override, WITH adds it anyway.
+            o.with.insert("C".into());
+        }
+        let s = session_for(ports);
+        let info = &s.ports[&key];
+        let reports = crate::report::option_reports(&s, info);
+        let find = |name: &str| reports.iter().find(|o| o.name == name).unwrap();
+        for (name, value, scope, by) in [
+            ("A", true, "override", "make.conf OPTIONS_OVERRIDE"),
+            ("B", false, "force", "make.conf *_FORCE"),
+            ("C", true, "with", "make.conf WITH/WITHOUT"),
+            ("D", false, "override", "make.conf OPTIONS_OVERRIDE"),
+        ] {
+            let o = find(name);
+            let m = o.makeconf.as_ref().unwrap_or_else(|| panic!("{name}: no makeconf"));
+            assert_eq!((m.value, m.scope), (value, scope), "{name}");
+            assert!(o.locked, "{name}");
+            assert_eq!(o.locked_by.as_deref(), Some(by), "{name}");
+            // The verdict is what make ends up with.
+            assert_eq!(o.staged, value, "{name}");
+            assert_eq!(nofile_effective(info).contains(name), value, "{name}");
         }
     }
 

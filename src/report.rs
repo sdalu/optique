@@ -112,8 +112,10 @@ pub struct OptionReport {
 #[derive(Clone, Serialize)]
 pub struct MakeConfVerdict {
     pub value: bool,
-    /// `global` (OPTIONS_SET/UNSET), `port` (${OPTIONS_NAME}_SET/_UNSET) or
-    /// `force` (a `*_FORCE` knob, which the options file cannot override).
+    /// `global` (OPTIONS_SET/UNSET), `port` (${OPTIONS_NAME}_SET/_UNSET),
+    /// `force` (a `*_FORCE` knob, which the options file cannot override),
+    /// `with` (WITH/WITHOUT, pinning likewise) or `override` (an
+    /// OPTIONS_OVERRIDE, for an option no FORCE or WITH pins over it).
     pub scope: &'static str,
 }
 
@@ -291,11 +293,14 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
             // What the file says about the option: Some(value) when it has an
             // entry, None when the option is new to it (or there is no file).
             let file_value = saved.and_then(|s| s.value(name));
-            // bsd.options.mk:300-304: an OPTIONS_OVERRIDE decides every
-            // option of the port by itself, before FORCE and WITH/WITHOUT
-            // are even in the picture; every option reports that scope,
-            // locked, whatever `mc_value`/`is_forced` would otherwise say.
-            let (makeconf, locked_by) = if let Some(over) = &opts.r#override {
+            // bsd.options.mk:300-304: an OPTIONS_OVERRIDE replaces the
+            // defaults, the SET/UNSET pairs and the file, so every option
+            // it leaves alone reports that scope, locked. The *_FORCE knobs
+            // and WITH/WITHOUT (367-409) still run after its `.endif`
+            // (365): an option they pin ends up at the pin and reports it,
+            // override or not, as `effective_with` and the TUI have it.
+            let (makeconf, locked_by) = if let (Some(over), false) = (&opts.r#override, opts.is_forced(name))
+            {
                 (
                     Some(MakeConfVerdict { value: over.contains(name), scope: "override" }),
                     Some("make.conf OPTIONS_OVERRIDE".to_string()),
