@@ -1,6 +1,18 @@
 //! The closure scan: breadth first from the roots through every dependency,
 //! each port taken from the cache or queried on a miss, and a dependency on
 //! an origin in no tree refused as poudriere's `deps_sanity` refuses it.
+//!
+//! ```text
+//! roots ─▸ pending ◂────────────────────────────────┐
+//!            │                                      │ deps not yet seen
+//!            ▾                                      │ whose origin is in
+//!          cache ── hit ──────────────▸ register ───┤ a tree; none for a
+//!            │ miss                       ▴         │ blacklisted port
+//!            ▾                            │         ▾
+//!    make runner ── PortDone ─────────────┘      errors deps whose origin
+//!            │                                      ▴   is in no tree
+//!            └── PortError ─────────────────────────┘
+//! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
