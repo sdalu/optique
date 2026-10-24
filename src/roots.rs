@@ -101,30 +101,6 @@ pub fn query_flavors(
     out
 }
 
-/// One note per root of `listed` that synth refuses for want of a flavor:
-/// a bare origin whose port has FLAVORS (`flavors`, by origin) is not in
-/// synth's flavor index, which holds `origin@flavor` for each, and synth
-/// refuses the whole list on it (`input_origin_valid`,
-/// `suggest_flavor_for_bad_origin`). An origin whose FLAVORS are unknown
-/// is not named.
-pub fn synth_bare_flavored(
-    listed: &[PortKey],
-    flavors: &HashMap<String, Vec<String>>,
-) -> Vec<String> {
-    listed
-        .iter()
-        .filter(|k| k.flavor.is_none())
-        .filter_map(|k| {
-            let fl = flavors.get(&k.origin).filter(|f| !f.is_empty())?;
-            Some(format!(
-                "synth refuses this list: {} is a flavored port given without its flavor ({})",
-                k.origin,
-                fl.iter().map(|f| format!("{}@{f}", k.origin)).collect::<Vec<_>>().join(", ")
-            ))
-        })
-        .collect()
-}
-
 /// How the build reads MOVED for a listed origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MovedPolicy {
@@ -437,25 +413,6 @@ mod tests {
             .map(|k| k.to_string())
             .collect();
         assert_eq!(queried, ["misc/flav"]);
-    }
-
-    /// Under -s, a listed bare origin of a flavored port is named, synth
-    /// refusing the list on it; a flavored entry, an unflavored port and
-    /// one whose FLAVORS are unknown are not.
-    #[test]
-    fn synth_names_a_bare_flavored_origin() {
-        let flavors: HashMap<String, Vec<String>> = [
-            ("misc/flav".to_string(), vec!["a".to_string(), "b".to_string()]),
-            ("misc/plain".to_string(), Vec::new()),
-        ]
-        .into_iter()
-        .collect();
-        let listed = keys(&["misc/flav", "misc/flav@a", "misc/plain", "misc/unknown"]);
-        assert_eq!(
-            synth_bare_flavored(&listed, &flavors),
-            ["synth refuses this list: misc/flav is a flavored port given without its flavor \
-              (misc/flav@a, misc/flav@b)"]
-        );
     }
 
     /// `cat/old@all` and, under FLAVOR_DEFAULT_ALL, bare `cat/old` root

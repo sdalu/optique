@@ -2729,21 +2729,10 @@ This applies to the TUI,
 and
 .Cm clean Fl -unused .
 .Pp
-A list given is read the poudriere way in every mode, but synth refuses a
-whole list on any entry not in its flavor index verbatim; under
-.Fl s ,
-each such entry is named in a
-.Ql synth refuses this list:
-note: a comment line, a line holding more than an origin, a list line
-ending in
-.Ql / ,
-an entry starting with
-.Ql / ,
-an
-.Ar origin Ns @all
-or
-.Ar origin Ns @- ,
-and the bare origin of a port that has flavors.
+A list given is read the poudriere way in every mode.
+synth's own list syntax is stricter, taking only its flavor index's keys
+verbatim; a list synth refuses is left to the user to fix, and optique
+says nothing of it.
 .Pp
 synth refuses a build when the saved options file of a port without
 flavors,

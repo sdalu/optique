@@ -268,12 +268,9 @@ implicit list to packages installed from the named pkg repositories,
 e.g. `--repo Synth` to consider only synth-built packages; the names are
 listed by `pkg query -a %R`.
 
-A list given is read poudriere's way in every mode, but synth refuses a
-whole list on any entry not in its flavor index verbatim. Under `-s`,
-each such entry is named in a `synth refuses this list:` note: a comment
-line, a line holding more than an origin, a list line ending in `/`, an
-entry starting with `/`, `origin@all` or `origin@-`, and the bare origin
-of a port that has flavors.
+A list given is read poudriere's way in every mode. synth's own list
+syntax is stricter, taking only its flavor index's keys verbatim; a list
+synth refuses is left to the user to fix, and optique says nothing of it.
 
 synth refuses a build when the saved options file of a port without
 flavors, `<category>_<name>/options`, names an option the port lacks or

@@ -62,11 +62,9 @@ installed side by side are each a root). `--repo NAME` (repeatable)
 narrows that implicit list to packages installed from the named pkg
 repositories, and is rejected when any ports *are* given, and with
 `decide` and plain `clean`, since it only means something for the
-implicit list. A list given is still read poudriere's way, but synth
-refuses a whole list on any entry not in its flavor index verbatim: each
-such entry (a comment line, a line holding more than an origin, a list
-line ending in `/`, a leading `/`, `@all`, `@-`, a flavored port's bare
-origin) is named in a `synth refuses this list:` note.
+implicit list. A list given is still read poudriere's way; synth's own
+list syntax is stricter (only its flavor index's keys, verbatim), and a
+list it refuses is the user's to fix, not optique's to report.
 
 ## `tui` (the default)
 
