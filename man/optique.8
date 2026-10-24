@@ -3,7 +3,7 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd October 22, 2026
+.Dd October 24, 2026
 .Dt OPTIQUE 8
 .Os
 .Sh NAME
@@ -103,16 +103,8 @@ Queries run in parallel
 .Pq up to 16 by default, see Fl J
 so a cold closure of about a thousand ports completes in roughly a minute.
 Every result is cached
-.Pq see Sx FILES
-keyed on the ports tree revision, the hash of the merged
-.Pa make.conf
-layers
-.Pq their own text, not the files they include; see Sx CAVEATS ,
-the host values the ports framework computes for every port
-.Pq release, architecture, CPU count; probed once per run and given to each query ,
-and the content of the port's own options file and of the
-.Pa options.local
-beside it, so subsequent runs
+.Pq see Sx Query cache ,
+so subsequent runs
 re-invoke
 .Nm make
 only for ports whose inputs actually changed and typically finish in well
@@ -205,6 +197,87 @@ each such port's row ends with
 .Ql [dependency loop]
 and the loop counts towards the exit gate unless every one of its members is
 blacklisted.
+.Ss Query cache
+Every query's answer is kept under
+.Pa ~/.cache/optique/
+.Pq see Sx FILES ,
+so a later run re-invokes
+.Nm make
+only for the ports whose inputs changed.
+Answers are grouped in generations, one file each, and a generation is one
+state of:
+.Bl -bullet
+.It
+the ports tree: the git commit its
+.Pa .git
+names, or, on a tree without git, the modification times of
+.Pa Mk/bsd.port.mk ,
+.Pa MOVED
+and
+.Pa UPDATING ;
+.It
+every overlay: the count and newest modification time of its files, down to
+.Pa category/port/file
+.Pq see Sx OVERLAYS ;
+.It
+the text of the staged
+.Pa make.conf
+layers, not of the files they include;
+.It
+the host values the ports framework computes for any port
+.Pq release, architecture, CPU count: its Va _EXPORTED_VARS ,
+read once per run from a port that uses nothing and then given to every
+query on its command line, as the framework gives them to its own sub-makes;
+an upgraded host is therefore a new generation;
+.It
+for a local build, the size and modification time of pkg's
+.Pa local.sqlite
+and the invoking
+.Ev USER
+.Pq see Sx LOCAL BUILDS .
+.El
+.Pp
+Within a generation, an entry answers for its port as long as the port's
+options file and the
+.Pa options.local
+beside it hold the bytes the query saw.
+.Pp
+When a git tree moves to another commit, the new generation starts with the
+entries of the latest one made under the same
+.Pa make.conf
+and overlays that the commits in between leave alone, as
+.Ql git diff-tree
+lists them.
+An entry goes when a file
+.Nm make
+read for the port changed
+.Pq its Va .MAKE.MAKEFILES ,
+when anything changed in the port's own directory or, for a slave port, its
+master's, or when its category's own files changed
+.Pq not its Pa Makefile ;
+a new
+.Pa Mk/*.mk ,
+or a top-level file other than
+.Pa MOVED , UPDATING , CHANGES , UIDs , GIDs
+and the like, takes them all.
+Scripts under
+.Pa Mk/ ,
+.Pa Tools/ , Templates/
+and
+.Pa Keywords/
+take none, being read only by targets.
+The startup banner says how many entries were carried over.
+Without git, or when git cannot list the changes, nothing is carried over
+and the closure is queried afresh.
+.Pp
+The current generation and the most recent other one are kept; older ones,
+and those of another cache format, are removed when a generation is opened.
+.Fl -no-cache
+neither reads nor writes the cache;
+.Fl -clear-cache
+deletes every generation first.
+What the cache cannot see is listed under
+.Sx CAVEATS .
 .Ss Global options
 These options follow the action
 .Pq Ql optique scan -z ws -f list ;
@@ -2821,27 +2894,12 @@ in which case
 is used; an empty or relative
 .Ev XDG_CACHE_HOME
 is ignored.
-Stale generations are pruned automatically.
-When a git tree moves to another commit, the new generation starts with the
-entries of the previous one made under the same
+Each file starts with a line naming the commit, overlays and
 .Pa make.conf
-and overlays that the commits in between leave alone, as
-.Ql git diff-tree
-lists them: an entry goes when a file
-.Nm make
-read for the port changed, or anything in the port's own directory or its
-master's; a new
-.Pa Mk/*.mk
-or an unknown top-level file takes them all.
-The startup banner says how many were carried over.
-Without git, nothing is carried over.
-A change to a file a
-.Pa make.conf
-includes does not start a new generation; clear the cache with
-.Fl -clear-cache
-.Pq see Sx CAVEATS .
-Disabled entirely by
-.Fl -no-cache .
+hash it was made for.
+What keys a generation, when an entry answers, and how a tree update
+carries entries over are described under
+.Sx Query cache .
 .It Pa ~/.cache/optique/drafts/
 Saved staged edits from an interrupted session, one JSON file per options
 directory, named after a hash of its path.
@@ -3075,10 +3133,38 @@ or
 After editing such an included file,
 .Nm
 keeps serving the answers cached under the old content, without any
-warning, until the ports tree revision or a
+warning, until a
 .Pa make.conf
-itself changes.
+layer itself changes: a ports tree update keeps every answer its changes
+leave alone
+.Pq see Sx Query cache .
 Run once with
 .Fl -clear-cache
 .Pq or use Fl -no-cache
 to have the edit seen.
+.Pp
+A git ports tree is known by its commit: a port edited in the tree and not
+committed is not seen, and its cached answer stays.
+Edit ports in an overlay, whose files are keyed by modification time
+.Pq see Sx OVERLAYS ,
+or run with
+.Fl -no-cache
+while editing.
+.Pp
+A cached answer is carried over a tree update when no file
+.Nm make
+read for it changed.
+A port that
+.Pa Mk/Uses/zig.mk
+or
+.Pa Mk/Uses/electron.mk
+IGNOREd because the
+.Pa lang/zig<N>
+or
+.Pa devel/electron<N>
+port it asks for was not in the tree keeps that IGNORE once a later commit
+adds the port, until the port itself or the
+.Pa .mk
+changes; run once with
+.Fl -clear-cache
+if such a port should have come back.

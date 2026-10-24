@@ -48,7 +48,9 @@ the dependency list (twice: the framework's own `_UNIFIED_DEPENDS`, and the
 lists poudriere builds without `-t`, so that test-only edges can be told
 apart on a tree old enough to still fold `TEST_DEPENDS` in; see
 [dependency loops](dependency-loops.md)). A query takes about 0.2–0.6 s, and
-up to 16 run in parallel (`-J` changes that).
+up to 16 run in parallel (`-J` changes that). What bsd.port.mk would work
+out about the host in every query (release, arch, CPU count, pkg's
+version) is probed once per run and given to each on its command line.
 
 Every query runs under the make.conf the build would use. For poudriere,
 that is the one it would use for the same jail, tree and set, wrapped in a
@@ -80,32 +82,87 @@ whose query fails, count in `scan`'s exit status.
 
 ## The cache
 
-Answers are cached under `~/.cache/optique/`, keyed on the ports tree's git
-HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
-`UPDATING`) and every overlay's (the count and newest mtime of its files,
-even in a git checkout, since overlay ports are edited before any commit),
-the hash of the layered make.conf, and the content of the
-port's options file and of the `options.local` beside it, which make reads
-after it. A local build also keys on pkg's database
-(`local.sqlite`), since its queries see the installed packages: a package
-install or delete starts a new generation; and on the invoking `USER`, its
-queries running as that user. Every build also keys on the values
-bsd.port.mk works out about the host (release, arch, CPU count), probed
-once per run and then given to every query, so an upgraded host starts a
-new generation. Files a make.conf `.include`s are not part of that hash:
-after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
-only ports whose inputs changed are queried again. When the tree moves to
-another git commit, the new generation starts with the entries of the
-previous one that the commits in between leave alone: an entry goes when
-a file make read for the port changed, or anything in the port's own
-directory (or its master's), so a daily update re-queries a handful of
-ports rather than all of them. The banner says how many entries were
-carried over.
+Answers are cached under `~/.cache/optique/`, so a later run queries only
+the ports whose inputs changed: a warm run over a thousand ports takes well
+under a second. The man page's "Query cache" subsection is the reference;
+the reasons, the measurements and what was rejected are in
+[DESIGN.md](../DESIGN.md#persistent-cache-keyed-on-what-actually-changed).
+
+### What keys a generation
+
+Answers are grouped in generations, one JSON Lines file each, named
+`v<schema>-<tree>-<make.conf hash>.jsonl`. A generation is one state of:
+
+- the ports tree: its git HEAD, read from `.git` without running git, or
+  on a tree without git the mtimes of `Mk/bsd.port.mk`, `MOVED` and
+  `UPDATING`;
+- every overlay: the count and newest mtime of its files, even in a git
+  checkout, since overlay ports are edited before any commit;
+- the text of the staged make.conf, layers and all;
+- the values bsd.port.mk works out about the host (release, arch, CPU
+  count: its `_EXPORTED_VARS`). They are read once per run from a probe
+  port that uses nothing, then given to every query on its command line,
+  as the framework gives them to its own sub-makes; an upgraded host is a
+  new generation;
+- for a local build, pkg's database (size and mtime of `local.sqlite`),
+  since its queries see the installed packages, and the invoking `USER`,
+  its queries running as that user.
+
+The current generation and the most recent other one are kept; older ones
+are removed when a generation is opened, and so are those an older optique
+wrote in another format.
+
+### When an entry answers
+
+Within a generation, an entry answers for its port while the port's
+options file and the `options.local` beside it, which make reads after it,
+hold the bytes the query saw.
 
 Each options file is read once per run, whoever needs it: the cache check,
 the session, the TUI's staging copy and the write planning all share that
 read. An options file that exists but cannot be read is an error for its
 port, never mistaken for a missing one.
+
+### After a tree update
+
+When the tree moves to another git commit, the new generation starts with
+the entries of the latest one made under the same make.conf and overlays
+that the commits in between leave alone. optique runs `git diff-tree`
+between the two commits; each entry keeps the list of the tree's files
+make read for it (`.MAKE.MAKEFILES`), and goes when:
+
+- one of those files changed (`Mk/bsd.port.mk`, a `Mk/Uses/*.mk` it
+  uses, another port's `Makefile.version` it includes);
+- anything changed in the port's own directory or, for a slave, its
+  master's: `pkg-help`, `Makefile.local` and `files/` are probed there,
+  not included;
+- a file of its category changed other than the category's `Makefile`
+  (`../Makefile.inc` is probed).
+
+A new `Mk/*.mk`, or a top-level file other than `MOVED`, `UPDATING`,
+`CHANGES`, `UIDs`, `GIDs` and the like, takes every entry. `Mk/` scripts,
+`Tools/`, `Templates/` and `Keywords/` take none: only targets read them.
+On a thousand-port closure a day's update re-queried 3 ports and a week's
+44. The banner says how many entries were carried over. Without git, or
+when git cannot list the changes (the old commit gone), nothing is carried
+over.
+
+### What it does not see
+
+- Files a make.conf `.include`s: after editing one, run once with
+  `--clear-cache`. A tree update does not clear their stale answers any
+  more, since it keeps whatever its changes leave alone.
+- A port edited in a git tree and not committed: the tree is known by its
+  commit. Edit ports in an [overlay](configuration.md#overlays), keyed by
+  its files' mtimes, or run with `--no-cache` while editing.
+- A `lang/zig<N>` or `devel/electron<N>` port added after a port using it
+  was found IGNOREd for its absence: that IGNORE is carried over until the
+  port or the `.mk` changes.
+
+### Turning it off
+
+`--no-cache` neither reads nor writes the cache; `--clear-cache` deletes
+every generation first. There is no environment variable for either.
 
 ## The session and the TUI
 

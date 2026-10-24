@@ -179,10 +179,17 @@ test-only edge, which poudriere's `deps_sanity` never checks. A
 blacklisted port is kept but its dependencies are not queued. Each answer is stored under the
 port's canonical key with an alias from the requested one.
 
-A cache entry is valid while the tree (git HEAD, or the mtimes of
-`Mk/bsd.port.mk`, `MOVED`, `UPDATING`), the staged make.conf, the
-overlays, `SCHEMA`, and the bytes of the port's options file and
-`options.local` are unchanged.
+A generation is named by `SCHEMA`, the trees (`cache::trees`: git HEAD,
+or the mtimes of `Mk/bsd.port.mk`, `MOVED`, `UPDATING`; each overlay's
+walk) and `conf_hash`, which holds the staged make.conf, the framework
+values, and for a local build pkg's database and `USER`. Its file starts
+with a `Header` naming the commit, overlays and full `conf_hash`. An entry
+answers while the bytes of the port's options file and `options.local`
+are unchanged. A new generation of a git tree is seeded by `carry_over`:
+the latest earlier generation with the same overlays and `conf_hash` is
+diffed against it with `git diff-tree`, and `Invalidation::keeps` drops
+the entries whose `PortInfo::makefiles`, owned port directories or
+category the changes touch.
 
 ## The options model
 
@@ -330,9 +337,13 @@ in-memory terminal: `key`, `keys`, `dump`, `state`, `settle`, `resize`,
 ## Invariants
 
 - Nothing is written before apply, and an apply is all or nothing.
-- Every input that changes a query's answer is in the cache key: the
-  tree, the staged make.conf text, overlays, `SCHEMA`, the options file
-  and `options.local` bytes.
+- Every input that changes a query's answer is in the cache key or the
+  entry: the staged make.conf text, the framework values, a local build's
+  pkg database and `USER`, overlays, `SCHEMA`, the options file and
+  `options.local` bytes, and the tree, either as the generation's commit
+  or, for an entry carried over, as the files make read for it, the
+  directories it owns and its category; the exceptions are the ones the
+  man page's CAVEATS lists.
 - A query sees no environment variable but `PATH`, `TMPDIR`,
   `PKG_DBDIR`, and the `USER` and `HOME` of whoever runs the build (root
   in a builder); `PORTSDIR` and `PORT_DBDIR` are always passed, absolute.

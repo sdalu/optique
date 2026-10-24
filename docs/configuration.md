@@ -96,7 +96,8 @@ it to each builder's).
 **Limitation:** the query cache is keyed on the text of the make.conf
 files, not of the files they `.include`. After editing an included file,
 run with `--clear-cache` once, or its change is not seen until something
-else invalidates the cached answers.
+else invalidates the cached answers; a tree update no longer does for most
+of them ([the cache](how-it-works.md#what-it-does-not-see)).
 
 ## The jail environment
 
