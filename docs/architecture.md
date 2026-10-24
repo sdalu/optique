@@ -63,7 +63,7 @@ interfaces sit side by side on the session.
 | `optfiles.rs` | Every options file of the options dir, each read from disk once | `OptionsFiles` |
 | `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_by`, `toggle` |
 | `apply.rs` | What to write and remove, and writing it atomically | `plan_writes`, `PendingWrite`, `plan_stale_removals`, `apply`, `commit` |
-| `clean.rs` | Classifying options-dir entries | `classify_entries`, `split_unused`, `redundancy_diff`, `remove_all` |
+| `clean.rs` | Classifying options-dir entries | `classify_entries`, `split_unused`, `prune`, `read_through_moved`, `keep_read`, `redundancy_diff`, `remove_all` |
 | `decide.rs` | A JSON plan applied to a session | `Plan`, `apply_plan` |
 | `report.rs` | Every `--json` payload | `ScanReport`, `WriteReport`, `option_reports` |
 | `staging.rs` | The TUI's private copy of the options dir | `StagingDb` |
@@ -120,7 +120,10 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   live), optionally drops those outside the closure (`--unused`) and
   those that change nothing (`--redundant`, one query per flavor sharing
   a file), never one optique cannot model; `--unused` refuses on any scan
-  error, and on a listed origin MOVED moves that was not followed.
+  error but a make.conf `PORT_DBDIR`, and on a listed origin MOVED moves
+  that was not followed. While make.conf sets `OPTIONS_FILE`, `clean::prune`
+  holds every vanished and unused entry; `clean::keep_read` keeps the
+  entry a queried port's moved file lies in.
 - **tui** adds a staging copy of the options dir, a refresher thread
   and the event loop on top of the session.
 
@@ -145,7 +148,13 @@ and the invoking `USER` into the hash: what is installed, and who runs
 the build, are part of its answer. Last, `with_framework` runs the probe
 port (`wrapper::FRAMEWORK_PROBE`) once under the settled tree, make.conf
 and environment, keeps the `_EXPORTED_VARS` bsd.port.mk reports
-(`Settings::framework`), and folds them into the hash.
+(`Settings::framework`), and folds them into the hash. Then
+`with_options_place` asks make, with no port and no `PORT_DBDIR` on its
+command line (`makerunner::options_place`), what the make.conf alone sets
+of `PORT_DBDIR` and `OPTIONS_FILE` (`Settings::options_place`, None when
+make cannot say): `Settings::port_dbdir_error` compares the first with
+where the build reads options, and `config::relocated_options` tells
+`clean` from the second that entry names cannot be trusted.
 
 `roots::apply_moved` reads MOVED for each listed originspec, as the build
 reads it (`MovedPolicy` from `QueryEnv`: poudriere looks up every one,

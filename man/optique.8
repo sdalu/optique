@@ -168,6 +168,61 @@ records of it, as poudriere refuses the bulk on it.
 The dependencies of an IGNOREd or blacklisted port, and those only
 .Va TEST_DEPENDS
 asks for, are not checked, as poudriere does not check them.
+.Pp
+Queries are given the options directory as
+.Va PORT_DBDIR
+on the command line of
+.Xr make 1 ,
+where it wins over any
+.Pa make.conf ;
+a build is given none.
+So once per run, with the
+.Pa make.conf
+settled,
+.Nm
+asks
+.Xr make 1 ,
+outside any port, what that
+.Pa make.conf
+alone sets of
+.Va PORT_DBDIR
+and
+.Va OPTIONS_FILE .
+A
+.Va PORT_DBDIR
+other than the directory the build reads options from \(em the options
+directory itself for a local build, the jail's
+.Pa /var/db/ports
+for poudriere, the scan slave's
+.Pa /options
+for synth \(em sends every port of the build to that directory, where none of
+the files
+.Nm
+reports and edits is read.
+The banner says so, even under
+.Fl q :
+.Dl error: make.conf sets PORT_DBDIR=/var/db/myports: the build reads that directory, not /usr/local/etc/poudriere.d/options
+.Cm scan
+counts it as an error
+.Pq see Sx EXIT STATUS ;
+.Cm sync ,
+.Cm decide
+and
+.Cm clean
+go on, writing being harmless there, only useless.
+An
+.Va OPTIONS_FILE
+set there keeps
+.Cm clean
+from removing entries as vanished or unused
+.Pq see Cm clean .
+When
+.Xr make 1
+cannot say, the banner notes it, and
+.Cm clean
+acts as if
+.Va OPTIONS_FILE
+were set.
 .Ss Dependency loops
 Resolving the closure also detects dependency loops: ports that are, directly
 or through other ports, their own dependency.
@@ -1476,6 +1531,14 @@ each with
 .Va subject
 and
 .Va message :
+first, under the subject
+.Ql make.conf ,
+a
+.Pa make.conf
+setting a
+.Va PORT_DBDIR
+the build reads instead of the options directory
+.Pq see Sx DESCRIPTION ;
 a port whose query failed, or a listed origin
 .Pa MOVED
 says is gone, missing from
@@ -1994,6 +2057,45 @@ leaves to
 .Xr make 1
 .Pq see Cm sync
 is never removed, whichever option asks: a warning names it as kept.
+.Pp
+An entry is mapped back to its port by its name, which
+.Xr make 1
+derives from
+.Va OPTIONS_FILE .
+A
+.Pa make.conf
+setting
+.Va OPTIONS_FILE
+.Pq other than bsd.options.mk's own Ql ${PORT_DBDIR}/${OPTIONS_NAME}/options
+breaks that mapping: with per-flavor files,
+.Pa editors_emacs-nox
+is the file of
+.Pa editors/emacs@nox ,
+not of a vanished
+.Pa editors/emacs-nox .
+Then no entry is removed as vanished or unused, with one warning:
+.Dl warning: make.conf sets OPTIONS_FILE (value): optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused
+and the same, beginning
+.Dq make could not say whether make.conf sets OPTIONS_FILE ,
+when
+.Xr make 1
+could not be asked.
+.Fl r
+still judges the entries of live ports
+.Nm
+manages; a port whose
+.Va OPTIONS_FILE
+moved is not one.
+Under
+.Fl u
+or
+.Fl r ,
+an entry that the moved
+.Va OPTIONS_FILE
+of a port queried lies in is kept whatever its name says, which covers a
+.Pa make.conf
+moving it for some ports only:
+.Dl warning: misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept
 .Bl -tag -width Ds
 .It Fl r , Fl -redundant
 Also remove files whose recorded configuration is exactly what defaults plus
@@ -2011,7 +2113,10 @@ which is then required.
 If any port in that closure fails to query, or there is any other error a
 .Cm scan
 would count
-.Pq see Sx EXIT STATUS ,
+.Pq see Sx EXIT STATUS
+but a
+.Pa make.conf
+.Va PORT_DBDIR ,
 such as a dependency on an origin in no tree, the closure is incomplete and
 .Nm
 refuses to prune anything rather than risk deleting live configuration,
@@ -3077,7 +3182,13 @@ not all of whose members are blacklisted, or the list names an origin
 .Pa MOVED
 moves, not followed
 .Pq without Fl -follow-moved ,
-or there is an error: a port
+or there is an error: the
+.Pa make.conf
+sets a
+.Va PORT_DBDIR
+the build reads instead of the options directory
+.Pq see Sx DESCRIPTION ,
+a port
 could not be checked because its query failed, or a listed origin is gone
 from the tree (it, and what it depends on, are missing from the report), or
 a port depends on an origin in no tree

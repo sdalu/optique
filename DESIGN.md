@@ -403,6 +403,29 @@ may hold its own assignments. Rejected: ignoring such a line with a
 warning, as `!=` once was, which let a write drop it and judged the port
 from a reading make does not share.
 
+The queries' own command line hides two make.conf settings from them:
+`PORT_DBDIR`, which optique passes there and a build does not, and
+`OPTIONS_FILE` for any entry no queried port reads. So once per run, after
+the make.conf is staged, one make with no port and neither on its command
+line (`makerunner::options_place`) asks what that make.conf alone sets:
+outside bsd.port.mk nothing else sets either, and the framework probe
+cannot answer, as it passes its own `PORT_DBDIR`. A `PORT_DBDIR` other
+than where the build reads options (the options dir on the host, the
+jail's /var/db/ports, synth's /options) is an error: the whole build reads
+an empty directory while optique edits files nobody reads. scan counts it
+but still reports, the rest being valid; the other commands say it and go
+on. A moved `OPTIONS_FILE` breaks the one assumption `clean` lives by,
+that an entry's name is its port's: under per-flavor files
+`editors_emacs-nox` is `editors/emacs@nox`'s file, not a vanished port's.
+So `clean` then removes nothing as vanished or unused, and the same when
+the probe failed; `--redundant` still judges managed live ports. Under
+`--unused` and `--redundant`, the entry a queried port's moved file lies
+in is also kept: that needs no make.conf value and covers a move made per
+port, which a probe outside any port cannot see. Rejected: guessing the
+names a moved `OPTIONS_FILE` yields (per-flavor suffixes and the like),
+which works only for the spellings guessed and deletes a file make reads
+for any other.
+
 An `options.local` locks only what its UNSET entries match:
 bsd.options.mk applies every SET entry, the file's and options.local's,
 before any UNSET one, so a SET there is a default the file's UNSET

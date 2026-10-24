@@ -171,6 +171,9 @@ struct CleanCtx {
     cache: Option<cache::Cache>,
     /// OPTIONS_NAMEs reached by the given list's closure; None without --unused.
     used: Option<std::collections::HashSet<String>>,
+    /// Entries a closure port's moved OPTIONS_FILE has make read, each with
+    /// that port (`clean::read_through_moved`); empty without --unused.
+    read: std::collections::BTreeMap<String, String>,
     /// Holds the layered make.conf alive until the pass is done.
     _staging: tempfile::TempDir,
 }
@@ -215,6 +218,7 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             jobs: default_jobs(cli),
             cache: None,
             used: None,
+            read: Default::default(),
             _staging: staging,
         };
         return clean_options_dir(cli, args, ctx);
@@ -244,49 +248,62 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         );
     }
     let used = scanned.result.ports.values().map(|i| i.options_name.clone()).collect();
+    // Sorted by port, so the port each note names is the same every run.
+    let mut infos: Vec<&model::port::PortInfo> = scanned.result.ports.values().collect();
+    infos.sort_by(|a, b| a.key.cmp(&b.key));
+    let read = clean::read_through_moved(&scanned.settings.options_dir, infos);
     let ctx = CleanCtx {
         settings: scanned.settings,
         moved: scanned.moved,
         jobs: scanned.jobs,
         cache: Some(scanned.cache),
         used: Some(used),
+        read,
         _staging: scanned.staging,
     };
     clean_options_dir(cli, args, ctx)
 }
 
 fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<()> {
-    let CleanCtx { settings, moved, jobs, cache: open_cache, used, _staging } = ctx;
+    let CleanCtx { settings, moved, jobs, cache: open_cache, used, mut read, _staging } = ctx;
     let paint = stderr_color(cli);
     eprintln!("{} options dir {}", tint(paint, ansi::BOLD, "optique clean:"), settings.options_dir.display());
     for note in &settings.notes {
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
+    // --unused had run_scan's banner say it already.
+    if used.is_none() {
+        if let Some(e) = settings.port_dbdir_error() {
+            eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
+        }
+    }
 
-    let (mut removals, live, mut warnings) =
+    let (vanished, live, mut warnings) =
         clean::classify_entries(
             &settings.options_dir,
             &settings.portsdir,
             &settings.overlay_paths(),
             &moved,
         );
-    let total_entries = removals.len() + live.len();
-    for w in &warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
-    }
+    let total_entries = vanished.len() + live.len();
     // Only --verbose fills this in; JSON reports it as `kept`.
     let mut kept_entries: Vec<(String, String)> = Vec::new();
 
-    // Entries nobody in the closure reads go; the redundancy pass below then
-    // only has to look at what --unused still keeps.
-    let live = match &used {
-        Some(used) => {
-            let (kept, unused) = clean::split_unused(live, used);
-            removals.extend(unused);
-            kept
-        }
-        None => live,
-    };
+    // Entries whose port vanished go, and so do, under --unused, those
+    // nobody in the closure reads, unless make.conf relocates options
+    // files; the redundancy pass below then only has to look at what is
+    // still live.
+    let relocated = config::relocated_options(settings.options_place.as_ref());
+    warnings.extend(relocated.clone());
+    for w in &warnings {
+        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+    }
+    let pruned = clean::prune(vanished, live, used.as_ref(), relocated.is_some());
+    let (mut removals, live) = (pruned.removals, pruned.live);
+    if cli.verbose {
+        let why = "make.conf relocates options files";
+        kept_entries.extend(pruned.held.into_iter().map(|name| (name, why.to_string())));
+    }
 
     // Optionally find files that only repeat defaults + make.conf.
     if args.redundant {
@@ -294,12 +311,23 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         let found = find_redundant(cli, &settings, jobs, cache, &live);
         removals.extend(found.removals);
         warnings.extend(found.warnings);
-        if cli.verbose && !args.json {
-            for (name, why) in &found.kept {
-                outln!("keep  {name:<38} {why}")?;
-            }
+        kept_entries.extend(found.kept);
+        for (entry, port) in found.read {
+            read.entry(entry).or_insert(port);
         }
-        kept_entries = found.kept;
+    }
+    kept_entries.sort();
+    if cli.verbose && !args.json {
+        for (name, why) in &kept_entries {
+            outln!("keep  {name:<38} {why}")?;
+        }
+    }
+
+    // An entry a moved OPTIONS_FILE has make read is kept whatever its
+    // name says, even where the make.conf probe saw no move.
+    for note in clean::keep_read(&mut removals, &read) {
+        eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+        warnings.push(note);
     }
 
     // Obsolete, unused and redundant removals were collected separately.
@@ -381,6 +409,9 @@ struct Redundancy {
     /// Entries kept and why, sorted; only --verbose fills it in.
     kept: Vec<(String, String)>,
     warnings: Vec<String>,
+    /// Entries a queried port's moved OPTIONS_FILE has make read, each with
+    /// the first such port (`clean::read_through_moved`).
+    read: std::collections::BTreeMap<String, String>,
 }
 
 /// Query the port of every live entry and mark the files that only repeat
@@ -468,6 +499,15 @@ fn find_redundant(
                 Ok(info) => info.key.clone(),
                 Err((key, _)) => key.clone(),
             };
+            if let Ok(info) = &result {
+                // Answers arrive in any order: the smallest port names it.
+                for (entry, port) in clean::read_through_moved(&settings.options_dir, [info]) {
+                    let named = found.read.entry(entry).or_insert_with(|| port.clone());
+                    if port < *named {
+                        *named = port;
+                    }
+                }
+            }
             let plain = PortKey::new(key.origin.clone(), None);
             if key.flavor.is_none() {
                 let Some(entry) = by_key.get(&key) else { continue };
@@ -1027,6 +1067,11 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             }
         }
     }
+    // Writing to the options dir is harmless, only useless: said, even
+    // under -q, and the run goes on (scan counts it among its errors).
+    if let Some(e) = settings.port_dbdir_error() {
+        eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
+    }
 
     let t0 = Instant::now();
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
@@ -1423,12 +1468,23 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     // it depends on: neither it nor they were checked, so the gate stays
     // shut until it can be (run_scan already named each one on stderr). So
     // does a dependency on a nonexistent origin, which no build gets past.
-    let query_errors = &scanned.result.errors;
+    // A make.conf sending the build to another options dir comes first:
+    // the report is still valid, but for files the build never reads.
+    let errors: Vec<report::ErrorEntry> = settings
+        .port_dbdir_error()
+        .map(|message| report::ErrorEntry { subject: "make.conf".to_string(), message })
+        .into_iter()
+        .chain(scanned.result.errors.iter().map(|(key, msg)| report::ErrorEntry {
+            subject: key.to_string(),
+            message: msg.clone(),
+        }))
+        .collect();
     // The gate: ports owing a decision, loops a human has to untangle,
     // listed origins MOVED moves that were not followed (the list needs a
     // fix), and errors: ports that could not be checked, or depend on no
-    // port.
-    let pending = attention + blocking_loops + flagged_moves + query_errors.len();
+    // port, and a make.conf moving the options dir.
+    let error_count = errors.len();
+    let pending = attention + blocking_loops + flagged_moves + error_count;
 
     if json {
         // stdout must stay pure JSON: one object, no table, quiet ignored.
@@ -1475,14 +1531,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 loops: dep_loops.len(),
                 loops_blocking: blocking_loops,
                 moved: flagged_moves,
-                errors: query_errors.len(),
+                errors: error_count,
                 pending,
             },
             moved: report::moved_entries(&scanned.moves),
-            errors: query_errors
-                .iter()
-                .map(|(key, msg)| report::ErrorEntry { subject: key.to_string(), message: msg.clone() })
-                .collect(),
+            errors,
         };
         report::print(&report)?;
     } else if !cli.quiet {
@@ -1556,7 +1609,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     if flagged_moves > 0 {
         loop_note.push_str(&format!(" · {flagged_moves} listed moved (see above)"));
     }
-    match query_errors.len() {
+    match error_count {
         0 => {}
         n => loop_note.push_str(&format!(" · {n} error{} (see above)", if n == 1 { "" } else { "s" })),
     }

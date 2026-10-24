@@ -142,7 +142,7 @@ fn make_command(ctx: &QueryCtx, dir: &Path) -> Command {
     // environment or /etc/make.conf over this tree; resolved as make's own
     // autodetection from the port's directory would (`:tA`).
     let portsdir = ctx.portsdir.canonicalize().unwrap_or_else(|_| ctx.portsdir.clone());
-    let mut cmd = Command::new("/usr/bin/make");
+    let mut cmd = bare_make(ctx.identity, ctx.make_conf.as_deref());
     cmd.arg("-C")
         .arg(dir)
         .arg(format!("PORTSDIR={}", portsdir.display()))
@@ -150,6 +150,13 @@ fn make_command(ctx: &QueryCtx, dir: &Path) -> Command {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    cmd
+}
+
+/// `/usr/bin/make` in the environment every query runs in, `make_conf` as
+/// its `__MAKE_CONF` when given.
+fn bare_make(identity: Identity, make_conf: Option<&Path>) -> Command {
+    let mut cmd = Command::new("/usr/bin/make");
     // Nothing of the caller's environment but what any make needs to run:
     // an exported make variable (OPTIONS_SET, MAKEFLAGS, ...) would change
     // the answer without changing the cache key, and no builder sees it. What
@@ -166,11 +173,33 @@ fn make_command(ctx: &QueryCtx, dir: &Path) -> Command {
             cmd.env(var, value);
         }
     }
-    cmd.envs(identity_env(ctx.identity, |var| std::env::var_os(var)));
-    if let Some(conf) = &ctx.make_conf {
+    cmd.envs(identity_env(identity, |var| std::env::var_os(var)));
+    if let Some(conf) = make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
     cmd
+}
+
+/// What make.conf alone makes of `PORT_DBDIR` and `OPTIONS_FILE`: one make
+/// with no port and neither on its command line, under the queries' own
+/// environment (`identity`) and `make_conf`. Outside bsd.port.mk only
+/// make.conf sets them (sys.mk sets neither). `PORT_DBDIR` comes expanded,
+/// as a build uses it; `OPTIONS_FILE` as written, its `${OPTIONS_NAME}`
+/// meaning nothing outside a port. Empty is unset; None when make cannot
+/// be asked or fails.
+pub fn options_place(identity: Identity, make_conf: Option<&Path>) -> Option<(String, String)> {
+    let mut cmd = bare_make(identity, make_conf);
+    // -dV prints a variable as written; a name holding `$` is expanded
+    // all the same.
+    cmd.current_dir("/")
+        .args(["-f", "/dev/null", "-dV", "-V", "${PORT_DBDIR}", "-V", "OPTIONS_FILE"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines().map(|l| l.trim().to_string());
+    Some((lines.next()?, lines.next()?))
 }
 
 /// The framework's `_EXPORTED_VARS`, read once from the probe port of

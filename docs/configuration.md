@@ -99,6 +99,39 @@ run with `--clear-cache` once, or its change is not seen until something
 else invalidates the cached answers; a tree update no longer does for most
 of them ([the cache](how-it-works.md#what-it-does-not-see)).
 
+## A make.conf moving the options
+
+Every query is given the options directory as `PORT_DBDIR` on make's
+command line, where it wins over make.conf; a build is given none. So
+once per run, with the make.conf settled, optique asks make, outside any
+port and in the queries' own environment, what that make.conf alone sets
+of `PORT_DBDIR` and `OPTIONS_FILE` (`make -f /dev/null -V ...`; outside
+bsd.port.mk nothing else sets them).
+
+A `PORT_DBDIR` other than the directory the build reads options from —
+the options directory itself for a local build, the jail's
+`/var/db/ports` where poudriere puts it, the scan slave's `/options`
+where synth mounts it — sends the whole build to a directory none of the
+files optique reports and edits is in: every port is built from whatever
+it holds. The banner says so, even under `-q`:
+
+```text
+error: make.conf sets PORT_DBDIR=/var/db/myports: the build reads that directory, not /usr/local/etc/poudriere.d/options
+```
+
+`scan` counts it as an error (in its JSON `errors`, subject `make.conf`),
+so it exits 1; `sync`, `decide` and `clean` go on, writing to the options
+directory being harmless, only useless. A local build without `-o` takes
+its options directory from that same `PORT_DBDIR`, so it never trips
+this; with `-o` naming another directory it does.
+
+An `OPTIONS_FILE` set there moves options files away from the names
+`clean` maps back to ports, so `clean` removes none as vanished or unused
+([commands.md](commands.md#clean)). Per port, `scan` and `sync` already
+see a moved `OPTIONS_FILE` and leave that port to make
+([commands.md](commands.md#sync)). When make cannot be asked, the banner
+notes it and `clean` acts as if `OPTIONS_FILE` were set.
+
 ## The jail environment
 
 The merged layers above are wrapped in the environment of a poudriere

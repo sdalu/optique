@@ -47,7 +47,14 @@ script — see [tui.md](tui.md#driving-the-tui-headless).
 | `errors`      | what could not be checked, each `{subject, message}`      |
 | `moved`       | listed origins `MOVED` moves, each `{listed, to, reason, followed}` |
 
-See [dependency loops](dependency-loops.md) for the shape of a loop entry. An
+See [dependency loops](dependency-loops.md) for the shape of a loop entry. The
+first error, when there is one, may be the make.conf's: subject `make.conf`,
+message `make.conf sets PORT_DBDIR=<dir>: the build reads that directory,
+not <options_dir>`, for a make.conf sending the build to another options
+directory
+([configuration](configuration.md#a-makeconf-moving-the-options)); the
+rest of the report is still valid, for files the build does not read. Any
+other
 error is a port whose query failed or a listed origin `MOVED` says is gone,
 missing from `ports` with whatever it depends on, or one entry per
 dependency of a port in `ports` on an origin in no tree (`depends on
@@ -212,13 +219,18 @@ included, is one it knew (in `diff`, not `adopted`), and a pattern entry is
 `clean --json` reports a different shape: `options_dir`, `dry_run`, `removals`
 (each `{options_name, reason}`), `kept` (only under `-v`, each `{options_name,
 reason}`), `warnings`, `errors` and `summary` (`{entries, removed, failed}`).
+When make.conf relocates options files, `warnings` says so once and no
+entry goes as vanished or unused ([commands](commands.md#clean)); under
+`-v`, `kept` lists each such entry with the reason `make.conf relocates
+options files`.
 
 All three shapes — `scan`, `decide`/`sync`, and `clean` — carry an `errors`
 list of `{subject, message}` for whatever failed outright, and each summary's
 count of them means something different for the exit status: `scan`'s
 `summary.errors` is folded into `summary.pending` alongside `attention` and
-`loops_blocking` (see above), so a query failure alone is enough to make
-`scan` exit 1. `decide` exits 1 when `summary.failed` is above zero, on top of
+`loops_blocking` (see above), so a query failure, or a make.conf
+`PORT_DBDIR` sending the build elsewhere, alone is enough to make `scan`
+exit 1. `decide` exits 1 when `summary.failed` is above zero, on top of
 exiting 1 for a plan that was not honoured. `sync` and `clean` instead report
 per-file failures in `summary.failed` without that failing the run: both still
 exit 0; see `optique(8)`'s EXIT STATUS section.

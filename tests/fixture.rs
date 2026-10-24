@@ -231,3 +231,79 @@ fn a_listed_moved_origin_is_flagged_unless_followed() {
     assert_eq!(report["errors"], serde_json::json!([]), "{report}");
     assert!(!ports_of(&report).contains(&"misc/cond".to_string()), "{report}");
 }
+
+/// A make.conf `PORT_DBDIR` sends the build to another directory, which
+/// optique's own command line hides from its queries: scan reports it as
+/// an error naming make.conf and exits 1, the rest of its report intact.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_make_conf_port_dbdir_elsewhere_is_an_error() {
+    let f = Fixture::new();
+    fs::write(&f.make_conf, "PORT_DBDIR=/nonexistent/elsewhere\n").unwrap();
+    let out = f.run("scan", &["--json", "misc/cond"]);
+    let err = stderr(&out);
+    let want = format!(
+        "make.conf sets PORT_DBDIR=/nonexistent/elsewhere: the build reads that directory, not {}",
+        f.options.display()
+    );
+    assert!(err.contains(&format!("error: {want}")), "{err}");
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    let report = common::json(&out);
+    assert_eq!(report["errors"], serde_json::json!([{"subject": "make.conf", "message": want}]), "{report}");
+    assert_eq!(report["summary"]["errors"], 1, "{report}");
+    assert!(report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+
+    // sync says so too, and writes all the same.
+    let out = f.run("sync", &["misc/cond"]);
+    assert!(stderr(&out).contains(&want), "{}", stderr(&out));
+    assert!(f.file("misc_cond").exists());
+
+    // The same directory, spelled as the options dir: nothing to report.
+    fs::write(&f.make_conf, format!("PORT_DBDIR={}/\n", f.options.display())).unwrap();
+    let out = f.run("scan", &["--json", "misc/cond"]);
+    assert_eq!(common::json(&out)["errors"], serde_json::json!([]), "{}", stderr(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
+/// A make.conf moving OPTIONS_FILE per flavor: `misc_flav-nox` is
+/// misc/flav@nox's file, not a vanished misc/flav-nox's. optique cannot
+/// tell which entries make reads, so neither plain clean nor --unused
+/// removes one as vanished or unused, the stale `misc_gone` included.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_relocated_options_file_keeps_clean_from_removing_entries() {
+    let f = Fixture::new();
+    let conf = "OPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options\n";
+    fs::write(&f.make_conf, conf).unwrap();
+    let nox = f.options.join("misc_flav-nox/options").display().to_string();
+    let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "OPTIONS_FILE"]);
+    assert_eq!(stdout(&out).trim(), nox);
+    f.write_file("misc_flav-nox", "_OPTIONS_READ=flav-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_UNSET+=A\n");
+    f.write_file("misc_gone", "_OPTIONS_READ=gone-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n");
+    let warning = "warning: make.conf sets OPTIONS_FILE (${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options): \
+                   optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused";
+
+    for args in [&[][..], &["--unused", "misc/flav@nox"][..]] {
+        let out = f.run("clean", args);
+        let err = stderr(&out);
+        assert_eq!(out.status.code(), Some(0), "clean {args:?}: {err}");
+        assert!(err.contains(warning), "clean {args:?}: {err}");
+        assert!(f.file("misc_flav-nox").exists(), "clean {args:?} removed the file make reads");
+        assert!(f.file("misc_gone").exists(), "clean {args:?} removed a vanished entry");
+    }
+
+    // Moved for this port only, where no probe outside a port sees it:
+    // --unused still keeps the entry the closure's port has make read,
+    // while the vanished one goes.
+    let conf = format!(".if ${{.CURDIR:M*/misc/flav}}\n{conf}.endif\n");
+    fs::write(&f.make_conf, conf).unwrap();
+    let out = f.run("clean", &["--unused", "misc/flav@nox"]);
+    let err = stderr(&out);
+    assert!(!err.contains("make.conf sets OPTIONS_FILE ("), "{err}");
+    assert!(
+        err.contains("warning: misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"),
+        "{err}"
+    );
+    assert!(f.file("misc_flav-nox").exists(), "{err}");
+    assert!(!f.file("misc_gone").exists(), "{err}");
+}

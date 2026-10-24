@@ -200,6 +200,31 @@ list is an error the other way round:
 An options file optique leaves to make ([`sync`](#sync)) is never
 removed, whichever option asks; a warning names it as kept.
 
+An entry is mapped back to its port by its name, which make derives from
+`OPTIONS_FILE`. A make.conf setting `OPTIONS_FILE` (to anything but
+bsd.options.mk's own `${PORT_DBDIR}/${OPTIONS_NAME}/options`) breaks the
+mapping: with per-flavor files, `editors_emacs-nox` is the file of
+`editors/emacs@nox`, not of a vanished `editors/emacs-nox`. Then no entry
+is removed as vanished or unused, with one warning:
+
+```text
+warning: make.conf sets OPTIONS_FILE (<value>): optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused
+```
+
+and the same, beginning `make could not say whether make.conf sets
+OPTIONS_FILE`, when make could not be asked. `--redundant` still judges
+the entries of live ports optique manages (a port whose `OPTIONS_FILE`
+moved is not one). Under `--unused` or `--redundant`, an entry the moved
+`OPTIONS_FILE` of a queried port lies in is kept whatever its name says,
+which covers a make.conf moving it for some ports only:
+`misc_flav-nox: make reads misc/flav@nox's options from it (make.conf
+OPTIONS_FILE); kept`.
+
+A make.conf `PORT_DBDIR` sending the build elsewhere
+([configuration.md](configuration.md#a-makeconf-moving-the-options))
+is said in the banner, and `clean` goes on: `--unused` does not count it
+among the errors that stop it pruning.
+
 `--minimal`/`-m` has no effect on `clean`; a note says so when it is given
 without `--redundant` — see
 [Minimal mode](#minimal-mode).
@@ -264,7 +289,10 @@ A `scan` decision is pending when a port is unconfigured or stale with
 undecided options, has a conflict, is caught in a dependency loop that is
 not fully blacklisted, when the list names an origin `MOVED` moves and
 that is not followed (`N listed moved (see above)` on the summary line),
-or there is an error: a port whose query failed or
+or there is an error: a make.conf `PORT_DBDIR` the build reads instead of
+the options directory
+([configuration.md](configuration.md#a-makeconf-moving-the-options)), a
+port whose query failed or
 a listed origin gone from the tree (neither checked, nor what it depends
 on), or a dependency on an origin in no tree. The summary line counts
 those as `N errors (see above)`, each named on stderr. A moved origin

@@ -157,6 +157,80 @@ pub struct Settings {
     /// make.conf and environment found them, given to every query
     /// (`makerunner::framework_values`); empty when make could not say.
     pub framework: Vec<(String, String)>,
+    /// Where make.conf alone puts options files, as one probe of the
+    /// settled make.conf found it (`makerunner::options_place`); None when
+    /// make could not say.
+    pub options_place: Option<OptionsPlace>,
+}
+
+/// What make.conf sets of `PORT_DBDIR` and `OPTIONS_FILE`, each None when
+/// it leaves the variable unset (or empty).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OptionsPlace {
+    /// Expanded, as a build uses it.
+    pub port_dbdir: Option<String>,
+    /// As written: its `${OPTIONS_NAME}` is a port's.
+    pub options_file: Option<String>,
+}
+
+/// bsd.options.mk's own `OPTIONS_FILE?=`: a make.conf spelling it out
+/// moves nothing.
+const DEFAULT_OPTIONS_FILE: &str = "${PORT_DBDIR}/${OPTIONS_NAME}/options";
+
+/// Why clean cannot tell which options-dir entries make reads, so removes
+/// none as vanished or unused, from `place`: make.conf relocates options
+/// files, or make could not say whether it does. None when the entries are
+/// named as bsd.options.mk names them.
+pub fn relocated_options(place: Option<&OptionsPlace>) -> Option<String> {
+    let tail = "optique cannot tell which options-dir entries make reads, \
+                so none is removed as vanished or unused";
+    match place {
+        None => Some(format!("make could not say whether make.conf sets OPTIONS_FILE: {tail}")),
+        Some(OptionsPlace { options_file: Some(file), .. }) if file != DEFAULT_OPTIONS_FILE => {
+            Some(format!("make.conf sets OPTIONS_FILE ({file}): {tail}"))
+        }
+        Some(_) => None,
+    }
+}
+
+/// Where the build reads options files from: a poudriere jail's
+/// /var/db/ports, where poudriere puts the options dir and which it leaves
+/// as the framework's default; synth's /options, which its own make.conf
+/// header names; the options dir itself on the host.
+fn build_dbdir(env: QueryEnv, options_dir: &Path) -> &Path {
+    match env {
+        QueryEnv::Jail { .. } => Path::new("/var/db/ports"),
+        QueryEnv::Synth => Path::new("/options"),
+        QueryEnv::Host => options_dir,
+    }
+}
+
+/// The error when make.conf's `PORT_DBDIR` (`set`) sends the build away
+/// from the options dir optique reads and writes: the command line
+/// optique gives its queries overrides it, the build's does not. Paths are
+/// compared as given, then canonicalised where both exist on the host.
+fn port_dbdir_error(env: QueryEnv, options_dir: &Path, set: &str) -> Option<String> {
+    let reads = build_dbdir(env, options_dir);
+    let set_path = Path::new(set);
+    let same = set_path == reads
+        || env == QueryEnv::Host
+            && matches!((set_path.canonicalize(), reads.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    (!same).then(|| {
+        format!(
+            "make.conf sets PORT_DBDIR={set}: the build reads that directory, not {}",
+            options_dir.display()
+        )
+    })
+}
+
+impl Settings {
+    /// The error a make.conf `PORT_DBDIR` moving the build's options
+    /// directory away from `options_dir` deserves; None when it moves
+    /// nothing, or make could not say.
+    pub fn port_dbdir_error(&self) -> Option<String> {
+        let set = self.options_place.as_ref()?.port_dbdir.as_deref()?;
+        port_dbdir_error(self.env, &self.options_dir, set)
+    }
 }
 
 /// A ports tree laid over the main one (the framework's `OVERLAYS`).
@@ -703,7 +777,27 @@ fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Sett
     let settings = with_overlays(settings, given);
     let settings = key_installed_packages(settings, pkg_db);
     let settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
-    Ok(with_framework(settings))
+    Ok(with_options_place(with_framework(settings)))
+}
+
+/// Settle `settings.options_place` on what make.conf says outside any
+/// port, where the queries' own command line cannot hide it: a build
+/// given no `PORT_DBDIR` there reads whatever make.conf names. A probe
+/// that fails is noted for the banner.
+fn with_options_place(mut settings: Settings) -> Settings {
+    let probed =
+        crate::query::makerunner::options_place(settings.env.identity(), settings.make_conf.as_deref());
+    let nonempty = |v: String| (!v.is_empty()).then_some(v);
+    settings.options_place = probed.map(|(port_dbdir, options_file)| OptionsPlace {
+        port_dbdir: nonempty(port_dbdir),
+        options_file: nonempty(options_file),
+    });
+    if settings.options_place.is_none() {
+        settings.notes.push(
+            "make could not say whether make.conf sets PORT_DBDIR or OPTIONS_FILE".to_string(),
+        );
+    }
+    settings
 }
 
 /// Settle `settings.framework` on what the probe port reports, and key it:
@@ -812,6 +906,7 @@ fn resolve_local(
         overlays: Vec::new(),
         flavor_default_all: false,
         framework: Vec::new(),
+        options_place: None,
     })
 }
 
@@ -872,6 +967,7 @@ fn resolve_poudriere(
         overlays: Vec::new(),
         flavor_default_all: default_all,
         framework: Vec::new(),
+        options_place: None,
     })
 }
 
@@ -1131,6 +1227,7 @@ fn resolve_synth(
         overlays: Vec::new(),
         flavor_default_all: false,
         framework: Vec::new(),
+        options_place: None,
     })
 }
 
@@ -3309,5 +3406,99 @@ not a key value line
             blacklist_layers(None, "t", None, true),
             vec!["blacklist", "t-blacklist", "qemu-blacklist"]
         );
+    }
+
+    /// A make.conf `PORT_DBDIR` is an error only where the build would
+    /// read another directory than the options dir: a local build compares
+    /// it with the options dir (canonicalised where both exist), which,
+    /// without -o, is that very PORT_DBDIR; a builder with the path it
+    /// mounts the options dir at.
+    #[test]
+    fn port_dbdir_error_only_where_the_build_reads_elsewhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("db");
+        fs::create_dir_all(&db).unwrap();
+        std::os::unix::fs::symlink(&db, tmp.path().join("link")).unwrap();
+        let other = tmp.path().join("other");
+        let jail = QueryEnv::Jail { package_building: true };
+        let s = |p: &Path| p.display().to_string();
+
+        // Local, no -o: the options dir is make's own PORT_DBDIR.
+        assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &s(&db)), None);
+        assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &format!("{}/", s(&db))), None);
+        assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &s(&tmp.path().join("link"))), None);
+        // Local with -o elsewhere.
+        assert_eq!(
+            port_dbdir_error(QueryEnv::Host, &other, &s(&db)),
+            Some(format!(
+                "make.conf sets PORT_DBDIR={}: the build reads that directory, not {}",
+                s(&db),
+                s(&other)
+            ))
+        );
+        // poudriere mounts the options dir at /var/db/ports, synth at /options.
+        assert_eq!(port_dbdir_error(jail, &db, "/var/db/ports"), None);
+        assert!(port_dbdir_error(jail, &db, "/var/db/myports").is_some());
+        assert!(port_dbdir_error(jail, &db, &s(&db)).is_some(), "the host path is not the jail's");
+        assert_eq!(port_dbdir_error(QueryEnv::Synth, &db, "/options"), None);
+        assert!(port_dbdir_error(QueryEnv::Synth, &db, "/var/db/ports").is_some());
+
+        // Unset, or make could not say: nothing.
+        let settings = |place: Option<OptionsPlace>| Settings {
+            portsdir: PathBuf::new(),
+            options_dir: db.clone(),
+            make_conf: None,
+            make_conf_sources: Vec::new(),
+            conf_hash: String::new(),
+            env: QueryEnv::Host,
+            blacklist: Blacklist::default(),
+            notes: Vec::new(),
+            overlays: Vec::new(),
+            flavor_default_all: false,
+            framework: Vec::new(),
+            options_place: place,
+        };
+        assert_eq!(settings(None).port_dbdir_error(), None);
+        assert_eq!(settings(Some(OptionsPlace::default())).port_dbdir_error(), None);
+        let set = OptionsPlace { port_dbdir: Some(s(&other)), options_file: None };
+        assert!(settings(Some(set)).port_dbdir_error().is_some());
+    }
+
+    /// clean holds its vanished and unused removals when make.conf moves
+    /// OPTIONS_FILE, or when make could not say; spelling out the
+    /// framework's own default moves nothing.
+    #[test]
+    fn relocated_options_follow_the_probe() {
+        let file = |f: &str| OptionsPlace { port_dbdir: None, options_file: Some(f.to_string()) };
+        assert_eq!(relocated_options(Some(&OptionsPlace::default())), None);
+        assert_eq!(relocated_options(Some(&file(DEFAULT_OPTIONS_FILE))), None);
+        let moved = relocated_options(Some(&file("${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options")));
+        assert_eq!(
+            moved.as_deref(),
+            Some(
+                "make.conf sets OPTIONS_FILE (${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options): \
+                 optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused"
+            )
+        );
+        assert!(relocated_options(None).unwrap().starts_with("make could not say whether make.conf sets OPTIONS_FILE: "));
+    }
+
+    /// The probe reads make.conf outside any port: PORT_DBDIR expanded,
+    /// OPTIONS_FILE as written, empty where unset.
+    #[test]
+    fn options_place_reads_make_conf_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conf = tmp.path().join("make.conf");
+        let probe = |text: &str| {
+            fs::write(&conf, text).unwrap();
+            crate::query::makerunner::options_place(Identity::Invoker, Some(&conf))
+        };
+        assert_eq!(probe(""), Some((String::new(), String::new())));
+        let moved = "D=/var/db\nPORT_DBDIR=${D}/my\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/x\n";
+        assert_eq!(
+            probe(moved),
+            Some(("/var/db/my".to_string(), "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string()))
+        );
+        assert_eq!(probe(".error broken\n"), None);
     }
 }

@@ -102,6 +102,98 @@ pub fn split_unused(
     (kept, removals)
 }
 
+/// What the vanished and unused passes leave: the removals, the live
+/// entries still to judge, and the entries held back because make.conf
+/// relocates options files.
+#[derive(Debug, Default)]
+pub struct Pruned {
+    pub removals: Vec<Removal>,
+    pub live: Vec<LiveEntry>,
+    /// Entries that would have gone as vanished or unused, sorted.
+    pub held: Vec<String>,
+}
+
+/// The removals of the vanished pass (`vanished`) and, given the options
+/// names a closure reads (`used`), of the unused pass. When make.conf
+/// relocates options files (`relocated`), an entry's name no longer says
+/// which port reads it, or whether any does: `misc_flav-nox` may be the
+/// file of `misc/flav@nox` rather than of a vanished `misc/flav-nox`. Then
+/// neither pass removes anything: every entry is held, the live ones still
+/// judged by the redundancy pass.
+pub fn prune(
+    vanished: Vec<Removal>,
+    live: Vec<LiveEntry>,
+    used: Option<&std::collections::HashSet<String>>,
+    relocated: bool,
+) -> Pruned {
+    if relocated {
+        let mut held: Vec<String> = vanished.into_iter().map(|r| r.options_name).collect();
+        if let Some(used) = used {
+            held.extend(live.iter().filter(|e| !used.contains(&e.options_name)).map(|e| e.options_name.clone()));
+        }
+        held.sort();
+        return Pruned { removals: Vec::new(), live, held };
+    }
+    match used {
+        Some(used) => {
+            let (live, unused) = split_unused(live, used);
+            let mut removals = vanished;
+            removals.extend(unused);
+            Pruned { removals, live, held: Vec::new() }
+        }
+        None => Pruned { removals: vanished, live, held: Vec::new() },
+    }
+}
+
+/// The options-dir entry `file`, an `OPTIONS_FILE` make.conf moved, lies
+/// in: the first component under `options_dir`, when the file is below
+/// one. None for a file elsewhere, or directly in the options dir.
+pub fn entry_of(options_dir: &Path, file: &str) -> Option<String> {
+    let rest = Path::new(file).strip_prefix(options_dir).ok()?;
+    let mut parts = rest.components();
+    let std::path::Component::Normal(first) = parts.next()? else { return None };
+    parts.next()?;
+    Some(first.to_string_lossy().into_owned())
+}
+
+/// The entries make reads through a moved `OPTIONS_FILE`, each with the
+/// first port (in `infos`' order) that reads it: whatever their names say,
+/// they are not vanished, unused or redundant. Needs no make.conf value, so
+/// covers a move the make.conf probe cannot see (one set per port).
+pub fn read_through_moved<'a>(
+    options_dir: &Path,
+    infos: impl IntoIterator<Item = &'a PortInfo>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for info in infos {
+        let Some(file) = &info.options.moved_file else { continue };
+        if let Some(entry) = entry_of(options_dir, file) {
+            out.entry(entry).or_insert_with(|| info.key.to_string());
+        }
+    }
+    out
+}
+
+/// Take out of `removals` every entry make reads (`read`, entry to port),
+/// one note each.
+pub fn keep_read(
+    removals: &mut Vec<Removal>,
+    read: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    removals.retain(|r| match read.get(&r.options_name) {
+        Some(port) => {
+            notes.push(format!(
+                "{}: make reads {port}'s options from it (make.conf OPTIONS_FILE); kept",
+                r.options_name
+            ));
+            false
+        }
+        None => true,
+    });
+    notes
+}
+
 /// How the options file changes the outcome versus defaults + make.conf
 /// and `local`, the entry's options.local read with no options file (an
 /// empty file without one): make reads options.local either way
@@ -349,5 +441,83 @@ mod tests {
         let r2 = Removal { options_name: "cat_other".into(), dir: dir2.clone(), reason: String::new() };
         assert!(remove_entry(&r2).unwrap().is_none());
         assert!(!dir2.exists());
+    }
+
+    fn removal(name: &str) -> Removal {
+        Removal { options_name: name.into(), dir: PathBuf::from("/opt").join(name), reason: "gone".into() }
+    }
+
+    fn live_entry(name: &str, origin: &str) -> LiveEntry {
+        LiveEntry {
+            options_name: name.into(),
+            dir: PathBuf::from("/opt").join(name),
+            key: PortKey::parse(origin).unwrap(),
+        }
+    }
+
+    /// With options files where bsd.options.mk puts them, vanished and
+    /// unused entries go; relocated, every one is held, the live ones still
+    /// handed to the redundancy pass.
+    #[test]
+    fn prune_holds_everything_when_options_files_are_relocated() {
+        let used: std::collections::HashSet<String> = ["misc_flav".to_string()].into();
+        let live = || vec![live_entry("misc_flav", "misc/flav"), live_entry("misc_cond", "misc/cond")];
+        let vanished = || vec![removal("misc_flav-nox"), removal("misc_gone")];
+        let names = |v: &[Removal]| v.iter().map(|r| r.options_name.clone()).collect::<Vec<_>>();
+        let live_names = |v: &[LiveEntry]| v.iter().map(|e| e.options_name.clone()).collect::<Vec<_>>();
+
+        let p = prune(vanished(), live(), None, false);
+        assert_eq!(names(&p.removals), ["misc_flav-nox", "misc_gone"]);
+        assert_eq!(live_names(&p.live), ["misc_flav", "misc_cond"]);
+        assert!(p.held.is_empty());
+
+        let p = prune(vanished(), live(), Some(&used), false);
+        assert_eq!(names(&p.removals), ["misc_flav-nox", "misc_gone", "misc_cond"]);
+        assert_eq!(live_names(&p.live), ["misc_flav"]);
+
+        let p = prune(vanished(), live(), None, true);
+        assert!(p.removals.is_empty());
+        assert_eq!(live_names(&p.live), ["misc_flav", "misc_cond"]);
+        assert_eq!(p.held, ["misc_flav-nox", "misc_gone"]);
+
+        let p = prune(vanished(), live(), Some(&used), true);
+        assert!(p.removals.is_empty());
+        assert_eq!(live_names(&p.live), ["misc_flav", "misc_cond"], "still judged as redundant or not");
+        assert_eq!(p.held, ["misc_cond", "misc_flav-nox", "misc_gone"]);
+    }
+
+    /// A moved OPTIONS_FILE under the options dir names the entry it lies
+    /// in; one elsewhere, or directly in the options dir, names none.
+    #[test]
+    fn entries_read_through_a_moved_options_file_are_kept() {
+        let dir = Path::new("/db");
+        assert_eq!(entry_of(dir, "/db/misc_flav-nox/options").as_deref(), Some("misc_flav-nox"));
+        assert_eq!(entry_of(dir, "/db//misc_flav-nox/sub/options").as_deref(), Some("misc_flav-nox"));
+        assert_eq!(entry_of(dir, "/db/options"), None);
+        assert_eq!(entry_of(dir, "/elsewhere/misc_flav/options"), None);
+        assert_eq!(entry_of(dir, "/db/../misc_flav/options"), None);
+        assert_eq!(entry_of(dir, "/dbx/misc_flav/options"), None);
+
+        let moved = |origin: &str, file: Option<&str>| PortInfo {
+            options: PortOptions { moved_file: file.map(str::to_string), ..PortOptions::default() },
+            ..PortInfo::stub(origin)
+        };
+        let infos = [
+            moved("misc/flav@nox", Some("/db/misc_flav-nox/options")),
+            moved("misc/other", Some("/db/misc_flav-nox/options")),
+            moved("misc/flav", None),
+            moved("misc/away", Some("/elsewhere/options")),
+        ];
+        let read = read_through_moved(dir, &infos);
+        assert_eq!(read.into_iter().collect::<Vec<_>>(), [("misc_flav-nox".to_string(), "misc/flav@nox".to_string())]);
+
+        let read = read_through_moved(dir, &infos);
+        let mut removals = vec![removal("misc_flav-nox"), removal("misc_gone")];
+        let notes = keep_read(&mut removals, &read);
+        assert_eq!(removals.iter().map(|r| r.options_name.as_str()).collect::<Vec<_>>(), ["misc_gone"]);
+        assert_eq!(
+            notes,
+            ["misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"]
+        );
     }
 }
