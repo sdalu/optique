@@ -225,11 +225,11 @@ pub fn plan_writes<'a>(
         if cands.iter().any(|c| c.info.options.r#override.is_some()) {
             continue;
         }
-        // bsd.options.mk:341-363: an options.local assigning a SET or UNSET
-        // list afresh drops what the file put in it; no write or removal
-        // of the file can say what make ends up with (the startup warning
-        // names it).
-        if files.combined(options_name).local_reset().is_some() {
+        // A file optique cannot model (`session::unmanaged_by`: OPTIONS_FILE
+        // moved, a line it cannot read, an options.local resetting a list):
+        // no write or removal of it can say what make ends up with, and a
+        // write would drop its lines (the startup warning names it).
+        if crate::session::unmanaged_by(cands.iter().map(|c| c.info), &files.combined(options_name)).is_some() {
             continue;
         }
         // The file's owner writes it, by the session's rule
@@ -501,6 +501,11 @@ pub fn plan_stale_removals(
     optionless
         .into_iter()
         .filter(|name| files.bytes(name).is_some())
+        // Nor one optique cannot model, which is not its to remove.
+        .filter(|name| {
+            let readers = ports.values().filter(|i| i.options_name == *name);
+            crate::session::unmanaged_by(readers, &files.combined(name)).is_none()
+        })
         .map(|name| crate::clean::Removal {
             options_name: name.to_string(),
             dir: files.entry_dir(name),
@@ -1257,9 +1262,9 @@ mod tests {
     fn stale_removal_spares_files_shared_with_optioned_flavors() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("devel_glib20")).unwrap();
-        std::fs::write(tmp.path().join("devel_glib20/options"), "x\n").unwrap();
+        std::fs::write(tmp.path().join("devel_glib20/options"), "# x\n").unwrap();
         std::fs::create_dir_all(tmp.path().join("print_indexinfo")).unwrap();
-        std::fs::write(tmp.path().join("print_indexinfo/options"), "x\n").unwrap();
+        std::fs::write(tmp.path().join("print_indexinfo/options"), "# x\n").unwrap();
 
         // glib20@default has options; glib20@bootstrap shares the file and
         // has none. indexinfo has none at all.
@@ -1293,7 +1298,7 @@ mod tests {
     fn stale_removal_needs_the_default_flavors_view() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("devel_gi")).unwrap();
-        std::fs::write(tmp.path().join("devel_gi/options"), "x\n").unwrap();
+        std::fs::write(tmp.path().join("devel_gi/options"), "# x\n").unwrap();
         let flavored = |flavor: &str| {
             let mut i = mk_info(&[], &[]);
             i.key = PortKey::parse(&format!("devel/gi@{flavor}")).unwrap();
@@ -1335,7 +1340,7 @@ mod tests {
         // so a port nobody edited is left alone rather than rewritten.
         fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_UNSET+=A\n").unwrap();
         fs::create_dir_all(tmp.path().join("cat_gone")).unwrap();
-        fs::write(tmp.path().join("cat_gone/options"), "x\n").unwrap();
+        fs::write(tmp.path().join("cat_gone/options"), "# x\n").unwrap();
 
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned = plan_writes(std::iter::once((&info.key.clone(), &info, enabled)), &files, false);
@@ -1355,7 +1360,7 @@ mod tests {
 
         // Redundant state + existing file -> removal, no write.
         fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
-        fs::write(tmp.path().join("cat_port/options"), "x\n").unwrap();
+        fs::write(tmp.path().join("cat_port/options"), "# x\n").unwrap();
         let enabled: BTreeSet<String> = ["A".to_string()].into();
         let planned = plan_writes(
             std::iter::once((&info.key.clone(), &info, enabled.clone())),
@@ -1503,7 +1508,7 @@ mod tests {
         let ports = [mk("cat/one"), mk("cat/two"), mk("cat/three")];
         for name in ["cat_one", "cat_three"] {
             fs::create_dir_all(tmp.path().join(name)).unwrap();
-            fs::write(tmp.path().join(name).join("options"), "x\n").unwrap();
+            fs::write(tmp.path().join(name).join("options"), "# x\n").unwrap();
         }
         let set = |opts: &[&str]| opts.iter().map(|o| o.to_string()).collect::<BTreeSet<String>>();
         let enabled = [set(&["A", "B"]), set(&["A", "B"]), set(&["A"])];

@@ -85,8 +85,10 @@ pub struct OptionReport {
     pub makeconf: Option<MakeConfVerdict>,
     /// The options file cannot change this value.
     pub locked: bool,
-    /// Why, when it is locked: a `*_FORCE` knob, `options.local`, or the
-    /// option that implies it.
+    /// Why, when it is locked: a `*_FORCE` knob, `options.local` (an UNSET
+    /// entry there), the option that implies it, or what makes the options
+    /// file one optique cannot manage (`options file`, `options.local`,
+    /// `make.conf OPTIONS_FILE`), which locks every option.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_by: Option<String>,
     /// The staged value contradicts what make.conf asks for.
@@ -287,6 +289,11 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
     let opts = &owner.options;
     let state = sess.state(owner);
     let saved = state.and_then(|s| s.saved.as_ref());
+    // A file optique cannot model: the state is make's own, every option
+    // locked by what makes it so, and no make.conf verdict, since the
+    // layers make dumps after reading the file may hold its own (inert)
+    // assignments. Its saved values are not known either (`saved` is None).
+    let unmanaged = sess.unmanaged(owner);
     opts.complete
         .iter()
         .map(|name| {
@@ -300,8 +307,9 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
             // and WITH/WITHOUT (367-409) still run after its `.endif`
             // (365): an option they pin ends up at the pin and reports it,
             // override or not, as `effective_with` and the TUI have it.
-            let (makeconf, locked_by) = if let (Some(over), false) = (&opts.r#override, opts.is_forced(name))
-            {
+            let (makeconf, locked_by) = if let Some(u) = &unmanaged {
+                (None, Some(u.by.to_string()))
+            } else if let (Some(over), false) = (&opts.r#override, opts.is_forced(name)) {
                 (
                     Some(MakeConfVerdict { value: over.contains(name), scope: "override" }),
                     Some("make.conf OPTIONS_OVERRIDE".to_string()),
@@ -328,8 +336,9 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                         _ => "make.conf *_FORCE".to_string(),
                     })
                 } else if sess.local_decides(owner, name) {
-                    // Read after the file (bsd.options.mk:342-363): an
-                    // edit to the file cannot change it.
+                    // An UNSET entry of options.local goes in after every
+                    // SET one (bsd.options.mk:352-363): an edit to the file
+                    // cannot turn it back on.
                     Some("options.local".to_string())
                 } else {
                     implier.map(|by| format!("implied by {by}"))

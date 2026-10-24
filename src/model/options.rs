@@ -248,6 +248,12 @@ pub struct PortOptions {
     /// these (bsd.port.mk's pre-check-config `ALL_OPTIONS:M${group}`).
     #[serde(default)]
     pub all: BTreeSet<String>,
+    /// OPTIONS_FILE, only when it is not `<PORT_DBDIR>/<OPTIONS_NAME>/options`
+    /// (the wrapper compares the two): make.conf can point it elsewhere
+    /// (bsd.options.mk:183 assigns it with `?=`), and then make neither
+    /// reads nor would `make config` write the file optique manages.
+    #[serde(default)]
+    pub moved_file: Option<String>,
 }
 
 /// Where an option's current value comes from, following the
@@ -294,28 +300,35 @@ impl PortOptions {
     }
 
     /// Whether make.conf names the option, globally or for this port,
-    /// FORCE knobs aside: whether one of those lists takes it out of
-    /// NEW_OPTIONS, an entry naming it or matching it as a pattern.
+    /// FORCE knobs aside: an UNSET entry matching it as a pattern, or a
+    /// SET entry naming it (`layer_hits`).
+    ///
+    /// make takes from NEW_OPTIONS whatever a SET word matches as a
+    /// pattern, though the word itself, appended literally, turns nothing
+    /// on (bsd.options.mk:312-334): `OPTIONS_SET=E*` would settle options
+    /// nobody chose. That is a defect optique does not follow: a SET word
+    /// settles only the option it names.
     pub fn mc_mentions(&self, opt: &str) -> bool {
-        [&self.mc_set, &self.mc_unset, &self.port_set, &self.port_unset]
+        [(true, &self.mc_set), (false, &self.mc_unset), (true, &self.port_set), (false, &self.port_unset)]
             .into_iter()
-            .any(|list| mentions(list, opt))
+            .any(|(adds, list)| layer_hits(adds, list, opt))
     }
 
-    /// Whether any make.conf layer, FORCE knobs included, takes the option
-    /// out of NEW_OPTIONS: make counts it as decided.
+    /// Whether any make.conf layer, FORCE knobs and WITH/WITHOUT included,
+    /// settles the option, as `mc_mentions` reads a layer: an UNSET or
+    /// WITHOUT entry by pattern, a SET or WITH entry by name.
     pub fn mc_decides(&self, opt: &str) -> bool {
         self.mc_mentions(opt)
             || [
-                &self.force_set,
-                &self.force_unset,
-                &self.port_force_set,
-                &self.port_force_unset,
-                &self.with,
-                &self.without,
+                (true, &self.force_set),
+                (false, &self.force_unset),
+                (true, &self.port_force_set),
+                (false, &self.port_force_unset),
+                (true, &self.with),
+                (false, &self.without),
             ]
             .into_iter()
-            .any(|list| mentions(list, opt))
+            .any(|(adds, list)| layer_hits(adds, list, opt))
     }
 
     /// Whether toggling this option in the options file can have any effect.
@@ -440,7 +453,8 @@ mod tests {
 
     /// bsd.options.mk:321-394: an UNSET entry takes out every option it
     /// matches, in make.conf and FORCE alike; a SET entry adds itself word
-    /// for word, but takes what it matches out of NEW_OPTIONS.
+    /// for word, and settles only what it names: make also takes what it
+    /// matches out of NEW_OPTIONS, a defect optique does not follow.
     #[test]
     fn unset_entries_are_patterns() {
         let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
@@ -449,11 +463,12 @@ mod tests {
             mc_unset: words(&["A*"]),
             port_set: words(&["C*"]),
             force_unset: words(&["[B]"]),
+            with: words(&["A?"]),
             ..Default::default()
         };
         let mentioned: Vec<bool> = ["A", "A2", "B", "C"].iter().map(|x| o.mc_mentions(x)).collect();
-        assert_eq!(mentioned, [true, true, false, true]);
-        assert!(o.mc_decides("B"));
+        assert_eq!(mentioned, [true, true, false, false]);
+        assert!(o.mc_decides("B") && !o.mc_decides("C"));
         assert_eq!(o.mc_value("A2"), Some((false, McLayer::Global)));
         assert_eq!(o.mc_value("C"), None, "C* turns no C on");
         assert_eq!(o.forced_value("B"), Some(false));

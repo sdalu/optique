@@ -37,6 +37,8 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "FLAVORS" => flavors = words(value),
             "FLAVOR" => flavor = value.trim().to_string(),
             "OPTIONS_NAME" => options_name = value.trim().to_string(),
+            // Dumped only when make.conf moved it (bsd.options.mk:183).
+            "OPTIONS_FILE" => opts.moved_file = Some(value.trim().to_string()),
             "COMPLETE" => {
                 // preserve order, drop duplicates
                 let mut seen = BTreeSet::new();
@@ -357,6 +359,7 @@ OPTIQUE|SLAVE|K
 OPTIQUE|WITH|B
 OPTIQUE|WITHOUT|C*
 OPTIQUE|OVERRIDE|A
+OPTIQUE|OPTIONS_FILE|/elsewhere/options
 OPTIQUE|DEFAULT_VERSIONS|ssl=base python=3.12
 OPTIQUE|GROUP|FREE|A B
 OPTIQUE|SINGLE|ONE|C D
@@ -382,7 +385,10 @@ OPTIQUE|MULTI|SOME|G H
         assert_eq!(o.with, set(&["B"]));
         assert_eq!(o.without, set(&["C*"]));
         assert_eq!(o.r#override, Some(set(&["A"])));
+        assert_eq!(o.moved_file.as_deref(), Some("/elsewhere/options"));
         assert_eq!(info.default_versions, ["ssl=base", "python=3.12"]);
+        // Absent, OPTIONS_FILE is the file optique manages.
+        assert_eq!(parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\n").unwrap().options.moved_file, None);
         let groups: Vec<(GroupKind, &str, Vec<String>)> =
             o.groups.iter().map(|g| (g.kind, g.name.as_str(), g.members.clone())).collect();
         assert_eq!(

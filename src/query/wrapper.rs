@@ -25,12 +25,21 @@
 /// (bsd.options.mk:300-304): an absent line means undefined, an empty one
 /// means defined empty — the two make.conf can produce differ, since the
 /// latter still forgets the file.
+///
+/// OPTIONS_FILE is dumped only when it is not the file optique reads and
+/// writes, `${PORT_DBDIR}/${OPTIONS_NAME}/options`: bsd.options.mk:183
+/// assigns it with `?=`, so make.conf can move it. PORT_DBDIR itself is
+/// given on make's command line, which a make.conf assignment cannot
+/// override.
 pub const WRAPPER: &str = "\
 .include \"${PORTDIR}/Makefile\"
 .info OPTIQUE|PKGNAME|${PKGNAME:U}
 .info OPTIQUE|FLAVORS|${FLAVORS:U}
 .info OPTIQUE|FLAVOR|${FLAVOR:U}
 .info OPTIQUE|OPTIONS_NAME|${OPTIONS_NAME:U}
+.if \"${OPTIONS_FILE:U}\" != \"${PORT_DBDIR}/${OPTIONS_NAME:U}/options\"
+.info OPTIQUE|OPTIONS_FILE|${OPTIONS_FILE:U}
+.endif
 .info OPTIQUE|COMPLETE|${COMPLETE_OPTIONS_LIST:U}
 .info OPTIQUE|DEFAULT|${OPTIONS_DEFAULT:U}
 .info OPTIQUE|ALL|${ALL_OPTIONS:U}
@@ -137,6 +146,17 @@ mod tests {
         let lines: Vec<&str> = WRAPPER.lines().collect();
         assert_eq!(lines[i - 1], ".if defined(OPTIONS_OVERRIDE)", "{}", lines[i - 1]);
         assert_eq!(lines[i], ".info OPTIQUE|OVERRIDE|${OPTIONS_OVERRIDE}");
+        assert_eq!(lines[i + 1], ".endif");
+    }
+
+    /// bsd.options.mk:183: OPTIONS_FILE is dumped only when make.conf moved
+    /// it from the file optique manages, so an absent line means it is that
+    /// file.
+    #[test]
+    fn options_file_is_dumped_only_when_moved() {
+        let i = WRAPPER.lines().position(|l| l.contains("OPTIQUE|OPTIONS_FILE|")).unwrap();
+        let lines: Vec<&str> = WRAPPER.lines().collect();
+        assert_eq!(lines[i - 1], ".if \"${OPTIONS_FILE:U}\" != \"${PORT_DBDIR}/${OPTIONS_NAME:U}/options\"");
         assert_eq!(lines[i + 1], ".endif");
     }
 }

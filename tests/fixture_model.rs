@@ -399,3 +399,164 @@ fn an_overfull_radio_group_conflicts_as_check_config_fails() {
         }
     }
 }
+
+/// bsd.options.mk:352-363 applies every OPTIONS_FILE_SET entry, the
+/// options file's and options.local's, before every OPTIONS_FILE_UNSET one:
+/// options.local's SET of D loses to the file's UNSET, make has nothing
+/// on, and D is not locked. `decide` turns it on, and make follows.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_options_local_set_is_a_default_the_file_overrides() {
+    let f = Fixture::new();
+    let origin = "misc/model-implies";
+    f.run("sync", &[origin]);
+    std::fs::write(f.options.join("misc_model-implies/options.local"), "OPTIONS_FILE_SET+=D\n").unwrap();
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), Vec::<String>::new());
+    let port = f.scan_port(&[origin], origin);
+    let d = common::option(&port, "D");
+    assert_eq!((&d["staged"], &d["locked"]), (&serde_json::json!(false), &serde_json::json!(false)), "{d}");
+
+    let plan = f.decide(&[origin], r#"{"misc/model-implies": {"D": true}}"#);
+    assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["D"]);
+}
+
+/// An options file holding a line optique cannot model: its `OPTIONS_SET=C`
+/// comes after bsd.options.mk's OPTIONS_SET loop and turns nothing on,
+/// though make still dumps it. optique says so, file and line, shows
+/// make's own PORT_OPTIONS with no make.conf verdict, every option locked,
+/// and neither sync nor clean --redundant touches the file. options.local's
+/// WITH=C does take effect, and the state follows make.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_options_file_optique_cannot_model_is_left_to_make() {
+    let f = Fixture::new();
+    let origin = "misc/model-globs";
+    f.run("sync", &[origin]);
+    let file = std::fs::read_to_string(f.file("misc_model-globs")).unwrap() + "OPTIONS_SET=C\n";
+    f.write_file("misc_model-globs", &file);
+    let line = file.lines().count();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["A", "A2", "B"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!((&port["status"], &port["undecided"]), (&serde_json::json!("ok"), &serde_json::json!([])), "{port}");
+    for o in port["options"].as_array().unwrap() {
+        assert!(o.get("makeconf").is_none(), "{o}");
+        assert_eq!(o["locked_by"], "options file", "{o}");
+    }
+
+    let out = f.run("sync", &[origin]);
+    let warning = format!(
+        "misc_model-globs/options line {line} assigns OPTIONS_SET, which optique does not model: \
+         optique leaves misc_model-globs/options alone"
+    );
+    assert!(common::stderr(&out).contains(&warning), "{}", common::stderr(&out));
+    assert_eq!(std::fs::read_to_string(f.file("misc_model-globs")).unwrap(), file);
+    f.run("clean", &["--redundant"]);
+    assert_eq!(std::fs::read_to_string(f.file("misc_model-globs")).unwrap(), file, "clean --redundant kept it");
+
+    std::fs::write(f.options.join("misc_model-globs/options.local"), "WITH=C\n").unwrap();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["A", "A2", "B", "C"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+}
+
+/// bsd.options.mk:183 assigns OPTIONS_FILE with `?=`: make.conf moves it,
+/// and make reads neither the file optique manages nor its options.local.
+/// optique warns, reads the port as configured, and sync writes nothing.
+/// PORT_DBDIR, given on make's command line, stays what optique passes.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_moved_options_file_leaves_the_port_alone() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    std::fs::write(&f.make_conf, "PORT_DBDIR=/nonexistent\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/moved\n").unwrap();
+    let moved = f.options.join("misc_cond/moved").display().to_string();
+    assert_eq!(f.make_v(origin, "OPTIONS_FILE"), std::slice::from_ref(&moved));
+    let out = f.run("scan", &["--json", "--options", origin]);
+    let stderr = common::stderr(&out);
+    assert!(stderr.contains(&format!("make.conf sets OPTIONS_FILE to {moved}")), "{stderr}");
+    let report = common::json(&out);
+    let port = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == origin).unwrap();
+    assert_eq!(port["status"], "ok", "{port}");
+    assert_eq!(common::option(port, "DOCS")["locked_by"], "make.conf OPTIONS_FILE", "{port}");
+    f.run("sync", &[origin]);
+    assert!(!f.file("misc_cond").exists(), "sync wrote the file make does not read");
+}
+
+/// bsd.options.mk:312-409: a make.conf set word is a pattern for the test
+/// only. `OPTIONS_SET=C*` and `WITH=A*` add those words, which turn nothing
+/// on, and make takes every match out of NEW_OPTIONS, leaving only B new.
+/// That last is a defect optique does not follow: a glob nobody resolved
+/// to an option decides none, so A, A2, B and C stay undecided, with C off
+/// and nothing pinned.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn make_conf_set_globs_turn_nothing_on_and_decide_nothing() {
+    let f = Fixture::new();
+    let origin = "misc/model-globs";
+    std::fs::write(&f.make_conf, "OPTIONS_SET=C*\nWITH=A*\n").unwrap();
+    let make = f.make_v(origin, "PORT_OPTIONS");
+    assert_eq!(make, ["A", "A*", "A2", "B", "C*"]);
+    assert_eq!(f.make_v(origin, "NEW_OPTIONS"), ["B"]);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(port["undecided"], serde_json::json!(["A", "A2", "B", "C"]), "{port}");
+    assert_eq!(flagged(&port, "staged"), ["A", "A2", "B"], "{port}");
+    assert_eq!(flagged(&port, "locked"), Vec::<String>::new(), "{port}");
+}
+
+/// bsd.port.mk's pre-check-config matches PREVENTS words as patterns, and
+/// bsd.options.mk:410-440 adds what an option implies, listed or not. A
+/// with B1 on breaks A's `B*`. FOO is excluded, and so is E, which implies
+/// it (bsd.options.mk:244-251), but that pass looks at OPTIONS_DEFINE only:
+/// C, a group member implying FOO, stays and turns FOO on, which breaks
+/// D's PREVENTS of it. optique lists what make lists, and reports a
+/// conflict exactly when check-config fails, naming the word make names.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn prevents_patterns_and_unlisted_implies_conflict_as_check_config_fails() {
+    let f = Fixture::new();
+    let origin = "misc/model-patterns";
+    let complete = f.make_v(origin, "COMPLETE_OPTIONS_LIST");
+    assert_eq!(complete, ["A", "B1", "B2", "C", "D"]);
+    let port = f.scan_port(&[origin], origin);
+    let mut listed: Vec<String> =
+        port["options"].as_array().unwrap().iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    listed.sort();
+    assert_eq!(listed, complete);
+    for (set, unset, violation) in [
+        ("A B1", "B2 C D", Some("A conflicts with B*: mutually exclusive")),
+        ("A", "B1 B2 C D", None),
+        ("C D", "A B1 B2", Some("D conflicts with FOO: mutually exclusive")),
+    ] {
+        f.write_file("misc_model-patterns", &format!("OPTIONS_FILE_SET+={set}\nOPTIONS_FILE_UNSET+={unset}\n"));
+        let check = f.make(origin, &["check-config"]);
+        assert_eq!(!check.status.success(), violation.is_some(), "{set}: {}", common::stdout(&check));
+        let port = f.scan_port(&[origin], origin);
+        let want: Vec<&str> = violation.into_iter().collect();
+        assert_eq!(port["violations"], serde_json::json!(want), "{set}: {port}");
+    }
+    assert!(f.make_v(origin, "PORT_OPTIONS").contains(&"FOO".to_string()));
+}
+
+/// bsd.port.mk drops the members of a conditional SINGLE group whose
+/// option is off only after the option helpers ran (the mail/faces case):
+/// with WITH=SOX and AUDIO off, make has SOX off yet SOX_RUN_DEPENDS in
+/// RUN_DEPENDS. optique reads the dependencies from make: misc/condep is
+/// in its closure, SOX off.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_pruned_group_members_dependencies_stay() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    std::fs::write(&f.make_conf, "WITH=SOX\n").unwrap();
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["DOCS"]);
+    assert!(f.make_v(origin, "RUN_DEPENDS").contains(&"true:misc/condep".to_string()));
+    let report = common::json(&f.run("scan", &["--json", "--options", origin]));
+    let ports: Vec<&str> = report["ports"].as_array().unwrap().iter().map(|p| p["port"].as_str().unwrap()).collect();
+    assert!(ports.contains(&"misc/condep"), "{ports:?}");
+    let cond = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == origin).unwrap();
+    assert_eq!(flagged(cond, "staged"), ["DOCS"], "{cond}");
+}

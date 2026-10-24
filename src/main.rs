@@ -299,6 +299,17 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
 
     // Obsolete, unused and redundant removals were collected separately.
     removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
+    // A file optique cannot model is the user's, whatever its port became.
+    let files = optfiles::OptionsFiles::new(&settings.options_dir);
+    removals.retain(|r| match files.combined(&r.options_name).unmanaged() {
+        Some((_, why)) => {
+            let note = format!("{}: {why}; kept", r.options_name);
+            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+            warnings.push(note);
+            false
+        }
+        None => true,
+    });
 
     // stdout carries either the listing or the JSON object, never both.
     if !args.json && !cli.quiet {
@@ -411,10 +422,10 @@ fn find_redundant(
         }
         // Answers arrive in any order; the reason names the same flavor each run.
         f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
-        // An options.local assigning a list afresh: not optique's to remove.
-        if let Some(why) = files.combined(&f.entry.options_name).local_reset() {
+        // A file optique cannot model: not its to remove.
+        if let Some(u) = session::unmanaged_by(&f.infos, &files.combined(&f.entry.options_name)) {
             if cli.verbose {
-                found.kept.push((f.entry.options_name.clone(), why));
+                found.kept.push((f.entry.options_name.clone(), u.why));
             }
             return;
         }
@@ -1079,6 +1090,21 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             if overridden.len() == 1 { "its" } else { "their" }
         );
     }
+    // bsd.options.mk:183: make.conf moved OPTIONS_FILE, so make reads
+    // neither the file optique manages nor its options.local.
+    let mut moved_files: std::collections::BTreeMap<&str, &str> = Default::default();
+    for info in result.ports.values().filter(|i| i.options.has_options()) {
+        if let Some(path) = &info.options.moved_file {
+            moved_files.entry(info.options_name.as_str()).or_insert(path);
+        }
+    }
+    for (name, path) in &moved_files {
+        eprintln!(
+            "{} make.conf sets OPTIONS_FILE to {path}: make does not read {name}/options, \
+             and optique leaves it alone",
+            tint(paint, ansi::YELLOW, "warning:"),
+        );
+    }
 
     // A file missing lines reads as its defaults today and follows them
     // tomorrow; said once per file, whatever the command (sync completes it).
@@ -1093,17 +1119,28 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         // and so does optique; sync never writes it. Its lines join the
         // file's, UNSET winning across both, so it overrides nothing by
         // itself: the note says what it adds.
+        if moved_files.contains_key(name) {
+            continue;
+        }
         let both = files.combined(name);
-        // make runs a `!=` line's shell command; optique does not.
-        for (file, line) in &both.shell {
+        // make reads every line of both files, a `!=` running its shell
+        // command; a line optique cannot model leaves the file to the user
+        // (apply::plan_writes), each line named once.
+        for u in &both.unmodeled {
             eprintln!(
-                "{} {name}/{file} line {line} assigns with != (a shell command): optique ignores it",
+                "{} {name}/{} line {} {}: optique leaves {name}/options alone",
                 tint(paint, ansi::YELLOW, "warning:"),
+                u.file,
+                u.line,
+                u.what,
             );
+        }
+        if !both.unmodeled.is_empty() {
+            continue;
         }
         // An options.local assigning a list afresh drops the file's lines:
         // optique leaves the file alone (apply::plan_writes), said once.
-        if let Some(why) = both.local_reset() {
+        if let Some((_, why)) = both.unmanaged() {
             eprintln!("{} {name}/options: {why}", tint(paint, ansi::YELLOW, "warning:"));
             continue;
         }
@@ -1311,14 +1348,13 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
             hidden += 1;
             continue;
         }
-        let saved = sess.state(info).and_then(|s| s.saved.as_ref());
         let status = sess.status(info);
         let (added, removed) = if status == UiStatus::Stale {
             sess.stale_delta(info).unwrap_or_default()
         } else {
             (Vec::new(), Vec::new())
         };
-        let undecided = session::undecided_options(info, saved, cli.minimal);
+        let undecided = sess.undecided(info);
         let state = if cli.verbose {
             session::signed_options(&info.options.complete, &info.options.effective)
         } else {

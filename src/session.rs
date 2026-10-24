@@ -77,6 +77,40 @@ pub(crate) fn outranks(candidate: &PortInfo, owner: &PortInfo) -> bool {
         && (is_preferred(candidate) || candidate.options.complete.len() > owner.options.complete.len())
 }
 
+/// Why optique leaves an options file alone: it neither writes nor removes
+/// it, takes no edit, and shows make's own outcome for its port.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmanaged {
+    /// What makes it so, as `locked_by` names it: `options file`,
+    /// `options.local` or `make.conf OPTIONS_FILE`.
+    pub by: &'static str,
+    /// The reason, in full.
+    pub why: String,
+}
+
+/// Whether optique can manage the options file these ports read, `combined`
+/// being the file with its options.local read after it
+/// (`OptionsFiles::combined`). It cannot when make.conf moved OPTIONS_FILE
+/// for one of them (`PortOptions::moved_file`): make reads another file,
+/// and `${OPTIONS_FILE}.local` with it. Nor when a line of either file is
+/// one optique cannot model, or options.local resets a list
+/// (`SavedOptionsFile::unmanaged`).
+pub(crate) fn unmanaged_by<'a>(
+    infos: impl IntoIterator<Item = &'a PortInfo>,
+    combined: &SavedOptionsFile,
+) -> Option<Unmanaged> {
+    if let Some(path) = infos.into_iter().find_map(|i| i.options.moved_file.as_ref()) {
+        return Some(Unmanaged {
+            by: "make.conf OPTIONS_FILE",
+            why: format!("make.conf sets OPTIONS_FILE to {path}, not the options file optique manages; edit it there"),
+        });
+    }
+    combined.unmanaged().map(|(file, why)| Unmanaged {
+        by: if file == "options.local" { "options.local" } else { "options file" },
+        why,
+    })
+}
+
 impl Session {
     pub fn new(
         ports: BTreeMap<PortKey, PortInfo>,
@@ -167,8 +201,16 @@ impl Session {
         if !self.states.contains_key(&info.options_name) {
             // The baseline follows the file OWNER's view (default flavor):
             // that's what apply will write.
-            let (saved, baseline) = saved_baseline(self.owner_info(info), files);
-            self.locals.insert(info.options_name.clone(), files.combined(&info.options_name));
+            let owner = self.owner_info(info);
+            let combined = files.combined(&info.options_name);
+            // A file optique cannot model claims nothing: no saved choices,
+            // and make's own PORT_OPTIONS as the state, which no edit
+            // changes (`edit_refusal`).
+            let (saved, baseline) = match unmanaged_by([info, owner], &combined) {
+                Some(_) => (None, owner.options.effective.clone()),
+                None => saved_baseline(owner, files),
+            };
+            self.locals.insert(info.options_name.clone(), combined);
             self.states.insert(
                 info.options_name.clone(),
                 OptState { saved, staged: baseline.clone(), baseline },
@@ -249,6 +291,14 @@ impl Session {
                 continue;
             };
             let saved = files.saved(name);
+            let combined = files.combined(name);
+            if unmanaged_by([owner], &combined).is_some() {
+                // Never written or removed by optique; kept as `ensure_state` has it.
+                state.saved = None;
+                state.baseline = owner.options.effective.clone();
+                self.locals.insert(name.to_string(), combined);
+                continue;
+            }
             state.baseline = if files.own(name).is_some() {
                 // A file apply wrote has a line for every option.
                 close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
@@ -260,27 +310,38 @@ impl Session {
             };
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
-            self.locals.insert(name.to_string(), files.combined(name));
+            self.locals.insert(name.to_string(), combined);
         }
     }
 
-    /// Whether the port's options.local has a SET or UNSET entry that
-    /// decides `opt` (patterns included): make reads it after the options
-    /// file, so an edit to the file cannot change what it says.
+    /// Whether the port's options.local has an UNSET entry matching `opt`
+    /// (`SavedOptionsFile::local_decides`): every SET entry goes in before
+    /// any UNSET one, so an edit to the file cannot turn it back on.
     pub fn local_decides(&self, info: &PortInfo, opt: &str) -> bool {
         self.locals.get(&info.options_name).is_some_and(|l| l.local_decides(opt))
     }
 
-    /// Why the port's options file is one optique cannot manage, when its
-    /// options.local assigns a SET or UNSET list afresh
-    /// (`SavedOptionsFile::local_reset`): nothing is written or removed
-    /// for it, and no edit is taken.
-    pub fn local_reset(&self, info: &PortInfo) -> Option<String> {
-        self.locals.get(&info.options_name).and_then(SavedOptionsFile::local_reset)
+    /// Why the port's options file is one optique cannot manage
+    /// (`unmanaged_by`), judged for the port and the flavor owning its
+    /// file: nothing is written or removed for it, no edit is taken, and
+    /// its state is make's own PORT_OPTIONS.
+    pub fn unmanaged(&self, info: &PortInfo) -> Option<Unmanaged> {
+        let combined = self.locals.get(&info.options_name)?;
+        unmanaged_by([info, self.owner_info(info)], combined)
+    }
+
+    /// The options the port still owes a human answer for
+    /// (`undecided_options`); none for a file optique cannot manage, which
+    /// it cannot read.
+    pub fn undecided(&self, info: &PortInfo) -> Vec<String> {
+        if self.unmanaged(info).is_some() {
+            return Vec::new();
+        }
+        undecided_options(info, self.state(info).and_then(|s| s.saved.as_ref()), self.minimal)
     }
 
     /// Why no edit of the port's options file is taken, whatever the
-    /// option: an OPTIONS_OVERRIDE, or an options.local resetting a list.
+    /// option: an OPTIONS_OVERRIDE, or a file optique cannot manage.
     pub fn edit_refusal(&self, key: &PortKey) -> Option<String> {
         let info = self.ports.get(key)?;
         // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
@@ -291,9 +352,8 @@ impl Session {
                     .to_string(),
             );
         }
-        // An options.local that assigns a list afresh drops the file's
-        // lines: the file is not optique's to edit.
-        self.local_reset(info)
+        // A file optique cannot model is not its to edit.
+        self.unmanaged(info).map(|u| u.why)
     }
 
     /// Toggle an option; returns a user-facing error when refused.
@@ -316,9 +376,9 @@ impl Session {
             ));
         }
 
-        // bsd.options.mk:342-363: options.local is read after the file and
-        // its entries join the file's lists; an edit to the file would be
-        // written and change nothing make sees.
+        // bsd.options.mk:352-363: options.local's UNSET entries go in after
+        // every SET entry, the file's included; an edit to the file would
+        // be written and change nothing make sees.
         if by_local {
             return Err(format!("options.local decides {opt}; edit it there"));
         }
@@ -445,24 +505,39 @@ impl Session {
         let Some(state) = self.state(info) else { return Vec::new() };
         let staged = &state.staged;
         let saved = state.saved.as_ref();
+        // Where optique cannot read the files, it cannot say what make.conf
+        // had to do with a rule broken.
+        let unmanaged = self.unmanaged(info).is_some();
+        let on_cause = |staged: &BTreeSet<String>, members: &[String]| {
+            if unmanaged { None } else { on_cause(info, saved, staged, members) }
+        };
+        let pick_cause = |staged: &BTreeSet<String>, members: &[String]| {
+            if unmanaged { None } else { pick_cause(info, saved, staged, members) }
+        };
         let o = &info.options;
         // Judged on what make computes from the staged set as the options
         // file: *_FORCE overrides it, IMPLIES closes it.
         let (unchecked, checked) = unchecked_groups(o, staged_effective(info, staged));
         let staged = &checked;
         let mut out = Vec::new();
+        // bsd.port.mk's pre-check-config: each PREVENTS word of an option
+        // that is on is a pattern (`${PORT_OPTIONS:M${conflict}}`), matched
+        // against every option on, the option itself included; make names
+        // the word, as written, in its message.
         for opt in staged {
             if let Some(def) = o.defs.get(opt) {
                 for p in &def.prevents {
-                    if staged.contains(p) {
+                    let hit: Vec<String> = staged.iter().filter(|s| str_match(s, p)).cloned().collect();
+                    if !hit.is_empty() {
                         let msg = def
                             .prevents_msg
                             .clone()
                             .unwrap_or_else(|| "mutually exclusive".to_string());
-                        let members = vec![opt.clone(), p.clone()];
+                        let mut members = vec![opt.clone()];
+                        members.extend(hit.into_iter().filter(|h| h != opt));
                         out.push(Conflict {
                             text: format!("{opt} conflicts with {p}: {msg}"),
-                            cause: on_cause(info, saved, staged, &members),
+                            cause: on_cause(staged, &members),
                             members,
                         });
                     }
@@ -476,19 +551,19 @@ impl Session {
             let (text, cause) = match g.kind {
                 GroupKind::Single if on == 0 => (
                     format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
-                    pick_cause(info, saved, staged, &members),
+                    pick_cause(staged, &members),
                 ),
                 GroupKind::Single if on > 1 => (
                     format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
-                    on_cause(info, saved, staged, &members),
+                    on_cause(staged, &members),
                 ),
                 GroupKind::Multi if on == 0 => (
                     format!("group {} needs at least one member enabled", g.name),
-                    pick_cause(info, saved, staged, &members),
+                    pick_cause(staged, &members),
                 ),
                 GroupKind::Radio if on > 1 => (
                     format!("group {} allows at most one member enabled ({on} enabled)", g.name),
-                    on_cause(info, saved, staged, &members),
+                    on_cause(staged, &members),
                 ),
                 _ => continue,
             };
@@ -518,9 +593,9 @@ impl Session {
         if info.options.r#override.is_some() {
             return UiStatus::Ok;
         }
-        // Nor can a file whose options.local resets a list: sync would
-        // rewrite it every run and make would still not read its lines.
-        if self.local_reset(self.owner_info(info)).is_some() {
+        // Nor can a file optique cannot model (`unmanaged_by`): it is not
+        // written, and what make makes of it is make's alone.
+        if self.unmanaged(info).is_some() {
             return UiStatus::Ok;
         }
         match self.stale_delta(info) {
@@ -562,8 +637,7 @@ impl Session {
     /// (removed options never need a decision); for an unconfigured port,
     /// every option it has.
     pub fn covered_by_makeconf(&self, info: &PortInfo) -> bool {
-        let Some(state) = self.state(info) else { return false };
-        undecided_options(info, state.saved.as_ref(), self.minimal).is_empty()
+        self.state(info).is_some() && self.undecided(info).is_empty()
     }
 
     /// Does this option's staged value contradict make.conf policy?
@@ -571,10 +645,12 @@ impl Session {
     /// OPTIONS_SET/UNSET or per-port _SET/_UNSET mention) and the staged
     /// value must differ from what defaults + make.conf alone would yield.
     /// FORCE-decided options are excluded: the file cannot override them.
+    /// So is every option of a file optique cannot manage: what the
+    /// make.conf layers hold may be the file's own assignments.
     pub fn mc_deviates(&self, info: &PortInfo, opt: &str) -> bool {
         let Some(state) = self.state(info) else { return false };
         let o = &info.options;
-        if o.is_forced(opt) {
+        if o.is_forced(opt) || self.unmanaged(info).is_some() {
             return false;
         }
         if !o.mc_mentions(opt) {
@@ -666,6 +742,10 @@ impl Session {
                 else {
                     continue; // the draft names a port no longer in the closure
                 };
+                // A file that became one optique cannot manage takes no edit.
+                if self.unmanaged(owner).is_some() {
+                    continue;
+                }
                 enabled
                     .iter()
                     .filter(|opt| owner.options.complete.contains(*opt))
@@ -987,9 +1067,34 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
     // the list but on whatever the layers above said. Then bsd.port.mk drops
     // the members of a conditional group whose option is off from
     // PORT_OPTIONS (see `unchecked_groups`).
-    let mut set = close_implies(info, set);
+    let mut set = make_implies(info, set);
     set.extend(o.slave.iter().cloned());
     unchecked_groups(o, set).1
+}
+
+/// The IMPLIES closure as bsd.options.mk:410-440 computes PORT_OPTIONS:
+/// only an option of the port's list implies (`_DEPCHAIN` pairs start in
+/// COMPLETE_OPTIONS_LIST), and what it implies goes in unchecked, listed
+/// or not (an option excluded on this platform, say), unless an option
+/// already on matches it as a pattern (`empty(_PORT_OPTIONS:M$d)`). Such an
+/// option implies nothing in turn, but a PREVENTS can name it. The staged
+/// sets, which hold only listed options, use `close_implies`.
+fn make_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> {
+    let complete: BTreeSet<&str> = info.options.complete.iter().map(String::as_str).collect();
+    let mut todo: Vec<String> = set.iter().cloned().collect();
+    while let Some(opt) = todo.pop() {
+        if !complete.contains(opt.as_str()) {
+            continue;
+        }
+        let Some(def) = info.options.defs.get(&opt) else { continue };
+        for imp in &def.implies {
+            if !set.iter().any(|s| str_match(s, imp)) {
+                set.insert(imp.clone());
+                todo.push(imp.clone());
+            }
+        }
+    }
+    set
 }
 
 /// One SET/UNSET layer applied to `set`: a SET entry goes in word for word
@@ -1490,7 +1595,8 @@ mod tests {
     /// bsd.options.mk:321: make.conf's `OPTIONS_UNSET=A*` takes A and A2
     /// out of PORT_OPTIONS and NEW_OPTIONS alike: both are off and decided,
     /// B and C stay undecided. `OPTIONS_SET=C*` adds the word `C*`, no C,
-    /// yet decides C.
+    /// and decides nothing: make takes C out of NEW_OPTIONS, a defect
+    /// optique does not follow.
     #[test]
     fn make_conf_entries_are_patterns() {
         let (mut ports, key) = mk_port(&["A", "A2", "B", "C"], &["A", "A2", "B"], vec![], vec![]);
@@ -1501,7 +1607,7 @@ mod tests {
         ports.get_mut(&key).unwrap().options.mc_set.insert("C*".into());
         let info = &ports[&key];
         assert_eq!(nofile_effective(info), set(&["B", "C*"]));
-        assert_eq!(undecided_options(info, None, false), ["B"]);
+        assert_eq!(undecided_options(info, None, false), ["B", "C"]);
     }
 
     /// bsd.options.mk:399-409: make.conf's WITH and WITHOUT apply after the
@@ -1647,31 +1753,47 @@ mod tests {
         assert!(err.contains("OPTIONS_OVERRIDE"), "{err}");
     }
 
-    /// bsd.options.mk:342-363: options.local is read after the file, its
-    /// entries joining the file's lists. The file sets A, options.local
-    /// unsets A*: turning A on would write a file make reads with A still
-    /// off, so toggle refuses it, and every option options.local decides,
-    /// pattern-matched (A2) or set there (B), reports locked by it.
+    /// bsd.options.mk:352-363: every OPTIONS_FILE_SET entry, options.local's
+    /// included, goes in before any OPTIONS_FILE_UNSET one. The file sets
+    /// A, options.local unsets A*: turning A on would write a file make
+    /// reads with A still off, so toggle refuses it, and A and A2 report
+    /// locked by options.local. Its SETs lock nothing: B, which the file
+    /// unsets, is off and can be turned on; D, which the file gives no
+    /// line, is on as a default; E* turns no E on.
     #[test]
-    fn toggle_is_refused_for_what_options_local_decides() {
+    fn toggle_is_refused_for_what_options_local_unsets() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
         std::fs::write(tmp.path().join("cat_port/options"), "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n").unwrap();
-        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=B\n")
+        std::fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=B D E*\n")
             .unwrap();
-        let (ports, key) = mk_port(&["A", "A2", "B", "C"], &[], vec![], vec![]);
+        let (ports, key) = mk_port(&["A", "A2", "B", "C", "D", "E"], &[], vec![], vec![]);
         let roots: Vec<PortKey> = ports.keys().cloned().collect();
-        let mut s = Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(tmp.path()), false);
-        for opt in ["A", "A2", "B"] {
+        let files = OptionsFiles::new(tmp.path());
+        let mut s = Session::new(ports, HashMap::new(), &roots, &files, false);
+        let info = s.ports[&key].clone();
+        // make appends the word E* itself, which is no option.
+        assert_eq!(effective_with(&info, Some(&files.combined("cat_port"))), set(&["D", "E*"]));
+        assert_eq!(s.state(&info).unwrap().staged, set(&["D"]));
+        for opt in ["A", "A2"] {
             let err = s.toggle(&key, opt).unwrap_err();
             assert_eq!(err, format!("options.local decides {opt}; edit it there"));
         }
-        assert!(!s.edited(&s.ports[&key]));
-        s.toggle(&key, "C").expect("options.local says nothing of C");
-        let reports = crate::report::option_reports(&s, &s.ports[&key]);
+        assert!(!s.edited(&info));
+        let reports = crate::report::option_reports(&s, &info);
         let locked: Vec<_> = reports.iter().map(|o| (o.name.as_str(), o.locked_by.as_deref())).collect();
         let local = Some("options.local");
-        assert_eq!(locked, [("A", local), ("A2", local), ("B", local), ("C", None)]);
+        assert_eq!(locked, [("A", local), ("A2", local), ("B", None), ("C", None), ("D", None), ("E", None)]);
+        s.toggle(&key, "B").expect("options.local's SET does not lock B");
+        s.toggle(&key, "D").expect("nor D");
+        // Written, the file has make end up with what is staged.
+        let staged = s.state(&info).unwrap().staged.clone();
+        assert_eq!(staged, set(&["B"]));
+        let planned = apply::plan_writes(std::iter::once((&key, &info, staged.clone())), &files, false);
+        let written = SavedOptionsFile::parse(&planned.writes[0].content);
+        let mut outcome = effective_with(&info, Some(&files.under_local("cat_port", written)));
+        outcome.remove("E*");
+        assert_eq!(outcome, staged);
     }
 
     /// bsd.options.mk:341-363: `OPTIONS_FILE_SET=B` in options.local drops
@@ -2710,5 +2832,156 @@ mod tests {
         let before = s.state(&s.ports[&key]).unwrap().staged.clone();
         assert_eq!(s.restore_draft(&draft_with(&[("other_port", &["A"])])), 0);
         assert_eq!(s.state(&s.ports[&key]).unwrap().staged, before);
+    }
+
+    /// A session over `ports` and the options dir `dir`.
+    fn session_in(ports: BTreeMap<PortKey, PortInfo>, dir: &std::path::Path) -> Session {
+        let roots: Vec<PortKey> = ports.keys().cloned().collect();
+        Session::new(ports, HashMap::new(), &roots, &OptionsFiles::new(dir), false)
+    }
+
+    /// An options file holding a line optique cannot model (here an
+    /// `OPTIONS_SET`, inert in make since its loop ran before the include,
+    /// though the wrapper dumps it as a make.conf layer) claims nothing:
+    /// no saved values, make's own PORT_OPTIONS as the state, ok, nothing
+    /// undecided, every option locked by the file with no make.conf
+    /// verdict, no edit or draft taken, and no write or removal planned.
+    #[test]
+    fn an_unmanageable_file_is_left_to_make() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+        std::fs::write(
+            tmp.path().join("cat_port/options"),
+            "_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A B C\nOPTIONS_FILE_SET+=A\n\
+             OPTIONS_FILE_UNSET+=B\nOPTIONS_SET=B\n",
+        )
+        .unwrap();
+        let (mut ports, key) = mk_port(&["A", "B", "C"], &["C"], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.mc_set.insert("B".into());
+            o.effective = set(&["A", "C"]);
+        }
+        let mut s = session_in(ports, tmp.path());
+        let info = s.ports[&key].clone();
+        let why = "options line 5 assigns OPTIONS_SET, which optique does not model: optique leaves \
+                   the options file alone; edit it by hand";
+        assert_eq!(s.unmanaged(&info), Some(Unmanaged { by: "options file", why: why.to_string() }));
+        let st = s.state(&info).unwrap();
+        assert!(st.saved.is_none());
+        assert_eq!(st.staged, set(&["A", "C"]));
+        assert_eq!(s.status(&info), UiStatus::Ok);
+        assert!(s.undecided(&info).is_empty() && s.covered_by_makeconf(&info));
+        assert!(!s.mc_deviates(&info, "B"));
+        assert_eq!(s.toggle(&key, "B").unwrap_err(), why);
+        s.reset_to_defaults(&key);
+        assert_eq!(s.restore_draft(&draft_with(&[("cat_port", &["B"])])), 0);
+        assert!(!s.edited(&info));
+        for o in crate::report::option_reports(&s, &info) {
+            assert!(o.makeconf.is_none() && o.saved.is_none() && !o.new, "{}", o.name);
+            assert_eq!(o.locked_by.as_deref(), Some("options file"), "{}", o.name);
+        }
+        let files = OptionsFiles::new(tmp.path());
+        for minimal in [false, true] {
+            let planned = apply::plan_writes(std::iter::once((&key, &info, set(&["B"]))), &files, minimal);
+            assert!(planned.writes.is_empty() && planned.removals.is_empty(), "minimal {minimal}");
+        }
+        // Nor is it removed once its port has no options left.
+        let mut optionless = info.clone();
+        optionless.options.complete.clear();
+        let ports: BTreeMap<PortKey, PortInfo> = [(key.clone(), optionless)].into();
+        assert!(apply::plan_stale_removals(&ports, &files).is_empty());
+    }
+
+    /// bsd.options.mk:183: make.conf moved OPTIONS_FILE, so make reads
+    /// neither the file optique manages nor its options.local. With none
+    /// on disk the port is not unconfigured, edits are refused, and sync
+    /// writes nothing.
+    #[test]
+    fn a_moved_options_file_is_left_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut ports, key) = mk_port(&["A", "B"], &["A"], vec![], vec![]);
+        ports.get_mut(&key).unwrap().options.moved_file = Some("/elsewhere/options".into());
+        let mut s = session_in(ports, tmp.path());
+        let info = s.ports[&key].clone();
+        assert_eq!(s.status(&info), UiStatus::Ok);
+        let why = "make.conf sets OPTIONS_FILE to /elsewhere/options, not the options file optique manages; edit it there";
+        assert_eq!(s.toggle(&key, "A").unwrap_err(), why);
+        let reports = crate::report::option_reports(&s, &info);
+        assert!(reports.iter().all(|o| o.locked_by.as_deref() == Some("make.conf OPTIONS_FILE")));
+        let planned =
+            apply::plan_writes(std::iter::once((&key, &info, set(&["A"]))), &OptionsFiles::new(tmp.path()), false);
+        assert!(planned.writes.is_empty());
+    }
+
+    /// bsd.options.mk:312-409: an UNSET word of any make.conf layer settles
+    /// what it matches as a pattern (F*); a SET, FORCE SET or WITH word
+    /// adds itself, which turns no option on, and settles only an option it
+    /// names. make takes what such a glob matches out of NEW_OPTIONS too, a
+    /// defect optique does not follow: A1 to E1 stay undecided, none is on,
+    /// and none is pinned, so the file can still turn C1 on.
+    #[test]
+    fn glob_words_decide_in_every_layer_and_turn_nothing_on() {
+        let opts = ["A1", "B1", "C1", "D1", "E1", "F1"];
+        let (mut ports, key) = mk_port(&opts, &[], vec![], vec![]);
+        {
+            let o = &mut ports.get_mut(&key).unwrap().options;
+            o.mc_set.insert("A*".into());
+            o.port_set.insert("B*".into());
+            o.force_set.insert("C*".into());
+            o.port_force_set.insert("D*".into());
+            o.with.insert("E*".into());
+            o.port_unset.insert("F*".into());
+        }
+        let info = &ports[&key];
+        assert_eq!(undecided_options(info, None, false), ["A1", "B1", "C1", "D1", "E1"]);
+        let on = nofile_effective(info);
+        assert!(opts.iter().all(|o| !on.contains(*o)), "{on:?}");
+        assert!(opts.iter().all(|o| !info.options.is_forced(o)));
+        let mut s = session_for(ports);
+        s.toggle(&key, "C1").expect("C* pins nothing");
+    }
+
+    /// bsd.port.mk's pre-check-config matches each PREVENTS word as a
+    /// pattern against every option on (`${PORT_OPTIONS:M${conflict}}`),
+    /// the option itself included, and names the word: A prevents B*,
+    /// which B1 matches; X prevents X*, itself.
+    #[test]
+    fn prevents_words_are_patterns() {
+        let defs = vec![
+            ("A", OptionDef { prevents: vec!["B*".into()], ..Default::default() }),
+            ("X", OptionDef { prevents: vec!["X*".into()], ..Default::default() }),
+        ];
+        let (ports, key) = mk_port(&["A", "B1", "B2", "X"], &["A", "B1"], vec![], defs);
+        let mut s = session_for(ports);
+        let conflicts = s.conflicts(&s.ports[&key]);
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].text, "A conflicts with B*: mutually exclusive");
+        assert_eq!(conflicts[0].members, ["A", "B1"]);
+        s.toggle(&key, "B1").unwrap();
+        s.toggle(&key, "X").unwrap();
+        assert_eq!(s.violations(&s.ports[&key]), ["X conflicts with X*: mutually exclusive"]);
+    }
+
+    /// bsd.options.mk:410-440 adds what an option of the list implies
+    /// unchecked: C implies FOO, no option of the port (one excluded on
+    /// this platform, say), and make's PORT_OPTIONS holds it, so D's
+    /// PREVENTS of FOO fails check-config. The staged set keeps to the
+    /// list, and a file repeating the defaults is still redundant against
+    /// make's PORT_OPTIONS.
+    #[test]
+    fn what_an_option_implies_goes_in_listed_or_not() {
+        let defs = vec![
+            ("C", OptionDef { implies: vec!["FOO".into()], ..Default::default() }),
+            ("D", OptionDef { prevents: vec!["FOO".into()], ..Default::default() }),
+        ];
+        let (mut ports, key) = mk_port(&["C", "D"], &["C", "D"], vec![], defs);
+        ports.get_mut(&key).unwrap().options.effective = set(&["C", "D", "FOO"]);
+        let info = ports[&key].clone();
+        assert_eq!(nofile_effective(&info), set(&["C", "D", "FOO"]));
+        assert!(crate::clean::redundancy_diff(&info, &SavedOptionsFile::default()).is_empty());
+        let s = session_for(ports);
+        assert_eq!(s.state(&info).unwrap().staged, set(&["C", "D"]));
+        assert_eq!(s.violations(&info), ["D conflicts with FOO: mutually exclusive"]);
     }
 }

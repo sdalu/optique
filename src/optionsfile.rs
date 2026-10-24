@@ -15,10 +15,11 @@ pub struct SavedOptionsFile {
     /// The variables optique reads that some line has assigned so far, by
     /// any operator: a later `?=` to one of them assigns nothing.
     pub assigned: BTreeSet<String>,
-    /// `(file, line)` of each `!=` to a variable optique reads: make runs
-    /// the shell command, optique does not, and ignores the line. `file` is
-    /// `options` or `options.local`, `line` counts from 1.
-    pub shell: Vec<(&'static str, usize)>,
+    /// Each line optique cannot model, in the order read: a `!=`, a make
+    /// directive, a `$` expansion, an assignment to a variable other than
+    /// the SET and UNSET lists and the bookkeeping make config writes. Any
+    /// one makes the file unmanageable (`unmanaged`).
+    pub unmodeled: Vec<Unmodeled>,
     /// The SET and UNSET entries `options.local` contributes, as they stand
     /// once it is read (`with_local`): a `?=` that assigns nothing adds none.
     pub local_set: BTreeSet<String>,
@@ -26,6 +27,19 @@ pub struct SavedOptionsFile {
     /// The lists `options.local` assigns afresh (`=`, `:=`, a `?=` that
     /// assigns), dropping what the options file put in them, in order.
     pub local_resets: Vec<String>,
+}
+
+/// A line of the options file or options.local that optique cannot model:
+/// make reads it, and what it does to the rest of the parse is not in
+/// optique's reading of the file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmodeled {
+    /// `options` or `options.local`.
+    pub file: &'static str,
+    /// The line it starts on, from 1.
+    pub line: usize,
+    /// What the line does, as a phrase: `assigns with != (a shell command)`.
+    pub what: String,
 }
 
 /// How a line assigns its variable: make's `=` and `:=` (afresh), `+=`,
@@ -83,10 +97,10 @@ impl SavedOptionsFile {
     /// a value is the whitespace-separated words after the operator, with
     /// or without spaces around it. `+=` appends to the variable; `=` and
     /// `:=` assign it afresh, as `OPTIONS_FILE_SET=X` resets the list; `?=`
-    /// assigns only a variable no earlier line assigned; `!=` (a shell
-    /// command) is ignored and recorded in `shell`. A line ending in `\`
-    /// goes on over the next (`logical_lines`). Lines that assign nothing
-    /// optique reads are skipped.
+    /// assigns only a variable no earlier line assigned. A line ending in
+    /// `\` goes on over the next (`logical_lines`). Every other line make
+    /// reads, a `!=` (a shell command) included, is one optique cannot
+    /// model: it is skipped and recorded in `unmodeled`.
     pub fn parse(text: &str) -> Self {
         let mut out = SavedOptionsFile::default();
         out.read(text, false);
@@ -106,14 +120,24 @@ impl SavedOptionsFile {
     }
 
     /// Read `text`'s assignments into `self`, in order; `lists_only`
-    /// takes nothing but the SET and UNSET lines.
+    /// takes nothing but the SET and UNSET lines. A line optique cannot
+    /// model is recorded in `unmodeled` (`unmodeled_line`); the SET and
+    /// UNSET lines around it are read all the same.
     fn read(&mut self, text: &str, lists_only: bool) {
         let file = if lists_only { "options.local" } else { "options" };
         for (n, line) in logical_lines(text) {
             // A `#` starts a comment, at the head of a line or after a value;
             // `\#` is a literal `#`, as make reads it.
             let line = strip_comment(&line);
-            let Some((name, op, value)) = assignment(line.trim()) else { continue };
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let parsed = assignment(line).filter(|(name, _, _)| plain_name(name));
+            if let Some(what) = unmodeled_line(line, parsed) {
+                self.unmodeled.push(Unmodeled { file, line: n, what });
+            }
+            let Some((name, op, value)) = parsed else { continue };
             let read = match name {
                 "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" => true,
                 "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST" => !lists_only,
@@ -129,10 +153,8 @@ impl SavedOptionsFile {
                 Op::Assign => false,
                 Op::IfUnset if first => false,
                 Op::IfUnset => continue,
-                Op::Shell => {
-                    self.shell.push((file, n));
-                    continue;
-                }
+                // make runs the command; optique cannot (`unmodeled`).
+                Op::Shell => continue,
             };
             let words = value.split_whitespace().map(str::to_string);
             match name {
@@ -189,23 +211,35 @@ impl SavedOptionsFile {
         }
     }
 
-    /// Whether an entry options.local contributes (`local_set`,
-    /// `local_unset`) settles the option, as `decides` judges the file's:
-    /// make reads it after the options file, so the file cannot change it.
+    /// Whether options.local turns the option off whatever the options
+    /// file says: one of its UNSET entries matches it as a pattern.
+    /// bsd.options.mk:352-363 applies every OPTIONS_FILE_SET entry, the
+    /// file's and options.local's, before every OPTIONS_FILE_UNSET one, so
+    /// only an UNSET there outranks the file; a SET there is a default the
+    /// file's UNSET line overrides, and a SET pattern turns nothing on.
     pub fn local_decides(&self, opt: &str) -> bool {
-        mentions(&self.local_set, opt) || mentions(&self.local_unset, opt)
+        unsets(&self.local_unset, opt)
     }
 
-    /// Why optique cannot manage the options file, when options.local
-    /// assigns OPTIONS_FILE_SET or OPTIONS_FILE_UNSET afresh: make drops
-    /// what the file put in that list (bsd.options.mk:341-363), so no write
-    /// of the file can say what the port ends up with.
-    pub fn local_reset(&self) -> Option<String> {
-        (!self.local_resets.is_empty()).then(|| {
-            format!(
-                "options.local resets {}: the options file's lines are not read; edit options.local",
-                self.local_resets.join(" and ")
-            )
+    /// Why optique cannot manage the options file, with the file (`options`
+    /// or `options.local`) that makes it so; None when it can. Either
+    /// options.local assigns OPTIONS_FILE_SET or OPTIONS_FILE_UNSET afresh,
+    /// so make drops what the file put in that list (bsd.options.mk:341-363)
+    /// and no write of the file can say what the port ends up with; or a
+    /// line of either is one optique cannot model (`unmodeled`). Its lines
+    /// would be lost to a write, and what make makes of them is not known.
+    pub fn unmanaged(&self) -> Option<(&'static str, String)> {
+        if !self.local_resets.is_empty() {
+            return Some((
+                "options.local",
+                format!(
+                    "options.local resets {}: the options file's lines are not read; edit options.local",
+                    self.local_resets.join(" and ")
+                ),
+            ));
+        }
+        self.unmodeled.first().map(|u| {
+            (u.file, format!("{} line {} {}: optique leaves the options file alone; edit it by hand", u.file, u.line, u.what))
         })
     }
 
@@ -236,6 +270,50 @@ impl SavedOptionsFile {
     /// turns no A2 on.
     pub fn decides(&self, opt: &str) -> bool {
         mentions(&self.set, opt) || mentions(&self.unset, opt)
+    }
+}
+
+/// Whether `name` is a variable name as written: nothing make would expand,
+/// nor anything that makes the line a directive or a dependency line.
+fn plain_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+
+/// What a line does that optique cannot model, None for a line it reads
+/// (`parsed`: the line's assignment, when it is a plain one). Inert in
+/// make or not, each is outside what optique reads and writes back:
+/// - a `!=` runs a shell command at every parse, a `make -V` included;
+/// - a directive (`.if`, `.include`, `.sinclude`, `.undef`, `.for`, ...)
+///   or a `$` expansion makes the file's meaning depend on what optique
+///   does not evaluate;
+/// - an assignment to any variable but the SET and UNSET lists and the
+///   bookkeeping `make config` writes (`_OPTIONS_READ`,
+///   `_FILE_COMPLETE_OPTIONS_LIST`) is seen by the rest of the parse:
+///   `OPTIONS_SET`, `${OPTIONS_NAME}_SET` and `OPTIONS_OVERRIDE` there come
+///   too late to count (bsd.options.mk:300-334, before the include at
+///   341), while the `*_FORCE` lists and `WITH`/`WITHOUT` take effect
+///   (368-409);
+/// - any other line (a dependency line, `include`) is no assignment.
+fn unmodeled_line(line: &str, parsed: Option<(&str, Op, &str)>) -> Option<String> {
+    let Some((name, op, value)) = parsed else {
+        return Some(if let Some(rest) = line.strip_prefix('.') {
+            let word: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+            format!("is a make directive (.{word})")
+        } else if line.contains('$') {
+            "expands a variable ($)".to_string()
+        } else {
+            "is not a variable assignment".to_string()
+        });
+    };
+    if op == Op::Shell {
+        Some("assigns with != (a shell command)".to_string())
+    } else if value.contains('$') {
+        Some("expands a variable ($)".to_string())
+    } else if matches!(name, "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" | "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST")
+    {
+        None
+    } else {
+        Some(format!("assigns {name}, which optique does not model"))
     }
 }
 
@@ -367,12 +445,12 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(f.set, words(&["B", "C"]), "`:=` resets, `?=` after it assigns nothing");
         assert_eq!(f.unset, words(&["E"]), "the first `?=` assigns, the second not");
         assert!(f.complete.is_empty());
-        assert_eq!(f.shell, [("options", 6)]);
+        assert_eq!(places(&f), [("options", 6)]);
         // options.local carries on: its `?=` meets a variable the file assigned.
         let l = f.with_local("OPTIONS_FILE_SET?=H\nOPTIONS_FILE_UNSET:=I\nOPTIONS_FILE_SET != echo J\n");
         assert_eq!(l.set, words(&["B", "C"]));
         assert_eq!(l.unset, words(&["I"]));
-        assert_eq!(l.shell, [("options", 6), ("options.local", 3)]);
+        assert_eq!(places(&l), [("options", 6), ("options.local", 3)]);
         // With no options file, options.local's `?=` assigns.
         let l = SavedOptionsFile::default().with_local("OPTIONS_FILE_SET?=H\n");
         assert_eq!(l.set, words(&["H"]));
@@ -416,13 +494,78 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(resets("OPTIONS_FILE_SET?=B\nOPTIONS_FILE_UNSET?=C\n"), ["OPTIONS_FILE_UNSET"]);
         let f = file.with_local("OPTIONS_FILE_UNSET?=C\nOPTIONS_FILE_SET=B\n");
         assert_eq!(
-            f.local_reset().as_deref(),
+            f.unmanaged().map(|(_, why)| why).as_deref(),
             Some(
                 "options.local resets OPTIONS_FILE_UNSET and OPTIONS_FILE_SET: \
                  the options file's lines are not read; edit options.local"
             )
         );
-        assert_eq!(SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").local_reset(), None, "the file's own `=`");
+        assert_eq!(SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").unmanaged(), None, "the file's own `=`");
+    }
+
+    /// Where each unmodeled line is.
+    fn places(f: &SavedOptionsFile) -> Vec<(&'static str, usize)> {
+        f.unmodeled.iter().map(|u| (u.file, u.line)).collect()
+    }
+
+    /// bsd.options.mk:341-363 includes both files as makefiles: optique
+    /// reads their SET and UNSET lines and the bookkeeping `make config`
+    /// writes, and records every other line make reads, each with what it
+    /// does. A directive, a `$` and a `!=` are recorded whatever they
+    /// assign; comments and blank lines are not lines at all.
+    #[test]
+    fn every_line_optique_cannot_model_is_recorded() {
+        let f = SavedOptionsFile::parse(
+            "# comment\n\n_OPTIONS_READ=port-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A B\n\
+             OPTIONS_FILE_SET+=A\nOPTIONS_SET=B\n.if exists(/x)\nOPTIONS_FILE_UNSET+=B\n.  endif\n\
+             OPTIONS_FILE_SET+=${X}\nFOO!=echo 1\n${OPTIONS_NAME}_SET=A\ninclude /x\n",
+        )
+        .with_local(".sinclude \"/y\"\nWITH=A\nOPTIONS_FILE_UNSET+=B\n_OPTIONS_READ=x\n");
+        let got: Vec<(&str, usize, &str)> =
+            f.unmodeled.iter().map(|u| (u.file, u.line, u.what.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                ("options", 6, "assigns OPTIONS_SET, which optique does not model"),
+                ("options", 7, "is a make directive (.if)"),
+                ("options", 9, "is a make directive (.endif)"),
+                ("options", 10, "expands a variable ($)"),
+                ("options", 11, "assigns with != (a shell command)"),
+                ("options", 12, "expands a variable ($)"),
+                ("options", 13, "is not a variable assignment"),
+                ("options.local", 1, "is a make directive (.sinclude)"),
+                ("options.local", 2, "assigns WITH, which optique does not model"),
+            ]
+        );
+        // The SET and UNSET lines around them are still read.
+        assert!(f.set.contains("A") && f.unset.contains("B"));
+        assert_eq!(
+            f.unmanaged(),
+            Some((
+                "options",
+                "options line 6 assigns OPTIONS_SET, which optique does not model: optique leaves \
+                 the options file alone; edit it by hand"
+                    .to_string()
+            ))
+        );
+        // A file make config wrote, and an options.local of SET and UNSET
+        // lines, are managed.
+        let clean = SavedOptionsFile::parse(&render("port-1.0", &["A".into()], &BTreeSet::new()))
+            .with_local("OPTIONS_FILE_SET+=A\n_FILE_COMPLETE_OPTIONS_LIST=A\n");
+        assert_eq!(clean.unmanaged(), None);
+    }
+
+    /// bsd.options.mk:352-363: every OPTIONS_FILE_SET entry, options.local's
+    /// included, goes in before any OPTIONS_FILE_UNSET one: options.local
+    /// decides only what its UNSET entries match, patterns included; its
+    /// SET of B loses to the file's UNSET.
+    #[test]
+    fn options_local_decides_only_what_it_unsets() {
+        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n")
+            .with_local("OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=B C*\n");
+        let decided: Vec<bool> = ["A", "A2", "B", "C"].iter().map(|o| f.local_decides(o)).collect();
+        assert_eq!(decided, [true, true, false, false]);
+        assert_eq!(f.value("B"), Some(false), "the file's UNSET beats options.local's SET");
     }
 
     /// bsd.options.mk:354-363: an UNSET entry takes out every option it
@@ -452,7 +595,7 @@ OPTIONS_FILE_UNSET+=FLITE
         let words = |s: &[&str]| s.iter().map(|o| o.to_string()).collect::<BTreeSet<_>>();
         assert_eq!(f.set, words(&["A", "B", "E", "F", "G"]));
         assert_eq!(f.unset, words(&["C", "H\\\\", "I"]));
-        assert_eq!(f.shell, [("options", 11)]);
+        assert_eq!(places(&f), [("options", 11)]);
         let lines = logical_lines("A \\\n\tB\nC\\\\\\\nD\n");
         assert_eq!(lines, [(1, "A  B".to_string()), (3, "C\\\\ D".to_string())]);
     }

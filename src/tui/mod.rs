@@ -6170,6 +6170,25 @@ mod tests {
         assert_eq!(info.options.provenance("B", Some(true)), crate::model::options::Provenance::Override);
     }
 
+    /// An options file holding a line optique cannot model shows no
+    /// make.conf verdict, since the layers make dumped after reading it may
+    /// be the file's own (inert) OPTIONS_SET, and says why above the rows.
+    #[test]
+    fn an_unmanageable_file_shows_no_makeconf_verdict() {
+        let tmp = tempfile::tempdir().unwrap();
+        alpha_file(tmp.path(), &["A", "B"], &["B"]);
+        let path = tmp.path().join("options/cat_alpha/options");
+        let text = std::fs::read_to_string(&path).unwrap() + "OPTIONS_SET=A\n";
+        std::fs::write(&path, text).unwrap();
+        let mut app = alpha_app(tmp.path(), &["A", "B"]);
+        alpha_mut(&mut app).options.mc_set = ["A".to_string()].into();
+        assert_eq!(mc_column(&mut app, "A").0, "");
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let rows = ui::screen_rows(terminal.backend().buffer());
+        assert!(rows.iter().any(|r| r.contains("UNMANAGED: options line 5 assigns OPTIONS_SET")), "{}", rows.join("\n"));
+    }
+
     /// The make.conf column says what make.conf says whenever a layer names
     /// the option, the options file deciding or not: the last layer wins,
     /// in its colour; blank only when no layer names it.
