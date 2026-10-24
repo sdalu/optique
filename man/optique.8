@@ -2688,7 +2688,18 @@ The layers are wrapped in the environment of a
 jail, not the host's: they come after the lines poudriere puts at the top
 of every jail's
 .Pa make.conf
-.Pq Va PACKAGE_BUILDING , PACKAGE_BUILDING_FLAVORS , BATCH , USE_PACKAGE_DEPENDS
+.Po
+.Va PACKAGE_BUILDING , PACKAGE_BUILDING_FLAVORS , BATCH , USE_PACKAGE_DEPENDS ,
+and
+.Va FORCE_PACKAGE
+unless
+.Pa poudriere.conf
+sets
+.Va NO_FORCE_PACKAGE ,
+without which a port's
+.Va NO_PACKAGE
+reads as an IGNORE
+.Pc
 and are followed by
 .Ql LOCALBASE=/nonexistent .
 A jail has nothing installed when poudriere reads a port, while the host
@@ -2714,6 +2725,10 @@ reads after it, for the jail, tree and set given
 and
 .Va PACKAGE_BUILDING_FLAVORS
 are left out, as poudriere leaves them out.
+These files, and the blacklists, are read as bytes; one that exists but
+cannot be read stops the run, as
+.Xr poudriere 8 ,
+run as root, would read it.
 .Va FLAVOR_DEFAULT_ALL Ns = Ns Ql yes ,
 read from the same files the same way, makes a bare origin listed stand
 for every flavor of its port, as

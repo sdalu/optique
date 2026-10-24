@@ -23,6 +23,12 @@ USE_PACKAGE_DEPENDS=yes
 BATCH=yes
 ";
 
+/// What `jail_start` (common.sh ~4100-4115) writes after the overlay lines
+/// unless poudriere.conf sets `NO_FORCE_PACKAGE`: bsd.port.mk:2191
+/// undefines `NO_PACKAGE` under it, which `PACKAGE_BUILDING` would
+/// otherwise turn into an IGNORE (devel/papi, audio/madfufw).
+const FORCE_PACKAGE_LINE: &str = "FORCE_PACKAGE=yes\n";
+
 /// The part of that prelude poudriere leaves out when poudriere.conf sets
 /// `NO_PACKAGE_BUILDING`: several framework probes are skipped under
 /// `PACKAGE_BUILDING`, and some ports change option defaults with it
@@ -91,7 +97,10 @@ impl Blacklist {
         let mut bl = Blacklist::default();
         for name in blacklist_layers(jail, tree, set, emulating) {
             let path = poudriere_d.join(&name);
-            let Ok(text) = fs::read_to_string(&path) else {
+            // Bytes, as poudriere's grep and sed read it under LC_ALL=C: a
+            // Latin-1 comment drops nothing ([`readable`] stopped the run
+            // on one it cannot read).
+            let Some(text) = read_lossy(&path) else {
                 continue;
             };
             for line in text.lines() {
@@ -267,14 +276,40 @@ pub(super) fn resolve(
         None => resolve_options_dir(poudriere_d, jail, tree_name, tree.is_some(), set),
     };
 
+    let emulating = jail.is_some_and(|j| jail_emulating(poudriere_d, j, host.supported_archs));
+    readable(
+        host.poudriere_conf,
+        poudriere_d,
+        jail,
+        tree,
+        set,
+        tree_name,
+        emulating,
+    )?;
     let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
     let env = QueryEnv::Jail {
         package_building: !off,
     };
     let mut notes = Vec::new();
-    let jail_lines = jail.map_or_else(String::new, |j| {
-        jail_system(poudriere_d, j, host, &mut notes)
-    });
+    let no_force = poudriere_conf_value(
+        host.poudriere_conf,
+        poudriere_d,
+        jail,
+        tree,
+        set,
+        "NO_FORCE_PACKAGE",
+    )
+    .is_some();
+    // FORCE_PACKAGE, then the jail's system: both before the layers, as
+    // poudriere writes them.
+    let mut jail_lines = if no_force {
+        String::new()
+    } else {
+        FORCE_PACKAGE_LINE.to_string()
+    };
+    if let Some(j) = jail {
+        jail_lines.push_str(&jail_system(poudriere_d, j, host, &mut notes));
+    }
     let ccache = ccache_dir(host.poudriere_conf, poudriere_d, jail, tree, set)
         .is_some_and(|dir| Path::new(&dir).is_dir());
     let staged = layer_make_conf(
@@ -289,7 +324,6 @@ pub(super) fn resolve(
         staging_dir,
     )?;
 
-    let emulating = jail.is_some_and(|j| jail_emulating(poudriere_d, j, host.supported_archs));
     let blacklist = Blacklist::load_emulating(poudriere_d, jail, tree_name, set, emulating);
 
     let default_all = flavor_default_all(host.poudriere_conf, poudriere_d, jail, tree, set);
@@ -558,7 +592,8 @@ fn poudriere_conf_value(
     );
     let mut value = None;
     for file in files {
-        let Ok(text) = fs::read_to_string(&file) else {
+        // Bytes, as sh sources it: a Latin-1 comment drops nothing.
+        let Some(text) = read_lossy(&file) else {
             continue;
         };
         for line in text.lines() {
@@ -623,6 +658,52 @@ fn ccache_dir(
     set: Option<&str>,
 ) -> Option<String> {
     poudriere_conf_value(poudriere_conf, poudriere_d, jail, tree, set, "CCACHE_DIR")
+}
+
+/// `path`'s text, bytes that are no UTF-8 replaced; None when it cannot be
+/// read.
+fn read_lossy(path: &Path) -> Option<String> {
+    fs::read(path)
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Every poudriere.conf layer and blacklist file this build reads, checked
+/// readable: poudriere, run as root, reads every one that exists (its only
+/// test is `[ -r ]`), so one optique cannot read stops the run, as an
+/// unreadable make.conf layer does, rather than leave its settings out.
+fn readable(
+    poudriere_conf: &Path,
+    poudriere_d: &Path,
+    jail: Option<&str>,
+    tree: Option<&str>,
+    set: Option<&str>,
+    tree_name: &str,
+    emulating: bool,
+) -> Result<()> {
+    let mut files = vec![
+        poudriere_conf.to_path_buf(),
+        poudriere_d.join("poudriere.conf"),
+    ];
+    files.extend(
+        poudriere_conf_layers(jail, tree, set)
+            .into_iter()
+            .map(|layer| poudriere_d.join(format!("{layer}-poudriere.conf"))),
+    );
+    files.extend(
+        blacklist_layers(jail, tree_name, set, emulating)
+            .into_iter()
+            .map(|name| poudriere_d.join(name)),
+    );
+    // A directory in a file's place is no file poudriere sources either.
+    for file in files.into_iter().filter(|f| !f.is_dir()) {
+        match fs::read(&file) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("reading {}", file.display())),
+        }
+    }
+    Ok(())
 }
 
 /// The per-name poudriere.conf layers, in poudriere(8)'s reading order:
@@ -1322,6 +1403,65 @@ mod tests {
             "{text}"
         );
         assert_ne!(on.conf_hash, off.conf_hash);
+    }
+
+    /// poudriere writes FORCE_PACKAGE=yes before the layers unless
+    /// poudriere.conf sets NO_FORCE_PACKAGE: without it, PACKAGE_BUILDING
+    /// turns a port's NO_PACKAGE into an IGNORE.
+    #[test]
+    fn force_package_unless_no_force_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fs::create_dir_all(ports.join("Mk")).unwrap();
+        fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        fs::write(pd.join("make.conf"), "LAYER=yes\n").unwrap();
+        let conf = tmp.path().join("poudriere.conf");
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let host = HostPaths {
+            poudriere_conf: &conf,
+            ..host(tmp.path(), &pd, &ports, &db)
+        };
+        let text = |s: &Settings| fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
+        let on = text(&resolve(&host, &Request::default(), &[], &stage).unwrap());
+        let at = on.find("FORCE_PACKAGE=yes\n").expect(&on);
+        assert!(at < on.find("LAYER=yes").unwrap(), "{on}");
+        // A Latin-1 comment does not hide the setting, as sh sources bytes.
+        fs::write(&conf, b"# St\xe9phane's box\nNO_FORCE_PACKAGE=yes\n").unwrap();
+        let off = text(&resolve(&host, &Request::default(), &[], &stage).unwrap());
+        assert!(!off.contains("FORCE_PACKAGE"), "{off}");
+    }
+
+    /// A poudriere.conf layer or blacklist that exists and cannot be read
+    /// stops the run: poudriere, as root, would read it.
+    #[test]
+    fn an_unreadable_poudriere_conf_layer_stops_the_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fs::create_dir_all(ports.join("Mk")).unwrap();
+        fs::write(ports.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        fs::create_dir_all(&pd).unwrap();
+        let conf = tmp.path().join("poudriere.conf");
+        let db = tmp.path().join("db");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let host = HostPaths {
+            poudriere_conf: &conf,
+            ..host(tmp.path(), &pd, &ports, &db)
+        };
+        use std::os::unix::fs::PermissionsExt as _;
+        let blacklist = pd.join("blacklist");
+        fs::write(&blacklist, "devel/papi\n").unwrap();
+        fs::set_permissions(&blacklist, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&blacklist).is_ok() {
+            return; // root reads it anyway, as poudriere does
+        }
+        let err = resolve(&host, &Request::default(), &[], &stage).unwrap_err();
+        assert!(format!("{err:#}").contains("blacklist"), "{err:#}");
     }
 
     #[test]

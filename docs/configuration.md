@@ -91,7 +91,11 @@ The layers are concatenated into one staged file, as poudriere itself
 concatenates them into the jail's make.conf, so an `.include` with a
 relative path does not find its file here any more than it would in the
 jail (synth's profile make.conf is handled the same way, as synth appends
-it to each builder's).
+it to each builder's). An absolute path is another matter: optique's make
+runs on the host and finds `/usr/local/etc/poudriere.d/common.mk`, while
+the jail and synth's builder, which mount neither poudriere.d nor the
+host's `/usr/local/etc`, do not; such an `.sinclude` decides options here
+that the build never sees.
 
 The query cache is keyed on the text of the make.conf files and, per
 answer, on each file they `.include` that make read for that port, so an
@@ -144,7 +148,10 @@ notes it and `clean` acts as if `OPTIONS_FILE` were set.
 The merged layers above are wrapped in the environment of a poudriere
 jail, not the host's. They come after the lines poudriere puts at the
 top of every jail's make.conf — `PACKAGE_BUILDING`,
-`PACKAGE_BUILDING_FLAVORS`, `BATCH`, `USE_PACKAGE_DEPENDS` — and are
+`PACKAGE_BUILDING_FLAVORS`, `BATCH`, `USE_PACKAGE_DEPENDS`, and
+`FORCE_PACKAGE` unless poudriere.conf sets `NO_FORCE_PACKAGE` (without
+it, a port's `NO_PACKAGE` would read as an `IGNORE` under
+`PACKAGE_BUILDING`, devel/papi's) — and are
 followed by `LOCALBASE` set to `/nonexistent`. A jail has nothing
 installed when poudriere reads a port, while the host running optique
 may; without this, a port Makefile that probes installed files would
@@ -156,7 +163,10 @@ poudriere.d files poudriere reads after it, for the jail, tree and set
 given (a tree's file only when `-p` names it) — `PACKAGE_BUILDING` and
 `PACKAGE_BUILDING_FLAVORS` are left out, as poudriere itself leaves them
 out. Only plain assignment lines are read; a value set by shell logic in
-those files is not seen. The startup banner's
+those files is not seen. They are read as bytes, as sh sources them (a
+Latin-1 comment hides nothing), and one that exists but cannot be read
+stops the run, as poudriere, run as root, would read it; so does an
+unreadable blacklist. The startup banner's
 `environment:` line says which applies: a plain
 `poudriere jail (host packages under /usr/local not seen)`, or the same
 line with `; NO_PACKAGE_BUILDING set` appended.
