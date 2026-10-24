@@ -12,7 +12,7 @@ includes the port's own `Makefile` and dumps options, groups, descriptions,
 `IMPLIES`/`PREVENTS`, `BROKEN`/`IGNORE`, make.conf layers and
 `_UNIFIED_DEPENDS` as parse-time `.info` lines, run under the layered
 `__MAKE_CONF` (`src/query/makerunner.rs`). Up to `min(16, ncpu)` of these run
-at once (`src/main.rs`, `default_jobs`).
+at once (`src/cmd/mod.rs`, `default_jobs`).
 
 The framework itself is the only faithful evaluator of a port's
 options/`IMPLIES`/make.conf — it is what `poudriere options -C` runs for one
@@ -509,7 +509,7 @@ Removing the file is the exception: it decides every flavor reading it, and
 a flavor can set its own defaults (`www/sogo@pgsql` adds `PGSQL`), so
 `--minimal` removes it only when it repeats defaults + make.conf for every
 flavor in the closure, and `clean --redundant` queries every flavor in
-`FLAVORS`, one make query each, keeping the file when one fails (`src/main.rs`,
+`FLAVORS`, one make query each, keeping the file when one fails (`src/cmd/clean.rs`,
 `find_redundant`). Rejected: judging only the default flavor, which deleted a
 file `@pgsql` still read.
 

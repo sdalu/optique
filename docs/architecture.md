@@ -15,7 +15,7 @@ interfaces sit side by side on the session.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│ entry           main.rs · cli.rs                                     │
+│ entry           main.rs · cli.rs · cmd/ · color.rs                   │
 │                 parse, dispatch, run_scan, banner, exit status       │
 ├──────────────────────────────────────────────────────────────────────┤
 │ resolution      config/{mod,local,poudriere,synth}.rs · roots.rs     │
@@ -45,7 +45,13 @@ interfaces sit side by side on the session.
 
 | File | Responsibility | Main items |
 | :-- | :-- | :-- |
-| `main.rs` | Entry, dispatch, the shared scan, every command's body, the startup banner, exit status (1 = something pending, 2 = usage, 3 = error) | `run`, `run_scan`/`Scanned`, `cmd_scan`, `cmd_sync`, `cmd_decide`, `cmd_clean`, `clean_options_dir`, `find_redundant`, `cmd_tui`, `WritePass`, `commit_writes`, `needs_attention` |
+| `main.rs` | Entry, dispatch, exit status (1 = something pending, 2 = usage, 3 = error) | `run`, `exit_pending`, `split_raw_origins` |
+| `cmd/mod.rs` | The scan every command shares: settings, roots through MOVED, the closure, what it found said on stderr | `run_scan`/`Scanned`, `RootSet`, `roots_or_installed`, `query_ctx` |
+| `cmd/scan.rs` | `scan`: the table or the JSON, and the gate | `cmd_scan`, `needs_attention`, `shown_ok` |
+| `cmd/clean.rs` | `clean`: vanished, unused and redundant entries | `cmd_clean`, `clean_options_dir`, `find_redundant` |
+| `cmd/write.rs` | A pass of writes and removals, and its summary | `WritePass`, `commit_writes`, `print_write_summary` |
+| `cmd/sync.rs`, `cmd/decide.rs`, `cmd/tui.rs` | `sync`, `decide`, and the TUI over a fresh scan | `cmd_sync`, `cmd_decide`, `cmd_tui` |
+| `color.rs` | When to paint a stream, and the escapes | `tint`, `stderr_color`, `stdout_color`, `ansi` |
 | `cli.rs` | The command line: clap definitions, the checks clap cannot do across levels, roots from arguments and `-f` lists | `disambiguate_synth`, `check_action_first`, `Cli::check_globals`, `collect_roots` |
 | `config/mod.rs` | Which build is configured and how queries see it: the resolution every build shares (overlays, options place, framework values, the staged make.conf and its hash) and the choice between local and poudriere | `Request`, `Settings`, `QueryEnv`, `resolve`, `resolve_host`, `finish`, `stage_make_conf` |
 | `config/local.rs` | A local build: the host's make.conf, PORTSDIR and PORT_DBDIR | `resolve`, `make_defaults` |
