@@ -1496,7 +1496,9 @@ fn merge_rebuilds_the_state_when_the_default_flavor_takes_the_file() {
         root_key.clone(),
         linked_info("cat/root", &["misc/flav@nox", "misc/flav@full"], &["R"]),
     );
-    let full = flavor("full", &["A", "B", "X11", "Y"]);
+    // Queried against staging, as the TUI's refresh is: B off already.
+    let mut full = flavor("full", &["A", "B", "X11", "Y"]);
+    full.options.effective = set(&["A", "X11", "Y"]);
     result.ports.insert(full.key.clone(), full);
     s.merge(result, &files);
     assert_eq!(s.owners["misc_flav"].to_string(), "misc/flav@full");
@@ -1529,6 +1531,9 @@ fn a_non_default_owner_holds_every_flavors_options() {
     assert!(s.unstored(&info, "X").is_none());
     assert!(s.states["cat_x"].staged.contains("X"), "X at @b's default");
     s.toggle(&b, "X").unwrap();
+    // The file (and the TUI's staging copy of it) lists the owner's
+    // options, then the other flavor's own.
+    assert_eq!(s.file_option_list("cat_x"), ["BASE", "Y", "Z", "X"]);
 }
 
 #[test]
@@ -1756,6 +1761,22 @@ fn an_option_the_owner_lacks_is_shown_as_built_and_refused() {
         "{err}"
     );
     s.toggle(&gtk3, "A").unwrap();
+}
+
+/// After `-m` removes a file, the reloaded baseline holds only the options
+/// the state does: an OPTIONS_SLAVE option, on with or without the file,
+/// is no option of the staged set, and would leave the port edited.
+#[test]
+fn a_removal_baseline_holds_no_slave_option() {
+    let (mut ports, key) = mk_port(&["A"], &["A"], vec![], vec![]);
+    ports.get_mut(&key).unwrap().options.slave = set(&["S"]);
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut s = session_in(ports, tmp.path());
+    s.reload_saved(&files, ["cat_port"]);
+    let st = s.state(&s.ports[&key]).unwrap();
+    assert_eq!(st.baseline, set(&["A"]));
+    assert!(!s.edited(&s.ports[&key]));
 }
 
 #[test]

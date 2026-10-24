@@ -174,6 +174,24 @@ pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BT
     enabled
 }
 
+/// [`sync_enabled_set`] with the options `saved` gives no line taken from
+/// optique's own reading of the layers ([`crate::session::built_with`])
+/// rather than from the port's queried PORT_OPTIONS, which in the TUI a
+/// refresh has queried with the staged edits in place.
+pub fn file_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BTreeSet<String> {
+    let built = crate::session::built_with(info, saved);
+    info.options
+        .complete
+        .iter()
+        .filter(|opt| {
+            saved
+                .and_then(|s| s.value(opt))
+                .unwrap_or_else(|| built.contains(*opt))
+        })
+        .cloned()
+        .collect()
+}
+
 /// Result of planning: the files to write, files to remove (minimal mode),
 /// plus non-fatal notes.
 pub struct PlannedWrites {

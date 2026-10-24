@@ -102,10 +102,13 @@ impl App {
                 } else {
                     Ok(())
                 };
-                // The file apply would write: the owning flavor's view, which
-                // holds every option the flavors reading it are queried with.
+                // The file apply would write: the owning flavor's view, and
+                // under an owner that is no default flavor every other
+                // flavor's own options too, so each flavor reading it is
+                // queried with its edits.
                 let owner = self.session.owner_info(info);
-                let content = optionsfile::render(&owner.pkgname, &owner.options.complete, &staged);
+                let list = self.session.file_option_list(&options_name);
+                let content = optionsfile::render(&owner.pkgname, &list, &staged);
                 local.and_then(|()| self.staging_db.write(&options_name, content.as_bytes()))
             };
             if let Err(e) = written {

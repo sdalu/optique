@@ -111,22 +111,22 @@ _OPTIQUE_IMPLIED+=	${${_o}_IMPLIES:U}
 .info OPTIQUE|OPT_IGNORE|${_o}|${${_o}_IGNORE}
 .  endif
 .  if defined(${_o}_LIB_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|lib|${${_o}_LIB_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|lib|${${_o}_LIB_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_RUN_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|run|${${_o}_RUN_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|run|${${_o}_RUN_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_BUILD_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|build|${${_o}_BUILD_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|build|${${_o}_BUILD_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_FETCH_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|fetch|${${_o}_FETCH_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|fetch|${${_o}_FETCH_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_EXTRACT_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|extract|${${_o}_EXTRACT_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|extract|${${_o}_EXTRACT_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_PATCH_DEPENDS)
-.info OPTIQUE|OPT_DEP|${_o}|patch|${${_o}_PATCH_DEPENDS}
+.info OPTIQUE|OPT_DEP|${_o}|patch|${${_o}_PATCH_DEPENDS:S,:${PORTSDIR}/,:,}
 .  endif
 .  if defined(${_o}_USES)
 .info OPTIQUE|OPT_DEP|${_o}|uses|${${_o}_USES}

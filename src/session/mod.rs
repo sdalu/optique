@@ -405,6 +405,7 @@ impl Session {
         touched: impl IntoIterator<Item = &'a str>,
     ) {
         for name in touched {
+            let holds = self.file_options(name);
             let owner = self.owners.get(name).and_then(|k| self.ports.get(k));
             let (Some(state), Some(owner)) = (self.states.get_mut(name), owner) else {
                 continue;
@@ -425,8 +426,13 @@ impl Session {
             } else {
                 // Removed under -m: what make builds with no file but its
                 // options.local, which is what the removal was judged
-                // against, a conditional group's members included.
+                // against, a conditional group's members included, within
+                // the options the state holds (no OPTIONS_SLAVE option or
+                // unlisted implied one, which the staged set never has).
                 built_with(owner, Some(&files.combined(name)))
+                    .into_iter()
+                    .filter(|o| holds.contains(o))
+                    .collect()
             };
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
@@ -473,11 +479,26 @@ impl Session {
                 continue;
             }
             let others = sharing(&self.ports, &name, &key);
-            let (_, baseline) = saved_baseline(owner, &others, files);
+            // Never from the ports' queried PORT_OPTIONS: in the TUI the
+            // refresh that brought them queried the staged edits, which
+            // would read as the baseline.
+            let saved = files.saved(&name);
+            let baseline = if owner.options.r#override.is_some() {
+                nofile_effective(owner)
+            } else {
+                shared_enabled_by(apply::file_enabled_set, owner, &others, saved.as_ref())
+            };
+            let holds = self.file_options(&name);
             let Some(state) = self.states.get_mut(&name) else {
                 continue;
             };
-            let on: Vec<String> = state.staged.difference(&state.baseline).cloned().collect();
+            // The edits carried over, within what the file now holds.
+            let on: Vec<String> = state
+                .staged
+                .difference(&state.baseline)
+                .filter(|o| holds.contains(*o))
+                .cloned()
+                .collect();
             let off: Vec<String> = state.baseline.difference(&state.staged).cloned().collect();
             let mut staged = baseline.clone();
             staged.extend(on);
@@ -1100,13 +1121,24 @@ impl Session {
     /// other flavor's under an owner that is no default flavor
     /// ([`shared_enabled`]).
     pub fn file_options(&self, name: &str) -> BTreeSet<String> {
+        self.file_option_list(name).into_iter().collect()
+    }
+
+    /// [`file_options`](Self::file_options) in the order a write lists
+    /// them: the owner's, then each other flavor's own, as
+    /// `apply::planned_file` carries them.
+    pub fn file_option_list(&self, name: &str) -> Vec<String> {
         let Some(owner) = self.owners.get(name).and_then(|k| self.ports.get(k)) else {
-            return BTreeSet::new();
+            return Vec::new();
         };
-        let mut opts: BTreeSet<String> = owner.options.complete.iter().cloned().collect();
+        let mut opts = owner.options.complete.clone();
         if !is_preferred(owner) {
             for other in sharing(&self.ports, name, &owner.key) {
-                opts.extend(other.options.complete.iter().cloned());
+                for o in &other.options.complete {
+                    if !opts.contains(o) {
+                        opts.push(o.clone());
+                    }
+                }
             }
         }
         opts
@@ -1333,10 +1365,20 @@ fn shared_enabled(
     others: &[&PortInfo],
     saved: Option<&SavedOptionsFile>,
 ) -> BTreeSet<String> {
-    let mut set = apply::sync_enabled_set(owner, saved);
+    shared_enabled_by(apply::sync_enabled_set, owner, others, saved)
+}
+
+/// [`shared_enabled`], each flavor's set taken by `enabled`.
+fn shared_enabled_by(
+    enabled: fn(&PortInfo, Option<&SavedOptionsFile>) -> BTreeSet<String>,
+    owner: &PortInfo,
+    others: &[&PortInfo],
+    saved: Option<&SavedOptionsFile>,
+) -> BTreeSet<String> {
+    let mut set = enabled(owner, saved);
     if !is_preferred(owner) {
         for other in others {
-            let theirs = apply::sync_enabled_set(other, saved);
+            let theirs = enabled(other, saved);
             set.extend(
                 theirs
                     .into_iter()
