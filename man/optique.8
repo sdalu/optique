@@ -115,12 +115,27 @@ re-invoke
 .Nm make
 only for ports whose inputs actually changed and typically finish in well
 under a second.
-Renamed ports are resolved through the tree's
+The listed origins are resolved through the tree's
 .Pa MOVED
-file, for origins no longer in the tree only, since a name moved away can
-be reused: a chain of moves stops at the first origin that exists.
-Ports that vanished, or whose chain of moves comes back on itself without
-reaching one, surface as per-edge errors.
+file as
+.Xr poudriere 8
+resolves them: for origins no longer in the tree only, since a name moved
+away can be reused, its chains collapsed in file order as poudriere's
+.Pa parse_MOVED.awk
+collapses them, a chain stopping at the first origin that exists.
+A listed origin that was removed, or whose entries come back on themselves
+without reaching one
+.Pq where poudriere loops forever, an upstream defect ,
+is an error.
+Dependencies are not resolved through
+.Pa MOVED :
+a dependency on an origin in no tree, moved, expired or never there, is an
+error on the depending port, saying what
+.Pa MOVED
+records of it, as poudriere refuses the bulk on it.
+The dependencies of an IGNOREd or blacklisted port, and those only
+.Va TEST_DEPENDS
+asks for, are not checked, as poudriere does not check them.
 .Ss Dependency loops
 Resolving the closure also detects dependency loops: ports that are, directly
 or through other ports, their own dependency.
@@ -674,7 +689,12 @@ or
 still decides the option it names, on top of the override.
 That column is empty only when no
 .Pa make.conf
-layer names the option.
+layer names the option, or when the port's options file is one
+.Nm
+leaves to
+.Xr make 1
+.Pq see Cm sync ,
+whose own assignments those layers may hold.
 Options auto-enabled through an
 .Va IMPLIES
 chain are locked and marked
@@ -699,7 +719,13 @@ is:
 .Ql IGNORE:
 and the option changes likely to blame,
 .Ql DEPRECATED: ,
-the flavor owning its options file, a
+the flavor owning its options file,
+.Ql UNMANAGED:
+and why, for an options file
+.Nm
+leaves to
+.Xr make 1 ,
+a
 .Ql CONFLICT:
 per rule the staged options break, and
 .Ql STALE:
@@ -892,9 +918,10 @@ toggles nothing and says
 Reset the port to its defaults, from either pane.
 A port whose options file takes no edit, under
 .Va OPTIONS_OVERRIDE
-or with an
-.Pa options.local
-resetting a list, is left as it is, the toggle's refusal shown instead.
+or left to
+.Xr make 1
+.Pq see Cm sync ,
+is left as it is, the toggle's refusal shown instead.
 .It Ic U
 Revert the port to its saved state, from either pane.
 .It Ic u
@@ -1256,7 +1283,15 @@ Each port is classified as
 .Pq the option list changed since the file was written, with the added and removed options named ,
 or
 .Cm conflict
-.Pq the options make computes from the recorded ones, Va *_FORCE No included, violate Va PREVENTS No or a group constraint .
+.Pq the options make computes from the recorded ones, Va *_FORCE No and what Va IMPLIES No adds included, violate Va PREVENTS No or a group constraint .
+Each
+.Va PREVENTS
+word is a pattern, matched against every option on, as the framework's
+pre-check-config matches it; an option an
+.Va IMPLIES
+names goes in whether the port lists it or not, as
+.Pa bsd.options.mk
+adds it.
 Every flagged port also lists the options that
 .Pa make.conf
 does
@@ -1298,13 +1333,18 @@ The object has the keys
 .Va summary
 and
 .Va errors ,
-the ports whose query failed, each with
+each with
 .Va subject
 and
-.Va message ;
-such a port is missing from
-.Va ports ,
-and so is whatever it depends on.
+.Va message :
+a port whose query failed, or a listed origin
+.Pa MOVED
+says is gone, missing from
+.Va ports
+with whatever it depends on; and one entry per dependency of a port in
+.Va ports
+on an origin in no tree
+.Pq see Sx DESCRIPTION .
 Each element of
 .Va ports
 has
@@ -1359,7 +1399,7 @@ holds the counts
 .Va loops_blocking
 .Pq loops with a member that is not blacklisted ,
 .Va errors
-.Pq ports whose query failed
+.Pq the length of Va errors
 and
 .Va pending ,
 which is
@@ -1456,14 +1496,29 @@ or
 whatever an options file on disk happens to say: it is not read, and
 .Cm sync
 and the TUI's apply leave it exactly as it is.
-An option a SET or UNSET entry of the port's
+An option an UNSET entry of the port's
 .Pa options.local
-decides, pattern or name, is locked with
+matches, as a pattern, is locked with
 .Va locked_by
 .Ql options.local
 after any
 .Va *_FORCE
 knob.
+Every option of a port whose options file
+.Nm
+leaves to
+.Xr make 1
+.Pq see Cm sync
+is locked, before anything else, with
+.Va locked_by
+.Ql options file ,
+.Ql options.local
+or
+.Ql make.conf OPTIONS_FILE ,
+whichever makes it so, no
+.Va makeconf
+and a null
+.Va saved .
 .Va group
 is
 .Bro Va name , Va kind , Va members Brc
@@ -1519,15 +1574,16 @@ which drops what earlier lines added to it;
 .Ql ?=
 assigns only a list no earlier line of the file or its
 .Pa options.local
-assigned, and a
-.Ql !=
-line, whose shell command
-.Nm
-does not run, is ignored with a warning naming the file and line;
+assigned;
 .Nm
 reads it so, and writes it back the way
 .Nm make Cm config
-does.
+does, but for the
+.Va _OPTIONS_READ
+line, left out, and a longer
+.Ql # Options for
+comment
+.Pq see Sx SYNTH .
 A line ending in a backslash goes on over the next, as
 .Xr make 1
 joins them, a comment included.
@@ -1539,8 +1595,9 @@ does: its
 .Va OPTIONS_FILE_SET
 and
 .Va OPTIONS_FILE_UNSET
-lines join the file's, an option on any UNSET line of either is off, and
-the result is the saved choice every command shows and judges.
+lines join the file's, every SET entry of either applied before any UNSET
+one, so an option on any UNSET line of either is off, and the result is the
+saved choice every command shows and judges.
 With no options file, an
 .Pa options.local
 is read after an empty one, so the options it decides are neither new nor
@@ -1549,14 +1606,21 @@ undecided.
 never writes or removes it, so what it unsets stays off whatever the options
 file says; every command that reads one says so in a note naming the options
 it sets or unsets.
-An option one of its entries decides cannot be edited through the options
-file: the TUI and
+An option one of its UNSET entries matches, as a pattern, cannot be edited
+through the options file: the TUI and
 .Cm decide
 refuse it with
 .Dq options.local decides Ar OPT ; edit it there .
-An
+Its SET entries lock nothing: each is a default the options file's UNSET
+line overrides.
+.Pp
+Some options files
+.Nm
+cannot model, and leaves to
+.Xr make 1 :
+one whose
 .Pa options.local
-that assigns
+assigns
 .Va OPTIONS_FILE_SET
 or
 .Va OPTIONS_FILE_UNSET
@@ -1567,12 +1631,52 @@ afresh
 or a
 .Ql ?=
 that takes effect
-.Pc
-drops the options file's lines for that list, so
+.Pc ,
+dropping the file's lines for that list; one where either file holds a line
 .Nm
-cannot manage the file: one warning names it, no command writes or removes
-it, its port is never stale, and edits to it are refused.
-It then reports every file it changed.
+cannot model \(em an assignment to any variable but those two lists and the
+.Va _OPTIONS_READ
+and
+.Va _FILE_COMPLETE_OPTIONS_LIST
+that
+.Nm make Cm config
+writes, a
+.Ql !=
+whose shell command
+.Nm
+does not run, a directive such as
+.Ic .if
+or
+.Ic .include ,
+a
+.Ql $
+expansion, or any line that is no assignment; and one
+.Pa make.conf
+moves away by setting
+.Va OPTIONS_FILE
+to anything but
+.Pa <PORT_DBDIR>/<OPTIONS_NAME>/options ,
+since
+.Xr make 1
+then reads neither it nor its
+.Pa options.local .
+A warning names the file and line, or the
+.Va OPTIONS_FILE
+.Pa make.conf
+sets.
+No command writes or removes such a file,
+.Cm clean
+included; its port shows the options
+.Xr make 1
+computes, is never unconfigured or stale and owes no decision; every option
+is locked, with no
+.Pa make.conf
+verdict
+.Pq see Cm scan Fl -options ;
+and edits to it are refused.
+.Pp
+.Cm sync
+then reports every file it changed.
 A port whose options file already records the same complete option list and the
 same enabled set is left untouched; a changed package name alone does not force
 a rewrite, matching
@@ -1727,6 +1831,12 @@ needs no package list, and giving origins or
 without
 .Fl u
 is an error, since it would ignore them.
+An options file
+.Nm
+leaves to
+.Xr make 1
+.Pq see Cm sync
+is never removed, whichever option asks: a warning names it as kept.
 .Bl -tag -width Ds
 .It Fl r , Fl -redundant
 Also remove files whose recorded configuration is exactly what defaults plus
@@ -1741,9 +1851,15 @@ Also remove entries for ports outside the dependency closure of the given
 package list
 .Pq positional origins and/or Fl f Ar pkglist ,
 which is then required.
-If any port in that closure fails to query, the closure is incomplete and
+If any port in that closure fails to query, or there is any other error a
+.Cm scan
+would count
+.Pq see Sx EXIT STATUS ,
+such as a dependency on an origin in no tree, the closure is incomplete and
 .Nm
-refuses to prune anything rather than risk deleting live configuration.
+refuses to prune anything rather than risk deleting live configuration,
+with
+.Dq Ar N No error(s): the dependency closure is incomplete, refusing to prune entries .
 .It Fl -json
 Report on standard output as one JSON object instead of the per-entry listing:
 .Va options_dir ,
@@ -2019,8 +2135,14 @@ pattern
 .Pc
 turning off every option it matches, so
 .Ql OPTIONS_UNSET=A*
-turns off A and A2; a SET entry turns on only the option it names, though
-every entry, SET or UNSET, counts as a decision for each option it matches.
+turns off A and A2, and decides each option it matches; a SET or
+.Va WITH
+entry turns on, and decides, only the option it names.
+.Xr make 1
+also counts every option a SET glob matches as decided, though it turns
+none of them on; that upstream defect is not followed, so
+.Ql OPTIONS_SET=A*
+leaves A2 undecided.
 .Pp
 .Va OPTIONS_OVERRIDE
 is different: defined for a port, even set empty, it forgets the whole
@@ -2324,21 +2446,42 @@ alone, as synth reads them
 .Po
 .Bq Global Configuration
 never stands in for a profile
-.Pc ,
-falling back to
-.Pa /usr/ports
+.Pc .
+A profile without
+.Va Directory_portsdir
+takes the first of
+.Ev PORTSDIR ,
+.Xr make 1 Ns 's
+.Va PORTSDIR ,
+.Pa /usr/dports
 and
+.Pa /usr/ports
+that exists, in that order, as synth does, a note naming which; one without
+.Va Directory_options
+takes
 .Pa /var/db/ports .
-A section header is
-.Ql \&[ Ns Ar name Ns \&] ,
-anything after it ignored; keys and values are trimmed of white space; and
-a key's first match within its section wins, a bare or empty one
-included, ending the search there rather than reading on to a later, real
-assignment of the same key.
-synth's own reader keeps a tab around a key or value, keeps the spaces of
+A missing synth.ini is read as empty; one that cannot be read is an error,
+since synth will not run without it.
+The file is read as synth's own reader reads it, defects included, since
+that decides which settings synth uses: a section header is
+.Ql \&[ Ns Ar name Ns \&]
+with its
+.Ql \&[
+in the first column, its name running untrimmed to the first
+.Ql \&] ,
+anything after it ignored, so
 .Ql "[ name ]"
-and takes no indented header; such lines are read as meant and named in a
-note, since synth will read them otherwise.
+names the section
+.Ql " name " ,
+and an indented header is none, its lines staying in the section above;
+keys and values are trimmed of spaces only, a tab or the CR of a CRLF line
+end staying part of them; and a key's first match within its section wins,
+a bare or empty one included, ending the search there rather than reading
+on to a later, real assignment of the same key.
+Each line synth reads otherwise than it seems to say is named in a note.
+A section header with no
+.Ql \&]
+makes synth refuse to run: each is named as an error on standard error.
 .Pa make.conf
 is the single file
 .Pa /usr/local/etc/synth/ Ns Ar profile Ns Pa -make.conf ,
@@ -2409,6 +2552,22 @@ This applies to the TUI,
 and
 .Cm clean Fl -unused .
 .Pp
+A list given is read the poudriere way in every mode, but synth refuses a
+whole list on any entry not in its flavor index verbatim; under
+.Fl s ,
+each such entry is named in a
+.Ql synth refuses this list:
+note: a comment line, a line holding more than an origin, a list line
+ending in
+.Ql / ,
+an entry starting with
+.Ql / ,
+an
+.Ar origin Ns @all
+or
+.Ar origin Ns @- ,
+and the bare origin of a port that has flavors.
+.Pp
 synth refuses a build when the saved options file of a port without
 flavors,
 .Pa <category>_<name>/options ,
@@ -2425,6 +2584,18 @@ marks such a port
 and counts it as needing attention in its exit status, whatever its status;
 .Cm sync
 rewrites the file.
+synth's check of a cached options file also reads bytes 17 to 20 of every
+line without checking its length, and aborts on a shorter line; so what
+.Nm
+writes never holds one, in every mode: it writes no
+.Va _OPTIONS_READ
+line, which nothing reads, and its
+.Ql # Options for Ar pkgname
+comment ends in
+.Ql \&, by optique .
+A file
+.Nm
+did not write is left as it is.
 .Fl -repo Ar name
 is repeatable and restricts that implicit list to packages installed from
 the named pkg repositories, e.g.
@@ -2501,6 +2672,13 @@ else
 .Pa /var/db/pkg ,
 are part of the cache key;
 .It
+queries run as the invoking user, with its
+.Ev USER
+and
+.Ev HOME ,
+not as a builder's root
+.Pq see Sx ENVIRONMENT ;
+.It
 there is no blacklist.
 .El
 .Pp
@@ -2512,14 +2690,35 @@ A query's
 .Xr make 1
 runs with
 .Ev PATH ,
-.Ev HOME ,
 .Ev TMPDIR
 and
 .Ev PKG_DBDIR
 of
 .Nm Ns 's
-environment, those that are set, and no other variable, whatever the
-build: a make variable exported in the shell, such as
+environment, those that are set, and with
+.Ev USER
+and
+.Ev HOME
+as the builder has them:
+.Ql root
+and
+.Pa /root
+for a poudriere or synth build, whose builders run as root, and the
+invoking user's own, when set, for a local build, whose
+.Ev USER
+is then part of the cache key.
+.Pa Mk/bsd.ccache.mk
+reads
+.Ev USER :
+under
+.Va WITH_CCACHE_BUILD
+with no
+.Va CCACHE_DIR ,
+it keeps ccache, and its
+.Pa devel/ccache
+dependency, for root alone.
+No other variable is passed, whatever the build: a make variable exported
+in the shell, such as
 .Ev OPTIONS_SET ,
 is not seen by the queries of a local build either; set it in the
 .Pa make.conf .
@@ -2527,6 +2726,26 @@ The variables below are read by
 .Nm
 itself.
 .Bl -tag -width Ds
+.It Ev POUDRIERE_ETC
+Where poudriere's configuration lives, as
+.Xr poudriere 8
+reads it: set and non-empty, it must be a directory, and
+.Pa poudriere.conf
+and
+.Pa poudriere.d
+are read from it instead of
+.Pa /usr/local/etc ,
+in every path this page names under
+.Pa /usr/local/etc/poudriere.d ;
+the startup banner notes it.
+Without a
+.Pa poudriere.d
+there, the build is a local one
+.Pq Sx LOCAL BUILDS .
+Ignored under
+.Fl l
+and
+.Fl s .
 .It Ev OVERLAYS
 Overlays of a local build, as
 .Xr make 1
@@ -2544,7 +2763,12 @@ environment or
 .Pa /etc/make.conf ;
 see
 .Sx LOCAL BUILDS .
-Ignored by poudriere and synth builds, and never passed through to the
+Ignored by poudriere builds, and by synth builds but for
+.Ev PORTSDIR
+under a profile without
+.Va Directory_portsdir
+.Pq see Sx SYNTH ;
+never passed through to the
 queries, which are always given the tree and options directory
 .Nm
 resolved.
@@ -2622,7 +2846,11 @@ Removed when
 .Nm
 exits.
 .It Pa /usr/local/etc/poudriere.d/
-Poudriere configuration root.
+Poudriere configuration root;
+.Pa $POUDRIERE_ETC/poudriere.d/
+when
+.Ev POUDRIERE_ETC
+is set, as are the paths below it.
 .It Pa /usr/local/etc/poudriere.d/ports/<tree>/mnt
 File holding the path of the named ports tree, or of an overlay named with
 .Fl O .
@@ -2681,9 +2909,11 @@ A human decision is pending: at least one port is unconfigured or stale with
 undecided options, or has a conflict, or, under
 .Fl s ,
 has a saved file synth would refuse to build with, or the closure holds a dependency loop
-not all of whose members are blacklisted, or a port could not be checked
-because its query failed (it, and what it depends on, are missing from the
-report).
+not all of whose members are blacklisted, or there is an error: a port
+could not be checked because its query failed, or a listed origin is gone
+from the tree (it, and what it depends on, are missing from the report), or
+a port depends on an origin in no tree
+.Pq see Sx DESCRIPTION .
 An options file that exists but cannot be read is such a failure:
 .Nm
 reports

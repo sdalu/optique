@@ -125,8 +125,10 @@ will not produce where the difference is the one the user would notice.
 
 ## Which build is configured: poudriere.d, unless `-l` says otherwise
 
-The existence of `/usr/local/etc/poudriere.d` selects a poudriere build;
-without it, or under `-l`, a local build is configured: the tree and
+The existence of `/usr/local/etc/poudriere.d` selects a poudriere build
+(`$POUDRIERE_ETC/poudriere.d` when that is set, poudriere.conf moving with
+it, as poudriere's own `-e` does; a value that is no directory is an
+error rather than a quiet fallback to `/usr/local/etc`); without it, or under `-l`, a local build is configured: the tree and
 options directory are `PORTSDIR` and `PORT_DBDIR` as `make -V` reports
 them (so `/etc/make.conf` counts as it does for `make config`), the host
 environment applies, and the make.conf (`__MAKE_CONF`, else
@@ -148,8 +150,8 @@ make's own autodetection would, because an inherited one silently
 replaced the framework of the tree being queried.
 
 The same holds for the rest of the environment: a query runs with
-`PATH`, `HOME`, `TMPDIR` and pkg's `PKG_DBDIR` alone
-(`src/query/makerunner.rs`), so an
+`PATH`, `TMPDIR` and pkg's `PKG_DBDIR` alone, plus the `USER` and `HOME`
+of whoever runs the build (`src/query/makerunner.rs`, `Identity`), so an
 exported `OPTIONS_SET=UTF8PROC` no longer turns `sysutils/tmux`'s
 4-port closure into a 22-port one behind a cache key that does not
 see it, nor reaches a poudriere query no builder would answer that
@@ -159,6 +161,16 @@ the make.conf. Rejected: removing the variables known to matter
 variable a user may export; keying the cache on the environment,
 which still let a poudriere or synth query see what its builder
 never does.
+
+`USER` and `HOME` are the builder's, not optique's: `root` and `/root`
+for a poudriere or synth query, as `jail_start` exports them and synth's
+scan environment passes them, the invoking user's for a local build,
+whose `USER` then keys its cache generation. `Mk/bsd.ccache.mk` reads
+`USER`: under `WITH_CCACHE_BUILD` with no `CCACHE_DIR` it keeps ccache for
+root alone, so a poudriere query that saw optique's `HOME` and no `USER`
+dropped `devel/ccache` from every port's dependencies, where the builder
+adds it. Rejected: passing optique's own `HOME` (and `USER`) to every
+query, which answers for whoever runs optique rather than for the build.
 
 Rejected: `-p` taking a path when there is no poudriere.d, which makes
 an argument's meaning depend on a directory that installing poudriere
@@ -261,6 +273,26 @@ Rejected: a status of its own in the session, write-protected everywhere,
 which would have needed every writer guarded; with the port failing its
 query it never reaches one. Also rejected, aborting the whole run on such a
 file, which a single bad permission would turn into no report at all.
+
+## An options file optique cannot model is left to make
+
+optique reads an options file as the makefile it is but models only the
+SET and UNSET lists and the bookkeeping `make config` writes
+(`src/optionsfile.rs`). A file with any other line, in it or in its
+`options.local` (another variable, `!=`, a directive, a `$` expansion, a
+line that is no assignment), an `options.local` assigning a list afresh,
+or a make.conf `OPTIONS_FILE` pointing elsewhere is unmanaged
+(`session::unmanaged_by`): never written or removed, by `clean` either,
+its port shown with make's own `PORT_OPTIONS`, every option locked, and
+no make.conf verdict, since the layers make dumps after reading the file
+may hold its own assignments. Rejected: ignoring such a line with a
+warning, as `!=` once was, which let a write drop it and judged the port
+from a reading make does not share.
+
+An `options.local` locks only what its UNSET entries match:
+bsd.options.mk applies every SET entry, the file's and options.local's,
+before any UNSET one, so a SET there is a default the file's UNSET
+overrides, and locking it refused edits make would have honoured.
 
 ## Flavors sharing one options file: the default flavor owns it
 
@@ -384,8 +416,17 @@ from the first overlay holding `<origin>/Makefile`, else from the main
 tree: the framework's rule for dependencies (`Mk/Scripts/do-depends.sh`)
 and poudriere's (`_lookup_portdir`), so the scanner, clean's vanished
 ports and MOVED's existence check all use it (`src/query/makerunner.rs`,
-`locate`). MOVED is every tree's in order, first entry winning, as
-poudriere's `parse_MOVED.awk`. The cache keys on every tree: an overlay
+`locate`). MOVED is every tree's in order, first entry winning, its chains
+collapsed in file order, as poudriere's `parse_MOVED.awk` does
+(`src/moved.rs`). Only the listed origins follow it, as poudriere applies
+it to the list alone: a dependency on an origin no tree holds is an error
+on the depending port, naming what MOVED says of it, since poudriere's
+`deps_sanity` fails the bulk on it and synth fails the port
+(`src/query/scanner.rs`, `register`); the dependencies of an IGNOREd or
+blacklisted port and test-only edges, which `deps_sanity` never looks at,
+are not checked. Rejected: following MOVED for dependencies too, as
+optique did, which configured the port a dependency had moved to and
+passed a closure poudriere refuses to build. The cache keys on every tree: an overlay
 on the count and newest mtime of its files, never on its git HEAD, since
 it is a few ports edited in place before any commit (keying on HEAD served
 a stale answer for a port edited in a git overlay).

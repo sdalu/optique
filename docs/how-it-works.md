@@ -58,8 +58,25 @@ installed on the host do not answer the Makefiles' probes. For synth, it
 is the header synth writes for its scan slave, the profile's make.conf,
 and the same `LOCALBASE` line, synth's chroot having nothing installed
 either. A local build (`-l`) reads the host's own make.conf as is, and its
-queries see the installed packages, as its build would. See
+queries see the installed packages, as its build would. A poudriere or
+synth query runs with `USER=root` and `HOME=/root`, as their builders do,
+a local build's with the invoking user's own: `bsd.ccache.mk` keeps ccache,
+and its `devel/ccache` dependency, for root alone. See
 [configuration](configuration.md) for the order the files are read in.
+
+The listed origins follow the tree's `MOVED` file as poudriere follows it:
+only an origin no longer in the tree, since a name moved away can be
+reused (math/mumps moved to math/mumps-edf, then math/mumps4 to
+math/mumps), its chains collapsed in file order as poudriere's
+`parse_MOVED.awk` collapses them, a chain stopping at the first origin that
+exists. A listed origin that is gone, or whose entries cycle without
+reaching one (poudriere loops forever on that, an upstream defect), is an
+error. Dependencies do not follow `MOVED`: a dependency on an origin in no
+tree, moved, expired or never there, is an error on the depending port,
+naming what `MOVED` says of it, as poudriere refuses the bulk on it; the
+dependencies of an `IGNORE`d or blacklisted port, and test-only edges, are
+not checked, as poudriere does not check them. These errors, and a port
+whose query fails, count in `scan`'s exit status.
 
 ## The cache
 
@@ -71,16 +88,10 @@ the hash of the layered make.conf, and the content of the
 port's options file and of the `options.local` beside it, which make reads
 after it. A local build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
-install or delete starts a new generation. Files a make.conf `.include`s are not part of that hash:
+install or delete starts a new generation; and on the invoking `USER`, its
+queries running as that user. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;
-only ports whose inputs changed are queried again. Renamed ports are
-followed through the tree's `MOVED` file, for origins no longer in the
-tree only: a name moved away can be reused (math/mumps moved to
-math/mumps-edf, then math/mumps4 to math/mumps), so a chain of moves
-stops at the first origin that exists. A port that is gone, whose chain
-of moves cycles without reaching one, or whose query fails, is reported
-as an error, and `scan` counts it in its exit
-status.
+only ports whose inputs changed are queried again.
 
 Each options file is read once per run, whoever needs it: the cache check,
 the session, the TUI's staging copy and the write planning all share that
@@ -92,6 +103,10 @@ port, never mistaken for a missing one.
 The scan's answers become a session: for every options file, the saved
 choices, the baseline `sync` would write, and what is staged now. `scan`,
 `sync`, `decide` and `clean` report from it; the [TUI](tui.md) edits it.
+An options file optique cannot model (a line it does not read, an
+`options.local` resetting a list, or an `OPTIONS_FILE` make.conf moves) is
+left to make: its port shows make's own outcome, every option locked, and
+nothing writes or removes the file.
 
 TUI edits never touch the real options directory. They are written to a
 private staging copy, and the ports they affect are queried again in the

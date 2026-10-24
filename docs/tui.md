@@ -216,7 +216,9 @@ what make.conf says of the option, whatever decides its value now — the
 options file included: the value of the last layer naming it, in the
 framework's order (the global knob, then the per-port one, then the
 `*_FORCE` knobs, then `WITH`/`WITHOUT`, the later winning), left blank only when no layer names
-the option and otherwise coloured by that layer — green for the
+the option, or for every option of a port whose options file optique
+leaves to make (the layers may then hold the file's own assignments), and
+otherwise coloured by that layer — green for the
 global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
 `${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob or a
 make.conf `WITH`/`WITHOUT`, which also locks the toggle — and, under
@@ -232,8 +234,11 @@ its own section.
 
 Above the rows, a line each says what is wrong with the port or whose
 view it is: `BROKEN:`, `IGNORE:` and the option changes likely to blame,
-`DEPRECATED:`, the flavor owning its options file, a `CONFLICT:` per
-rule the staged options break, and `STALE:` when the port's option list
+`DEPRECATED:`, the flavor owning its options file, `UNMANAGED:` and why
+for an options file optique leaves to make (a line it cannot model, an
+`options.local` resetting a list, or a make.conf `OPTIONS_FILE` moving it;
+see [commands](commands.md#sync)), a `CONFLICT:` per rule the staged
+options break, and `STALE:` when the port's option list
 changed since its file was written, naming the options added and those
 gone — `STALE: new A B · obsolete X`, each part only when it has options.
 For a port the list counts as done (`≈` under `-m` or the `m` view, or
@@ -402,9 +407,10 @@ option the cursor is on, to compare it across flavors, and lands the same
 way only when the other flavor lacks it.
 
 `Space` and `d` leave alone what the options file cannot decide, and say
-why in the status bar: an option `*_FORCE`, `WITH`/`WITHOUT` or the port's
-`options.local` decides, and every option of a port under make.conf's
-`OPTIONS_OVERRIDE` or whose `options.local` resets the file's lists.
+why in the status bar: an option `*_FORCE`, `WITH`/`WITHOUT` or an UNSET
+entry of the port's `options.local` decides, and every option of a port
+under make.conf's `OPTIONS_OVERRIDE` or whose options file optique leaves
+to make (the `UNMANAGED:` line's reason).
 
 `B` asks for `OPTION=on`, `OPTION=off`, `OPTION+` or `OPTION-`, prefilled
 with `OPTION=` when the cursor is on an option, and sets it on every

@@ -44,11 +44,13 @@ script — see [tui.md](tui.md#driving-the-tui-headless).
 | `ports`       | one entry per port in the closure                         |
 | `loops`       | dependency loops found in the closure (details below)     |
 | `summary`     | counts, including `pending`, which drives the exit status |
-| `errors`      | ports whose query failed, each `{subject, message}`       |
+| `errors`      | what could not be checked, each `{subject, message}`      |
 
-See [dependency loops](dependency-loops.md) for the shape of a loop entry. A
-port whose query failed is missing from `ports`, and so is whatever it depends
-on. `summary` holds `total`, `unconfigured`, `stale`, `conflict`, `ok`,
+See [dependency loops](dependency-loops.md) for the shape of a loop entry. An
+error is a port whose query failed or a listed origin `MOVED` says is gone,
+missing from `ports` with whatever it depends on, or one entry per
+dependency of a port in `ports` on an origin in no tree (`depends on
+nonexistent origin <origin>`, with what `MOVED` says of it). `summary` holds `total`, `unconfigured`, `stale`, `conflict`, `ok`,
 `optionless`, `blacklisted`, `attention` (ports owing a decision), `loops`,
 `loops_blocking` (loops with a member that is not blacklisted), `errors` (the
 length of the `errors` list above) and `pending`, which is `attention` +
@@ -78,7 +80,7 @@ re-running `make`:
 | `new`               | added since the file was written[^4]             |
 | `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`/`override`[^1] |
 | `locked`            | the file cannot change this value                |
-| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, `options.local` (a SET or UNSET entry there decides it; `decide` refuses it), or an implying option |
+| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, `options.local` (an UNSET entry there matches it; `decide` refuses it), an implying option, or what leaves the file to make[^5] |
 | `deviates_makeconf` | staged value contradicts `makeconf`              |
 | `group`             | `{name, kind, members}`[^2]                      |
 | `implies`           | options this one turns on                        |
@@ -111,6 +113,14 @@ re-running `make`:
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
     `NEW_OPTIONS`; a line settles the option even when the file's
     `_FILE_COMPLETE_OPTIONS_LIST`, which make never reads, misses it.
+[^5]: an options file optique cannot model is left to make
+    ([commands](commands.md#sync)): every option of its port reports
+    `locked: true` with `locked_by` `"options file"`, `"options.local"` or
+    `"make.conf OPTIONS_FILE"`, whichever makes it so, ahead of any other
+    reason, no `makeconf` and a `null` `saved`; `staged` is make's own
+    outcome, `undecided` is empty, `status` is never `stale` or
+    `unconfigured`, `decide` refuses its options, and no command writes or
+    removes the file.
 
 ## Plans for `decide`
 

@@ -49,19 +49,19 @@ interfaces sit side by side on the session.
 | `config.rs` | Which build is configured and how queries see it: tree, options dir, staged make.conf and its hash, query environment, blacklist, overlays, notes | `Request`, `Settings`, `QueryEnv`, `resolve`, `resolve_poudriere`, `resolve_local`, `resolve_synth`, `stage_make_conf`, `jail_system`, `plugin_make_confs`, `Blacklist` |
 | `roots.rs` | Roots as the build tool reads them, before the scan | `resolve`, `apply_moved`, `expand`, `query_flavors`, `synth_installed` |
 | `query/wrapper.rs` | The makefile piped to `make`: includes the port, prints `OPTIQUE\|TAG\|value` lines | `WRAPPER` |
-| `query/makerunner.rs` | One `make` per port, cleared environment, a pool of workers, killable | `QueryCtx`, `run_query`, `MakeRunner`, `kill_active_makes` |
+| `query/makerunner.rs` | One `make` per port, cleared environment, the builder's `USER` and `HOME`, a pool of workers, killable | `QueryCtx`, `Identity`, `run_query`, `MakeRunner`, `kill_active_makes` |
 | `query/parse.rs` | The dump into a `PortInfo` | `parse_dump`, `parse_depends` |
-| `query/scanner.rs` | The closure, breadth first: cache, MOVED, blacklist stop | `scan`, `ScanResult`, `register` |
+| `query/scanner.rs` | The closure, breadth first: cache, MOVED for the roots, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
 | `query/refresher.rs` | The TUI's background re-scans over the staging dir | `spawn`, `RefreshEvent` |
 | `cache.rs` | Query results on disk, one generation per tree × make.conf | `Cache`, `CacheEntry`, `tree_key`, `SCHEMA` |
-| `moved.rs` | `MOVED` of the tree and its overlays | `Moved::load_all`, `Moved::resolve` |
+| `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does | `Moved::load_all`, `Moved::resolve` |
 | `deps.rs` | Alias resolution, dependency loops | `resolve`, `detect` (Tarjan), `DepLoop` |
 | `model/origin.rs` | `category/port[@flavor]` | `PortKey::parse` |
 | `model/port.rs` | One port as `make` describes it | `PortInfo`, `DepEdge` |
 | `model/options.rs` | Its options and every make.conf layer naming them; bmake patterns | `PortOptions`, `OptionDef`, `OptionGroup`, `str_match`, `mc_value`, `forced_value`, `provenance` |
-| `optionsfile.rs` | One options file (and its `options.local`) read as the makefile it is; written as `make config` writes it | `SavedOptionsFile`, `parse`, `with_local`, `render`, `decides` |
+| `optionsfile.rs` | One options file (and its `options.local`) read as the makefile it is, each line it cannot model recorded; written as `make config` writes it, less what trips synth | `SavedOptionsFile`, `parse`, `with_local`, `unmanaged`, `render`, `decides` |
 | `optfiles.rs` | Every options file of the options dir, each read from disk once | `OptionsFiles` |
-| `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `toggle` |
+| `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_by`, `toggle` |
 | `apply.rs` | What to write and remove, and writing it atomically | `plan_writes`, `PendingWrite`, `plan_stale_removals`, `apply`, `commit` |
 | `clean.rs` | Classifying options-dir entries | `classify_entries`, `split_unused`, `redundancy_diff`, `remove_all` |
 | `decide.rs` | A JSON plan applied to a session | `Plan`, `apply_plan` |
@@ -105,8 +105,9 @@ Every command but `clean` (without `--unused`) starts with the same scan.
 
 - **scan** prints one row per port, or `--json`, and exits 1 when a port
   needs attention (`needs_attention`: a conflict, a decision owed, a file
-  synth would refuse; never a blacklisted port), a loop blocks, or a
-  query failed.
+  synth would refuse; never a blacklisted port), a loop blocks, or the
+  scan has an error: a query failed, a listed origin is gone, or a port
+  depends on a nonexistent origin.
 - **sync** writes, for every port, what `make config` would leave: the
   saved value where the file has one, the computed one otherwise
   (`sync_enabled_set`); then removes the files of ports that lost every
@@ -117,7 +118,8 @@ Every command but `clean` (without `--unused`) starts with the same scan.
 - **clean** classifies the options dir's entries (gone through MOVED,
   live), optionally drops those outside the closure (`--unused`) and
   those that change nothing (`--redundant`, one query per flavor sharing
-  a file).
+  a file), never one optique cannot model; `--unused` refuses on any scan
+  error.
 - **tui** adds a staging copy of the options dir, a refresher thread
   and the event loop on top of the session.
 
@@ -138,13 +140,14 @@ answer is in the staged text.
 A layer reached twice through a symlink is read once. The blacklist is
 read from the same layers, plus `qemu-blacklist` for a jail poudriere
 would emulate. A local build also folds pkg's database (size, mtime)
-into the hash: what is installed is part of its answer.
+and the invoking `USER` into the hash: what is installed, and who runs
+the build, are part of its answer.
 
 `roots::resolve` turns the listed origins into the scan's roots: `@all`
 and (under `FLAVOR_DEFAULT_ALL`) bare origins become every flavor of the
 port, after MOVED maps them to the port's current origin; `@-` becomes
-the default flavor. Other roots meet MOVED in the scan, like any
-dependency. Under `-s` with no list, `run_scan` first takes the installed
+the default flavor. `scanner::scan` resolves the other roots through
+MOVED; a dependency never is. Under `-s` with no list, `run_scan` first takes the installed
 packages and keeps those synth's index has (`roots::synth_installed`:
 the categories' `SUBDIR` lines and each port's flavors).
 
@@ -153,16 +156,23 @@ the categories' `SUBDIR` lines and each port's flavors).
 `run_query` runs `/usr/bin/make -C <port> -f /dev/stdin optique-config`
 with `PORTSDIR`, `PORTDIR`, `PORT_DBDIR` on the command line,
 `__MAKE_CONF` and `FLAVOR` when set, and an environment holding only
-`PATH`, `HOME`, `TMPDIR` and `PKG_DBDIR`. The wrapper prints the port's
-options as computed (`COMPLETE_OPTIONS_LIST`, `PORT_OPTIONS`), every
+`PATH`, `TMPDIR` and `PKG_DBDIR`, with `USER` and `HOME` by the query's
+`Identity`: `root` and `/root` for a poudriere or synth build (`QueryEnv`
+`Jail` or `Synth`), the invoking user's own for a local one. The wrapper
+prints the port's `OPTIONS_FILE` when make.conf moved it, its options as
+computed (`COMPLETE_OPTIONS_LIST`, `PORT_OPTIONS`), every
 make.conf layer naming them, groups, per-option definitions
 (implies, prevents, descriptions, dependencies), dependencies, and
 BROKEN/IGNORE/DEPRECATED; `parse_dump` makes a `PortInfo` of it. An
 unreadable options file fails the port rather than reading as absent.
 
-`scanner::scan` walks breadth first from the roots: a dependency goes
-through MOVED, then the cache, then a worker. A blacklisted port is kept
-but its dependencies are not queued. Each answer is stored under the
+`scanner::scan` walks breadth first from the roots, each first resolved
+through MOVED; a dependency goes to the cache, then a worker, when its
+origin is in some tree. One in no tree is never walked nor redirected:
+`register` records it as an error on the depending port, saying what
+MOVED says of it, except for an IGNORE'd or blacklisted port and a
+test-only edge, which poudriere's `deps_sanity` never checks. A
+blacklisted port is kept but its dependencies are not queued. Each answer is stored under the
 port's canonical key with an alias from the requested one.
 
 A cache entry is valid while the tree (git HEAD, or the mtimes of
@@ -194,7 +204,7 @@ from a given options file, in the framework's order:
   │ <name>_SET_FORCE, <name>_UNSET_FORCE                         │
   │ WITH, WITHOUT  (make.conf)                                   │
   ├──────────────────────────────────────────────────────────────┤
-  │ IMPLIES, transitively                                        │
+  │ IMPLIES, transitively; a target goes in, listed or not       │
   ├──────────────────────────────────────────────────────────────┤
   │ + OPTIONS_SLAVE                                              │
   ├──────────────────────────────────────────────────────────────┤
@@ -210,8 +220,12 @@ of the port as a bmake pattern; each UNSET entry removes every option it
 matches; each scope's UNSET runs before the next scope's SET. The
 options file and `options.local` are read as one makefile, the second
 continuing the first even when there is no first: `+=`, `=`, `:=`,
-`?=`, backslash continuations, `#` comments and `\#`; `!=` is ignored
-with a warning. A SINGLE or MULTI group is conditional when its name is
+`?=`, backslash continuations, `#` comments and `\#`, every SET entry of
+both going in before any UNSET one. Any other line (an assignment to
+another variable than the lists and `make config`'s bookkeeping, `!=`, a
+directive, a `$` expansion, no assignment at all) is recorded in
+`unmodeled` and leaves the file to make. An IMPLIES target goes in
+unchecked, as bsd.options.mk adds it; a PREVENTS word is a pattern. A SINGLE or MULTI group is conditional when its name is
 in the port's `ALL_OPTIONS`. `nofile_effective` is the same with no
 options file: the defaults plus make.conf (and `options.local`, where
 there is one, for the redundancy checks).
@@ -231,10 +245,11 @@ Then:
 
 | Question | Function | Rule |
 | :-- | :-- | :-- |
-| Status | `status` | conflict if the staged outcome breaks PREVENTS or a checked group; ok under `OPTIONS_OVERRIDE` or an `options.local` reset; else unconfigured (no file), stale (options new or gone), ok |
-| New option | `SavedOptionsFile::decides` | no SET/UNSET line for it in the file or `options.local` |
+| Unmanaged | `unmanaged_by` | make.conf moved `OPTIONS_FILE`, a line `unmodeled`, or an `options.local` resetting a list: no `saved`, make's own `PORT_OPTIONS` as the state, every option locked, no make.conf verdict |
+| Status | `status` | conflict if the staged outcome breaks PREVENTS or a checked group; ok under `OPTIONS_OVERRIDE` or for an unmanaged file; else unconfigured (no file), stale (options new or gone), ok |
+| New option | `SavedOptionsFile::decides` | no SET entry naming it, nor UNSET entry matching it, in the file or `options.local` (make's NEW_OPTIONS, less its SET-glob defect) |
 | Owed a decision | `undecided_options` | new, and no make.conf layer, implied-by-forced or group choice settles it; none under `-m` |
-| Locked | `toggle` refusals | `*_FORCE`, `WITH`/`WITHOUT`, `options.local`, `OPTIONS_OVERRIDE`, an `options.local` reset, an implier still on, a group left empty, a forced-on sibling |
+| Locked | `toggle` refusals | `*_FORCE`, `WITH`/`WITHOUT`, an `options.local` UNSET entry, `OPTIONS_OVERRIDE`, an unmanaged file, an implier still on, a group left empty, a forced-on sibling |
 | Deviates from make.conf | `mc_deviates` | make.conf takes a stance and the staged outcome differs from the no-file outcome |
 
 The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
@@ -244,7 +259,8 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 
 `apply::plan_writes` groups the ports by options file and, for each:
 
-1. leaves it alone under `OPTIONS_OVERRIDE` or an `options.local` reset;
+1. leaves it alone under `OPTIONS_OVERRIDE` or when it is unmanaged
+   (`session::unmanaged_by`);
 2. picks the writer as the session picks the owner (`session::outranks`):
    the default flavor, else the flavor with the most options, the first
    on ties, whose file is then the union of every present flavor's
@@ -253,7 +269,9 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
    changes nothing for any flavor and holds no line those flavors cannot
    see;
 4. skips it when it is up to date (make would end up the same, and the
-   list is complete), else renders it as `make config` would.
+   list is complete), else renders it as `make config` would, less the
+   `_OPTIONS_READ` line and with a pkgname comment of 20 bytes or more,
+   so no line trips synth's options check.
 
 `apply::apply` writes every temporary file and fsyncs it before renaming
 any; one failure discards them all. Removals run only after every write
@@ -311,8 +329,10 @@ in-memory terminal: `key`, `keys`, `dump`, `state`, `settle`, `resize`,
 - Every input that changes a query's answer is in the cache key: the
   tree, the staged make.conf text, overlays, `SCHEMA`, the options file
   and `options.local` bytes.
-- A query sees no environment variable but `PATH`, `HOME`, `TMPDIR`,
-  `PKG_DBDIR`; `PORTSDIR` and `PORT_DBDIR` are always passed, absolute.
+- A query sees no environment variable but `PATH`, `TMPDIR`,
+  `PKG_DBDIR`, and the `USER` and `HOME` of whoever runs the build (root
+  in a builder); `PORTSDIR` and `PORT_DBDIR` are always passed, absolute.
+- optique never writes or removes an options file it cannot model.
 - Each options file is read from disk at most once per run; staging is
   seeded from those bytes, not from a second read.
 - An unreadable options file is an error, never a missing one.

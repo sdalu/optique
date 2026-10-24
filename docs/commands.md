@@ -23,7 +23,10 @@ As poudriere reads them, `origin@all` names every flavor of the port (its
 `MOVED` entry on `origin` is applied first, as poudriere's own listing
 does: `origin@all` and, under `FLAVOR_DEFAULT_ALL`, a bare `origin` query
 the FLAVORS of whatever it last moved to, not the old origin, which has
-no directory to query.
+no directory to query. Only listed origins follow `MOVED`, and only when
+no longer in the tree; a dependency on a moved or removed origin is an
+error on the port that depends on it (see
+[how-it-works.md](how-it-works.md#querying-a-port)).
 Across arguments and files, duplicates are dropped and first-seen order is
 kept. With neither, every subcommand but `clean` and `decide` (which
 then takes the plan's own ports) refuses — "no port origins given (arguments or -f pkglist)"
@@ -40,7 +43,11 @@ installed side by side are each a root). `--repo NAME` (repeatable)
 narrows that implicit list to packages installed from the named pkg
 repositories, and is rejected when any ports *are* given, and with
 `decide` and plain `clean`, since it only means something for the
-implicit list.
+implicit list. A list given is still read poudriere's way, but synth
+refuses a whole list on any entry not in its flavor index verbatim: each
+such entry (a comment line, a line holding more than an origin, a list
+line ending in `/`, a leading `/`, `@all`, `@-`, a flavored port's bare
+origin) is named in a `synth refuses this list:` note.
 
 ## `tui` (the default)
 
@@ -70,7 +77,8 @@ port is `ok`, `unconfigured` (no saved options file), `stale` (the option
 list changed since the file was written) or `conflict` (the options make
 computes from the saved ones, `*_FORCE` included, violate a group rule or
 `PREVENTS`, which `make check-config` checks for an `OPTIONS_SLAVE` option
-too). A flagged port also lists what
+too; a `PREVENTS` word is a pattern, as make matches it, and what an option
+`IMPLIES` goes in whether the port lists it or not). A flagged port also lists what
 `make.conf` leaves `undecided`, or is marked `[mc-covered ≈]` when `make.conf`
 settles every option by itself. An unconfigured or stale `mc-covered` port
 does not count against the exit gate (a conflict still does, and so does,
@@ -99,11 +107,28 @@ command that reads it, and `sync` completes it: make reads such an option at
 its defaults, follows them if they change, and `make config-conditional` asks
 about it again. A hand-written file is read as the makefile it is: several
 options to a line, spaces around `+=` or `=`, and `=` assigning a list
-afresh; `sync` writes it back as `make config` does. An `options.local`
-beside the file is read after it, as make does: its SET and UNSET lines
-join the file's, UNSET winning, and the result is the saved choice every
-command shows. `sync` never writes it, so an option it unsets stays off;
-every command that reads one notes which options it sets or unsets. `--dry-run`/`-n` reports what
+afresh; `sync` writes it back as `make config` does, but for the unread
+`_OPTIONS_READ` line, left out, and a pkgname comment long enough not to
+crash synth (see [configuration.md](configuration.md#synth)). An
+`options.local` beside the file is read after it, as make does: its SET
+and UNSET lines join the file's, every SET before any UNSET, and the
+result is the saved choice every command shows. `sync` never writes it,
+so an option one of its UNSET entries matches stays off, and the TUI and
+`decide` refuse to change it; a SET entry there locks nothing, the file's
+UNSET overriding it. Every command that reads one notes which options it
+sets or unsets.
+
+optique leaves to make, never writing or removing it (`clean` included),
+an options file it cannot model: one whose `options.local` assigns a SET
+or UNSET list afresh, dropping the file's lines; one where either file has
+a line it cannot model — an assignment to anything but the SET and UNSET
+lists and the bookkeeping `make config` writes, a `!=`, a directive, a `$`
+expansion, or a line that is no assignment; and one `make.conf` moves away
+by setting `OPTIONS_FILE`. A warning names the file and line, or the
+moved path. The port shows make's own outcome, every option locked with no
+make.conf verdict, is never unconfigured or stale, and takes no edit.
+
+`--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in
 the same shape as `decide` (see [machine-interface.md](machine-interface.md))
 instead of the per-file listing.
@@ -144,12 +169,17 @@ list is an error the other way round:
   exactly what defaults plus the `make.conf` overlay would produce anyway,
   so removing them changes nothing on a later `sync`.
 - `-u`/`--unused` — also remove entries for ports outside the dependency
-  closure of the given package list, which is then required. If any port in
-  that closure fails to query, the closure is incomplete and `clean` refuses
-  to prune anything at all, rather than risk deleting live configuration
- .
+  closure of the given package list, which is then required. If the scan
+  of that closure has any error — a port that fails to query, a listed
+  origin gone, a dependency on an origin in no tree — the closure is
+  incomplete and `clean` refuses to prune anything at all, rather than risk
+  deleting live configuration: `N error(s): the dependency closure is
+  incomplete, refusing to prune entries`.
 - `--json` — report on stdout as one JSON object instead of the per-entry
   listing; see [machine-interface.md](machine-interface.md).
+
+An options file optique leaves to make ([`sync`](#sync)) is never
+removed, whichever option asks; a warning names it as kept.
 
 `--minimal`/`-m` has no effect on `clean`; a note says so when it is given
 without `--redundant` — see
@@ -212,7 +242,10 @@ decision.
 
 A `scan` decision is pending when a port is unconfigured or stale with
 undecided options, has a conflict, is caught in a dependency loop that is
-not fully blacklisted, or could not be checked because its query failed.
+not fully blacklisted, or there is an error: a port whose query failed or
+a listed origin gone from the tree (neither checked, nor what it depends
+on), or a dependency on an origin in no tree. The summary line counts
+those as `N errors (see above)`, each named on stderr.
 An unconfigured or stale port make.conf fully decides (`[mc-covered ≈]`)
 does not count, nor does any blacklisted port; under `-s`, a file synth
 would refuse counts whatever the port's status. Per-file failures during `sync` or `clean` are reported one by

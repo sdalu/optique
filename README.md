@@ -81,8 +81,9 @@ optique -l -f server.lst
 The same flags select the build for every command:
 
 ```sh
-# What is left to decide? Exit status 1 while anything is pending, 3 on
-# an error
+# What is left to decide? Exit status 1 while anything is pending (a port
+# that could not be checked, or depends on a gone origin, included), 3 when
+# the run itself fails
 optique scan -z server -f server.lst
 
 # The unattended refresh after a ports tree update: keep saved choices,

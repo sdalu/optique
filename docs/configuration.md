@@ -37,6 +37,13 @@ Without it, or under `-l`, optique configures a
 [local build](#local-builds) instead, and giving `-j`, `-z` or `-p`
 without it is an error.
 
+`POUDRIERE_ETC`, set and non-empty, moves poudriere's configuration as
+poudriere itself does: `poudriere.conf` and `poudriere.d` are read from
+that directory, which must exist, in place of `/usr/local/etc` in every
+path on this page, and the startup banner notes it. Without a
+`poudriere.d` there, the build is a local one. It is not read under `-l`
+or `-s`.
+
 ## The ports tree
 
 `-p tree` (default `default`) is read from
@@ -74,9 +81,11 @@ knobs, and `WITH`/`WITHOUT`, which bsd.options.mk applies after them and
 which pin an option as they do.
 As in `bsd.options.mk`, an UNSET entry, in make.conf or an options file,
 is a make pattern (`*`, `?`, `[...]`) that turns off every option it
-matches: `OPTIONS_UNSET=A*` turns off A and A2. A SET entry turns on only
-the option it names, though any entry counts as a decision for every
-option it matches.
+matches: `OPTIONS_UNSET=A*` turns off A and A2, and decides both. A SET
+or `WITH` entry turns on, and decides, only the option it names. make
+also counts every option a SET glob matches as decided, though it turns
+none on; that upstream defect is not followed, so `OPTIONS_SET=A*` leaves
+A2 undecided.
 
 The layers are concatenated into one staged file, as poudriere itself
 concatenates them into the jail's make.conf, so an `.include` with a
@@ -119,6 +128,12 @@ still names that flavor alone. The banner notes it.
 When `CCACHE_DIR`, read the same way, names an existing directory,
 `WITH_CCACHE_BUILD=yes` and `CCACHE_DIR=/root/.ccache` are appended after
 the layers, as poudriere's `setup_ccache` does.
+
+Queries run with `USER=root` and `HOME=/root`, as poudriere's
+`jail_start` exports them for its builders. It matters for
+`bsd.ccache.mk`: under `WITH_CCACHE_BUILD` with no `CCACHE_DIR`, it keeps
+ccache, and the devel/ccache build dependency, for root alone, and
+disables it for anyone else.
 
 Given `-j jail`, queries also see the jail's system rather than the
 host's, from poudriere.d's `jails/<jail>/arch`, `version` and `mnt`: the
@@ -192,15 +207,25 @@ option, or anything containing a slash) must be attached, as
 The ports tree comes from `Directory_portsdir` and the options
 directory from `Directory_options`, both read from the profile's
 section of `/usr/local/etc/synth/synth.ini` alone, as synth reads them
-(`[Global Configuration]` never stands in for a profile), falling back
-to `/usr/ports` and `/var/db/ports`. A section header is `[name]`,
-anything after it ignored; keys and values are trimmed of white space;
-and a key's first match within its section wins, a bare or empty one
-included, so it ends the search there rather than reading on to a
-later, real assignment of the same key. synth's own reader keeps a tab
-around a key or value, keeps the spaces of `[ name ]` and takes no
-indented header: optique reads such lines as meant and names each in a
-note, since synth will read them otherwise.
+(`[Global Configuration]` never stands in for a profile). A profile
+without `Directory_portsdir` takes the first that exists of `PORTSDIR`,
+make's `PORTSDIR`, `/usr/dports` and `/usr/ports`, in that order, as synth
+does, a note naming which; one without `Directory_options` takes
+`/var/db/ports`. A missing synth.ini reads as empty; one that cannot be
+read is an error, since synth will not run without it.
+
+optique reads synth.ini as synth's own reader reads it, defects
+included, since that decides which settings synth uses: a section header
+is `[name]` with its `[` in the first column, the name running untrimmed
+to the first `]` and anything after it ignored, so `[ name ]` names the
+section ` name ` and an indented header is none, its lines staying in the
+section above; keys and values are trimmed of spaces only, a tab or the
+CR of a CRLF line end staying part of them; and a key's first match
+within its section wins, a bare or empty one included, so it ends the
+search there rather than reading on to a later, real assignment of the
+same key. Each line synth reads otherwise than it seems to say is named
+in a note, saying it is read as synth reads it. A section header with no
+`]` makes synth refuse to run: each is named as an error.
 make.conf is the single file
 `/usr/local/etc/synth/<profile>-make.conf` — the one synth appends to
 each builder's make.conf — or none at all when the profile has none (the
@@ -219,7 +244,8 @@ that probes installed files would answer for the host: with php82
 installed, `Mk/Uses/php.mk` reads its `php.conf` and every `php84-*`
 extension builds against `lang/php82`. The startup banner's
 `environment:` line reads
-`synth scan slave (host packages under /usr/local not seen)`.
+`synth scan slave (host packages under /usr/local not seen)`. Queries run
+with `USER=root` and `HOME=/root`, as synth's builders do.
 
 `-o dir` and `-P dir` still override the options directory and the
 ports tree.
@@ -240,6 +266,13 @@ implicit list to packages installed from the named pkg repositories,
 e.g. `--repo Synth` to consider only synth-built packages; the names are
 listed by `pkg query -a %R`.
 
+A list given is read poudriere's way in every mode, but synth refuses a
+whole list on any entry not in its flavor index verbatim. Under `-s`,
+each such entry is named in a `synth refuses this list:` note: a comment
+line, a line holding more than an origin, a list line ending in `/`, an
+entry starting with `/`, `origin@all` or `origin@-`, and the bare origin
+of a port that has flavors.
+
 synth refuses a build when the saved options file of a port without
 flavors, `<category>_<name>/options`, names an option the port lacks or
 has more or fewer `OPTIONS_FILE_SET`/`OPTIONS_FILE_UNSET` entries than
@@ -247,6 +280,13 @@ the port has options, every line counted. Under `-s`, `scan` marks such
 a port `[synth refuses the file: reason]` and counts it as needing
 attention in its exit status, whatever its status; `sync` rewrites the
 file.
+
+synth's check of a cached options file also reads bytes 17 to 20 of every
+line without checking its length, and aborts on a shorter one. So what
+optique writes, in every mode, never holds one: it writes no
+`_OPTIONS_READ` line, which nothing reads, and its `# Options for
+<pkgname>` comment ends in `, by optique`. A file optique did not write is
+left as it is.
 
 When `Directory_options` is the live `/var/db/ports`, minimal and
 redundancy cleanups also affect plain make config workflows.
@@ -305,6 +345,8 @@ not, optique configures ports for a build on this host, the way
   [make.conf layers](#makeconf-layers) still applies);
 - queries see the host's installed packages under `/usr/local`, since
   they are what the build will find (no `LOCALBASE=/nonexistent`);
+- queries run as the invoking user, with its `USER` and `HOME`, not as a
+  builder's root, and that `USER` is part of the cache key;
 - queries do not see optique's environment: a make variable exported in
   the shell (`OPTIONS_SET`, `WITH_DEBUG`, `DEFAULT_VERSIONS`, ...) does
   not reach them, since the cache could not key it; set it in the
@@ -318,10 +360,12 @@ poudriere:
 optique scan -l -f list
 ```
 
-`-l` is mutually exclusive with `-z`, `-j`, `-p` and `-s`. Poudriere and
-synth builds ignore `PORTSDIR` and `PORT_DBDIR`, and whatever the build,
-every query is given the ports tree and options directory optique
-resolved, so a `PORTSDIR` in the environment cannot send `make` to
-another tree. Whatever the build, a query runs with an environment of
-`PATH`, `HOME`, `TMPDIR` and `PKG_DBDIR` (those set) and no other
-variable.
+`-l` is mutually exclusive with `-z`, `-j`, `-p` and `-s`. Poudriere
+builds ignore `PORTSDIR` and `PORT_DBDIR`, synth builds too but for a
+profile without `Directory_portsdir`, and whatever the build, every query
+is given the ports tree and options directory optique resolved, so a
+`PORTSDIR` in the environment cannot send `make` to another tree.
+Whatever the build, a query runs with an environment of `PATH`, `TMPDIR`
+and `PKG_DBDIR` (those set), `USER` and `HOME` as above (root's for a
+poudriere or synth build, the invoking user's for a local one), and no
+other variable.
