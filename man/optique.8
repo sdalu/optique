@@ -253,6 +253,17 @@ or
 installs are not configured, as
 .Nm poudriere Cm options
 does not configure them either; poudriere builds them with their defaults.
+A dependency is read as the framework's
+.Pa do-depends.sh
+reads it: an
+.Ar origin Ns ~ Ns Ar subpackage
+is a dependency on
+.Ar origin ,
+and an
+.Ar origin Ns @ Ns Ar flavor Ns ~ Ns Ar subpackage
+keeps
+.Ar flavor Ns ~ Ns Ar subpackage
+as its flavor, as the framework itself does.
 A port's
 .Ql TEST
 option is unaffected: what it adds to the build
@@ -536,7 +547,12 @@ its default flavor, the bare origin, whatever the build.
 A stray leading or trailing
 .Ql /
 is stripped from an origin, in a pkglist line or on the command line
-alike.
+alike, and a
+.Ar ~subpackage
+is dropped, as
+.Xr poudriere 8
+splits it off before the flavor: every subpackage comes from the one port
+build and its one options file.
 Repeatable; duplicates across files and command line arguments are dropped.
 .It Fl -follow-moved
 Follow

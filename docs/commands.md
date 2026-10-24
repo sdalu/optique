@@ -16,7 +16,10 @@ reads it: a line is a comment, skipped whole, only when its first word
 starts with `#`, and anything past the first word on any other line,
 comment or not, is dropped with it — the poudriere pkglist format), or
 both at once; `-f` is repeatable. A stray leading or trailing `/` is
-stripped from an origin, in a pkglist line or on the command line alike.
+stripped from an origin, in a pkglist line or on the command line alike,
+and a `~subpackage` is dropped, as poudriere splits it off before the
+flavor: `devel/bar@py311~lib` roots `devel/bar@py311`, every subpackage
+coming from the one port build and its one options file.
 As poudriere reads them, `origin@all` names every flavor of the port (its
 `FLAVORS`, queried first; the bare origin for a port without any) and
 `origin@-` its default flavor, the bare origin, whatever the build.

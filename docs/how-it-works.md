@@ -47,7 +47,9 @@ everything optique needs: the options, groups and descriptions,
 the dependency list (twice: the framework's own `_UNIFIED_DEPENDS`, and the
 lists poudriere builds without `-t`, so that test-only edges can be told
 apart on a tree old enough to still fold `TEST_DEPENDS` in; see
-[dependency loops](dependency-loops.md)). A query takes about 0.2–0.6 s, and
+[dependency loops](dependency-loops.md)). A dependency on `origin~subpkg`
+is one on `origin`, as the framework's `do-depends.sh` reads it: every
+subpackage comes from the one port build and its one options file. A query takes about 0.2–0.6 s, and
 up to 16 run in parallel (`-J` changes that). What bsd.port.mk would work
 out about the host in every query (release, arch, CPU count, pkg's
 version) is probed once per run and given to each on its command line.
