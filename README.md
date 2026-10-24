@@ -140,6 +140,9 @@ Every command takes the same global options after its name (`-z set`,
   each command's flow, the options model and the TUI's loop
 - [Conformance](docs/conformance.md): how optique was checked against the
   ports framework, poudriere and synth, and what it does not model
+- Upstream reference: how [the ports framework](docs/reference/ports-framework.md),
+  [poudriere](docs/reference/poudriere.md) and [synth](docs/reference/synth.md)
+  read make.conf, resolve options and compute dependencies
 - [The FreeBSD port](docs/port.md): updating `ports-mgmt/optique` for a
   release, and test-building it
 - `optique(8)`, the man page: every flag, key, JSON key and exit status

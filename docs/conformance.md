@@ -17,6 +17,10 @@ Checked against, in October 2026:
 | poudriere | git `3b268b38` (2026-10-19), `src/share/poudriere/common.sh`, `options.sh`, `bulk.sh` |
 | synth | 3.15 (`ports-mgmt/synth`), with its INI reader ini-files 11 (`misc/ini_file_manager`) |
 
+How each upstream works, independent of optique, is in the reference
+pages: [ports framework](reference/ports-framework.md),
+[poudriere](reference/poudriere.md), [synth](reference/synth.md).
+
 Upstream line numbers drift; the functions named below are the stable
 reference. Verdicts: **matches**; **differs on purpose**, with the
 reason in [DESIGN.md](../DESIGN.md), or because the upstream behaviour
