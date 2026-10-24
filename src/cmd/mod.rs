@@ -170,52 +170,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
 
     let paint = stderr_color(cli);
     if !cli.quiet {
-        eprintln!(
-            "{} ports tree {} · {} jobs",
-            tint(paint, ansi::BOLD, "optique:"),
-            settings.portsdir.display(),
-            jobs
-        );
-        let notes = rs.notes.iter().chain(settings.notes.iter()).map(String::as_str);
-        for note in notes.chain(cache.note()) {
-            eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
-        }
-        // In lookup order: the first holding a port answers for it.
-        for (i, o) in settings.overlays.iter().enumerate() {
-            let label = if i == 0 { "overlay:" } else { "        " };
-            let what = match &o.name {
-                Some(name) => format!("{name} ({})", o.path.display()),
-                None => o.path.display().to_string(),
-            };
-            eprintln!("  {}     {what}", tint(paint, ansi::CYAN, label));
-        }
-        eprintln!(
-            "  {} {}{}",
-            tint(paint, ansi::CYAN, "options dir:"),
-            settings.options_dir.display(),
-            tint(
-                paint,
-                ansi::YELLOW,
-                if !settings.options_dir.is_dir() { " (new, created on apply)" } else { "" }
-            )
-        );
-        if settings.make_conf_sources.is_empty() {
-            eprintln!("  {}   (none)", tint(paint, ansi::CYAN, "make.conf:"));
-        } else {
-            for (i, src) in settings.make_conf_sources.iter().enumerate() {
-                let label = if i == 0 { "make.conf:" } else { "          " };
-                eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
-            }
-        }
-        if let Some(env) = settings.env.description() {
-            eprintln!("  {} {env}", tint(paint, ansi::CYAN, "environment:"));
-        }
-        if !settings.blacklist.is_empty() {
-            for (i, src) in settings.blacklist.sources.iter().enumerate() {
-                let label = if i == 0 { "blacklist:" } else { "          " };
-                eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
-            }
-        }
+        print_banner(paint, rs, &settings, &cache, jobs);
     }
     // Writing to the options dir is harmless, only useless: said, even
     // under -q, and the run goes on (scan counts it among its errors).
@@ -268,6 +223,94 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
     }
 
+    say_overridden(paint, &result);
+    let read = say_moved_files(paint, &result);
+    say_options_files(paint, &result, &files, &read);
+
+    // A dependency loop is a property of the closure, not of one command:
+    // whatever the caller went on to do, poudriere will not build it.
+    let dep_loops = deps::detect(&result.ports, &result.aliases);
+    for dl in &dep_loops {
+        eprintln!("{} {}", tint(paint, ansi::RED, "loop:"), dl.render());
+        if let Some(extra) = dl.extra_line() {
+            eprintln!("       also tangled: {extra}");
+        }
+    }
+
+    Ok(Scanned {
+        settings,
+        roots,
+        result,
+        dep_loops,
+        elapsed: t0.elapsed().as_secs_f32(),
+        staging,
+        files,
+        cache,
+        moved,
+        moves: listing.moves,
+        jobs,
+    })
+}
+
+/// The startup banner: the tree and the jobs, the notes, the overlays, then
+/// where options, make.conf, the environment and the blacklist come from.
+fn print_banner(
+    paint: bool,
+    rs: &RootSet,
+    settings: &config::Settings,
+    cache: &cache::Cache,
+    jobs: usize,
+) {
+    eprintln!(
+        "{} ports tree {} · {} jobs",
+        tint(paint, ansi::BOLD, "optique:"),
+        settings.portsdir.display(),
+        jobs
+    );
+    let notes = rs.notes.iter().chain(settings.notes.iter()).map(String::as_str);
+    for note in notes.chain(cache.note()) {
+        eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+    }
+    // In lookup order: the first holding a port answers for it.
+    for (i, o) in settings.overlays.iter().enumerate() {
+        let label = if i == 0 { "overlay:" } else { "        " };
+        let what = match &o.name {
+            Some(name) => format!("{name} ({})", o.path.display()),
+            None => o.path.display().to_string(),
+        };
+        eprintln!("  {}     {what}", tint(paint, ansi::CYAN, label));
+    }
+    eprintln!(
+        "  {} {}{}",
+        tint(paint, ansi::CYAN, "options dir:"),
+        settings.options_dir.display(),
+        tint(
+            paint,
+            ansi::YELLOW,
+            if !settings.options_dir.is_dir() { " (new, created on apply)" } else { "" }
+        )
+    );
+    if settings.make_conf_sources.is_empty() {
+        eprintln!("  {}   (none)", tint(paint, ansi::CYAN, "make.conf:"));
+    } else {
+        for (i, src) in settings.make_conf_sources.iter().enumerate() {
+            let label = if i == 0 { "make.conf:" } else { "          " };
+            eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
+        }
+    }
+    if let Some(env) = settings.env.description() {
+        eprintln!("  {} {env}", tint(paint, ansi::CYAN, "environment:"));
+    }
+    if !settings.blacklist.is_empty() {
+        for (i, src) in settings.blacklist.sources.iter().enumerate() {
+            let label = if i == 0 { "blacklist:" } else { "          " };
+            eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
+        }
+    }
+}
+
+/// The ports make.conf decides outright with OPTIONS_OVERRIDE, named once.
+fn say_overridden(paint: bool, result: &ScanResult) {
     // bsd.options.mk:300-304: make.conf may define OPTIONS_OVERRIDE for a
     // port, which decides it outright and leaves its options file unread;
     // named once here so it is not mistaken for one sync merely left alone.
@@ -285,6 +328,11 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             if overridden.len() == 1 { "its" } else { "their" }
         );
     }
+}
+
+/// The ports make.conf moves OPTIONS_FILE for, each said once; returns the
+/// options files make still reads.
+fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeSet<&str> {
     // bsd.options.mk:183: make.conf moved OPTIONS_FILE, so make reads
     // neither the file optique manages nor its options.local. Per port: a
     // flavor moved elsewhere leaves the shared file to those still reading
@@ -316,7 +364,17 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             }
         }
     }
+    read
+}
 
+/// What each options file make reads holds that a build may not expect:
+/// lines optique cannot model, an options.local, options with no line.
+fn say_options_files(
+    paint: bool,
+    result: &ScanResult,
+    files: &optfiles::OptionsFiles,
+    read: &std::collections::BTreeSet<&str>,
+) {
     // A file missing lines reads as its defaults today and follows them
     // tomorrow; said once per file, whatever the command (sync completes it).
     let names: std::collections::BTreeSet<&str> = result
@@ -379,28 +437,4 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             );
         }
     }
-
-    // A dependency loop is a property of the closure, not of one command:
-    // whatever the caller went on to do, poudriere will not build it.
-    let dep_loops = deps::detect(&result.ports, &result.aliases);
-    for dl in &dep_loops {
-        eprintln!("{} {}", tint(paint, ansi::RED, "loop:"), dl.render());
-        if let Some(extra) = dl.extra_line() {
-            eprintln!("       also tangled: {extra}");
-        }
-    }
-
-    Ok(Scanned {
-        settings,
-        roots,
-        result,
-        dep_loops,
-        elapsed: t0.elapsed().as_secs_f32(),
-        staging,
-        files,
-        cache,
-        moved,
-        moves: listing.moves,
-        jobs,
-    })
 }
