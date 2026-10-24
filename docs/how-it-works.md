@@ -125,7 +125,8 @@ Answers are grouped in generations, one JSON Lines file each, named
   count: its `_EXPORTED_VARS`). They are read once per run from a probe
   port that uses nothing, then given to every query on its command line,
   as the framework gives them to its own sub-makes; an upgraded host is a
-  new generation;
+  new generation. `--no-framework-probe` leaves the probe out, each query
+  working them out itself, in a generation of its own;
 - for a local build, pkg's database (size and mtime of `local.sqlite`),
   since its queries see the installed packages, and the invoking `USER`,
   its queries running as that user.

@@ -268,31 +268,32 @@ action is a usage error that shows the command as it should read: the
 action comes first, as for `poudriere` and `pkg`, so that every option of
 a run is read at one level.
 
-| Flag                  | Argument    | Meaning                                |
-| :-------------------- | :---------- | :------------------------------------- |
-| `-z`, `--set`         | `SET`       | poudriere set name                     |
-| `-j`, `--jail`        | `JAIL`      | poudriere jail name                    |
-| `-p`, `--ports-tree`  | `TREE`      | poudriere tree (default `default`)     |
-| `-P`, `--portsdir`    | `DIR`       | explicit ports tree                    |
-| `-O`, `--overlay`     | `NAME`      | poudriere overlay (repeatable)         |
-| `--overlay-dir`       | `DIR`       | explicit overlay (repeatable)          |
-| `-l`, `--local`       | —           | local build, poudriere.d ignored       |
-| `-s`, `--synth`       | `[PROFILE]` | synth's layout, not poudriere's        |
-| `--repo`              | `NAME`      | synth: restrict implicit list to repo  |
-| `-o`, `--options-dir` | `DIR`       | explicit options dir                   |
-| `-f`, `--file`        | `PKGLIST`   | pkglist of origins (repeatable)        |
-| `--follow-moved`      | —           | follow `MOVED` for a listed origin     |
-| `-J`, `--jobs`        | `JOBS`      | parallel `make` jobs (min(16, ncpu))   |
-| `--no-cache`          | —           | skip the persistent query cache        |
-| `--no-carry-over`     | —           | start a new cache generation empty     |
-| `--clear-cache`       | —           | delete the query cache first           |
-| `-n`, `--dry-run`     | —           | preview `sync`/`decide`/`clean` writes |
-| `-m`, `--minimal`     | —           | persist only deviations                |
-| `-v`, `--verbose`     | —           | more per-subcommand detail             |
-| `-q`, `--quiet`       | —           | drop banner and per-item stdout rows   |
-| `--color`             | `WHEN`      | `auto`, `always` or `never`            |
-| `-h`, `--help`        | —           | print usage and exit                   |
-| `-V`, `--version`     | —           | print the version and exit             |
+| Flag                   | Argument    | Meaning                                |
+| :--------------------- | :---------- | :------------------------------------- |
+| `-z`, `--set`          | `SET`       | poudriere set name                     |
+| `-j`, `--jail`         | `JAIL`      | poudriere jail name                    |
+| `-p`, `--ports-tree`   | `TREE`      | poudriere tree (default `default`)     |
+| `-P`, `--portsdir`     | `DIR`       | explicit ports tree                    |
+| `-O`, `--overlay`      | `NAME`      | poudriere overlay (repeatable)         |
+| `--overlay-dir`        | `DIR`       | explicit overlay (repeatable)          |
+| `-l`, `--local`        | —           | local build, poudriere.d ignored       |
+| `-s`, `--synth`        | `[PROFILE]` | synth's layout, not poudriere's        |
+| `--repo`               | `NAME`      | synth: restrict implicit list to repo  |
+| `-o`, `--options-dir`  | `DIR`       | explicit options dir                   |
+| `-f`, `--file`         | `PKGLIST`   | pkglist of origins (repeatable)        |
+| `--follow-moved`       | —           | follow `MOVED` for a listed origin     |
+| `-J`, `--jobs`         | `JOBS`      | parallel `make` jobs (min(16, ncpu))   |
+| `--no-cache`           | —           | skip the persistent query cache        |
+| `--no-carry-over`      | —           | start a new cache generation empty     |
+| `--no-framework-probe` | —           | each query works out the host values   |
+| `--clear-cache`        | —           | delete the query cache first           |
+| `-n`, `--dry-run`      | —           | preview `sync`/`decide`/`clean` writes |
+| `-m`, `--minimal`      | —           | persist only deviations                |
+| `-v`, `--verbose`      | —           | more per-subcommand detail             |
+| `-q`, `--quiet`        | —           | drop banner and per-item stdout rows   |
+| `--color`              | `WHEN`      | `auto`, `always` or `never`            |
+| `-h`, `--help`         | —           | print usage and exit                   |
+| `-V`, `--version`      | —           | print the version and exit             |
 
 `-O` conflicts with `-l` and `-s`, `--overlay-dir` with `-s` (see
 [overlays](configuration.md#overlays)). `-s` and `-l` conflict with

@@ -183,6 +183,7 @@ fn resolve_settings(cli: &Cli, staging_dir: &Path) -> Result<config::Settings> {
             portsdir: cli.portsdir.as_deref(),
             options_dir: cli.options_dir.as_deref(),
             overlays: &cli.overlays,
+            no_framework_probe: cli.no_framework_probe,
         },
         staging_dir,
     )

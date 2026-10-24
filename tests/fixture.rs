@@ -639,6 +639,28 @@ fn an_option_edit_to_make_conf_keeps_what_it_cannot_reach() {
     assert!(!err.contains("carried over"), "{err}");
 }
 
+/// --no-framework-probe gives the queries no host values probed once:
+/// each works them out itself, the banner says so, and the answers are
+/// those of a probed run, byte for byte.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn the_framework_probe_changes_no_answer() {
+    let f = Fixture::new();
+    let ports = ["misc/cond", "misc/flav", "misc/slavey", "misc/forced"];
+    let scan = |extra: &[&str]| {
+        let mut args = vec!["--json", "--options", "--no-cache"];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&ports);
+        f.run("scan", &args)
+    };
+    let probed = scan(&[]);
+    let unprobed = scan(&["--no-framework-probe"]);
+    let err = stderr(&unprobed);
+    assert!(err.contains("framework probe off"), "{err}");
+    assert!(!stderr(&probed).contains("framework probe off"));
+    assert_eq!(stdout(&probed), stdout(&unprobed), "{err}");
+}
+
 /// A make.conf `.include` is part of what the cache keys on: an edit to the
 /// included file alone is a new answer for the ports that read it, without
 /// --clear-cache.

@@ -22,6 +22,7 @@
 .Op Fl J Ar jobs
 .Op Fl -no-cache
 .Op Fl -no-carry-over
+.Op Fl -no-framework-probe
 .Op Fl -clear-cache
 .Op Fl -color Ar when
 .Op Fl f Ar pkglist
@@ -383,7 +384,12 @@ the host values the ports framework computes for any port
 .Pq release, architecture, CPU count: its Va _EXPORTED_VARS ,
 read once per run from a port that uses nothing and then given to every
 query on its command line, as the framework gives them to its own sub-makes;
-an upgraded host is therefore a new generation;
+an upgraded host is therefore a new generation
+.Po under
+.Fl -no-framework-probe
+each query works them out itself, and such runs have generations of their
+own
+.Pc ;
 .It
 for a local build, the size and modification time of pkg's
 .Pa local.sqlite
@@ -683,6 +689,14 @@ or an option edit to the
 answers cached under the current tree and
 .Pa make.conf
 are still used.
+.It Fl -no-framework-probe
+Give the queries none of the host values probed once per run
+.Pq see Sx Query cache :
+each works them out itself, as plain
+.Xr make 1
+does, at about ten more forks a port.
+The answers are the same; the flag rules the probe out when one looks
+wrong.
 .It Fl -clear-cache
 Delete the persistent query cache
 .Pq every generation file, drafts left alone

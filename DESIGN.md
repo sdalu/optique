@@ -372,6 +372,11 @@ release, arch and CPU count, which no key held before: a local or synth
 build on a host upgraded under an unchanged make.conf kept its generation
 unless pkg's database happened to change too.
 
+`--no-framework-probe` leaves the probe out: nothing is given or folded
+into the hash, each query working the values out itself in a generation
+of its own, the answers the same; it rules the probe out when one looks
+wrong.
+
 Rejected: synth's fixed list, which drifts from the framework where
 `_EXPORTED_VARS` cannot; keeping the values on disk between runs, which
 would need a key for the very host state they describe; probing at the

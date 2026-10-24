@@ -279,6 +279,11 @@ pub struct Cli {
     #[arg(long = "no-carry-over", global = true)]
     pub no_carry_over: bool,
 
+    /// Give the queries no host values probed once per run: each works them
+    /// out itself, as plain make does
+    #[arg(long = "no-framework-probe", global = true)]
+    pub no_framework_probe: bool,
+
     /// Delete the persistent query cache before running
     /// (given alone: clear it and exit)
     #[arg(long = "clear-cache", global = true)]

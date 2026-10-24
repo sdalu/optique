@@ -314,6 +314,9 @@ pub struct Request<'a> {
     pub options_dir: Option<&'a Path>,
     /// -O and --overlay-dir, in command-line order.
     pub overlays: &'a [OverlaySpec],
+    /// --no-framework-probe: give the queries no host values probed once
+    /// (`with_framework`), each working them out itself.
+    pub no_framework_probe: bool,
 }
 
 /// A path from the environment, `var`, ignored when it is set but empty,
@@ -330,11 +333,8 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     // pkg(8)'s own default, which the environment may move.
     let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
     if let Some(profile) = req.synth {
-        return finish(
-            synth::resolve(profile, req, staging_dir)?,
-            Vec::new(),
-            &pkg_db,
-        );
+        let settings = synth::resolve(profile, req, staging_dir)?;
+        return finish(settings, Vec::new(), &pkg_db, req.no_framework_probe);
     }
     // -l reads no poudriere configuration, so POUDRIERE_ETC is not asked.
     let etc = if req.local {
@@ -442,7 +442,7 @@ fn resolve_host(host: &HostPaths, req: &Request, staging_dir: &Path) -> Result<S
     } else {
         poudriere::resolve(host, req, &given, staging_dir)?
     };
-    finish(settings, given, host.pkg_db)
+    finish(settings, given, host.pkg_db, req.no_framework_probe)
 }
 
 /// The overlays the command line names, in its order: a -O name read from
@@ -616,15 +616,26 @@ fn invoker_hash(conf_hash: &str, user: Option<&str>) -> String {
 /// built: paths absolute, `overlays` settled against what make reports, and
 /// the host's installed packages, the invoking user and the framework
 /// values keyed in. Shared by `resolve`'s synth path and `resolve_host`.
-fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Settings> {
+fn finish(
+    settings: Settings,
+    given: Vec<Overlay>,
+    pkg_db: &Path,
+    no_framework_probe: bool,
+) -> Result<Settings> {
     let settings = settings.absolute()?;
     let settings = with_overlays(settings, given);
     let settings = key_installed_packages(settings, pkg_db);
-    let settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
-    Ok(with_options_place(
-        with_framework(settings),
-        std::env::var_os("PORT_DBDIR"),
-    ))
+    let mut settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
+    // Without the probe nothing is folded in either: such runs answer in a
+    // generation of their own.
+    if no_framework_probe {
+        settings
+            .notes
+            .push("framework probe off: each query works out the host values".to_string());
+    } else {
+        settings = with_framework(settings);
+    }
+    Ok(with_options_place(settings, std::env::var_os("PORT_DBDIR")))
 }
 
 /// Settle `settings.options_place` on what make.conf says where the
