@@ -589,8 +589,8 @@ Unmarked defects change neither and are not to be reproduced.
   is off are removed from `PORT_OPTIONS` by `pre-check-config`, after the
   option helpers ran, so their `_DEPENDS`, `_USES` and other helpers stay
   applied: on `mail/faces`, `make WITH=SOX` shows `SOX` off and
-  `play:audio/sox` still in `RUN_DEPENDS` ([The config
-  targets](#the-config-targets)).
+  `play:audio/sox` still in `RUN_DEPENDS`
+  ([The config targets](#the-config-targets)).
 - A set word is tested as a pattern but appended literally:
   `OPTIONS_SET=E*` (or `WITH=E*`) turns nothing on, yet removes every
   matching option from `NEW_OPTIONS`, so `config-conditional` stops

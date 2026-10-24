@@ -530,8 +530,8 @@ Unmarked defects change neither and are not to be reproduced.
   for `<cat>_<port>@<flavor>/options`, while the framework's default
   `OPTIONS_NAME` (`Mk/bsd.options.mk`) has no flavor, so the file is never
   found and the port always passes. A port that sets its own `OPTIONS_NAME`
-  is checked against the wrong file the same way ([Cached options
-  check](#cached-options-check)).
+  is checked against the wrong file the same way
+  ([Cached options check](#cached-options-check)).
 - **Radical.** `passed_options_cache_check` slices bytes 17-18 and 19-20 of
   each line without checking its length, so a line shorter than 18 bytes, or
   an 18- or 19-byte line without `+=` at 17-18, raises `Constraint_Error`,
@@ -555,18 +555,18 @@ Unmarked defects change neither and are not to be reproduced.
   ([How missing keys are filled](#how-missing-keys-are-filled)).
 - **Radical.** The INI reader raises `Constraint_Error` on a header with no
   `]`, keeps the `\r` of a CRLF file in every value, keeps a tab in a key,
-  and takes no indented `[name]` for a header ([How a value is
-  read](#how-a-value-is-read)).
+  and takes no indented `[name]` for a header
+  ([How a value is read](#how-a-value-is-read)).
 
 **Inconsistent treatment**
 
 - **Radical.** `<profile>-environment` is applied to builders but not to the
   scanner, so a variable it sets can change what a port builds without
-  changing what the scan saw ([Environment of a make
-  run](#environment-of-a-make-run)).
+  changing what the scan saw
+  ([Environment of a make run](#environment-of-a-make-run)).
 - **Radical.** A port list given as arguments loses a trailing `/`; the same
-  origin as a line of a list file keeps it and is refused ([The port
-  list](#the-port-list)).
+  origin as a line of a list file keeps it and is refused
+  ([The port list](#the-port-list)).
 - **Radical.** `LIB_DEPENDS_ALL`, the subpackages' library dependencies, is
   parsed as a build dependency, so those entries do not count in `librun`
   and `min_librun`, against which recorded package dependencies are checked
