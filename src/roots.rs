@@ -101,6 +101,27 @@ pub fn query_flavors(
     out
 }
 
+/// A root as the list names it: the port, and whether the list named one
+/// of its subpackages (`origin[@flavor]~sub`). The port is the same, its
+/// options too, but MOVED reads the two apart ([`Moved::resolve_spec`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Listed {
+    pub key: PortKey,
+    pub subpackage: bool,
+}
+
+impl Listed {
+    /// A root naming the port itself.
+    pub fn port(key: PortKey) -> Self {
+        Listed { key, subpackage: false }
+    }
+
+    /// A listed `origin[@flavor][~subpkg]` ([`PortKey::parse_listed`]).
+    pub fn parse(spec: &str) -> Option<Self> {
+        Some(Listed { key: PortKey::parse_listed(spec)?, subpackage: spec.contains('~') })
+    }
+}
+
 /// How the build reads MOVED for a listed origin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MovedPolicy {
@@ -139,9 +160,11 @@ pub struct MovedRoots {
 /// whose entries cycle or name another flavor, is an error. `follow` means
 /// nothing under synth, which never follows MOVED: there a flavor clash is
 /// no error of synth's, and the root, in no tree, is left for the scan to
-/// report.
+/// report. A root naming a subpackage is looked up as `_check_moved` looks
+/// up the whole originspec, `~sub` included ([`Moved::resolve_spec`]): no
+/// move without a flavor, only the bare origin's entry with one.
 pub fn apply_moved(
-    roots: &[PortKey],
+    roots: &[Listed],
     policy: MovedPolicy,
     follow: bool,
     moved: &Moved,
@@ -149,15 +172,16 @@ pub fn apply_moved(
 ) -> MovedRoots {
     let mut out = MovedRoots::default();
     let mut seen = HashSet::new();
-    for key in roots {
-        if !seen.insert(key.clone()) {
+    for listed in roots {
+        if !seen.insert(listed.clone()) {
             continue;
         }
+        let key = &listed.key;
         if policy != MovedPolicy::Poudriere && exists(&key.origin) {
             out.roots.push(key.clone());
             continue;
         }
-        match moved.resolve(key, &exists) {
+        match moved.resolve_spec(key, listed.subpackage, &exists) {
             MovedResult::Unchanged => out.roots.push(key.clone()),
             MovedResult::MovedTo { key: to, reason } => {
                 let can_follow = policy != MovedPolicy::Synth;
@@ -165,7 +189,12 @@ pub fn apply_moved(
                 if followed {
                     out.roots.push(to.clone());
                 }
-                let in_tree = exists(&key.origin);
+                // The listed originspec is itself buildable, and moved all
+                // the same: the existence-first defect (math/mumps). A
+                // named flavor is not known to be in the port's FLAVORS
+                // here (audio/kid3@qt5, retired): no defect is claimed.
+                let in_tree = exists(&key.origin)
+                    && matches!(key.flavor.as_deref(), None | Some(FLAVOR_ALL) | Some(FLAVOR_DEFAULT));
                 out.moves.push(ListedMove { listed: key.clone(), to, reason, followed, can_follow, in_tree });
             }
             MovedResult::FlavorClash { .. } if policy == MovedPolicy::Synth => out.roots.push(key.clone()),
@@ -372,6 +401,10 @@ mod tests {
         specs.iter().map(|s| PortKey::parse(s).unwrap()).collect()
     }
 
+    fn listing(specs: &[&str]) -> Vec<Listed> {
+        specs.iter().map(|s| Listed::parse(s).unwrap()).collect()
+    }
+
     #[test]
     fn all_expands_to_every_flavor_in_order() {
         let flavors: HashMap<String, Vec<String>> = [
@@ -438,7 +471,7 @@ mod tests {
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let mut cache = Cache::disabled();
         let exists = |o: &str| ctx.locate(o).is_some();
-        let roots = keys(&["cat/old@all", "cat/old"]);
+        let roots = listing(&["cat/old@all", "cat/old"]);
         let followed = apply_moved(&roots, MovedPolicy::Poudriere, true, &moved, exists);
         assert_eq!(followed.roots, keys(&["cat/new@all", "cat/new"]));
         let got = resolve(&followed.roots, true, &ctx, &files, 1, &mut cache);
@@ -449,7 +482,7 @@ mod tests {
         let moves: Vec<String> = flagged.moves.iter().map(|m| format!("{} {} {}", m.listed, m.to, m.followed)).collect();
         assert_eq!(moves, ["cat/old@all cat/new@all false", "cat/old cat/new false"]);
 
-        let default = apply_moved(&keys(&["cat/old@-"]), MovedPolicy::Poudriere, true, &moved, exists);
+        let default = apply_moved(&listing(&["cat/old@-"]), MovedPolicy::Poudriere, true, &moved, exists);
         assert_eq!(resolve(&default.roots, false, &ctx, &files, 1, &mut cache), keys(&["cat/new"]));
     }
 
@@ -469,7 +502,7 @@ mod tests {
         );
         let tree = ["math/mumps", "math/mumps-edf", "cat/new", "editors/mg"];
         let exists = |o: &str| tree.contains(&o);
-        let listed = keys(&["math/mumps", "cat/old", "cat/gone", "cat/a", "editors/mg-static@dynamic", "x/y"]);
+        let listed = listing(&["math/mumps", "cat/old", "cat/gone", "cat/a", "editors/mg-static@dynamic", "x/y"]);
         let run = |policy, follow| {
             let r = apply_moved(&listed, policy, follow, &moved, exists);
             let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
@@ -515,6 +548,53 @@ mod tests {
             assert_eq!(only.len(), 1, "{only:?}");
             assert!(!only[0].followed && !only[0].can_follow, "{only:?}");
             assert_eq!(only[0].message(), "listed cat/old moved to cat/new (renamed): fix the list");
+        }
+    }
+
+    /// A flavor-level entry retires a flavor (audio/kid3@qt5, the port in
+    /// the tree): poudriere moves it, rightly, and no defect is named. The
+    /// bare origin's entry moving math/mumps, its `@all` and its `@-`,
+    /// all buildable as listed, is the defect.
+    #[test]
+    fn a_flavor_move_is_not_called_a_defect() {
+        let moved = Moved::parse(
+            "audio/kid3@qt5|audio/kid3@qt6|2024-02-25|The legacy qt5 flavor has been replaced by the qt6 flavor\n\
+             math/mumps|math/mumps-edf|2026-10-07|Repomove to math/mumps-edf\n",
+        );
+        let tree = ["audio/kid3", "math/mumps", "math/mumps-edf"];
+        let exists = |o: &str| tree.contains(&o);
+        let listed = listing(&["audio/kid3@qt5", "math/mumps", "math/mumps@all", "math/mumps@-"]);
+        let r = apply_moved(&listed, MovedPolicy::Poudriere, false, &moved, exists);
+        let defects: Vec<bool> = r.moves.iter().map(|m| m.in_tree).collect();
+        assert_eq!(defects, [false, true, true, true]);
+        assert_eq!(
+            r.moves[0].message(),
+            "listed audio/kid3@qt5 moved to audio/kid3@qt6 (The legacy qt5 flavor has been replaced by \
+             the qt6 flavor): fix the list, or --follow-moved to follow it"
+        );
+    }
+
+    /// poudriere's `_check_moved` gets the listed originspec whole,
+    /// `~sub` included, and MOVED names no subpackage: `cat/old~sub` is not
+    /// moved, under any build, and stays a root for the scan to report;
+    /// `cat/old@fl~sub` moves by the bare origin's entry alone, never by
+    /// `cat/old@fl`'s. Listed beside `cat/old`, both are read, each its
+    /// own way.
+    #[test]
+    fn a_listed_subpackage_goes_through_moved_whole() {
+        let moved = Moved::parse(
+            "cat/old|cat/new|2026-01-01|renamed\n\
+             cat/flav@fl|cat/other@fl|2026-01-01|flavor moved\n",
+        );
+        let exists = |o: &str| o == "cat/new" || o == "cat/other";
+        let listed = listing(&["cat/old~sub", "cat/old@fl~sub", "cat/flav@fl~sub", "cat/old"]);
+        for policy in [MovedPolicy::Poudriere, MovedPolicy::Local] {
+            let r = apply_moved(&listed, policy, true, &moved, exists);
+            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            assert_eq!(roots, ["cat/old", "cat/new@fl", "cat/flav@fl", "cat/new"], "{policy:?}");
+            let moves: Vec<String> = r.moves.iter().map(|m| format!("{}>{}", m.listed, m.to)).collect();
+            assert_eq!(moves, ["cat/old@fl>cat/new@fl", "cat/old>cat/new"], "{policy:?}");
+            assert!(r.errors.is_empty(), "{:?}", r.errors);
         }
     }
 

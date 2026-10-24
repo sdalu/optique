@@ -24,6 +24,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut about = PortAbout::default();
     let mut descr = String::new();
     let mut build_deps = String::new();
+    let mut subpackage_deps = Vec::new();
     let mut default_versions: Vec<String> = Vec::new();
     let mut makefiles: Vec<String> = Vec::new();
     let mut saw_sentinel = false;
@@ -56,7 +57,10 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             // present one with an empty value is Some(empty) (defined
             // empty) — the two are not the same decision.
             "OVERRIDE" => opts.r#override = Some(words(value)),
-            "DEPENDS" => (deps, warnings) = parse_depends(value),
+            "DEPENDS" => {
+                (deps, warnings) = parse_depends(value);
+                subpackage_deps = parse_subpackage_deps(value);
+            }
             "BUILDDEPS" => build_deps = value.to_string(),
             "MC_SET" => opts.mc_set = words(value),
             "MC_UNSET" => opts.mc_unset = words(value),
@@ -189,6 +193,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         options_name,
         options: opts,
         deps,
+        subpackage_deps,
         broken: non_empty(broken),
         ignore: non_empty(ignore),
         deprecated: non_empty(deprecated),
@@ -229,6 +234,27 @@ pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
         }
     }
     (edges, warnings)
+}
+
+/// The targets of `_UNIFIED_DEPENDS` written `origin~subpkg`, without
+/// a flavor, where [`parse_depends`] keeps that form for the edge (its
+/// first entry for the target): the edge names the origin, but
+/// poudriere's `deps_sanity` hands `check_moved` the originspec whole.
+fn parse_subpackage_deps(value: &str) -> Vec<PortKey> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    for entry in value.split_whitespace() {
+        let fields: Vec<&str> = entry.split(':').collect();
+        let Some((field, target)) =
+            fields.iter().skip(1).find_map(|f| PortKey::parse_dependency(f).map(|t| (*f, t)))
+        else {
+            continue;
+        };
+        if seen.insert(target.clone()) && !field.contains('@') && field.contains('~') {
+            out.push(target);
+        }
+    }
+    out
 }
 
 /// Whitespace-separated words of `s`, collected into whatever the call site
@@ -285,6 +311,18 @@ mod tests {
         let (edges, _) = parse_depends("/usr/local/bin/gmake:devel/gmake");
         assert_eq!(edges[0].target.to_string(), "devel/gmake");
         assert_eq!(edges[0].spec, "/usr/local/bin/gmake");
+    }
+
+    /// A dependency written `origin~sub`, without a flavor, is noted for
+    /// MOVED; one with a flavor keeps its `~sub` in it, and an edge first
+    /// written as the plain origin stays plain.
+    #[test]
+    fn subpackage_dependencies_are_noted() {
+        let got = parse_subpackage_deps(
+            "a>0:devel/a~lib b>0:devel/b@fl~lib c>0:devel/c c.so:devel/c~lib d:devel/d~x d.so:devel/d",
+        );
+        let got: Vec<String> = got.iter().map(|k| k.to_string()).collect();
+        assert_eq!(got, ["devel/a", "devel/d"]);
     }
 
     #[test]

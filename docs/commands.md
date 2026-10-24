@@ -19,7 +19,8 @@ both at once; `-f` is repeatable. A stray leading or trailing `/` is
 stripped from an origin, in a pkglist line or on the command line alike,
 and a `~subpackage` is dropped, as poudriere splits it off before the
 flavor: `devel/bar@py311~lib` roots `devel/bar@py311`, every subpackage
-coming from the one port build and its one options file.
+coming from the one port build and its one options file. `MOVED` still
+reads it whole (below).
 As poudriere reads them, `origin@all` names every flavor of the port (its
 `FLAVORS`, queried first; the bare origin for a port without any) and
 `origin@-` its default flavor, the bare origin, whatever the build.
@@ -28,11 +29,17 @@ As poudriere reads them, `origin@all` names every flavor of the port (its
 as poudriere's own listing reads it: the entry of `origin@flavor` as
 written, else the bare origin's, its target taking the listed flavor
 unless it names one (one naming another flavor is an error, as it stops
-poudriere). Under poudriere every listed origin is looked up, one still in
-the tree included (`math/mumps`, moved to `math/mumps-edf`); a local
-build and synth take an origin in the tree as it is. A listed origin
-`MOVED` moves is not followed by default: neither it nor its target is
-scanned, and it is reported as pending, the list needing a fix —
+poudriere). A listed originspec naming a subpackage is looked up whole,
+`~sub` included, as poudriere's `check_moved` is given it, and `MOVED`
+names no subpackage: `cat/old~sub` is never moved, and `cat/old@fl~sub`
+only by the bare origin's entry, never by `cat/old@fl`'s. Under poudriere
+every listed origin is looked up, one still in the tree included
+(`math/mumps`, moved to `math/mumps-edf`, an upstream defect the message
+names for a bare origin, `@all` or `@-`; an entry for one flavor, as
+`audio/kid3@qt5` moved to `audio/kid3@qt6`, retires that flavor and reads
+as a plain move); a local build and synth take an origin in the tree as it
+is. A listed origin `MOVED` moves is not followed by default: neither it
+nor its target is scanned, and it is reported as pending, the list needing a fix —
 
 ```
 moved: listed cat/old moved to cat/new (renamed): fix the list, or --follow-moved to follow it
@@ -43,10 +50,14 @@ stops `clean --unused` from pruning. `--follow-moved` scans and configures
 the target instead, as poudriere builds it (`origin@all` and, under
 `FLAVOR_DEFAULT_ALL`, a bare `origin` then query the FLAVORS of whatever
 it last moved to), with a note that the list still names the old origin;
-the gate does not count it. Under `-s` it is never followed, synth reading
-no `MOVED`. A listed origin `MOVED` removes, or whose entries cycle, is an
-error. A dependency never follows `MOVED`: one on a moved or removed
-origin is an error on the port that depends on it (see
+the gate does not count it. A `decide` plan naming the old origin
+configures the target, but a dependency on the old origin stays an error
+and never leads to the target, so it closes no loop through it. Under
+`-s` it is never followed, synth reading no `MOVED`. A listed origin
+`MOVED` removes, or whose entries cycle, is an error. A dependency never
+follows `MOVED`: one on a moved or removed origin is an error on the port
+that depends on it, `MOVED` read for its note as poudriere's `deps_sanity`
+reads it, so `cat/old~sub` gets none (see
 [how-it-works.md](how-it-works.md#querying-a-port)).
 
 Across arguments and files, duplicates are dropped and first-seen order is

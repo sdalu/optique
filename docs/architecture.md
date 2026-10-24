@@ -161,7 +161,11 @@ reads it (`MovedPolicy` from `QueryEnv`: poudriere looks up every one,
 a local build and synth only one in no tree), before anything expands. A
 root MOVED moves becomes a `ListedMove`: left out with its target and
 counted as pending by `cmd_scan`, or, under `--follow-moved` (never under
-`-s`), replaced by its target, an alias kept from the old name. A removed
+`-s`), replaced by its target. The old name is kept out of the closure's
+aliases, which dependency edges resolve through: `decide::apply_plan`
+alone finds a followed move's target from `Session::listed_moves`. A root
+naming a subpackage (`roots::Listed`) is looked up whole
+(`Moved::resolve_spec`). A removed
 one, a cycle or a flavor clash is an error. `Scanned::moves` carries them
 to every command: the JSON `moved`, `clean --unused`'s refusal, the TUI's
 `MOVED:` line and first message (`Session::listed_moves`). This runs on

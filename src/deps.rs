@@ -19,10 +19,10 @@ use crate::model::port::PortInfo;
 
 /// Resolve a (possibly non-canonical) key to the key the closure stores the
 /// port under. Dep edges and command-line arguments may name a port without
-/// its flavor, while the scan files it under the flavor `make` selected, and
-/// may name an origin MOVED sends to another. Aliases chain (a moved origin
-/// to its new one, that to its flavor) and are followed until a key the
-/// closure holds; None when there is none, a cycle of aliases included.
+/// its flavor, while the scan files it under the flavor `make` selected;
+/// aliases chain and are followed until a key the closure holds; None
+/// when there is none, a cycle of aliases included. A followed MOVED root
+/// is no alias: a dependency on its old origin, in no tree, leads nowhere.
 pub fn resolve(
     ports: &BTreeMap<PortKey, PortInfo>,
     aliases: &HashMap<PortKey, PortKey>,
@@ -441,9 +441,9 @@ mod tests {
         assert!(detect(&ports, &HashMap::new()).is_empty());
     }
 
-    /// A MOVED origin is an alias of the origin it moved to, itself an
-    /// alias of the flavor make chose: resolving follows the chain, and a
-    /// cycle of aliases resolves to nothing rather than spinning.
+    /// An alias may lead to another, itself an alias of the flavor make
+    /// chose: resolving follows the chain, and a cycle of aliases resolves
+    /// to nothing rather than spinning.
     #[test]
     fn resolve_follows_chained_aliases_and_stops_on_a_cycle() {
         let key = |s: &str| PortKey::parse(s).unwrap();

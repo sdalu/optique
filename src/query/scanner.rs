@@ -13,9 +13,10 @@ use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 pub struct ScanResult {
     /// Ports keyed by canonical key (origin + resolved flavor).
     pub ports: BTreeMap<PortKey, PortInfo>,
-    /// Requested key -> canonical key (for dedup of default-flavor aliases),
-    /// and a followed MOVED root -> the key it moved to (set by the
-    /// caller); `deps::resolve` follows the chain.
+    /// Requested key -> canonical key (for dedup of default-flavor
+    /// aliases); `deps::resolve` follows the chain. A followed MOVED root
+    /// is not here (`decide::apply_plan` finds its target): a dependency
+    /// on the old origin would otherwise lead to it.
     pub aliases: HashMap<PortKey, PortKey>,
     /// (key, error): a port whose query failed (missing from `ports`), or
     /// a port in `ports` depending on an origin that does not exist, once
@@ -135,7 +136,8 @@ fn register(
             if exists(&dep.target.origin) {
                 targets.push(dep.target.clone());
             } else if check && !dep.test_only {
-                let error = nonexistent_dependency(&dep.target, moved, exists);
+                let subpackage = info.subpackage_deps.contains(&dep.target);
+                let error = nonexistent_dependency(&dep.target, subpackage, moved, exists);
                 result.errors.push((canonical.clone(), error));
             }
         }
@@ -145,10 +147,16 @@ fn register(
 }
 
 /// `deps_sanity`'s refusal of a dependency on `target`, whose origin is in
-/// no tree, with what MOVED says of its originspec, flavor and all, as
-/// `deps_sanity` passes it to `check_moved`.
-fn nonexistent_dependency(target: &PortKey, moved: &Moved, exists: &dyn Fn(&str) -> bool) -> String {
-    let why = match moved.resolve(target, exists) {
+/// no tree, with what MOVED says of its originspec, flavor and subpackage
+/// and all (`subpackage`: written `origin~sub`), as `deps_sanity`
+/// passes it to `check_moved` (`Moved::resolve_spec`).
+fn nonexistent_dependency(
+    target: &PortKey,
+    subpackage: bool,
+    moved: &Moved,
+    exists: &dyn Fn(&str) -> bool,
+) -> String {
+    let why = match moved.resolve_spec(target, subpackage, exists) {
         MovedResult::MovedTo { key, .. } => format!(" (moved to {key})"),
         MovedResult::Removed { reason } if reason.is_empty() => " (port EXPIRED)".to_string(),
         MovedResult::Removed { reason } => format!(" (port EXPIRED: {reason})"),
@@ -524,7 +532,8 @@ mod tests {
         };
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let listed: Vec<PortKey> = ["cat/old", "cat/a"].iter().map(|o| PortKey::parse(o).unwrap()).collect();
+        let listed: Vec<crate::roots::Listed> =
+            ["cat/old", "cat/a"].iter().map(|o| crate::roots::Listed::parse(o).unwrap()).collect();
         let exists = |o: &str| ctx.locate(o).is_some();
         let roots = crate::roots::apply_moved(&listed, crate::roots::MovedPolicy::Poudriere, true, &moved, exists);
         assert_eq!(roots.moves.len(), 1);

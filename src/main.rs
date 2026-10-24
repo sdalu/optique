@@ -721,7 +721,7 @@ fn parse_installed(
 /// The resolved root list plus notes destined for the startup banner's
 /// aligned `note:` block (nothing is printed here).
 struct RootSet {
-    roots: Vec<model::origin::PortKey>,
+    roots: Vec<roots::Listed>,
     notes: Vec<String>,
     /// The roots are synth's implicit list, the installed packages, which
     /// the scan matches against the tree as synth does.
@@ -749,6 +749,7 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
                 repos_phrase(&cli.repo)
             )
         };
+        let roots = roots.into_iter().map(roots::Listed::port).collect();
         return Ok(RootSet { roots, notes: vec![note], installed: true });
     }
     listed_roots(origins, &cli.files)
@@ -1083,9 +1084,10 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         // merely a directory holding a Makefile.
         let synth_index = roots::synth_index(&ctx.portsdir, &ctx.overlays);
         let exists = |o: &str| synth_index.contains(o);
-        let origins = given.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
+        let installed: Vec<_> = given.iter().map(|l| l.key.clone()).collect();
+        let origins = installed.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
         let flavors = roots::query_flavors(&origins, &ctx, &files, jobs, &mut cache);
-        let (kept, skipped) = roots::synth_installed(&given, exists, &flavors);
+        let (kept, skipped) = roots::synth_installed(&installed, exists, &flavors);
         if !skipped.is_empty() && !cli.quiet {
             let list: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} ({why})")).collect();
             eprintln!(
@@ -1095,7 +1097,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 list.join(", ")
             );
         }
-        given = kept;
+        given = kept.into_iter().map(roots::Listed::port).collect();
     }
     // MOVED, read for the listed origins as the build reads it, each time:
     // never cached, as the cache's carry-over takes MOVED to be read per run.
@@ -1121,13 +1123,6 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     });
     eprintln!();
 
-    // A followed origin's old name leads to its target, for a plan naming
-    // it; never over a port of that name the closure holds.
-    for m in listing.moves.iter().filter(|m| m.followed) {
-        if !result.ports.contains_key(&m.listed) {
-            result.aliases.entry(m.listed.clone()).or_insert_with(|| m.to.clone());
-        }
-    }
     result.errors.splice(0..0, listing.errors);
     for m in &listing.moves {
         eprintln!("{} {}", tint(paint, ansi::MAGENTA, "moved:"), m.message());
@@ -1852,7 +1847,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
 
     let rs = if args.roots.origins.is_empty() && cli.files.is_empty() {
         RootSet {
-            roots: plan.roots(),
+            roots: plan.roots().into_iter().map(roots::Listed::port).collect(),
             notes: vec!["no port list given; the plan's own ports are the closure roots".into()],
             installed: false,
         }
@@ -1871,6 +1866,7 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         cli.minimal,
     );
 
+    sess.listed_moves = scanned.moves.clone();
     let outcome = decide::apply_plan(&mut sess, &plan);
 
     // Only the files of the ports the plan named are rewritten; `sync`

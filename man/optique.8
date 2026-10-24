@@ -123,12 +123,28 @@ as written, else the entry of the bare origin, its target taking the listed
 flavor unless it names one; a target naming another flavor stops poudriere,
 and is an error here.
 A chain stops at the first target in a tree.
+A listed originspec naming a subpackage is looked up whole, as
+.Fn check_moved
+is given it, and
+.Pa MOVED
+names no subpackage:
+.Ar origin Ns ~ Ns Ar subpackage
+is never moved, and
+.Ar origin Ns @ Ns Ar flavor Ns ~ Ns Ar subpackage
+only by the bare origin's entry, never by that of
+.Ar origin Ns @ Ns Ar flavor .
 Which listed origins are looked up follows the build:
 .Xr poudriere 8
 looks up every one, one still in the tree included, so an entry moves a name
 the tree has reused
 .Pq Pa math/mumps , moved to Pa math/mumps-edf ,
-an upstream defect the report names;
+an upstream defect the report names when the listed origin is bare,
+.Ar origin Ns @all
+or
+.Ar origin Ns @- ;
+an entry for one flavor
+.Pq Pa audio/kid3@qt5 , moved to Pa audio/kid3@qt6
+retires that flavor, and is reported as a plain move;
 a local build
 .Pq Nm make Cm config ,
 which knows no
@@ -149,6 +165,10 @@ With
 .Fl -follow-moved ,
 its target is scanned in its place, as poudriere builds it, with a note that
 the list still names the old origin.
+A
+.Cm decide
+plan naming the old origin configures the target; a dependency on it is
+still an error, and does not lead to the target.
 Under
 .Fl s
 it is never followed, synth not reading
@@ -264,6 +284,13 @@ and an
 keeps
 .Ar flavor Ns ~ Ns Ar subpackage
 as its flavor, as the framework itself does.
+Either is looked up in
+.Pa MOVED
+whole, as poudriere's
+.Fn deps_sanity
+looks it up: an
+.Ar origin Ns ~ Ns Ar subpackage
+in no tree gets no moved-to note.
 A port's
 .Ql TEST
 option is unaffected: what it adds to the build
@@ -553,6 +580,9 @@ is dropped, as
 .Xr poudriere 8
 splits it off before the flavor: every subpackage comes from the one port
 build and its one options file.
+That a subpackage was named still counts for
+.Pa MOVED
+.Pq see Sx DESCRIPTION .
 Repeatable; duplicates across files and command line arguments are dropped.
 .It Fl -follow-moved
 Follow

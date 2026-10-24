@@ -39,6 +39,12 @@ pub struct PortInfo {
     pub options_name: String,
     pub options: PortOptions,
     pub deps: Vec<DepEdge>,
+    /// The dependencies written `origin~subpkg`, without a flavor: the
+    /// edge names the origin (`PortKey::parse_dependency`), but
+    /// poudriere's `deps_sanity` hands `check_moved` the originspec
+    /// whole, which MOVED never moves (`Moved::resolve_spec`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subpackage_deps: Vec<PortKey>,
     pub broken: Option<String>,
     pub ignore: Option<String>,
     pub deprecated: Option<String>,
@@ -88,6 +94,7 @@ impl PortInfo {
             flavors: vec![],
             options: PortOptions::default(),
             deps: vec![],
+            subpackage_deps: vec![],
             broken: None,
             ignore: None,
             deprecated: None,

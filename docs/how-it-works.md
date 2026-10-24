@@ -78,12 +78,18 @@ origins are looked up follows the build. poudriere looks up every listed
 one before testing whether it is in the tree, so an entry moves a name the
 tree has since reused (math/mumps moved to math/mumps-edf, then math/mumps4
 to math/mumps): an upstream defect that changes what gets built, conformed
-to. `make config` knows no `MOVED`, and synth reads none: a local build and
+to, and named in the message for a listed origin buildable as it stands (a
+flavor-level entry, as audio/kid3@qt5's, retires a flavor: a plain move).
+A listed `origin~sub` is looked up whole, as `check_moved` is given it, and
+`MOVED` names no subpackage: no move without a flavor, the bare origin's
+entry alone with one. `make config` knows no `MOVED`, and synth reads none: a local build and
 synth take an origin in the tree as it is. A listed origin `MOVED` moves is
 flagged rather than followed: left out of the walk with its target, and
 pending in `scan`'s exit status, since the list needs a fix;
 `--follow-moved` walks the target in its place, as poudriere builds it
-(never under `-s`: synth would not). A listed origin that is gone, or
+(never under `-s`: synth would not); the old name is no alias in the
+closure, so a dependency on it still leads nowhere, and only a `decide`
+plan naming it reaches the target. A listed origin that is gone, or
 whose entries cycle without reaching one (poudriere loops forever on that,
 an upstream defect), is an error. This is read on every run, never cached:
 the cache's carry-over takes `MOVED` to be read each time. Dependencies do

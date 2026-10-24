@@ -92,6 +92,17 @@ impl Plan {
     }
 }
 
+/// The port a plan entry names: the closure's own, or, for a listed origin
+/// `--follow-moved` followed, the port it moved to. That old name is kept
+/// out of the session's aliases: a dependency on it, in no tree, is an
+/// error, and must not lead to the target and close a loop through it.
+fn resolve(sess: &Session, requested: &PortKey) -> Option<PortKey> {
+    sess.resolve(requested).or_else(|| {
+        let m = sess.listed_moves.iter().find(|m| m.followed && m.listed == *requested)?;
+        sess.resolve(&m.to)
+    })
+}
+
 /// Apply the plan to the session's staged state.
 ///
 /// Options are applied in name order within each port, which matters when one
@@ -103,7 +114,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
     // the final-state check once the whole plan has run.
     let mut asked: Vec<(PortKey, &BTreeMap<String, bool>, Vec<String>)> = Vec::new();
     for (requested, wanted) in &plan.ports {
-        let Some(key) = sess.resolve(requested) else {
+        let Some(key) = resolve(sess, requested) else {
             outcome.unknown.push(requested.clone());
             continue;
         };

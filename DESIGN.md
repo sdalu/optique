@@ -573,7 +573,17 @@ reads no MOVED, and would not build the target). MOVED is read on every
 run, never cached, which the cache's carry-over relies on. Rejected:
 following silently, as poudriere does and optique did, which configured
 the right port but hid a stale list; and never following, which stopped
-optique from predicting what poudriere builds. A dependency on an origin
+optique from predicting what poudriere builds. A listed `origin~sub` is
+looked up whole, `~sub` included, as `_check_moved` is given it: no move
+without a flavor, the bare origin's entry alone with one, which changes
+which origin is built and so is conformed to. The message names the
+existence-first defect only for a listed originspec buildable as it
+stands (bare, `@all`, `@-`): a flavor-level entry is how a flavor is
+retired. A followed origin's old name is no alias in the closure: a
+`decide` plan naming it reaches the target (`src/decide.rs`), a dependency
+on it stays an error. Rejected: an alias for every lookup, which led a
+dependency on the old origin, never walked, to the target, and reported a
+loop through it that poudriere never sees. A dependency on an origin
 no tree holds is an error
 on the depending port, naming what MOVED says of it, since poudriere's
 `deps_sanity` fails the bulk on it and synth fails the port

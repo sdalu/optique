@@ -149,6 +149,99 @@ fn a_dependency_on_a_moved_origin_is_an_error() {
     assert!(!report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
 }
 
+/// A port of the fixture's shape at `origin`, `extra` added to its
+/// Makefile.
+fn add_port(f: &common::Fixture, origin: &str, extra: &str) {
+    let dir = f.tree.join(origin);
+    fs::create_dir_all(&dir).unwrap();
+    let name = origin.rsplit('/').next().unwrap();
+    fs::write(
+        dir.join("Makefile"),
+        format!(
+            "PORTNAME=\t{name}\nPORTVERSION=\t1.0\nCATEGORIES=\tmisc\n\
+             MAINTAINER=\tnobody@example.org\nCOMMENT=\tFixture port\n\
+             WWW=\t\thttps://example.org/\nNO_BUILD=\tyes\n{extra}\n.include <bsd.port.mk>\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// poudriere's `check_moved` gets a listed originspec whole, `~sub`
+/// included, and MOVED names no subpackage: misc/oldname~sub is not moved
+/// (misc/oldname, in no tree, is an error), misc/oldflav@nox~sub not by
+/// misc/oldflav@nox's own entry, misc/oldflav2@nox~sub by its bare
+/// origin's, as misc/flav@nox. A dependency on misc/oldname~sub gets no
+/// "moved to" note, deps_sanity's `check_moved` finding none.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_listed_subpackage_is_not_moved_by_check_moved() {
+    let f = Fixture::new();
+    fs::write(
+        f.tree.join("MOVED"),
+        "misc/oldname|misc/cond|2026-01-01|Renamed\n\
+         misc/oldflav@nox|misc/flav@pgtk|2026-01-01|Flavor moved\n\
+         misc/oldflav2|misc/flav|2026-01-01|Renamed too\n",
+    )
+    .unwrap();
+    let no_moves = |report: &serde_json::Value| report["moved"].as_array().is_none_or(|a| a.is_empty());
+
+    for listed in ["misc/oldname~sub", "misc/oldflav@nox~sub"] {
+        let out = f.run("scan", &["--json", "--follow-moved", listed]);
+        let report = common::json(&out);
+        assert!(no_moves(&report), "{listed}: {report}");
+        assert_eq!(report["summary"]["errors"], 1, "{listed}: {report}");
+        assert!(!ports_of(&report).iter().any(|p| p.starts_with("misc/cond") || p.starts_with("misc/flav")), "{report}");
+    }
+
+    let out = f.run("scan", &["--json", "misc/oldflav2@nox~sub"]);
+    let report = common::json(&out);
+    assert_eq!(
+        report["moved"],
+        serde_json::json!([{"listed": "misc/oldflav2@nox", "to": "misc/flav@nox", "reason": "Renamed too", "followed": false}]),
+        "{report}"
+    );
+    let out = f.run("scan", &["--json", "--follow-moved", "misc/oldflav2@nox~sub"]);
+    assert!(ports_of(&common::json(&out)).contains(&"misc/flav@nox".to_string()), "{}", stderr(&out));
+
+    add_port(&f, "misc/subdep", "RUN_DEPENDS=\tcond>0:misc/oldname~sub\n");
+    let out = f.run("scan", &["--json", "misc/subdep"]);
+    let report = common::json(&out);
+    assert_eq!(report["errors"][0]["subject"], "misc/subdep", "{report}");
+    assert_eq!(report["errors"][0]["message"], "depends on nonexistent origin misc/oldname", "{report}");
+}
+
+/// A followed move is no alias for the dependency graph: misc/mid's
+/// dependency on misc/old, in no tree, is an error, and does not lead to
+/// misc/new, which depends on misc/mid, to close a loop.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_followed_move_does_not_close_a_loop_through_a_nonexistent_dependency() {
+    let f = Fixture::new();
+    fs::write(f.tree.join("MOVED"), "misc/old|misc/new|2026-01-01|Renamed\n").unwrap();
+    add_port(&f, "misc/new", "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\tmid>0:misc/mid\n");
+    add_port(&f, "misc/mid", "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\told>0:misc/old\n");
+
+    let out = f.run("scan", &["--json", "--follow-moved", "misc/old"]);
+    let report = common::json(&out);
+    let err = stderr(&out);
+    assert!(!err.contains("loop:"), "{err}");
+    assert_eq!(report["loops"], serde_json::json!([]), "{report}");
+    assert_eq!(report["errors"][0]["subject"], "misc/mid", "{report}");
+    assert_eq!(
+        report["errors"][0]["message"],
+        "depends on nonexistent origin misc/old (moved to misc/new)",
+        "{report}"
+    );
+    let ports = ports_of(&report);
+    assert!(ports.contains(&"misc/new".to_string()) && ports.contains(&"misc/mid".to_string()), "{ports:?}");
+
+    // A plan naming the old origin still reaches the port it moved to.
+    let plan = f.decide(&["--follow-moved", "misc/old"], r#"{"misc/old": {"X": true}}"#);
+    assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
+    let text = fs::read_to_string(f.file("misc_new")).unwrap_or_else(|e| panic!("{e}: {plan}"));
+    assert!(text.contains("OPTIONS_FILE_SET+=X"), "{text}");
+}
+
 fn ports_of(report: &serde_json::Value) -> Vec<String> {
     report["ports"].as_array().unwrap().iter().map(|p| p["port"].as_str().unwrap().to_string()).collect()
 }

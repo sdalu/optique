@@ -59,9 +59,12 @@ pub struct ListedMove {
     /// `--follow-moved` would follow it: false under synth, which reads no
     /// MOVED and never builds the port it leads to.
     pub can_follow: bool,
-    /// `listed` is in a tree all the same: poudriere moves it because its
-    /// `_listed_ports` asks `check_moved` before testing the origin, an
-    /// upstream defect optique conforms to and names.
+    /// `listed` is buildable all the same (its origin in a tree, bare,
+    /// `@all` or `@-`): poudriere moves it because its `_listed_ports` asks
+    /// `check_moved` before testing the origin, an upstream defect optique
+    /// conforms to and names. A named flavor is not known to be in the
+    /// port's FLAVORS when MOVED is read, and a flavor-level entry is how
+    /// a flavor is retired (audio/kid3@qt5): no defect is named for one.
     pub in_tree: bool,
 }
 
@@ -184,13 +187,21 @@ impl Moved {
     }
 
     /// One step of poudriere's `_check_moved`: the entry of `key` as
-    /// written; else, for a flavored one, its bare origin's, the target
-    /// taking `key`'s flavor when it names none and refused when it names
-    /// another. None when neither has an entry; `Err` the clashing target.
+    /// written; else, for a flavored one, its bare origin's
+    /// ([`bare_step`](Self::bare_step)). None when neither has an entry;
+    /// `Err` the clashing target.
     fn step(&self, key: &PortKey) -> Option<Result<(Option<PortKey>, &str), String>> {
         if let Some((next, why)) = self.map.get(&key.to_string()) {
             return Some(Ok((next.as_deref().map(spec), why)));
         }
+        self.bare_step(key)
+    }
+
+    /// `_check_moved`'s second lookup: for a flavored `key`, its bare
+    /// origin's entry, the target taking `key`'s flavor when it names none
+    /// and refused when it names another. None for an unflavored `key`, or
+    /// when its bare origin has no entry; `Err` the clashing target.
+    fn bare_step(&self, key: &PortKey) -> Option<Result<(Option<PortKey>, &str), String>> {
         let flavor = key.flavor.as_ref()?;
         let (next, why) = self.map.get(&key.origin)?;
         let Some(next) = next else {
@@ -217,16 +228,39 @@ impl Moved {
     /// `b|a` give `a|a` and `b|a`); where poudriere then loops forever, the
     /// chase reports a cycle once it comes back to an originspec it passed.
     pub fn resolve(&self, key: &PortKey, exists: impl Fn(&str) -> bool) -> MovedResult {
-        let mut current = key.clone();
+        self.resolve_spec(key, false, exists)
+    }
+
+    /// [`resolve`](Self::resolve) for an originspec that may name a
+    /// subpackage: `subpackage` says a listed root named one
+    /// (`origin[@flavor]~sub`, dropped from the key by
+    /// `PortKey::parse_listed`), and a flavor still holding one
+    /// (`@flavor~sub`, as `PortKey::parse_dependency` keeps it) is split as
+    /// `originspec_decode` splits it. `_check_moved` looks the whole
+    /// originspec up first, `~sub` included, and MOVED names no subpackage:
+    /// without a flavor there is no move; with one, only the bare origin's
+    /// entry applies, never `origin@flavor`'s. Its target names no
+    /// subpackage, and the chase goes on from it as from any other.
+    pub fn resolve_spec(&self, key: &PortKey, subpackage: bool, exists: impl Fn(&str) -> bool) -> MovedResult {
+        let (start, mut sub) = match key.flavor.as_deref().and_then(|f| f.split_once('~')) {
+            Some((flavor, _)) => {
+                (PortKey::new(key.origin.clone(), (!flavor.is_empty()).then(|| flavor.to_string())), true)
+            }
+            None => (key.clone(), subpackage),
+        };
+        let mut current = start.clone();
         let mut reason = String::new();
         let mut passed = HashSet::new();
         let mut found = false;
-        while let Some(step) = self.step(&current) {
+        loop {
+            let step = if sub { self.bare_step(&current) } else { self.step(&current) };
+            let Some(step) = step else { break };
             let (next, why) = match step {
                 Ok(s) => s,
                 Err(to) => return MovedResult::FlavorClash { to },
             };
-            if !passed.insert(current.clone()) {
+            // The `~sub` originspec is not one the chase can come back to.
+            if !std::mem::take(&mut sub) && !passed.insert(current.clone()) {
                 return MovedResult::Cycle;
             }
             reason = why.to_string();
@@ -239,7 +273,7 @@ impl Moved {
                 break;
             }
         }
-        if !found || current == *key {
+        if !found || current == start {
             MovedResult::Unchanged
         } else {
             MovedResult::MovedTo { key: current, reason }
@@ -329,6 +363,32 @@ mod tests {
         assert_eq!(r("cat/old@py311"), to("cat/new@py311", "renamed"), "the flavor re-attached");
         assert_eq!(r("cat/old@all"), to("cat/new@all", "renamed"));
         assert_eq!(r("cat/gone@x"), MovedResult::Removed { reason: "Has expired".into() });
+    }
+
+    /// An originspec naming a subpackage goes to `_check_moved` whole, and
+    /// MOVED names none: `cat/old~sub` is not moved, `cat/old@fl~sub` only
+    /// by the bare origin's entry, its flavor re-attached and its
+    /// subpackage gone, never by `cat/old@fl`'s. A dependency's flavor
+    /// still holding the `~sub` is split the same way.
+    #[test]
+    fn a_subpackage_spec_is_looked_up_whole() {
+        let m = Moved::parse(
+            "cat/old|cat/new|2026-01-01|renamed\n\
+             audio/kid3@qt5|audio/kid3@qt6|2024-02-25|qt6 now\n\
+             cat/new|cat/newer|2026-02-01|again\n",
+        );
+        let exists = |o: &str| o == "audio/kid3" || o == "cat/newer";
+        let sub = |s: &str| m.resolve_spec(&key(s), true, exists);
+        assert_eq!(sub("cat/old"), MovedResult::Unchanged);
+        assert_eq!(sub("cat/old@fl"), to("cat/newer@fl", "again"), "the chase goes on from the target");
+        assert_eq!(sub("audio/kid3@qt5"), MovedResult::Unchanged, "no flavor-level entry for a ~sub");
+        assert_eq!(m.resolve(&key("cat/old"), exists), to("cat/newer", "again"));
+        assert_eq!(m.resolve(&key("audio/kid3@qt5"), exists), to("audio/kid3@qt6", "qt6 now"));
+        // A dependency's `@fl~sub` keeps the subpackage in its flavor.
+        let dep = |s: &str| m.resolve(&PortKey::parse_dependency(s).unwrap(), exists);
+        assert_eq!(dep("cat/old@fl~lib"), to("cat/newer@fl", "again"));
+        assert_eq!(dep("audio/kid3@qt5~lib"), MovedResult::Unchanged);
+        assert_eq!(dep("cat/old@~lib"), MovedResult::Unchanged);
     }
 
     /// The main tree's MOVED, then each overlay's: a chain runs across

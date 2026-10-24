@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
-use crate::model::origin::PortKey;
+use crate::roots::Listed;
 
 /// Sentinel for a bare `-s`: the profile then comes from synth.ini's
 /// `profile_selected`, falling back to LiveSystem.
@@ -498,9 +498,9 @@ pub struct RootsArgs {
 
 /// Merge positional origins and pkglist files into parsed root keys,
 /// dropping duplicates while preserving first-seen order.
-pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<PortKey>> {
-    let mut out: Vec<PortKey> = Vec::new();
-    let mut seen: HashSet<PortKey> = HashSet::new();
+pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<Listed>> {
+    let mut out: Vec<Listed> = Vec::new();
+    let mut seen: HashSet<Listed> = HashSet::new();
     let mut push = |spec: &str, source: &str, from_pkglist: bool| -> anyhow::Result<()> {
         let spec = if from_pkglist {
             // poudriere(8) reads a pkglist line with `read`, splitting it on
@@ -527,7 +527,8 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         let spec = spec.strip_suffix('/').unwrap_or(spec);
         // A `~subpkg` is dropped, as poudriere's `originspec_decode` splits
         // it off before the flavor: the port's options are the origin's.
-        match PortKey::parse_listed(spec) {
+        // That one was named is kept, for MOVED (`roots::apply_moved`).
+        match Listed::parse(spec) {
             Some(k) => {
                 // `origin@all` and `origin@-` are kept as given: the scan
                 // reads them (`roots::expand`).
@@ -622,7 +623,7 @@ mod tests {
             &[f1.path().to_path_buf(), f2.path().to_path_buf()],
         )
         .unwrap();
-        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(
             names,
             vec![
@@ -646,7 +647,7 @@ mod tests {
             .unwrap();
 
         let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
-        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]);
     }
 
@@ -659,7 +660,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "sysutils/tmux #note\n#sysutils/tmux").unwrap();
         let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
-        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
 
@@ -672,17 +673,20 @@ mod tests {
         let roots =
             collect_roots(&["/sysutils/tmux".to_string(), "sysutils/tmux/".to_string()], &[])
                 .unwrap();
-        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
+        let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
 
     /// A listed `origin~sub` or `origin@fl~sub` roots its port, the
-    /// subpackage dropped as poudriere splits it off first.
+    /// subpackage dropped as poudriere splits it off first, but noted:
+    /// MOVED reads `cat/port~sub` and `cat/port` apart, so both are kept.
     #[test]
     fn a_listed_subpackage_roots_its_port() {
-        let roots = collect_roots(&["cat/port~sub".to_string(), "cat/other@fl~sub".to_string()], &[]).unwrap();
-        let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
-        assert_eq!(names, ["cat/port", "cat/other@fl"]);
+        let specs = ["cat/port~sub", "cat/other@fl~sub", "cat/port~lib", "cat/port"];
+        let roots = collect_roots(&specs.map(String::from), &[]).unwrap();
+        let names: Vec<String> =
+            roots.iter().map(|l| format!("{}{}", l.key, if l.subpackage { "~" } else { "" })).collect();
+        assert_eq!(names, ["cat/port~", "cat/other@fl~", "cat/port"]);
     }
 
     #[test]
