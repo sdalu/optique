@@ -236,6 +236,32 @@ pub fn options_place(
     Some((lines.next()?, lines.next()?))
 }
 
+/// The values make gives `vars`, in order, under the make.conf at
+/// `make_conf` outside any port: `make -f /dev/null -V` each, run from
+/// `dir` as [`options_place`] is. What carrying the cache over an edit to
+/// make.conf compares; None when make fails or answers short.
+pub fn make_conf_values(
+    identity: Identity,
+    make_conf: &Path,
+    dir: &Path,
+    vars: &[String],
+) -> Option<Vec<String>> {
+    let mut cmd = bare_make(identity, Some(make_conf));
+    cmd.current_dir(dir).args(["-f", "/dev/null"]);
+    for var in vars {
+        cmd.arg("-V").arg(var);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let values: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .collect();
+    (values.len() == vars.len()).then_some(values)
+}
+
 /// The framework's `_EXPORTED_VARS`, read once from the probe port of
 /// [`wrapper::FRAMEWORK_PROBE`] under `ctx`'s tree, make.conf and
 /// environment, for [`QueryCtx::framework`]: given on each query's command

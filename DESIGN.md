@@ -305,6 +305,45 @@ every warm run, and on NFS pays a round trip for each; and a directory per
 dependency rather than a file, which re-queried every python port for any
 change to python's port.
 
+### An option edit to make.conf keeps the entries it cannot reach
+
+Any change to the make.conf hash used to start an empty generation: on an
+879-port closure, a 31-second cold scan for `OPTIONS_UNSET+=DOCS`, the
+very edit optique's make.conf verdicts lead to. A generation's header now
+holds the staged make.conf text and a signature of everything else folded
+into its hash (`Settings::conf_rest`: a local build's overlay lines, the
+installed packages, the invoking user, the framework's host values). When
+a new generation opens under the same tree, commit and signature, and the
+latest earlier one's text differs only in option policy, it starts with
+the entries that change cannot reach (`cache::makeconf`):
+
+- Option policy is a comment, a blank, or a top-level assignment to
+  `OPTIONS_SET`, `OPTIONS_UNSET`, their `_FORCE` forms, `WITH`, `WITHOUT`
+  or a per-port `<OPTIONS_NAME>_SET` and the like, each changed line
+  counted as a multiset of lines with their conditional depth. A changed
+  variable must be assigned under no conditional anywhere, read by no
+  line, and the make.conf must include no file: the value make gives it
+  outside any port is then the one every port sees.
+- make is asked those values under the old text and the new (two `make
+  -V`s outside any port, `makerunner::make_conf_values`). The words in one
+  value and not the other reach a port when one matches any of its
+  options as a pattern (as make matches an UNSET entry, and so a SET one
+  naming the option); a per-port knob reaches the port of that
+  OPTIONS_NAME (`PortOptions::name`, kept apart from the options-dir key).
+- Every entry dumps the raw value of the global variables, so a kept one
+  is patched to the new value, and one whose dump showed another value
+  than make.conf's got it elsewhere, and goes.
+
+`OPTIONS_UNSET+=DOCS` then re-queried 165 ports in 7.7 seconds, `NLS`
+instead 178 and `X11` 61 in 4.0, the JSON byte-identical to a
+`--no-cache` scan each time. `--no-carry-over` starts every new generation
+empty, carrying nothing over a tree update or such an edit. Rejected:
+judging the edit from the text alone, which cannot see a value an
+assignment with `=` erases from an earlier line; ignoring a per-port
+knob's name, which a port's dump shows only under that name; and folding
+every make.conf change through, which only an evaluation of make.conf for
+each port could make sound.
+
 ## The framework's host values are probed once per run
 
 Every query used to pay for bsd.port.mk working out the host again: about

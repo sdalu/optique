@@ -258,6 +258,12 @@ pub struct PortOptions {
     /// reads nor would `make config` write the file optique manages.
     #[serde(default)]
     pub moved_file: Option<String>,
+    /// OPTIONS_NAME as make has it, which the per-port make.conf knobs
+    /// (`${OPTIONS_NAME}_SET` and the like) are named after; the options-dir
+    /// key (`PortInfo::options_name`) differs from it when the port's
+    /// OPTIONS_FILE names another entry.
+    #[serde(default)]
+    pub name: String,
 }
 
 /// Where an option's current value comes from, following the

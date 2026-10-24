@@ -284,6 +284,7 @@ a run is read at one level.
 | `--follow-moved`      | —           | follow `MOVED` for a listed origin     |
 | `-J`, `--jobs`        | `JOBS`      | parallel `make` jobs (min(16, ncpu))   |
 | `--no-cache`          | —           | skip the persistent query cache        |
+| `--no-carry-over`     | —           | start a new cache generation empty     |
 | `--clear-cache`       | —           | delete the query cache first           |
 | `-n`, `--dry-run`     | —           | preview `sync`/`decide`/`clean` writes |
 | `-m`, `--minimal`     | —           | persist only deviations                |

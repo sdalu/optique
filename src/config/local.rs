@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 
 use super::{
     HostPaths, Overlay, QueryEnv, Request, Settings, checked_portsdir, is_ports_tree, make_values,
-    stage_make_conf,
+    read_text, stage_make_conf,
 };
 
 /// PORTSDIR and PORT_DBDIR as make(1) sees them on this host, from the
@@ -64,7 +64,7 @@ pub(super) fn resolve(
             host.db.to_path_buf()
         }
     };
-    let (staged, mut conf_hash, make_conf_sources) = stage_make_conf(
+    let (copy, mut conf_hash, make_conf_sources) = stage_make_conf(
         String::new(),
         &[host.make_conf.to_path_buf()],
         "",
@@ -73,10 +73,11 @@ pub(super) fn resolve(
     // Queries run with a cleared environment, so make would fall back to
     // /etc/make.conf, unhashed, when the one it was given cannot be read:
     // /dev/null stands for "none", as an unreadable __MAKE_CONF is for make.
-    let mut make_conf = Some(staged.map_or_else(
+    let mut make_conf = Some(copy.as_ref().map_or_else(
         || PathBuf::from("/dev/null"),
         |_| host.make_conf.to_path_buf(),
     ));
+    let mut rest = String::new();
     // --overlay-dir, then the environment's OVERLAYS (absolute), then the
     // make.conf's own: a small make.conf including the real one first,
     // still read in place for its own .includes, then putting them in
@@ -98,16 +99,16 @@ pub(super) fn resolve(
         let path = staging_dir.join("local-make.conf");
         fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         conf_hash = crate::cache::sha256_hex(format!("{conf_hash}\n{text}").as_bytes());
+        rest = crate::cache::sha256_hex(format!("{rest}\n{text}").as_bytes());
         make_conf = Some(path);
     }
     let staged = (make_conf, conf_hash, make_conf_sources);
-    Ok(Settings::new(
-        portsdir,
-        options_dir,
-        staged,
-        QueryEnv::Host,
-        notes,
-    ))
+    let mut settings = Settings::new(portsdir, options_dir, staged, QueryEnv::Host, notes);
+    // make reads the make.conf in place, through the overlay lines when
+    // there are some: its staged copy is the text the hash starts from.
+    settings.conf_text = read_text(copy.as_deref());
+    settings.conf_rest = rest;
+    Ok(settings)
 }
 
 #[cfg(test)]

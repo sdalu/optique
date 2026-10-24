@@ -831,3 +831,90 @@ fn an_included_make_conf_change_drops_its_readers() {
         "the include is gone"
     );
 }
+
+/// A make.conf edit to option policy alone starts the new generation with
+/// the entries no changed word reaches, their dumps patched to the new
+/// value; one under other host values, or with carrying off, starts empty.
+#[test]
+fn an_option_edit_carries_over_what_it_cannot_reach() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dbdir = tmp.path().join("db");
+    fs::create_dir_all(&dbdir).unwrap();
+    let cache_dir = tmp.path().join("cache");
+    let trees = Trees {
+        key: "tree".to_string(),
+        portsdir: PathBuf::new(),
+        commit: None,
+        overlays: String::new(),
+    };
+    // OPTIONS_UNSET as make would expand these plain texts.
+    let probe = |text: &str, vars: &[String]| {
+        let unset: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.strip_prefix("OPTIONS_UNSET+="))
+            .collect();
+        Some(
+            vars.iter()
+                .map(|v| {
+                    if v == "OPTIONS_UNSET" {
+                        unset.join(" ")
+                    } else {
+                        String::new()
+                    }
+                })
+                .collect(),
+        )
+    };
+    let conf = |hash: &'static str, text: &'static str, rest: &'static str, carry: bool| Conf {
+        hash,
+        text,
+        rest,
+        probe: Some(&probe),
+        carry,
+    };
+    let port = |origin: &str, option: &str| {
+        let mut i = info(origin);
+        i.options.complete = vec![option.to_string()];
+        i.options.mc_unset = ["DOCS".to_string()].into();
+        i
+    };
+    let (x11, nls) = (port("x11/port", "X11"), port("misc/nls", "NLS"));
+    let files = OptionsFiles::new(&dbdir);
+    let mut c = Cache::open_trees(
+        &cache_dir,
+        &trees,
+        conf("a", "OPTIONS_UNSET+=DOCS\n", "r", true),
+    );
+    c.insert(&x11, &files);
+    c.insert(&nls, &files);
+
+    let text = "OPTIONS_UNSET+=DOCS\nOPTIONS_UNSET+=NLS\n";
+    let c = Cache::open_trees(&cache_dir, &trees, conf("b", text, "r", true));
+    let kept = c
+        .lookup(&x11.key, &files)
+        .expect("NLS names none of its options");
+    assert_eq!(
+        kept.options.mc_unset,
+        ["DOCS".to_string(), "NLS".to_string()].into()
+    );
+    assert!(c.lookup(&nls.key, &files).is_none(), "NLS is its option");
+    assert_eq!(
+        c.note(),
+        Some(
+            "cache: 1 entries carried over from the make.conf before, 1 dropped by its edit to OPTIONS_UNSET"
+        )
+    );
+
+    let other_host = Cache::open_trees(
+        &cache_dir,
+        &trees,
+        conf("c", "OPTIONS_UNSET+=X\n", "other", true),
+    );
+    assert!(other_host.lookup(&x11.key, &files).is_none());
+    let off = Cache::open_trees(
+        &cache_dir,
+        &trees,
+        conf("d", "OPTIONS_UNSET+=Y\n", "r", false),
+    );
+    assert!(off.lookup(&x11.key, &files).is_none());
+}

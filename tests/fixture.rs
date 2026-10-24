@@ -578,6 +578,67 @@ fn a_flavor_the_port_gives_its_own_file_is_managed() {
     assert_eq!(f.make_v("misc/flavfile", "PORT_OPTIONS"), ["A", "X11"]);
 }
 
+/// An edit to make.conf's option policy alone keeps the cached answers it
+/// cannot reach: the next scan says how many it carried over and how many
+/// the edit dropped, and answers byte for byte as a scan with no cache.
+/// Any other edit carries nothing over, and neither does --no-carry-over.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_option_edit_to_make_conf_keeps_what_it_cannot_reach() {
+    let f = Fixture::new();
+    let ports = [
+        "misc/cond",
+        "misc/flav",
+        "misc/flav@nox",
+        "misc/forced",
+        "misc/slavey",
+        "misc/flavfile",
+        "misc/flavfile@lite",
+        "misc/model-globs",
+        "misc/model-radio",
+    ];
+    let scan = |extra: &[&str]| {
+        let mut args = vec!["--json", "--options"];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&ports);
+        f.run("scan", &args)
+    };
+    fs::write(&f.make_conf, "OPTIONS_UNSET+=DOCS\n").unwrap();
+    scan(&[]);
+
+    fs::write(
+        &f.make_conf,
+        "OPTIONS_UNSET+=DOCS\n# X11 for the flavors\nOPTIONS_SET+=X11\n",
+    )
+    .unwrap();
+    let carried = scan(&[]);
+    let err = stderr(&carried);
+    assert!(
+        err.contains("entries carried over from the make.conf before")
+            && err.contains("dropped by its edit to OPTIONS_SET"),
+        "{err}"
+    );
+    let fresh = scan(&["--no-cache"]);
+    assert_eq!(stdout(&carried), stdout(&fresh), "{err}");
+
+    // Anything but option policy: nothing carried over.
+    fs::write(
+        &f.make_conf,
+        "OPTIONS_UNSET+=DOCS\nOPTIONS_SET+=X11\nCPUTYPE?=native\n",
+    )
+    .unwrap();
+    let err = stderr(&scan(&[]));
+    assert!(!err.contains("carried over"), "{err}");
+    // Nor under --no-carry-over.
+    fs::write(
+        &f.make_conf,
+        "OPTIONS_UNSET+=DOCS NLS\nOPTIONS_SET+=X11\nCPUTYPE?=native\n",
+    )
+    .unwrap();
+    let err = stderr(&scan(&["--no-carry-over"]));
+    assert!(!err.contains("carried over"), "{err}");
+}
+
 /// A make.conf `.include` is part of what the cache keys on: an edit to the
 /// included file alone is a new answer for the ports that read it, without
 /// --clear-cache.

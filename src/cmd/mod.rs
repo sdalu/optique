@@ -132,14 +132,29 @@ fn default_jobs(cli: &Cli) -> usize {
 }
 
 /// Open the persistent query cache for this tree + make.conf pair (or a
-/// no-op cache under --no-cache).
+/// no-op cache under --no-cache). Carrying entries over an edit to
+/// make.conf asks make for the option variables it touched, under the old
+/// text and the new, each staged in a temporary file.
 fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
     if cli.no_cache {
-        cache::Cache::disabled()
-    } else {
-        let trees = cache::trees(&settings.portsdir, &settings.overlay_paths());
-        cache::Cache::open_trees(&cache::default_cache_dir(), &trees, &settings.conf_hash)
+        return cache::Cache::disabled();
     }
+    let trees = cache::trees(&settings.portsdir, &settings.overlay_paths());
+    let identity = settings.env.identity();
+    let dir = config::probe_dir(&settings.portsdir);
+    let probe = |text: &str, vars: &[String]| {
+        let file = tempfile::NamedTempFile::new().ok()?;
+        std::fs::write(file.path(), text).ok()?;
+        crate::query::makerunner::make_conf_values(identity, file.path(), &dir, vars)
+    };
+    let conf = cache::Conf {
+        hash: &settings.conf_hash,
+        text: &settings.conf_text,
+        rest: &settings.conf_rest,
+        probe: Some(&probe),
+        carry: !cli.no_carry_over,
+    };
+    cache::Cache::open_trees(&cache::default_cache_dir(), &trees, conf)
 }
 
 /// MOVED of the main tree and every overlay, its warnings said once.

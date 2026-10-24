@@ -177,6 +177,19 @@ On a thousand-port closure a day's update re-queried 3 ports and a week's
 when git cannot list the changes (the old commit gone), nothing is carried
 over.
 
+An edit to make.conf that changes option policy alone keeps the answers
+it cannot reach the same way. When every line it adds or removes is a
+comment, a blank, or a top-level assignment to `OPTIONS_SET`,
+`OPTIONS_UNSET`, their `_FORCE` forms, `WITH`, `WITHOUT` or a per-port
+`<OPTIONS_NAME>_SET` and the like (none assigned under a conditional or
+read by another line, and no `.include` in the file), make is asked their
+values before and after. A port is queried again when a word in one value
+and not the other matches one of its options, or its own knob changed;
+the others are kept, their dump showing the new value. On an 879-port
+closure, `OPTIONS_UNSET+=DOCS` re-queried 165 ports in 7.7 s instead of
+31 s, `X11` 61 in 4.0 s, answering byte for byte as a scan without the
+cache. Any other edit starts afresh.
+
 ### What it does not see
 
 - A file a make.conf `.sinclude`s that did not exist when a port was
@@ -192,8 +205,11 @@ over.
 
 ### Turning it off
 
-`--no-cache` neither reads nor writes the cache; `--clear-cache` deletes
-every generation first. There is no environment variable for either.
+`--no-cache` neither reads nor writes the cache; `--no-carry-over` keeps
+using the current generation's answers but starts a new generation empty,
+carrying nothing over a tree update or a make.conf option edit;
+`--clear-cache` deletes every generation first. There is no environment
+variable for any of them.
 
 ## The session and the TUI
 

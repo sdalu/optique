@@ -43,7 +43,10 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "PKGNAME" => pkgname = value.trim().to_string(),
             "FLAVORS" => flavors = words(value),
             "FLAVOR" => flavor = value.trim().to_string(),
-            "OPTIONS_NAME" => options_name = value.trim().to_string(),
+            "OPTIONS_NAME" => {
+                options_name = value.trim().to_string();
+                opts.name = options_name.clone();
+            }
             // Dumped only when make.conf moved it (bsd.options.mk:183).
             "OPTIONS_FILE" => opts.moved_file = Some(value.trim().to_string()),
             "COMPLETE" => {

@@ -14,6 +14,8 @@ use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
 
+mod makeconf;
+
 /// Persistent per-generation query cache.
 ///
 /// A generation is one (ports tree and its state, layered make.conf) pair;
@@ -50,6 +52,47 @@ struct Generation {
     /// The overlays' part of the tree key (see [`Trees`]).
     overlays: String,
     conf: String,
+    /// The staged make.conf text `conf` was made from, and a signature of
+    /// everything else folded into it ([`Conf`]): what carrying entries over
+    /// an edit to make.conf needs.
+    #[serde(default)]
+    conf_text: String,
+    #[serde(default)]
+    conf_rest: String,
+}
+
+/// Values make gives variables (in order) under a make.conf of the given
+/// text, outside any port; None when make cannot say.
+pub type Probe<'a> = &'a dyn Fn(&str, &[String]) -> Option<Vec<String>>;
+
+/// The make.conf a generation is opened for: the hash naming it, and what
+/// carrying entries over an edit to it needs.
+pub struct Conf<'a> {
+    pub hash: &'a str,
+    /// The staged make.conf text the hash was made from.
+    pub text: &'a str,
+    /// A signature of everything else folded into the hash: the host's
+    /// installed packages, the invoking user, the framework's host values.
+    pub rest: &'a str,
+    /// Asked for the option variables an edit touched, under each text.
+    pub probe: Option<Probe<'a>>,
+    /// Whether a new generation may start with an earlier one's entries
+    /// (`--no-carry-over` says no).
+    pub carry: bool,
+}
+
+impl<'a> From<&'a str> for Conf<'a> {
+    /// A make.conf known by its hash alone, which no entry is carried over
+    /// an edit to.
+    fn from(hash: &'a str) -> Self {
+        Conf {
+            hash,
+            text: "",
+            rest: "",
+            probe: None,
+            carry: true,
+        }
+    }
 }
 
 /// The trees a generation is opened for: its key, and what carrying entries
@@ -127,7 +170,9 @@ impl Cache {
 
     /// The generation for `trees` under `conf_hash`. A new one starts with
     /// what [`carry_over`] keeps of the latest earlier one.
-    pub fn open_trees(cache_dir: &Path, trees: &Trees, conf_hash: &str) -> Self {
+    pub fn open_trees<'a>(cache_dir: &Path, trees: &Trees, conf: impl Into<Conf<'a>>) -> Self {
+        let conf = conf.into();
+        let conf_hash = conf.hash;
         let generation = format!("v{SCHEMA}-{}-{}.jsonl", short(&trees.key), short(conf_hash));
         let path = cache_dir.join(&generation);
         let _ = fs::create_dir_all(cache_dir);
@@ -136,6 +181,8 @@ impl Cache {
             commit: trees.commit.clone(),
             overlays: trees.overlays.clone(),
             conf: conf_hash.to_string(),
+            conf_text: conf.text.to_string(),
+            conf_rest: conf.rest.to_string(),
         };
         let mut note = None;
         let fresh = fs::metadata(&path).map_or(true, |m| m.len() == 0);
@@ -145,7 +192,11 @@ impl Cache {
             })
             .map(|h| h + "\n")
             .unwrap_or_default();
-            if let Some(carried) = carry_over(cache_dir, &generation, &here, &trees.portsdir) {
+            let carried = conf
+                .carry
+                .then(|| carry_over(cache_dir, &generation, &here, &trees.portsdir, conf.probe))
+                .flatten();
+            if let Some(carried) = carried {
                 for line in &carried.lines {
                     text.push_str(line);
                     text.push('\n');
@@ -342,34 +393,59 @@ struct Carried {
     note: String,
 }
 
-/// The entries of the latest earlier generation that the commits since
-/// leave alone, for a new generation `here` (`name`): one made for the same
-/// make.conf and overlays, and another commit of the same git tree, at the
-/// same path: another tree at that commit holds its own edits. None
-/// when there is no such generation or git cannot list the changes.
-fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) -> Option<Carried> {
-    let new = here.commit.as_deref()?;
+/// The entries of the latest earlier generation that a new one, `here`
+/// (`name`), can start with: one made for the same make.conf and overlays
+/// at another commit of the same git tree, at the same path (another tree
+/// at that commit holds its own edits), keeping what the commits since
+/// leave alone ([`carry_over_tree`]); or one made for the same tree, its
+/// overlays and everything else folded into the make.conf hash, under a
+/// make.conf differing only in option policy, keeping what that edit cannot
+/// reach ([`carry_over_conf`]). None when there is no such generation, or
+/// what changed cannot be told.
+fn carry_over(
+    cache_dir: &Path,
+    name: &str,
+    here: &Generation,
+    portsdir: &Path,
+    probe: Option<Probe>,
+) -> Option<Carried> {
     let prefix = format!("v{SCHEMA}-");
-    let mut others: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(cache_dir)
+    let tree_part = |n: &str| n.split('-').nth(1).map(str::to_string);
+    let mut others: Vec<(std::time::SystemTime, PathBuf, String)> = fs::read_dir(cache_dir)
         .ok()?
         .flatten()
-        .filter(|e| {
+        .filter_map(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
-            n.starts_with(&prefix) && n.ends_with(".jsonl") && n != name
+            let candidate = n.starts_with(&prefix) && n.ends_with(".jsonl") && n != name;
+            candidate.then(|| Some((e.metadata().ok()?.modified().ok()?, e.path(), n)))?
         })
-        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
-    others.sort_by_key(|(t, _)| std::cmp::Reverse(*t));
-    let (text, old) = others.into_iter().find_map(|(_, path)| {
+    others.sort_by_key(|(t, _, _)| std::cmp::Reverse(*t));
+    others.into_iter().find_map(|(_, path, n)| {
         let text = fs::read_to_string(path).ok()?;
         let header: Header = serde_json::from_str(text.lines().next()?).ok()?;
         let g = header.generation;
-        let same =
-            g.portsdir == here.portsdir && g.conf == here.conf && g.overlays == here.overlays;
-        let old = g.commit.filter(|old| same && old != new)?;
-        Some((text, old))
-    })?;
-    let mut changes = git_changes(portsdir, &old, new)?;
+        if g.portsdir != here.portsdir || g.overlays != here.overlays {
+            return None;
+        }
+        if g.conf == here.conf {
+            let (old, new) = (g.commit?, here.commit.clone()?);
+            return (old != new)
+                .then(|| carry_over_tree(&text, &old, &new, portsdir))
+                .flatten();
+        }
+        let same_tree = g.commit == here.commit && tree_part(&n) == tree_part(name);
+        let comparable = same_tree && g.conf_rest == here.conf_rest && !g.conf_text.is_empty();
+        comparable
+            .then(|| carry_over_conf(&text, &g.conf_text, &here.conf_text, probe?))
+            .flatten()
+    })
+}
+
+/// [`carry_over`] from `text`, a generation of commit `old`, to commit
+/// `new` of the same tree.
+fn carry_over_tree(text: &str, old: &str, new: &str, portsdir: &Path) -> Option<Carried> {
+    let mut changes = git_changes(portsdir, old, new)?;
     let changed = changes.len();
     changes.extend(
         parse_time_readers(portsdir, &changes)
@@ -377,7 +453,7 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
             .map(|mk| ('M', mk)),
     );
     let invalidation = Invalidation::of(&changes);
-    let from = short(&old);
+    let from = short(old);
     if let Some(path) = &invalidation.all {
         return Some(Carried {
             lines: Vec::new(),
@@ -395,6 +471,35 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
     let note = format!(
         "cache: {} entries carried over from tree {from}, {dropped} dropped by {changed} changed paths",
         lines.len(),
+    );
+    Some(Carried { lines, note })
+}
+
+/// [`carry_over`] from `text`, a generation of the same tree made under the
+/// make.conf `old`, to the make.conf `new`: when the edit changes option
+/// policy alone (`makeconf::option_edit`), each entry it cannot reach, its
+/// dump patched to the new values, which `probe` asks make for under each
+/// text. None for any other edit, or when make cannot say.
+fn carry_over_conf(text: &str, old: &str, new: &str, probe: Probe) -> Option<Carried> {
+    let vars = makeconf::option_edit(old, new)?;
+    let reach = makeconf::Reach::of(&vars, &probe(old, &vars)?, &probe(new, &vars)?);
+    let (mut lines, mut dropped) = (Vec::new(), 0);
+    for line in text.lines().skip(1) {
+        let Ok(mut entry) = serde_json::from_str::<CacheEntry>(line) else {
+            continue;
+        };
+        match reach.carry(&entry.info) {
+            Some(info) => {
+                entry.info = info;
+                lines.extend(serde_json::to_string(&entry).ok());
+            }
+            None => dropped += 1,
+        }
+    }
+    let note = format!(
+        "cache: {} entries carried over from the make.conf before, {dropped} dropped by its edit to {}",
+        lines.len(),
+        vars.join(" "),
     );
     Some(Carried { lines, note })
 }
@@ -856,7 +961,7 @@ fn short(s: &str) -> String {
 /// one wrote with missing fields. Part of every generation file name
 /// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
 /// by the prune pass since nothing can read them again.
-const SCHEMA: u32 = 20;
+const SCHEMA: u32 = 21;
 
 /// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {

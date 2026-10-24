@@ -83,6 +83,13 @@ pub struct Settings {
     pub make_conf_sources: Vec<PathBuf>,
     /// Hash identifying the make.conf layering (empty layering hashes too).
     pub conf_hash: String,
+    /// The staged make.conf text `conf_hash` starts from, which carrying
+    /// cache entries over an edit to make.conf compares.
+    pub conf_text: String,
+    /// A signature of everything else folded into `conf_hash` (a local
+    /// build's overlay lines, the installed packages, the invoking user,
+    /// the framework's host values), each fold made to both.
+    pub conf_rest: String,
     /// Whether queries see a poudriere jail's environment or the host's
     /// (`POUDRIERE_JAIL_PRELUDE`, `POUDRIERE_JAIL_TRAILER`).
     pub env: QueryEnv,
@@ -155,6 +162,14 @@ fn build_dbdir(env: QueryEnv, options_dir: &Path) -> &Path {
     }
 }
 
+/// The text of the file at `path`, bytes that are not UTF-8 decoded
+/// lossily; empty when there is none or it cannot be read.
+fn read_text(path: Option<&Path>) -> String {
+    path.and_then(|path| fs::read(path).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .unwrap_or_default()
+}
+
 /// The error when make.conf's `PORT_DBDIR` (`set`) sends the build away
 /// from the options dir optique reads and writes: the command line
 /// optique gives its queries overrides it, the build's does not. Paths are
@@ -191,12 +206,15 @@ impl Settings {
         env: QueryEnv,
         notes: Vec<String>,
     ) -> Self {
+        let conf_text = read_text(make_conf.as_deref());
         Settings {
             portsdir,
             options_dir,
             make_conf,
             make_conf_sources,
             conf_hash,
+            conf_text,
+            conf_rest: String::new(),
             env,
             blacklist: Blacklist::default(),
             notes,
@@ -565,13 +583,12 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
         return settings;
     };
     let mtime = crate::cache::mtime(&meta).as_nanos();
-    let keyed = format!(
-        "{}\n{} {} {mtime}\n",
-        settings.conf_hash,
-        pkg_db.display(),
-        meta.len()
-    );
-    settings.conf_hash = crate::cache::sha256_hex(keyed.as_bytes());
+    let fold = |hash: &str| {
+        let keyed = format!("{hash}\n{} {} {mtime}\n", pkg_db.display(), meta.len());
+        crate::cache::sha256_hex(keyed.as_bytes())
+    };
+    settings.conf_hash = fold(&settings.conf_hash);
+    settings.conf_rest = fold(&settings.conf_rest);
     settings
 }
 
@@ -586,6 +603,7 @@ fn key_invoker(mut settings: Settings, user: Option<&str>) -> Settings {
         return settings;
     }
     settings.conf_hash = invoker_hash(&settings.conf_hash, user);
+    settings.conf_rest = invoker_hash(&settings.conf_rest, user);
     settings
 }
 
@@ -643,7 +661,7 @@ fn with_options_place(
 /// Where [`with_options_place`] asks make: a real port's directory, so that
 /// a make.conf testing `.CURDIR` sees what a build sees. ports-mgmt/pkg,
 /// which every port depends on, else the tree itself, else `/`.
-fn probe_dir(portsdir: &Path) -> PathBuf {
+pub(crate) fn probe_dir(portsdir: &Path) -> PathBuf {
     let pkg = portsdir.join("ports-mgmt/pkg");
     if pkg.join("Makefile").is_file() {
         pkg
@@ -668,6 +686,7 @@ fn with_framework(mut settings: Settings) -> Settings {
     };
     settings.framework = crate::query::makerunner::framework_values(&ctx);
     settings.conf_hash = framework_hash(&settings.conf_hash, &settings.framework);
+    settings.conf_rest = framework_hash(&settings.conf_rest, &settings.framework);
     settings
 }
 
@@ -1272,18 +1291,14 @@ mod tests {
 
         // Unset, or make could not say: nothing.
         let settings = |place: Option<OptionsPlace>| Settings {
-            portsdir: PathBuf::new(),
-            options_dir: db.clone(),
-            make_conf: None,
-            make_conf_sources: Vec::new(),
-            conf_hash: String::new(),
-            env: QueryEnv::Host,
-            blacklist: Blacklist::default(),
-            notes: Vec::new(),
-            overlays: Vec::new(),
-            flavor_default_all: false,
-            framework: Vec::new(),
             options_place: place,
+            ..Settings::new(
+                PathBuf::new(),
+                db.clone(),
+                (None, String::new(), Vec::new()),
+                QueryEnv::Host,
+                Vec::new(),
+            )
         };
         assert_eq!(settings(None).port_dbdir_error(), None);
         assert_eq!(

@@ -21,6 +21,7 @@
 .Op Fl o Ar dir
 .Op Fl J Ar jobs
 .Op Fl -no-cache
+.Op Fl -no-carry-over
 .Op Fl -clear-cache
 .Op Fl -color Ar when
 .Op Fl f Ar pkglist
@@ -446,6 +447,31 @@ The startup banner says how many entries were carried over.
 Without git, or when git cannot list the changes, nothing is carried over
 and the closure is queried afresh.
 .Pp
+An edit to the
+.Pa make.conf
+that changes option policy alone keeps, likewise, the answers it cannot
+reach: when every line it adds or removes is a comment, a blank, or a
+top-level assignment to
+.Va OPTIONS_SET ,
+.Va OPTIONS_UNSET ,
+their
+.Va _FORCE
+forms,
+.Va WITH ,
+.Va WITHOUT
+or a per-port
+.Va <OPTIONS_NAME>_SET
+and the like, none of them assigned under a conditional or read by another
+line, and the
+.Pa make.conf
+includes no file.
+.Xr make 1
+is asked their value before and after, and a port is queried again when a
+word in one value and not the other matches one of its options, or when
+its own knob changed; the others are kept.
+Any other edit, or another installed-package database, user or host,
+starts afresh.
+.Pp
 The current generation and the most recent other one are kept; older ones,
 and those of another cache format, are removed when a generation is opened.
 .Fl -no-cache
@@ -647,6 +673,14 @@ Defaults to
 .Ic min Ns Pq 16 , Va ncpu .
 .It Fl -no-cache
 Neither read nor write the persistent query cache.
+.It Fl -no-carry-over
+Start a new cache generation empty: keep no answer over a ports tree update
+or an option edit to the
+.Pa make.conf
+.Pq see Sx Query cache ;
+answers cached under the current tree and
+.Pa make.conf
+are still used.
 .It Fl -clear-cache
 Delete the persistent query cache
 .Pq every generation file, drafts left alone

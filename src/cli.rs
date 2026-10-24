@@ -274,6 +274,11 @@ pub struct Cli {
     #[arg(long = "no-cache", global = true)]
     pub no_cache: bool,
 
+    /// Start a new cache generation empty: carry no entry over a ports tree
+    /// update or a make.conf option edit
+    #[arg(long = "no-carry-over", global = true)]
+    pub no_carry_over: bool,
+
     /// Delete the persistent query cache before running
     /// (given alone: clear it and exit)
     #[arg(long = "clear-cache", global = true)]
