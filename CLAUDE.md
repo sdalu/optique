@@ -14,7 +14,7 @@ end of each `docs/reference/` page, except those marked **radical**
 Traps:
 
 - A change to what the wrapper dumps or the parser keeps needs `SCHEMA`
-  bumped in `src/cache.rs`; the cache is keyed on the tree and make.conf,
+  bumped in `src/cache/mod.rs`; the cache is keyed on the tree and make.conf,
   not on optique, so old entries are otherwise served as if current.
 - The tree is not rustfmt-formatted (`cargo fmt --check` differs in
   hundreds of places); do not run `cargo fmt` over it, format only what

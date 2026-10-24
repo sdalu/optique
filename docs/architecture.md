@@ -24,19 +24,19 @@ interfaces sit side by side on the session.
 │                 blacklist, overlays; which roots                     │
 ├──────────────────────────────────────────────────────────────────────┤
 │ query           query/{scanner,makerunner,wrapper,parse,refresher}   │
-│                 cache.rs · moved.rs · deps.rs                        │
+│                 cache/ · moved.rs · deps.rs                          │
 │                 wrapper | make -f /dev/stdin → PortInfo, closure     │
 ├──────────────────────────────────────────────────────────────────────┤
 │ model           model/{origin,port,options}.rs                       │
 │                 optionsfile.rs · optfiles.rs                         │
 │                 PortKey, PortInfo, PortOptions; options files read   │
 ├──────────────────────────────────────────────────────────────────────┤
-│ session         session.rs                                           │
+│ session         session/                                             │
 │                 saved / baseline / staged per options file;          │
 │                 the framework's rules as functions                   │
 ├───────────────────────┬────────────────────────┬─────────────────────┤
 │ writes                │ interfaces             │ TUI                 │
-│ apply.rs · clean.rs   │ report.rs · decide.rs  │ tui/{mod,ui,driver} │
+│ apply/ · clean.rs     │ report.rs · decide.rs  │ tui/{mod,ui,driver} │
 │ staging.rs            │ JSON, plans            │ draft.rs            │
 └───────────────────────┴────────────────────────┴─────────────────────┘
 ```
@@ -58,7 +58,7 @@ interfaces sit side by side on the session.
 | `query/parse.rs` | The dump into a `PortInfo` | `parse_dump`, `parse_depends` |
 | `query/scanner.rs` | The closure, breadth first from roots taken as given: cache, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
 | `query/refresher.rs` | The TUI's background re-scans over the staging dir | `spawn`, `RefreshEvent` |
-| `cache.rs` | Query results on disk, one generation per tree × make.conf, a new commit's starting with what the diff leaves of the last | `Cache`, `CacheEntry`, `tree_key`, `Invalidation`, `SCHEMA` |
+| `cache/mod.rs` | Query results on disk, one generation per tree × make.conf, a new commit's starting with what the diff leaves of the last | `Cache`, `CacheEntry`, `tree_key`, `Invalidation`, `SCHEMA` |
 | `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does, originspecs looked up as `check_moved` does | `Moved::load_all`, `Moved::resolve`, `MovedResult`, `ListedMove` |
 | `deps.rs` | Alias resolution, dependency loops | `resolve`, `detect` (Tarjan), `DepLoop` |
 | `model/origin.rs` | `category/port[@flavor]` | `PortKey::parse` |
@@ -66,8 +66,8 @@ interfaces sit side by side on the session.
 | `model/options.rs` | Its options and every make.conf layer naming them; bmake patterns | `PortOptions`, `OptionDef`, `OptionGroup`, `str_match`, `mc_value`, `forced_value`, `provenance` |
 | `optionsfile.rs` | One options file (and its `options.local`) read as the makefile it is, each line it cannot model recorded; written as `make config` writes it, less what trips synth | `SavedOptionsFile`, `parse`, `with_local`, `unmanaged`, `render`, `decides` |
 | `optfiles.rs` | Every options file of the options dir, each read from disk once | `OptionsFiles` |
-| `session.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_file`, `moved`, `toggle` |
-| `apply.rs` | What to write and remove, and writing it atomically | `plan_writes`, `PendingWrite`, `plan_stale_removals`, `apply`, `commit` |
+| `session/mod.rs` | The editing model and the framework's rules | `Session`, `OptState`, `UiStatus`, `effective_with`, `unmanaged_file`, `moved`, `toggle` |
+| `apply/mod.rs` | What to write and remove, and writing it atomically | `plan_writes`, `PendingWrite`, `plan_stale_removals`, `apply`, `commit` |
 | `clean.rs` | Classifying options-dir entries | `classify_entries`, `split_unused`, `prune`, `read_through_moved`, `keep_read`, `redundancy_diff`, `remove_all` |
 | `decide.rs` | A JSON plan applied to a session | `Plan`, `apply_plan` |
 | `report.rs` | Every `--json` payload | `ScanReport`, `WriteReport`, `option_reports` |

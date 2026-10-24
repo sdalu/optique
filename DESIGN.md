@@ -190,7 +190,7 @@ Results are cached under `~/.cache/optique/`, keyed on the ports tree's
 canonical path and git HEAD, the make.conf hash, and the content of the
 options file and of the `options.local` bsd.options.mk reads after it, or,
 when make.conf moves `OPTIONS_FILE`, of the file it names and its
-`.local` (`src/cache.rs`), with a schema number bumped whenever the parsed
+`.local` (`src/cache/mod.rs`), with a schema number bumped whenever the parsed
 shape changes. The path is part of the key because two trees at one
 commit are not one tree: poudriere's `-p default` and `-p dev`, or a
 clone, hold their own uncommitted edits, and an entry holds absolute
@@ -336,7 +336,7 @@ Apply writes every file atomically — temp file, `fsync`,
 rename — and skips a file that is semantically identical (same option list,
 a line for every option, and make reading the same options from it as from
 the file it would write), so a pkgname-only change does not force a rewrite,
-as with `make config-conditional` (`src/apply.rs`). Identical is judged by
+as with `make config-conditional` (`src/apply/mod.rs`). Identical is judged by
 running both files through the framework's own layering, IMPLIES last,
 never from the port's queried `effective`: in the TUI a refresh has queried
 make with the staged edits already in place. A file missing a line is not
@@ -481,7 +481,7 @@ changes defaults from `devel/git`'s view; so does `editors/emacs@nox`
 against `@full`). The file is owned by the default flavor, written and
 judged from its view — exactly what `make config` on the plain origin
 produces — and a divergent flavor's difference is reported as a warning,
-not an error (`src/apply.rs`, `src/session.rs`).
+not an error (`src/apply/mod.rs`, `src/session/mod.rs`).
 
 Without the default flavor in the closure, one rule names the owner for
 the session's state and for the write alike (`session::outranks`): the
@@ -523,7 +523,7 @@ mention in a `_SET`/`_UNSET` list, settles the value: `nofile_effective`
 applies defaults, then one `SET`/`UNSET` pass per layer in
 `bsd.options.mk`'s own order, each scope's UNSET before the next scope's SET
 so a per-port knob overrides the global one, closes the `IMPLIES` chain, and only
-then asks whether the option ended up on (`src/session.rs`). A group
+then asks whether the option ended up on (`src/session/mod.rs`). A group
 (`SINGLE`/`RADIO`) counts as decided only when a member of it really wins
 that outcome, not merely because some layer names one.
 
