@@ -38,7 +38,10 @@ Contents:
 
 `POUDRIERE_ETC` is the configuration root: `-e etcdir` in
 `src/bin/poudriere.in`, else `${SCRIPTPREFIX}/../../etc` (`PREFIX/etc`
-when installed), made absolute against the starting directory.
+when installed), made absolute against the starting directory. A
+`POUDRIERE_ETC` already in the environment does the same as `-e`:
+`poudriere.in` passes any non-empty value through the `env -i` that starts
+the sub-command, without the check `-e` makes that it is a directory.
 `POUDRIERED` is `${POUDRIERE_ETC}/poudriere.d`; `HOOKDIR` is
 `${POUDRIERED}/hooks`.
 
@@ -225,7 +228,8 @@ The command is chosen by the flags, which are mutually exclusive:
 
 (1) Needs `portconfig`, or else `dialog4ports`.
 
-`-j` and `-a` are checked for compatibility; either gives the architecture for `setup_makeconf`.
+`-j` and `-a` are checked for compatibility; either gives the
+architecture for `setup_makeconf`.
 
 The make.conf is a temporary file built by `setup_makeconf` for the
 given jail, tree (`PTNAME`, `default` when `-p` is absent) and set,
@@ -282,7 +286,11 @@ What the query sees:
   `HOME=/root`, `USER=root`, `MAKE_OBJDIR_CHECK_WRITABLE=0`, and the
   `LOCALBASE` and `PREFIX` that `fetch_global_port_vars` exports (taken
   from `bsd.port.mk` when not already set), and, for a cross build, the
-  `UNAME_*` and `OSVERSION` from `export_cross_env`.
+  `UNAME_*` and `OSVERSION` from `export_cross_env`. `HOME` and `USER`
+  are exported by `jail_start`, and `injail` does not clear the
+  environment, so the framework sees `USER=root`: with
+  `WITH_CCACHE_BUILD` and no `CCACHE_DIR`, `bsd.ccache.mk` falls back to
+  `/root/.ccache` instead of disabling ccache.
 - `TRYBROKEN=yes` in the environment after `bulk -T`. For `testport -T`
   it is passed only to the tested port's own query (as the per-port
   `port_flags`), so a broken dependency stays ignored.
@@ -311,6 +319,19 @@ Each entry is an originspec, `origin[@flavor][~subpackage]`.
 `_listed_ports` refuses a flavor on a tree without `FLAVORS`, follows
 `MOVED` (`EXPIRED` is an error), and requires the origin to exist in an
 overlay or the tree; any failure is fatal.
+
+### MOVED
+
+`MOVED` is applied to listed origins only; a dependency on a moved origin
+is not rewritten (see `deps_sanity` below). `awk/parse_MOVED.awk` reads
+the file once and collapses chains in file order: a later `B|C` repoints
+an earlier `A|B` to `A|C` (`update_forwards`). `check_moved` then follows
+the collapsed entry: it returns the target if that origin exists, else
+looks the target up again, and so on. Two consequences:
+
+- `A` goes to `C` even when `B` exists again; `B` is never tested.
+- A cycle `a|b`, `b|a` collapses to `a|a` and `b|a`; when `a` does not
+  exist, `check_moved` loops forever.
 
 `@-` (`FLAVOR_DEFAULT`) names the default flavor and `@all`
 (`FLAVOR_ALL`) every flavor. `FLAVOR_DEFAULT_ALL=yes` makes every listed
@@ -421,8 +442,10 @@ dependencies are queried only when something else needs them
 (`test/bulk-ignore-listed.sh`, `test/bulk-ignore-one-dep-but-not-other.sh`).
 Otherwise `deps_sanity` refuses a port depending on itself, on an origin
 ending in `/`, on a nonexistent origin (naming its `MOVED` entry if
-any), or, with `FLAVORS`, on an originspec with an empty flavor; then
-the port enters `dqueue`.
+any), or, with `FLAVORS`, on an originspec with an empty flavor. A
+refusal is fatal to the whole run (`set_pipe_fatal_error`); a port with
+an `IGNORE` reason never reaches `deps_sanity`, so its bad dependencies
+abort nothing. Otherwise the port enters `dqueue`.
 
 `gather_port_vars_process_depqueue` takes each entry of the `_PDEPS`
 list. Without `-a`, a plain dependency goes to `gqueue`; a flavored one

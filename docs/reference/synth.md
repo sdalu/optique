@@ -98,6 +98,11 @@ it with `On_Type_Mismatch => Be_Quiet`):
   integer that does not parse, yields the default silently. A boolean other
   than `true` or `false` (any case) raises an exception, and synth stops
   with "Configuration failed to load."
+- The same happens when the file cannot be opened (an unreadable
+  `synth.ini`), and on a header line with no `]`: `Index` returns 0 and
+  `Found_Section_End`, a `Natural`, cannot take `-1` (`Constraint_Error`).
+- Lines are read with their line end only, so a CRLF file keeps the `\r`
+  in every value.
 
 `Parameters.param_set` treats a key as set when it has a non-empty value
 (it asks with the sentinel default `this-is-garbage`); `section_exists` is
@@ -269,7 +274,10 @@ The scanner's `make` is started through `/usr/bin/env -i` with only
 and `/usr/local/bin` in `PATH`, `PORTSDIR=/xports`, `PKG_DBDIR`,
 `PKG_CACHEDIR`, `SSL_NO_VERIFY_PEER=1`, and every line containing `=` from
 `/usr/local/etc/synth/<profile>-environment` (`obtain_custom_environment`).
-That profile environment file is not applied to the scanner.
+That profile environment file is not applied to the scanner. Both
+environments carry `USER=root`, so with `WITH_CCACHE_BUILD` and no
+`CCACHE_DIR` the framework's `bsd.ccache.mk` falls back to
+`/root/.ccache`.
 
 ## Options
 
@@ -349,10 +357,13 @@ order make returned them, or the bare origin when `FLAVORS` is empty.
 
 `PortScan.Pilot.store_origins` builds the list from the arguments: a single
 argument naming an existing file is read one origin per non-blank line
-(`valid_file`); otherwise each argument, less a trailing `/`, is an origin.
-Each must appear verbatim in the index (`input_origin_valid`), so a flavored
-port without `@flavor` is rejected with a list of its flavors
-(`suggest_flavor_for_bad_origin`). `ports-mgmt/pkg` is dropped; it is built
+(`valid_file`, which trims each line but keeps a trailing `/`); otherwise
+each argument, less a trailing `/`, is an origin. Each must appear
+verbatim in the index (`input_origin_valid`), so a flavored port without
+`@flavor` is rejected with a list of its flavors
+(`suggest_flavor_for_bad_origin`), and so are `@all`, `@-` and a `#`
+comment line, none of which the index holds. The first invalid line of a
+file refuses the whole list. `ports-mgmt/pkg` is dropped; it is built
 first (`prerequisites_available`).
 
 - `upgrade-system`, `prepare-system` and argument-less `status`
@@ -515,7 +526,9 @@ first (`force_delete`), so those are always built.
   checks, so a line shorter than 18 bytes, or an 18- or 19-byte line without
   `+=` at 17-18, raises `Constraint_Error`. No handler on the call path
   (`limited_cached_options_check`, `sanity_check_then_prefail`, `synth.adb`)
-  catches it.
+  catches it. `make config` writes such lines itself for a package name
+  of four or five characters: for `x11-wm/wmx`, both
+  `_OPTIONS_READ=wmx-8` and `# Options for wmx-8` are 19 bytes.
 - The scan output is parsed by line position with standard error merged into
   it, so a line of diagnostics from `make` shifts every following value.
 - A dependency without `@flavor` on a flavored port resolves to the first

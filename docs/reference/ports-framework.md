@@ -127,9 +127,13 @@ ${PORT_DBDIR}/
                               always, rmconfig included
 ```
 
-Both are makefile fragments. The framework uses only the
-`OPTIONS_FILE_SET` and `OPTIONS_FILE_UNSET` they leave, but anything else
-they assign is visible to the rest of the parse.
+Both are makefile fragments, read by make like any other: conditionals,
+further `.include`s and variable expansions in them are evaluated, and a
+`!=` assignment runs its command on every parse, a `make -V` query
+included. The framework uses only the `OPTIONS_FILE_SET` and
+`OPTIONS_FILE_UNSET` they leave, but anything else they assign is visible
+to the rest of the parse. `OPTIONS_FILE` is itself a `?=`, so make.conf
+can point it elsewhere, as it can `OPTIONS_NAME` and `PORT_DBDIR`.
 
 `UNIQUENAME` is gone (`CHANGES`, 20150817). What remains is
 `_OPTIONS_UNIQUENAME=${PKGNAMEPREFIX}${PORTNAME}`, used only to add a
@@ -258,9 +262,23 @@ Consequences, checked with `make -V` on `shells/zsh` in this run:
 - `OPTIONS_OVERRIDE=FOO` gives `PORT_OPTIONS` = `FOO`, not an option of
   the port, and an empty `NEW_OPTIONS`.
 
-The options files are `.include`d before step 8, so the `.for` loops of
-later steps see anything they assign, `OPTIONS_SET_FORCE` or `WITH`
-included (derived from the order of the blocks; not exercised).
+What an options file assigns counts only for the steps after its
+inclusion:
+
+- `OPTIONS_SET`, `OPTIONS_UNSET`, `${OPTIONS_NAME}_SET` and `_UNSET`
+  assigned there are inert: their loops (steps 5 and 6) have already run.
+  So is `OPTIONS_OVERRIDE`, tested in step 3.
+- `OPTIONS_SET_FORCE` and the other FORCE lists, and `WITH` and
+  `WITHOUT`, take effect.
+- Every `OPTIONS_FILE_SET` of both files is applied before every
+  `OPTIONS_FILE_UNSET`, so `options.local` overrides the options file only
+  by unsetting: its SET of an option the options file unsets is lost.
+
+Checked on `shells/zsh` with an options file holding
+`OPTIONS_FILE_UNSET+=DOCS`, `OPTIONS_UNSET=EXAMPLES`,
+`OPTIONS_SET_FORCE=STATIC` and a `!=`, and an `options.local` holding
+`OPTIONS_FILE_SET+=DOCS`: `PORT_OPTIONS` came out `EXAMPLES STATIC`, and
+the `!=` command ran during the `make -V`.
 
 `NEW_OPTIONS` ends as the options no set or unset step named, at any
 level; `OPTIONS_DEFAULT` and step 1 do not count. A saved options file
@@ -279,7 +297,8 @@ against the list, and `OPTIONS_SLAVE`, appended later, is not followed.
 
 `${opt}_PREVENTS` does not change `PORT_OPTIONS`: the comment in
 `bsd.options.mk` defers it to `bsd.port.mk:pre-check-config`, which records
-each enabled option whose `PREVENTS` names another enabled one.
+each enabled option whose `PREVENTS` names another enabled one. Each
+`PREVENTS` word is matched as a pattern (`${PORT_OPTIONS:M${conflict}}`).
 
 ## Option helpers
 
