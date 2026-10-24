@@ -573,10 +573,13 @@ not an error (`src/apply/mod.rs`, `src/session/mod.rs`).
 
 Without the default flavor in the closure, one rule names the owner for
 the session's state and for the write alike (`session::outranks`): the
-flavor with the most options, the first met on ties. Flavors exclude
-options, so the widest view covers the others' (`editors/emacs@pgtk`'s
-holds `@nox`'s), and an edit to an option only it has reaches the shared
-staged set. Rejected: letting `apply` fall back to the first flavor it
+flavor with the most options, the first met on ties. Flavors mostly
+exclude options, so the widest view covers the others'
+(`editors/emacs@pgtk`'s holds `@nox`'s), and an edit to an option only it
+has reaches the shared staged set. Not always: multimedia/audacious-plugins
+@gtk3 adds `AOSD`, which the default `@qt6` lacks. An option the owner has
+not is never written, so it reads at that flavor's own outcome and an edit
+to it is refused (`Session::unstored`), rather than accepted and dropped. Rejected: letting `apply` fall back to the first flavor it
 meets while the session followed the widest, which judged the file from
 one view and wrote it from another. A flavor whose
 `OPTIONS_FILE` names another file reads none of the file and is neither

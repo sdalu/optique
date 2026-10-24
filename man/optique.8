@@ -2213,7 +2213,9 @@ Given one
 the closure comes from it and a plan naming a port outside it is reported as
 unknown rather than guessed at.
 .Pp
-Only the options files of the ports the plan names are written;
+Only the options files of the ports the plan names are written, and each of
+them is, unless the file on disk already says the same: a plan confirming an
+unconfigured port's defaults records them;
 .Cm sync
 refreshes the rest.
 Writing a port's file necessarily adopts its current option list, exactly as
@@ -2232,8 +2234,13 @@ or a group rule all leave the options dir untouched and are reported in the
 and
 .Va conflicts
 lists, with the exit status at 1.
-Asking for a value a port already has is not a change and not an error, so a
-plan can be replayed.
+Asking for the value a port's file already records is not a change and not
+an error, so a plan can be replayed: the second run writes nothing.
+A flavor sharing the default flavor's file is asked about the file's options,
+as
+.Cm scan
+lists them, those it excludes included; an option only it has, which the file
+never records, is refused.
 .Pp
 The report always goes to standard output as JSON
 .Pq see Sx MACHINE INTERFACE ;
@@ -2412,8 +2419,8 @@ or
 with a reason, instead of being dropped.
 .It
 Plans are replayable.
-Asking for the value a port already has is not a change, so the same plan can
-be applied twice and the second run writes nothing.
+Asking for the value a port's file already records is not a change, so the
+same plan can be applied twice and the second run writes nothing.
 .It
 .Fl n
 previews.
@@ -3468,9 +3475,10 @@ uses its exit status the same way:
 The plan was honoured: every value asked for is the value recorded, and every
 file that had to be written was.
 .It 1
-The plan was not honoured, and nothing was written: some value was refused or
-undone, a port was not in the closure, the result would conflict, or a file
-could not be written.
+The plan was not honoured: some value was refused or undone, a port was not in
+the closure, or the result would conflict, and nothing was written; or a file
+could not be written, which stops the pass there, the files renamed before it
+staying, counted as written.
 The report on standard output says which.
 .It 3
 An error occurred, for example a malformed plan or an unresolvable ports tree.

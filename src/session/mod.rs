@@ -365,7 +365,21 @@ impl Session {
 
     /// Is the option staged on (false for a port without state)?
     pub fn is_staged(&self, info: &PortInfo, opt: &str) -> bool {
+        if self.unstored(info, opt).is_some() {
+            return info.options.effective.contains(opt);
+        }
         self.state(info).is_some_and(|s| s.staged.contains(opt))
+    }
+
+    /// The flavor owning the options file `info` shares, when `opt` is an
+    /// option of `info` that owner has not: the file is written from the
+    /// owner's view, so it never records `opt`, which `info` builds at its
+    /// own outcome (multimedia/audacious-plugins@gtk3's AOSD, which @qt6
+    /// lacks). None for an option the file can hold.
+    pub fn unstored<'a>(&'a self, info: &'a PortInfo, opt: &str) -> Option<&'a PortInfo> {
+        let owner = self.owner_info(info);
+        let theirs = |i: &PortInfo| i.options.complete.iter().any(|o| o == opt);
+        (owner.key != info.key && theirs(info) && !theirs(owner)).then_some(owner)
     }
 
     /// The port's dependencies, resolved to closure keys; unknown ones are
@@ -490,6 +504,12 @@ impl Session {
             .ports
             .get(key)
             .ok_or_else(|| "unknown port".to_string())?;
+        if let Some(owner) = self.unstored(info, opt) {
+            return Err(format!(
+                "{opt} is {}'s alone: the options file it shares is written from {}'s view, which has no {opt}",
+                info.key, owner.key
+            ));
+        }
         // Checked before `states` is borrowed mutably.
         let by_local = self.local_decides(info, opt);
         let state = self

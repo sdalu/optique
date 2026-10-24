@@ -33,6 +33,11 @@ pub struct Plan {
 pub struct Outcome {
     /// Ports the plan actually changed, in plan order.
     pub touched: Vec<PortKey>,
+    /// Every port the plan names that the closure holds with options, in
+    /// plan order: its file is written as the staged state says, unless it
+    /// already says the same. A plan confirming an unconfigured port's
+    /// defaults changes nothing staged and still records them.
+    pub named: Vec<PortKey>,
     /// (port, option, why) for every value the port's rules refused.
     pub rejected: Vec<(PortKey, String, String)>,
     /// Ports named in the plan that the closure does not hold.
@@ -136,8 +141,19 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
         }
         let mut changed = false;
         let mut refused = Vec::new();
+        // The file is written from the owner's view: an option it has and
+        // this flavor excludes (OPTIONS_EXCLUDE) is still the file's, and
+        // `scan` reports it for the flavor; one only this flavor has is
+        // refused by `toggle` (`Session::unstored`).
+        let file_options = sess.owner_info(&info).options.complete.clone();
+        let owner_has = |opt: &str| {
+            file_options
+                .iter()
+                .chain(&info.options.complete)
+                .any(|o| o == opt)
+        };
         for (opt, on) in wanted {
-            if !info.options.complete.iter().any(|o| o == opt) {
+            if !owner_has(opt) {
                 outcome.rejected.push((
                     key.clone(),
                     opt.clone(),
@@ -162,6 +178,7 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
         if changed {
             outcome.touched.push(key.clone());
         }
+        outcome.named.push(key.clone());
         asked.push((key, wanted, refused));
     }
     // Order must not hide a broken promise. A value can be undone after it
@@ -481,7 +498,12 @@ mod tests {
         let (mut sess, _tmp) = session(vec![port("cat/one", &["DOCS", "SSL"], &["DOCS"], &[])]);
         let plan = Plan::parse(r#"{"cat/one": {"DOCS": true, "SSL": false}}"#).unwrap();
         let out = apply_plan(&mut sess, &plan);
-        assert!(out.touched.is_empty(), "nothing to do");
+        assert!(out.touched.is_empty(), "nothing staged changes");
+        assert_eq!(
+            out.named,
+            [PortKey::parse("cat/one").unwrap()],
+            "its file is still written, unless it already says the same"
+        );
         assert!(out.complete());
         assert_eq!(staged(&sess, "cat/one"), vec!["DOCS"]);
     }

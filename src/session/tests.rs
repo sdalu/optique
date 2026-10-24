@@ -1574,6 +1574,37 @@ fn reset_on_a_non_default_flavor_keeps_the_owners_defaults() {
     );
 }
 
+/// An option only a non-default flavor has (audacious-plugins@gtk3's AOSD,
+/// which @qt6 lacks) is never written: the shared file is the default
+/// flavor's. It reads at that flavor's own outcome, and an edit to it is
+/// refused rather than accepted and dropped.
+#[test]
+fn an_option_the_owner_lacks_is_shown_as_built_and_refused() {
+    let mk = |flavor: &str, complete: &[&str]| {
+        let (mut p, k) = mk_port(complete, complete, vec![], vec![]);
+        let mut info = p.remove(&k).unwrap();
+        info.key = PortKey::parse(&format!("multimedia/ap@{flavor}")).unwrap();
+        info.canonical = info.key.clone();
+        info.flavors = vec!["qt6".into(), "gtk3".into()];
+        info.options_name = "multimedia_ap".into();
+        info
+    };
+    let mut ports = BTreeMap::new();
+    for info in [mk("qt6", &["A"]), mk("gtk3", &["A", "AOSD"])] {
+        ports.insert(info.key.clone(), info);
+    }
+    let gtk3 = PortKey::parse("multimedia/ap@gtk3").unwrap();
+    let mut s = session_for(ports);
+    let info = s.ports[&gtk3].clone();
+    assert!(s.is_staged(&info, "AOSD"), "gtk3 builds it on, by default");
+    let err = s.toggle(&gtk3, "AOSD").unwrap_err();
+    assert!(
+        err.contains("written from multimedia/ap@qt6's view"),
+        "{err}"
+    );
+    s.toggle(&gtk3, "A").unwrap();
+}
+
 #[test]
 fn reload_saved_refreshes_baseline() {
     let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);

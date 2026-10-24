@@ -47,11 +47,13 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     sess.listed_moves = scanned.moves.clone();
     let outcome = decide::apply_plan(&mut sess, &plan);
 
-    // Only the files of the ports the plan named are rewritten; `sync`
-    // refreshes the rest. Every closure port sharing a touched options file
-    // is handed to the planner, so the default flavor still owns the write.
+    // Only the files of the ports the plan named are rewritten, each unless
+    // it already says the same (a plan confirming an unconfigured port's
+    // defaults writes them); `sync` refreshes the rest. Every closure port
+    // sharing such a file is handed to the planner, so the default flavor
+    // still owns the write.
     let touched_names: std::collections::BTreeSet<String> = outcome
-        .touched
+        .named
         .iter()
         .filter_map(|k| sess.ports.get(k))
         .map(|i| i.options_name.clone())

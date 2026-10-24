@@ -190,8 +190,10 @@ echo '{"www/nginx": {"LUA": true}}' | optique decide -z ws
 Sets option values from a JSON plan read on stdin — ports to booleans per
 option name — for scripts and agents that decide without a terminal
 . The plan goes through the same group, `IMPLIES`
-and `*_FORCE` rules the TUI enforces, writes only the named ports' files, and
-writes nothing unless the whole plan can be honoured. `-n`/`--dry-run`
+and `*_FORCE` rules the TUI enforces, writes the named ports' files (each
+unless it already says the same, so a plan confirming an unconfigured
+port's defaults records them), and writes nothing unless the whole plan
+can be honoured. `-n`/`--dry-run`
 previews the report without writing. See
 [machine-interface.md](machine-interface.md) for the plan format and the
 report shape.

@@ -355,13 +355,14 @@ fn with_and_without_pin_like_force() {
     }
 }
 
-/// make reads `:=` as `=` and `?=` only for a variable no earlier line
-/// assigned, the options file and options.local read as one makefile. The
-/// file resets SET to AUDIO NAS, its `?=SOX` assigns nothing, its
-/// `?=DOCS` does (UNSET had no value). make has AUDIO and NAS on and SOX
-/// new; so does optique. options.local's `?=NAS` then meets an UNSET the
-/// file assigned and changes nothing, but would once a write left UNSET
-/// out: the file is left to make, its outcome unchanged.
+/// make reads `:=` as `=`, the options file and options.local read as one
+/// makefile: the file resets SET to AUDIO NAS, so make has AUDIO and NAS on
+/// and SOX new; so does optique. A list assigned with `?=` in the file
+/// assigns or not by what the port's Makefile set first (devel/subversion
+/// sets both lists), which the file does not show: such a file is left to
+/// make, its outcome read as make reads it here. options.local's `?=NAS`
+/// meets an UNSET the file assigned and changes nothing, but would once a
+/// write left UNSET out: the file is left to make likewise.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn colon_and_question_assignments_are_read_as_make_reads_them() {
@@ -369,8 +370,7 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
     let origin = "misc/cond";
     f.write_file(
         "misc_cond",
-        "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_SET?=SOX\n\
-         OPTIONS_FILE_UNSET?=DOCS\n",
+        "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_UNSET=DOCS\n",
     );
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, ["AUDIO", "NAS"]);
@@ -380,6 +380,25 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
     assert_eq!(flagged(&port, "staged"), make, "{port}");
     assert_eq!(flagged(&port, "new"), new, "{port}");
 
+    // The file's own `?=`: left to make, at make's outcome.
+    f.write_file(
+        "misc_cond",
+        "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_SET?=SOX\n\
+         OPTIONS_FILE_UNSET?=DOCS\n",
+    );
+    assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
+    let port = f.scan_port(&[origin], origin);
+    assert_eq!(flagged(&port, "staged"), make, "{port}");
+    assert_eq!(
+        common::option(&port, "SOX")["locked_by"],
+        "options file",
+        "{port}"
+    );
+
+    f.write_file(
+        "misc_cond",
+        "OPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_SET:=AUDIO NAS\nOPTIONS_FILE_UNSET=DOCS\n",
+    );
     std::fs::write(
         f.options.join("misc_cond/options.local"),
         "OPTIONS_FILE_UNSET ?= NAS\n",

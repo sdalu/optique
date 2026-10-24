@@ -101,6 +101,41 @@ fn non_default_flavors_keep_the_default_flavors_choices() {
     assert!(text.contains("OPTIONS_FILE_UNSET+=X11"), "{text}");
 }
 
+/// A plan replayed from scan's report is honoured for a flavor that excludes
+/// some of the shared file's options: scan lists the file's options for it
+/// (`X11` for misc/flav@nox), and the file is the default flavor's.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_plan_naming_an_option_the_flavor_excludes_is_honoured() {
+    let f = Fixture::new();
+    let order = ["misc/flav", "misc/flav@nox"];
+    let nox = f.scan_port(&order, "misc/flav@nox");
+    assert_eq!(common::option(&nox, "X11")["staged"], true, "{nox}");
+    let plan = f.decide(&order, r#"{"misc/flav@nox": {"X11": true, "A": true}}"#);
+    assert_eq!(plan["applied"], true, "{plan}");
+    assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
+}
+
+/// A plan confirming an unconfigured port's defaults records them: the
+/// file is written and scan stops reporting the port; the same plan again
+/// writes nothing.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_plan_confirming_the_defaults_writes_the_file() {
+    let f = Fixture::new();
+    let origin = "misc/flav";
+    let port = f.scan_port(&[origin], "misc/flav@full");
+    assert_eq!(port["status"], "unconfigured", "{port}");
+    let wanted = r#"{"misc/flav": {"A": true, "X11": true, "Y": true}}"#;
+    let plan = f.decide(&[origin], wanted);
+    assert_eq!(plan["applied"], true, "{plan}");
+    assert_eq!(plan["summary"]["written"], 1, "{plan}");
+    assert!(f.file("misc_flav").exists());
+    assert_eq!(f.scan_port(&[origin], "misc/flav@full")["status"], "ok");
+    let again = f.decide(&[origin], wanted);
+    assert_eq!(again["summary"]["written"], 0, "{again}");
+}
+
 /// A SINGLE group with a member forced on by make.conf and the other chosen
 /// in the file is a conflict, and turning the chosen one off settles it.
 #[test]

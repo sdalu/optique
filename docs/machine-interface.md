@@ -95,7 +95,7 @@ re-running `make`:
 | `new`               | added since the file was written[^4]             |
 | `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`/`override`[^1] |
 | `locked`            | the file cannot change this value                |
-| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, `options.local` (an UNSET entry there matches it; `decide` refuses it), an implying option, or what leaves the file to make[^5] |
+| `locked_by`         | why: a `*_FORCE` knob, `WITH`/`WITHOUT`, `options.local` (an UNSET entry there matches it; `decide` refuses to change it), an implying option, or what leaves the file to make[^5] |
 | `deviates_makeconf` | staged value contradicts `makeconf`              |
 | `group`             | `{name, kind, members}`[^2]                      |
 | `implies`           | options this one turns on                        |
@@ -122,7 +122,7 @@ re-running `make`:
     OPTIONS_OVERRIDE"`. `undecided` is always empty for such a port and
     `status` is never `stale` or `unconfigured`
     (`conflict` still applies when the outcome breaks a group or `PREVENTS`
-    rule). `decide` refuses any value for such a port's options, and `sync`
+    rule). `decide` refuses any change to such a port's options, and `sync`
     never writes or removes its options file.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
@@ -135,7 +135,7 @@ re-running `make`:
     reason but an `OPTIONS_OVERRIDE`, under which make reads no file and
     the port reports as in [^1]; no `makeconf` and a `null` `saved`;
     `staged` is make's own outcome, `undecided` is empty, `status` is never
-    `stale` or `unconfigured`, `decide` refuses its options, and no command
+    `stale` or `unconfigured`, `decide` refuses any change to its options, and no command
     writes or removes the file. A make.conf moving `OPTIONS_FILE` for one
     flavor reports that flavor so, with its own outcome, and leaves the
     file it no longer reads to the other flavors, reported and written as
@@ -175,14 +175,19 @@ The interface is meant to be safe to drive blind:
   usage exits 2.
 - **All-or-nothing.** A plan that cannot be carried out in full changes
   nothing: `decide` only writes when nothing was rejected, no port was
-  unknown and no result conflicts.
+  unknown and no result conflicts. A file that then cannot be written
+  stops the pass there; the files renamed before it stay, counted in
+  `written`.
 - **Everything refused is named.** A value the rules turned down, a
   value another value in the plan undoes, a port outside the closure,
   a resulting conflict: each lands in `rejected`, `unknown` or
   `conflicts` with a reason, instead of being silently dropped.
-- **Replayable.** Asking for the value a port already has is not a
-  change and not an error, so the same plan can be applied twice and
-  the second run writes nothing.
+- **Replayable.** Asking for the value a port's file already records is
+  not a change and not an error, so the same plan can be applied twice
+  and the second run writes nothing. A named port with no file, or a
+  stale one, gets its file written even when the plan only confirms its
+  values, so `scan` stops reporting it. A flavor is asked about the
+  options `scan` lists for it, the shared file's.
 - **`-n` previews.** `decide -n` and `sync -n` build the whole report,
   per-file diff included, and touch nothing.
 
