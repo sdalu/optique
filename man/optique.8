@@ -672,7 +672,9 @@ queries.
 Defaults to
 .Ic min Ns Pq 16 , Va ncpu .
 .It Fl -no-cache
-Neither read nor write the persistent query cache.
+Neither read nor write the persistent query cache: the run is answered by
+.Xr make 1
+alone, and the cache is left as it was, the next run warm again.
 .It Fl -no-carry-over
 Start a new cache generation empty: keep no answer over a ports tree update
 or an option edit to the
@@ -684,8 +686,10 @@ are still used.
 .It Fl -clear-cache
 Delete the persistent query cache
 .Pq every generation file, drafts left alone
-before running; given alone, without a subcommand or a package list, clear
-it and exit.
+before running, which then fills a fresh one, as
+.Fl -no-cache
+does not; given alone, without a subcommand or a package list, clear it
+and exit.
 .It Fl -color Ar when
 When to colorize output:
 .Cm auto

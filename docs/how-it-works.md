@@ -205,11 +205,21 @@ cache. Any other edit starts afresh.
 
 ### Turning it off
 
-`--no-cache` neither reads nor writes the cache; `--no-carry-over` keeps
-using the current generation's answers but starts a new generation empty,
-carrying nothing over a tree update or a make.conf option edit;
-`--clear-cache` deletes every generation first. There is no environment
-variable for any of them.
+Three flags, from the lightest to the heaviest:
+
+| | `--no-carry-over` | `--no-cache` | `--clear-cache` |
+|---|---|---|---|
+| reads cached answers this run | yes, the current generation's | no | no (none left) |
+| writes this run's answers | yes | no | yes, into a fresh cache |
+| the cache on disk | untouched | untouched | deleted (drafts kept) |
+| the next run | as usual | warm again, as if this run never was | warm, from this run |
+
+`--no-carry-over` rules carrying over out: a new generation, after a tree
+update or a make.conf option edit, starts empty. `--no-cache` bypasses the
+cache for one run and leaves it as it was: a one-off check nothing cached
+can influence, or a port edited in a git tree. `--clear-cache` throws the
+cache away and rebuilds it from this run; given alone, it clears and
+exits. There is no environment variable for any of them.
 
 ## The session and the TUI
 
