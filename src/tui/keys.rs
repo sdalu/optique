@@ -48,41 +48,14 @@ pub(super) fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
 
     // Modal and quit-confirm grab all keys.
     if app.quit_confirm {
-        match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => return save_draft_and_quit(app),
-            // Drop any older draft too: quitting on purpose without saving
-            // must not resurrect stale intentions.
-            KeyCode::Char('n') | KeyCode::Char('N') => {
-                draft::discard(&app.options_dir);
-                return KeyOutcome::Quit;
-            }
-            _ => app.quit_confirm = false,
-        }
-        return KeyOutcome::Continue;
+        return handle_quit_confirm_key(app, code);
     }
     if app.modal.is_some() {
         handle_modal_key(app, code);
         return KeyOutcome::Continue;
     }
     if let Some(tab) = app.help_tab {
-        let n = ui::HELP_TABS.len();
-        match code {
-            KeyCode::Char(c @ '1'..='9') => {
-                let idx = c as usize - '1' as usize;
-                if idx < n {
-                    app.open_help(idx);
-                }
-            }
-            KeyCode::Tab | KeyCode::Right => app.open_help((tab + 1) % n),
-            KeyCode::BackTab | KeyCode::Left => app.open_help((tab + n - 1) % n),
-            _ => match scroll_key(code, app.help_scroll as usize, app.page.help) {
-                Some(at) => app.help_scroll = clamp_u16(at),
-                None => {
-                    app.help_tab = None;
-                    app.help_scroll = 0;
-                }
-            },
-        }
+        handle_help_key(app, tab, code);
         return KeyOutcome::Continue;
     }
     if let Some(help) = &mut app.port_help {
@@ -93,29 +66,8 @@ pub(super) fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
         }
         return KeyOutcome::Continue;
     }
-    if let Some(why) = &mut app.why {
-        // The scroll keys move the cursor, which the box keeps in view.
-        if let Some(at) = scroll_key(code, why.selected, app.page.why) {
-            why.selected = at.min(why.entries().len().saturating_sub(1));
-            return KeyOutcome::Continue;
-        }
-        match code {
-            KeyCode::Enter => {
-                let target = why.entries().get(why.selected).cloned().cloned();
-                app.why = None;
-                if let Some(target) = target {
-                    app.jump_to_port(&target);
-                }
-            }
-            KeyCode::Char('r') => {
-                // Walk the graph: re-open why on the highlighted port. Around
-                // a loop this steps from port to port along the cycle.
-                if let Some(target) = why.entries().get(why.selected).cloned().cloned() {
-                    app.why = Some(app.why_for(target));
-                }
-            }
-            _ => app.why = None,
-        }
+    if app.why.is_some() {
+        handle_why_key(app, code);
         return KeyOutcome::Continue;
     }
     if let Some(info) = &mut app.opt_info {
@@ -128,63 +80,149 @@ pub(super) fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
     // The bulk prompt takes text input, so it grabs the keys before the
     // filter branch and the plain command keys.
     if app.bulk.is_some() {
-        // Ctrl-U clears the line, as in a shell; read before the folding
-        // made it no key, and nowhere else.
-        if ctrl && key.code == KeyCode::Char('u') {
-            if let Some(input) = app.bulk.as_mut() {
-                input.clear();
-            }
-            return KeyOutcome::Continue;
-        }
-        match code {
-            KeyCode::Esc => app.bulk = None,
-            KeyCode::Enter => {
-                if let Some(input) = app.bulk.take() {
-                    app.run_bulk(&input);
-                }
-            }
-            KeyCode::Backspace => {
-                if let Some(input) = app.bulk.as_mut() {
-                    input.pop();
-                }
-            }
-            KeyCode::Char(c) => {
-                if let Some(input) = app.bulk.as_mut() {
-                    input.push(c);
-                }
-            }
-            _ => {}
-        }
+        handle_bulk_key(app, key, code);
         return KeyOutcome::Continue;
     }
     if app.focus == Focus::Filter {
-        match code {
-            KeyCode::Esc => {
-                app.filter.clear();
-                app.focus = Focus::List;
-                app.rebuild_visible(app.selected_key());
-            }
-            KeyCode::Enter => app.focus = Focus::List,
-            // An arrow accepts the filter as Enter does, and moves on the
-            // list it left: type a few letters, then arrow to the port.
-            KeyCode::Up | KeyCode::Down => {
-                app.focus = Focus::List;
-                app.move_selection(if code == KeyCode::Up { -1 } else { 1 });
-            }
-            KeyCode::Backspace => {
-                app.filter.pop();
-                app.rebuild_visible(None);
-            }
-            KeyCode::Char(c) => {
-                app.filter.push(c);
-                app.rebuild_visible(None);
-            }
-            _ => {}
-        }
-        app.rebuild_editor();
+        handle_filter_key(app, code);
         return KeyOutcome::Continue;
     }
 
+    handle_command_key(app, code)
+}
+
+/// The quit prompt takes every key: `y` keeps the staged edits as a draft,
+/// `n` drops them, anything else goes back to the session.
+fn handle_quit_confirm_key(app: &mut App, code: KeyCode) -> KeyOutcome {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => return save_draft_and_quit(app),
+        // Drop any older draft too: quitting on purpose without saving
+        // must not resurrect stale intentions.
+        KeyCode::Char('n') | KeyCode::Char('N') => {
+            draft::discard(&app.options_dir);
+            return KeyOutcome::Quit;
+        }
+        _ => app.quit_confirm = false,
+    }
+    KeyOutcome::Continue
+}
+
+/// The help popup: a digit or Tab picks a tab, the scroll keys scroll it,
+/// any other key closes it.
+fn handle_help_key(app: &mut App, tab: usize, code: KeyCode) {
+    let n = ui::HELP_TABS.len();
+    match code {
+        KeyCode::Char(c @ '1'..='9') => {
+            let idx = c as usize - '1' as usize;
+            if idx < n {
+                app.open_help(idx);
+            }
+        }
+        KeyCode::Tab | KeyCode::Right => app.open_help((tab + 1) % n),
+        KeyCode::BackTab | KeyCode::Left => app.open_help((tab + n - 1) % n),
+        _ => match scroll_key(code, app.help_scroll as usize, app.page.help) {
+            Some(at) => app.help_scroll = clamp_u16(at),
+            None => {
+                app.help_tab = None;
+                app.help_scroll = 0;
+            }
+        },
+    }
+}
+
+/// The why popup: the scroll keys move its cursor, Enter jumps to the port
+/// under it, `r` re-opens why on that port, any other key closes it.
+fn handle_why_key(app: &mut App, code: KeyCode) {
+    let Some(why) = &mut app.why else { return };
+    // The scroll keys move the cursor, which the box keeps in view.
+    if let Some(at) = scroll_key(code, why.selected, app.page.why) {
+        why.selected = at.min(why.entries().len().saturating_sub(1));
+        return;
+    }
+    match code {
+        KeyCode::Enter => {
+            let target = why.entries().get(why.selected).cloned().cloned();
+            app.why = None;
+            if let Some(target) = target {
+                app.jump_to_port(&target);
+            }
+        }
+        KeyCode::Char('r') => {
+            // Walk the graph: re-open why on the highlighted port. Around
+            // a loop this steps from port to port along the cycle.
+            if let Some(target) = why.entries().get(why.selected).cloned().cloned() {
+                app.why = Some(app.why_for(target));
+            }
+        }
+        _ => app.why = None,
+    }
+}
+
+/// The bulk prompt, a line of text: Enter runs it, Esc drops it, Ctrl-U
+/// clears it (read from `key`, before the folding made it no key).
+fn handle_bulk_key(app: &mut App, key: KeyEvent, code: KeyCode) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    // Ctrl-U clears the line, as in a shell; read before the folding
+    // made it no key, and nowhere else.
+    if ctrl && key.code == KeyCode::Char('u') {
+        if let Some(input) = app.bulk.as_mut() {
+            input.clear();
+        }
+        return;
+    }
+    match code {
+        KeyCode::Esc => app.bulk = None,
+        KeyCode::Enter => {
+            if let Some(input) = app.bulk.take() {
+                app.run_bulk(&input);
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(input) = app.bulk.as_mut() {
+                input.pop();
+            }
+        }
+        KeyCode::Char(c) => {
+            if let Some(input) = app.bulk.as_mut() {
+                input.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The filter line: typing narrows the list, Enter or an arrow accepts it,
+/// Esc clears it.
+fn handle_filter_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.filter.clear();
+            app.focus = Focus::List;
+            app.rebuild_visible(app.selected_key());
+        }
+        KeyCode::Enter => app.focus = Focus::List,
+        // An arrow accepts the filter as Enter does, and moves on the
+        // list it left: type a few letters, then arrow to the port.
+        KeyCode::Up | KeyCode::Down => {
+            app.focus = Focus::List;
+            app.move_selection(if code == KeyCode::Up { -1 } else { 1 });
+        }
+        KeyCode::Backspace => {
+            app.filter.pop();
+            app.rebuild_visible(None);
+        }
+        KeyCode::Char(c) => {
+            app.filter.push(c);
+            app.rebuild_visible(None);
+        }
+        _ => {}
+    }
+    app.rebuild_editor();
+}
+
+/// The command keys, answered whatever pane has the focus; the view keys
+/// next ([`handle_view_key`]), then the focused pane's own.
+fn handle_command_key(app: &mut App, code: KeyCode) -> KeyOutcome {
     match code {
         KeyCode::Char('q') => return request_quit(app),
         KeyCode::Char('/') => {
@@ -207,6 +245,22 @@ pub(super) fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             Some(why) => app.flash(&why, true),
             None => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
         },
+        _ => {
+            if !handle_view_key(app, code) {
+                match app.focus {
+                    Focus::List => handle_list_key(app, code),
+                    Focus::Editor => handle_editor_key(app, code),
+                    Focus::Filter => {}
+                }
+            }
+        }
+    }
+    KeyOutcome::Continue
+}
+
+/// The keys that change what the list shows or how; false for any other.
+fn handle_view_key(app: &mut App, code: KeyCode) -> bool {
+    match code {
         KeyCode::Char('t') => app.toggle_view(
             |a| &mut a.hide_ok,
             "showing only ports needing attention (t to show all)",
@@ -257,13 +311,9 @@ pub(super) fn dispatch_key(app: &mut App, key: KeyEvent) -> KeyOutcome {
             "flagging options that contradict make.conf OPTIONS_SET/UNSET (≠, w to undo)",
             "make.conf contradictions no longer flagged",
         ),
-        _ => match app.focus {
-            Focus::List => handle_list_key(app, code),
-            Focus::Editor => handle_editor_key(app, code),
-            Focus::Filter => {}
-        },
+        _ => return false,
     }
-    KeyOutcome::Continue
+    true
 }
 
 /// The key as the keymap reads it, its Ctrl folded in: Ctrl-F and Ctrl-B
