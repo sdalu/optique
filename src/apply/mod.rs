@@ -153,13 +153,20 @@ impl PendingWrite {
 /// The file is read the way bsd.options.mk reads it: OPTIONS_FILE_UNSET runs
 /// after OPTIONS_FILE_SET, so an option on both lines is off, and an option
 /// on neither (listed only in `_FILE_COMPLETE_OPTIONS_LIST`) keeps its
-/// default/make.conf value.
+/// default/make.conf value. That value is make's before bsd.port.mk drops
+/// the members of a conditional group whose option is off: PORT_OPTIONS
+/// lacks such a member, but its helpers ran with it, so recording it off
+/// would change the build (`session::built_with`).
 pub fn sync_enabled_set(info: &PortInfo, saved: Option<&SavedOptionsFile>) -> BTreeSet<String> {
+    let dropped: BTreeSet<String> = crate::session::built_with(info, saved)
+        .difference(&crate::session::effective_with(info, saved))
+        .cloned()
+        .collect();
     let mut enabled = BTreeSet::new();
     for opt in &info.options.complete {
         let on = saved
             .and_then(|s| s.value(opt))
-            .unwrap_or_else(|| info.options.effective.contains(opt));
+            .unwrap_or_else(|| info.options.effective.contains(opt) || dropped.contains(opt));
         if on {
             enabled.insert(opt.clone());
         }

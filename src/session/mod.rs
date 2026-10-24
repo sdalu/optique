@@ -416,10 +416,10 @@ impl Session {
                 // A file apply wrote has a line for every option.
                 close_implies(owner, apply::sync_enabled_set(owner, saved.as_ref()))
             } else {
-                // Removed under -m: what make reads with no file but its
+                // Removed under -m: what make builds with no file but its
                 // options.local, which is what the removal was judged
-                // against.
-                effective_with(owner, Some(&files.combined(name)))
+                // against, a conditional group's members included.
+                built_with(owner, Some(&files.combined(name)))
             };
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.

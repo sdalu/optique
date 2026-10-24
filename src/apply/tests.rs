@@ -659,6 +659,38 @@ fn a_non_default_flavor_does_not_carry_a_pattern_over() {
     );
 }
 
+/// An unconfigured port whose conditional group's option is off: make drops
+/// the default-on member from PORT_OPTIONS, but its helpers ran with it, so
+/// -m writes no file recording it off (comms/splat's HRM_4X4).
+#[test]
+fn minimal_mode_keeps_a_dropped_members_default() {
+    use crate::model::options::{GroupKind, OptionGroup};
+    let tmp = tempfile::tempdir().unwrap();
+    let mut info = mk_info(&["HRM", "HRM_4X4", "HRM_8X8"], &[]);
+    info.options.defaults = ["HRM_4X4".to_string()].into();
+    info.options.all = ["HRM".to_string()].into();
+    info.options.groups = vec![OptionGroup {
+        kind: GroupKind::Single,
+        name: "HRM".into(),
+        desc: String::new(),
+        members: vec!["HRM_4X4".into(), "HRM_8X8".into()],
+    }];
+    // make's PORT_OPTIONS: HRM off, so HRM_4X4 dropped.
+    info.options.effective = BTreeSet::new();
+    let enabled = sync_enabled_set(&info, None);
+    assert!(enabled.contains("HRM_4X4"), "{enabled:?}");
+    let p = plan_writes(
+        std::iter::once((&info.key, &info, enabled)),
+        &OptionsFiles::new(tmp.path()),
+        true,
+    );
+    assert!(
+        p.writes.is_empty(),
+        "{:?}",
+        p.writes.iter().map(|w| &w.content).collect::<Vec<_>>()
+    );
+}
+
 /// Under -m the file goes when the file it would write gives the no-file
 /// outcome, OPTIONS_SLAVE included: www/w3m-img with nothing chosen
 /// needs no file, and one repeating its defaults is removed.
