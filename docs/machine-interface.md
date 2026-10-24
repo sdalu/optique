@@ -50,8 +50,9 @@ script — see [tui.md](tui.md#driving-the-tui-headless).
 See [dependency loops](dependency-loops.md) for the shape of a loop entry. The
 first error, when there is one, may be the make.conf's: subject `make.conf`,
 message `make.conf sets PORT_DBDIR=<dir>: the build reads that directory,
-not <options_dir>`, for a make.conf sending the build to another options
-directory
+not <options_dir>` (for a local build, `make.conf or the environment
+sets`, its make reading the environment's `PORT_DBDIR` too), for a
+make.conf sending the build to another options directory
 ([configuration](configuration.md#a-makeconf-moving-the-options)); the
 rest of the report is still valid, for files the build does not read. Any
 other

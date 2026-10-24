@@ -336,7 +336,8 @@ fn a_make_conf_port_dbdir_elsewhere_is_an_error() {
     let out = f.run("scan", &["--json", "misc/cond"]);
     let err = stderr(&out);
     let want = format!(
-        "make.conf sets PORT_DBDIR=/nonexistent/elsewhere: the build reads that directory, not {}",
+        "make.conf or the environment sets PORT_DBDIR=/nonexistent/elsewhere: the build reads \
+         that directory, not {}",
         f.options.display()
     );
     assert!(err.contains(&format!("error: {want}")), "{err}");

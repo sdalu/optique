@@ -215,9 +215,12 @@ fn port_dbdir_error(env: QueryEnv, options_dir: &Path, set: &str) -> Option<Stri
     let same = set_path == reads
         || env == QueryEnv::Host
             && matches!((set_path.canonicalize(), reads.canonicalize()), (Ok(a), Ok(b)) if a == b);
+    // A local build's make also takes PORT_DBDIR from the environment,
+    // which the probe passes on (`with_options_place`).
+    let source = if env == QueryEnv::Host { "make.conf or the environment" } else { "make.conf" };
     (!same).then(|| {
         format!(
-            "make.conf sets PORT_DBDIR={set}: the build reads that directory, not {}",
+            "{source} sets PORT_DBDIR={set}: the build reads that directory, not {}",
             options_dir.display()
         )
     })
@@ -3567,7 +3570,8 @@ not a key value line
         assert_eq!(
             port_dbdir_error(QueryEnv::Host, &other, &s(&db)),
             Some(format!(
-                "make.conf sets PORT_DBDIR={}: the build reads that directory, not {}",
+                "make.conf or the environment sets PORT_DBDIR={}: the build reads that directory, \
+                 not {}",
                 s(&db),
                 s(&other)
             ))
