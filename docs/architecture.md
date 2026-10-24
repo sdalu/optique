@@ -81,7 +81,8 @@ interfaces sit side by side on the session.
 | `tui/refresh.rs` | Re-queries after an edit, and what a change is blamed on | `flush_due_refreshes`, `drain_refresh_events` |
 | `tui/overlays.rs` | The popups' state and the description panel | `WhyInfo`, `open_why`, `run_bulk` |
 | `tui/ui/mod.rs` | Drawing: the frame, the status bar, the fitting helpers | `draw`, `draw_status_bar` |
-| `tui/ui/list.rs`, `tui/ui/editor.rs`, `tui/ui/popups.rs` | Drawing the port list, the option editor, the popups | `draw_port_list`, `draw_editor`, `draw_help`, `draw_why` |
+| `tui/ui/list.rs`, `tui/ui/editor.rs`, `tui/ui/popups.rs` | Drawing the port list, the option editor, the popups | `draw_port_list`, `draw_editor`, `draw_why`, `draw_apply_modal` |
+| `tui/ui/help.rs` | The help popup and the text of its tabs | `draw_help`, `HELP_TABS`, `help_lines` |
 | `tui/driver.rs` | The TUI driven headless from stdin | `run_driver` |
 
 ## Commands

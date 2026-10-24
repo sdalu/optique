@@ -11,17 +11,20 @@ use ratatui::Frame;
 use super::{App, Focus, OverlayKind};
 
 mod editor;
+mod help;
 mod list;
 mod popups;
 
 #[cfg(test)]
 pub(crate) use list::fit_port_name;
-pub(crate) use popups::{elide_paths, HELP_TABS, WHY_MAX_DEPENDENTS};
+pub(crate) use help::HELP_TABS;
+pub(crate) use popups::{elide_paths, WHY_MAX_DEPENDENTS};
 
 use editor::draw_editor;
+use help::draw_help;
 use list::draw_port_list;
 use popups::{
-    draw_apply_modal, draw_bulk, draw_help, draw_opt_info, draw_port_help, draw_quit_confirm, draw_why,
+    draw_apply_modal, draw_bulk, draw_opt_info, draw_port_help, draw_quit_confirm, draw_why,
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
