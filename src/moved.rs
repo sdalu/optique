@@ -24,7 +24,9 @@ impl MovedResult {
             }
             MovedResult::Removed { .. } => Some("port removed from tree".to_string()),
             MovedResult::Cycle => Some(
-                "port no longer exists in the tree (its MOVED entries form a cycle)".to_string(),
+                "port no longer exists in the tree (its MOVED entries form a cycle, \
+                 which poudriere's check_moved follows forever: an upstream defect)"
+                    .to_string(),
             ),
             MovedResult::Unchanged | MovedResult::MovedTo { .. } => None,
         }

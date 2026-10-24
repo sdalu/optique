@@ -1182,66 +1182,84 @@ fn ini_strip_comment(line: &str) -> &str {
     }
 }
 
-/// A synth.ini section header: `[name]`, its name trimmed, anything after
-/// the first `]` ignored. synth's INI reader (ini-files' config.adb) only
-/// takes a `[` in column 1 and keeps the name untrimmed; that sloppiness is
-/// not copied — `synth_ini_misreads` names such lines instead.
+/// synth.ini's lines as synth reads them (config.adb's `Get_Value`): split
+/// at LF alone, a CR left in place, and a line of fewer than two characters
+/// skipped.
+fn ini_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.split('\n').enumerate().map(|(n, l)| (n + 1, l)).filter(|(_, l)| l.len() > 1)
+}
+
+/// A synth.ini section header as synth reads it: a `[` in column 1, the
+/// name running untrimmed to the first `]`, anything after it ignored. An
+/// indented `[name]` is no header, and `[ C ]` names the section ` C `.
+/// These follow synth's INI reader rather than what the line seems to say
+/// (an upstream defect that decides which settings synth uses, so optique
+/// reads the file as synth does, and `synth_ini_misreads` names each such
+/// line). A header with no `]` makes synth fail (`synth_ini_refusals`);
+/// optique takes it for no header.
 fn ini_section_header(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix('[')?;
-    let end = rest.find(']')?;
-    Some(rest[..end].trim())
+    let rest = line.strip_prefix('[')?;
+    rest.find(']').map(|end| &rest[..end])
 }
 
-/// Trim whitespace from both ends of a key or value. config.adb trims spaces
-/// alone and keeps a tab as part of the key or value, which is not copied:
-/// `synth_ini_misreads` names such lines instead.
+/// Trim a key or value as config.adb does: spaces alone (`Index_Non_Blank`),
+/// a tab or a CRLF file's CR staying part of it, as for synth.
 fn ini_trim(s: &str) -> &str {
-    s.trim()
+    s.trim_matches(' ')
 }
 
-/// The synth.ini lines synth itself reads differently from optique, each as
-/// a note: synth's INI reader (ini-files' config.adb) keeps a tab around a
-/// key or value as part of it, keeps the spaces of `[ name ]`, and takes no
-/// indented `[name]` for a header. optique reads them as meant; synth will
-/// not, so the file wants fixing.
+/// The synth.ini lines synth reads otherwise than they seem to say, each as
+/// a note: a tab around a key or value is part of it, the spaces of
+/// `[ name ]` are part of the name, an indented `[name]` is no header but a
+/// data line of the section above, and a CRLF file's CR stays in each key
+/// or value. optique reads them as synth does (`ini_section_header`,
+/// `ini_trim`), so a profile, key or path may not be the one meant; the note
+/// says why, for the user to fix the file.
 ///
 /// A line with no data once its comment is cut (blank, tab-only, a
-/// tab-indented comment) holds nothing synth could misread. A data line
-/// ending in a CR, a CRLF file's, keeps it in its key or value for synth,
-/// which reads lines up to the LF alone; those lines are named in one note.
+/// tab-indented comment) holds nothing synth could misread; a header
+/// ignores its CR, which comes after the `]`.
 fn synth_ini_misreads(text: &str) -> Vec<String> {
+    const WHY: &str = "read as synth reads it (a synth defect)";
     let mut notes = Vec::new();
     let mut crlf = Vec::new();
-    for (n, raw) in text.split('\n').enumerate() {
-        let n = n + 1;
-        let line = raw.strip_suffix('\r').unwrap_or(raw);
-        if let Some(rest) = line.trim_start().strip_prefix('[') {
-            let name = rest.find(']').map(|end| &rest[..end]);
-            if line.starts_with(|c: char| c.is_whitespace()) {
-                notes.push(format!("synth.ini line {n}: synth reads no indented section header"));
-            } else if name.is_some_and(|name| name.trim() != name) {
-                notes.push(format!("synth.ini line {n}: synth keeps the spaces around a section name"));
+    for (n, raw) in ini_lines(text) {
+        if let Some(name) = ini_section_header(raw) {
+            if name.trim() != name {
+                notes.push(format!(
+                    "synth.ini line {n}: synth keeps the spaces of the section name '{name}'; {WHY}"
+                ));
             }
             continue;
         }
-        let data = ini_strip_comment(line);
+        if raw.trim_start().starts_with('[') && raw.contains(']') {
+            notes.push(format!(
+                "synth.ini line {n}: synth takes no indented [name] for a section header, \
+                 the lines after it staying in the section above; {WHY}"
+            ));
+            continue;
+        }
+        if raw.starts_with([';', '#']) {
+            continue;
+        }
+        let data = ini_strip_comment(raw);
         if data.trim().is_empty() {
             continue;
         }
         // A comment cut drops the CR with it.
-        if ini_strip_comment(raw).ends_with('\r') {
+        if data.ends_with('\r') {
             crlf.push(n);
         }
         let (k, v) = data.split_once('=').unwrap_or((data, ""));
-        let tabbed = |s: &str| s.trim_matches(' ') != s.trim();
+        let tabbed = |s: &str| s.trim_matches([' ', '\r']) != s.trim();
         if tabbed(k) || tabbed(v) {
-            notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value"));
+            notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value; {WHY}"));
         }
     }
     if !crlf.is_empty() {
         let (s, list) = (if crlf.len() == 1 { "" } else { "s" }, line_ranges(&crlf));
         notes.push(format!(
-            "synth.ini line{s} {list}: synth keeps the CR of a CRLF line end in the key or value"
+            "synth.ini line{s} {list}: synth keeps the CR of a CRLF line end in the key or value; {WHY}"
         ));
     }
     notes
@@ -1284,7 +1302,7 @@ fn synth_ini_refusals(text: &str) -> Vec<String> {
 
 /// Does synth.ini contain a `[name]` section header?
 fn synth_ini_has_section(text: &str, name: &str) -> bool {
-    text.lines().any(|line| ini_section_header(line) == Some(name))
+    ini_lines(text).any(|(_, line)| ini_section_header(line) == Some(name))
 }
 
 /// Minimal INI reader for synth.ini: the value of `key` in section
@@ -1292,20 +1310,23 @@ fn synth_ini_has_section(text: &str, name: &str) -> bool {
 /// (parameters.adb:200-271, `load_specific_profile`, over config.adb's
 /// `Get_Value`): no other section, `[Global Configuration]` included,
 /// stands in for it. Keys are case-sensitive, `;` and `#` start a comment,
-/// and whitespace around the key and the value is trimmed.
+/// and spaces alone around the key and the value are trimmed (`ini_trim`).
 /// A key's first match within the section wins — `Get_Value` exits its scan
 /// of the whole file the moment one is found, matched or not, so even a
 /// bare key with no `=`, or one given an empty value, ends the search
 /// there, giving the default rather than reading on to a later, real
 /// assignment of the same key.
 fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
-    let mut section = "";
-    for line in text.lines() {
-        if let Some(name) = ini_section_header(line) {
-            section = name;
+    let mut in_section = false;
+    for (_, line) in ini_lines(text) {
+        if line.starts_with('[') {
+            // A header with no `]` stops synth (`synth_ini_refusals`).
+            if let Some(name) = ini_section_header(line) {
+                in_section = name == profile;
+            }
             continue;
         }
-        if section != profile {
+        if !in_section || line.starts_with([';', '#']) {
             continue;
         }
         let data = ini_strip_comment(line);
@@ -2601,37 +2622,45 @@ not a key value line
         assert_eq!(synth_ini_lookup("", "LiveSystem", "Directory_portsdir"), None);
     }
 
-    /// config.adb's own syntax (`Get_Value`), each claim checked on its own:
-    /// a section header's `[` must open the line (column 1, checked before
-    /// anything is trimmed), its name runs untrimmed to the first `]`, with
-    /// anything after it, comment or not, ignored; a key and its value are
-    /// trimmed of spaces only, a tab left in place; and a key's first match
-    /// within its section ends the whole search there — `exit Read_File` —
-    /// even a bare key with no `=` or one given an empty value, so a later,
-    /// real assignment of the same key is never reached.
+    /// config.adb's own syntax (`Get_Value`), each claim checked on its own,
+    /// optique reading it as synth does and naming each line that does not
+    /// say what it seems to: a section header's `[` must open the line
+    /// (column 1), its name runs untrimmed to the first `]`, anything after
+    /// it ignored; a key and its value are trimmed of spaces only, a tab left
+    /// in place; and a key's first match within its section ends the whole
+    /// search there — `exit Read_File` — even a bare key with no `=` or one
+    /// given an empty value, so a later, real assignment is never reached.
     #[test]
-    fn synth_ini_reads_sanely_and_names_what_synth_misreads() {
+    fn synth_ini_reads_as_synth_and_names_what_it_misreads() {
         assert_eq!(ini_section_header("[B] extra"), Some("B"), "anything after ] is ignored");
-        assert_eq!(ini_section_header("[ C ]"), Some("C"), "the name is trimmed");
-        assert_eq!(ini_section_header("   [P]"), Some("P"), "an indented header is one");
+        assert_eq!(ini_section_header("[ C ]"), Some(" C "), "the name is not trimmed");
+        assert_eq!(ini_section_header("   [P]"), None, "an indented header is none");
 
-        let ini = "[A]\nk\t= d\n[ C ]\nDirectory_portsdir=/c\n  [P]\nkey=2\n";
-        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("d"));
-        assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir").as_deref(), Some("/c"));
-        assert_eq!(synth_ini_lookup(ini, "P", "key").as_deref(), Some("2"));
-        // Each line synth reads otherwise is named, for the user to fix.
+        let ini = "[A]\nk\t= d\n[ C ]\nDirectory_portsdir=/c\n[P]\n  [Q]\nkey=2\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "k"), None, "the key is `k\\t`");
+        assert_eq!(synth_ini_lookup(ini, "A", "k\t").as_deref(), Some("d"));
+        assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir"), None);
+        assert_eq!(synth_ini_lookup(ini, " C ", "Directory_portsdir").as_deref(), Some("/c"));
+        assert_eq!(synth_ini_lookup(ini, "Q", "key"), None, "no section Q");
+        assert_eq!(synth_ini_lookup(ini, "P", "key").as_deref(), Some("2"), "still in [P]");
+        assert!(!synth_ini_has_section(ini, "C") && synth_ini_has_section(ini, " C "));
+        // Each line synth reads otherwise than it seems is named.
+        let why = "read as synth reads it (a synth defect)";
         assert_eq!(
             synth_ini_misreads(ini),
             [
-                "synth.ini line 2: synth keeps a tab around the key or value",
-                "synth.ini line 3: synth keeps the spaces around a section name",
-                "synth.ini line 5: synth reads no indented section header",
+                format!("synth.ini line 2: synth keeps a tab around the key or value; {why}"),
+                format!("synth.ini line 3: synth keeps the spaces of the section name ' C '; {why}"),
+                format!(
+                    "synth.ini line 6: synth takes no indented [name] for a section header, \
+                     the lines after it staying in the section above; {why}"
+                ),
             ]
         );
         assert!(synth_ini_misreads("[A]\nk = v\n").is_empty(), "spaces are fine");
 
-        // The format's own rule, kept: the first match ends the search, an
-        // empty value giving the default rather than a later assignment.
+        // The format's own rule: the first match ends the search, an empty
+        // value giving the default rather than a later assignment.
         let ini = "[A]\nDirectory_portsdir=\nDirectory_portsdir=/x\n";
         assert_eq!(synth_ini_lookup(ini, "A", "Directory_portsdir"), None);
     }
@@ -2651,25 +2680,27 @@ not a key value line
     }
 
     /// A line with nothing left once its comment is cut is no misread, tab
-    /// or not; a data line's CR, which synth keeps, is, all such lines in
-    /// one note; a comment cut drops the CR, a header ignores it, and a CR
-    /// alone is a blank line.
+    /// or not; a data line's CR, which synth keeps and optique with it, is,
+    /// all such lines in one note; a comment cut drops the CR, a header
+    /// ignores it, and a CR alone is a line synth skips.
     #[test]
     fn synth_ini_misreads_skip_empty_lines_and_name_crlf() {
         let ini = "[A]\n\t\n\t# comment\n \t; comment\nk = v ; tab\there\n";
         assert!(synth_ini_misreads(ini).is_empty(), "{:?}", synth_ini_misreads(ini));
 
         let ini = "[A]\r\nk=v\r\nj=w\r\n\r\n; c\r\nm=x ; c\r\nn=y\r\n";
+        let why = "read as synth reads it (a synth defect)";
         assert_eq!(
             synth_ini_misreads(ini),
-            ["synth.ini lines 2-3, 7: synth keeps the CR of a CRLF line end in the key or value"]
+            [format!("synth.ini lines 2-3, 7: synth keeps the CR of a CRLF line end in the key or value; {why}")]
         );
         assert_eq!(
             synth_ini_misreads("[A]\nk=v\r\n"),
-            ["synth.ini line 2: synth keeps the CR of a CRLF line end in the key or value"]
+            [format!("synth.ini line 2: synth keeps the CR of a CRLF line end in the key or value; {why}")]
         );
-        // optique reads the value without it.
-        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v"));
+        // As synth reads it: the value keeps the CR, a comment cut drops it.
+        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v\r"));
+        assert_eq!(synth_ini_lookup(ini, "A", "m").as_deref(), Some("x"));
         assert_eq!(line_ranges(&[1, 2, 3, 5, 7, 8]), "1-3, 5, 7-8");
     }
 

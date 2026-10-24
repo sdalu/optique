@@ -180,7 +180,11 @@ fn nonexistent_dependency(origin: &str, moved: &Moved, exists: &dyn Fn(&str) -> 
         MovedResult::MovedTo { origin: new, .. } => format!(" (moved to nonexistent {new})"),
         MovedResult::Removed { reason } if reason.is_empty() => " (port EXPIRED)".to_string(),
         MovedResult::Removed { reason } => format!(" (port EXPIRED: {reason})"),
-        MovedResult::Cycle => " (its MOVED entries form a cycle)".to_string(),
+        MovedResult::Cycle => {
+            " (its MOVED entries form a cycle, which poudriere's check_moved follows forever: \
+             an upstream defect)"
+                .to_string()
+        }
         MovedResult::Unchanged => String::new(),
     };
     format!("depends on nonexistent origin {origin}{why}")
