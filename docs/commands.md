@@ -19,14 +19,33 @@ both at once; `-f` is repeatable. A stray leading or trailing `/` is
 stripped from an origin, in a pkglist line or on the command line alike.
 As poudriere reads them, `origin@all` names every flavor of the port (its
 `FLAVORS`, queried first; the bare origin for a port without any) and
-`origin@-` its default flavor, the bare origin, whatever the build. A
-`MOVED` entry on `origin` is applied first, as poudriere's own listing
-does: `origin@all` and, under `FLAVOR_DEFAULT_ALL`, a bare `origin` query
-the FLAVORS of whatever it last moved to, not the old origin, which has
-no directory to query. Only listed origins follow `MOVED`, and only when
-no longer in the tree; a dependency on a moved or removed origin is an
-error on the port that depends on it (see
+`origin@-` its default flavor, the bare origin, whatever the build.
+
+`MOVED` is read for each listed originspec first, before `@all` expands,
+as poudriere's own listing reads it: the entry of `origin@flavor` as
+written, else the bare origin's, its target taking the listed flavor
+unless it names one (one naming another flavor is an error, as it stops
+poudriere). Under poudriere every listed origin is looked up, one still in
+the tree included (`math/mumps`, moved to `math/mumps-edf`); a local
+build and synth take an origin in the tree as it is. A listed origin
+`MOVED` moves is not followed by default: neither it nor its target is
+scanned, and it is reported as pending, the list needing a fix —
+
+```
+moved: listed cat/old moved to cat/new (renamed): fix the list, or --follow-moved to follow it
+```
+
+— which holds `scan`'s gate (exit 1, a `moved` entry in its JSON) and
+stops `clean --unused` from pruning. `--follow-moved` scans and configures
+the target instead, as poudriere builds it (`origin@all` and, under
+`FLAVOR_DEFAULT_ALL`, a bare `origin` then query the FLAVORS of whatever
+it last moved to), with a note that the list still names the old origin;
+the gate does not count it. Under `-s` it is never followed, synth reading
+no `MOVED`. A listed origin `MOVED` removes, or whose entries cycle, is an
+error. A dependency never follows `MOVED`: one on a moved or removed
+origin is an error on the port that depends on it (see
 [how-it-works.md](how-it-works.md#querying-a-port)).
+
 Across arguments and files, duplicates are dropped and first-seen order is
 kept. With neither, every subcommand but `clean` and `decide` (which
 then takes the plan's own ports) refuses — "no port origins given (arguments or -f pkglist)"
@@ -174,7 +193,9 @@ list is an error the other way round:
   origin gone, a dependency on an origin in no tree — the closure is
   incomplete and `clean` refuses to prune anything at all, rather than risk
   deleting live configuration: `N error(s): the dependency closure is
-  incomplete, refusing to prune entries`.
+  incomplete, refusing to prune entries`. So it does while the list names
+  an origin `MOVED` moves and that is not followed, whose target's
+  options would otherwise go as unused.
 - `--json` — report on stdout as one JSON object instead of the per-entry
   listing; see [machine-interface.md](machine-interface.md).
 
@@ -206,6 +227,7 @@ a run is read at one level.
 | `--repo`              | `NAME`      | synth: restrict implicit list to repo  |
 | `-o`, `--options-dir` | `DIR`       | explicit options dir                   |
 | `-f`, `--file`        | `PKGLIST`   | pkglist of origins (repeatable)        |
+| `--follow-moved`      | —           | follow `MOVED` for a listed origin     |
 | `-J`, `--jobs`        | `JOBS`      | parallel `make` jobs (min(16, ncpu))   |
 | `--no-cache`          | —           | skip the persistent query cache        |
 | `--clear-cache`       | —           | delete the query cache first           |
@@ -242,10 +264,15 @@ decision.
 
 A `scan` decision is pending when a port is unconfigured or stale with
 undecided options, has a conflict, is caught in a dependency loop that is
-not fully blacklisted, or there is an error: a port whose query failed or
+not fully blacklisted, when the list names an origin `MOVED` moves and
+that is not followed (`N listed moved (see above)` on the summary line),
+or there is an error: a port whose query failed or
 a listed origin gone from the tree (neither checked, nor what it depends
 on), or a dependency on an origin in no tree. The summary line counts
-those as `N errors (see above)`, each named on stderr.
+those as `N errors (see above)`, each named on stderr. A moved origin
+followed under `--follow-moved` does not count. `decide`'s status answers
+for its plan alone: a moved origin is reported in its JSON `moved`, and a
+plan naming one not followed finds no port for it (`unknown`).
 An unconfigured or stale port make.conf fully decides (`[mc-covered ≈]`)
 does not count, nor does any blacklisted port; under `-s`, a file synth
 would refuse counts whatever the port's status. Per-file failures during `sync` or `clean` are reported one by

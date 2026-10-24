@@ -27,10 +27,6 @@ impl PortKey {
         }
         Some(PortKey { origin: origin.to_string(), flavor })
     }
-
-    pub fn with_origin(&self, origin: &str) -> Self {
-        PortKey { origin: origin.to_string(), flavor: self.flavor.clone() }
-    }
 }
 
 impl fmt::Display for PortKey {

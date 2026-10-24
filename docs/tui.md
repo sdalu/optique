@@ -97,7 +97,11 @@ needs doing, in list order, leaving out what is at zero:
 ```
 
 `a: write defaults for all` shows only when some ports were never
-configured: the apply writes them their defaults in one go.
+configured: the apply writes them their defaults in one go. Listed
+origins `MOVED` moves and that were not followed, in no row, come first:
+`1 listed moved (fix the list) · 3 conflicting · …` (see
+[commands](commands.md#choosing-the-ports); stderr named each before the
+screen opened).
 
 and, with nothing to do, `all 21 ports are configured — ?: help`. When a
 draft was restored (see [Quitting and drafts](#quitting-and-drafts)), it
@@ -234,7 +238,11 @@ its own section.
 
 Above the rows, a line each says what is wrong with the port or whose
 view it is: `BROKEN:`, `IGNORE:` and the option changes likely to blame,
-`DEPRECATED:`, the flavor owning its options file, `UNMANAGED:` and why
+`DEPRECATED:`, the flavor owning its options file, `MOVED:` for a port a
+listed origin moved to (`MOVED: listed as cat/old (renamed); fix the
+list` under `--follow-moved`, `…, not followed; fix the list, or
+--follow-moved` when the port is in the closure on another account),
+`UNMANAGED:` and why
 for an options file optique leaves to make (a line it cannot model, an
 `options.local` resetting a list, or a make.conf `OPTIONS_FILE` moving it;
 see [commands](commands.md#sync)), a `CONFLICT:` per rule the staged
@@ -254,7 +262,7 @@ member on, the members to pick from, and those make.conf turns off —
 its own text, and gains make.conf's part when make.conf sets one of the
 two. A row, a group header or one of those
 lines too wide for the pane ends in `…` after its last whole word, rather
-than being cut mid-word at the border; a `CONFLICT:` or `STALE:` line
+than being cut mid-word at the border; a `MOVED:`, `CONFLICT:` or `STALE:` line
 wraps first to a second line, under its text, and is cut only past that. The list's
 title is cut the same way. An option row too wide for the pane drops only
 its trailing description: its checkbox, name, default, make.conf value and

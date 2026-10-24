@@ -66,8 +66,8 @@ pub fn classify_entries(
             });
             continue;
         }
-        let reason = match moved.resolve(&origin, exists) {
-            MovedResult::MovedTo { origin: new, .. } => {
+        let reason = match moved.resolve(&PortKey::new(origin, None), exists) {
+            MovedResult::MovedTo { key: new, .. } => {
                 format!("port moved to {new} (its options live under another name)")
             }
             MovedResult::Unchanged => "port no longer exists in the tree".to_string(),

@@ -45,16 +45,23 @@ script — see [tui.md](tui.md#driving-the-tui-headless).
 | `loops`       | dependency loops found in the closure (details below)     |
 | `summary`     | counts, including `pending`, which drives the exit status |
 | `errors`      | what could not be checked, each `{subject, message}`      |
+| `moved`       | listed origins `MOVED` moves, each `{listed, to, reason, followed}` |
 
 See [dependency loops](dependency-loops.md) for the shape of a loop entry. An
 error is a port whose query failed or a listed origin `MOVED` says is gone,
 missing from `ports` with whatever it depends on, or one entry per
 dependency of a port in `ports` on an origin in no tree (`depends on
-nonexistent origin <origin>`, with what `MOVED` says of it). `summary` holds `total`, `unconfigured`, `stale`, `conflict`, `ok`,
+nonexistent origin <origin>`, with what `MOVED` says of it). An element of
+`moved` is a listed originspec (`listed`) `MOVED` sends to another (`to`),
+for `reason` (possibly empty); `followed` is true under `--follow-moved`,
+when `to` was scanned in its place, and false otherwise, when neither is in
+`ports` and the list needs a fix ([commands](commands.md#choosing-the-ports)).
+`summary` holds `total`, `unconfigured`, `stale`, `conflict`, `ok`,
 `optionless`, `blacklisted`, `attention` (ports owing a decision), `loops`,
-`loops_blocking` (loops with a member that is not blacklisted), `errors` (the
-length of the `errors` list above) and `pending`, which is `attention` +
-`loops_blocking` + `errors` and is what the exit status reports. An options
+`loops_blocking` (loops with a member that is not blacklisted), `moved` (the
+elements of `moved` not followed), `errors` (the length of the `errors`
+list above) and `pending`, which is `attention` + `loops_blocking` +
+`moved` + `errors` and is what the exit status reports. An options
 file that exists but cannot be read is one such error, reported for its port
 as `cannot read options file <path>: <reason>` rather than taken for an
 unconfigured one.
@@ -184,8 +191,13 @@ The interface is meant to be safe to drive blind:
 | `warnings`    | notices, e.g. a flavor disagreeing on an option    |
 | `errors`      | ports/files that failed, each `{subject, message}` |
 | `summary`     | `{written, removed, failed, rejected, conflicts}`  |
+| `moved`       | listed origins `MOVED` moves, as `scan` has them   |
 
 [^3]: non-empty means nothing was written.
+
+A `moved` entry does not change `decide`'s exit status, which answers for
+the plan; a plan naming a moved origin that was not followed finds no port
+for it, in `unknown`.
 
 Each `writes` entry has `port`, `options_name`, `file` (its absolute path),
 `new_file`, `diff` (`+OPT`/`-OPT` for options the file already knew),

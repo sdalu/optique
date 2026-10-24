@@ -56,6 +56,10 @@ pub struct Session {
     /// options.local read after it (`OptionsFiles::combined`): what
     /// options.local decides, which an edit to the file cannot change.
     pub locals: HashMap<String, SavedOptionsFile>,
+    /// The listed origins MOVED moves, followed or flagged
+    /// (`roots::apply_moved`): the TUI names them on their targets' panes
+    /// and in its first-run message.
+    pub listed_moves: Vec<crate::moved::ListedMove>,
 }
 
 /// Is this port the default flavor of its origin (or unflavored)?
@@ -128,13 +132,14 @@ impl Session {
             minimal,
             blacklist: crate::config::Blacklist::default(),
             locals: HashMap::new(),
+            listed_moves: Vec::new(),
         };
         session.roots = requested_roots
             .iter()
             .filter_map(|r| session.resolve(r))
             .collect();
         if session.roots.len() != requested_roots.len() {
-            // Some root didn't resolve (e.g. MOVED rename): disable GC rather
+            // Some root didn't resolve (its query failed): disable GC rather
             // than risk collecting live ports.
             session.roots = session.ports.keys().cloned().collect();
         }
@@ -328,6 +333,23 @@ impl Session {
     pub fn unmanaged(&self, info: &PortInfo) -> Option<Unmanaged> {
         let combined = self.locals.get(&info.options_name)?;
         unmanaged_by([info, self.owner_info(info)], combined)
+    }
+
+    /// The listed origins MOVED moves to this port: its key, or, for one
+    /// listed `@all`, any flavor of its origin, and for one listed `@-`,
+    /// its default flavor.
+    pub fn moved_to(&self, info: &PortInfo) -> Vec<&crate::moved::ListedMove> {
+        use crate::roots::{FLAVOR_ALL, FLAVOR_DEFAULT};
+        self.listed_moves
+            .iter()
+            .filter(|m| match m.to.flavor.as_deref() {
+                Some(FLAVOR_ALL) => m.to.origin == info.canonical.origin,
+                Some(FLAVOR_DEFAULT) => {
+                    self.resolve(&PortKey::new(m.to.origin.clone(), None)).as_ref() == Some(&info.canonical)
+                }
+                _ => self.resolve(&m.to).as_ref() == Some(&info.canonical),
+            })
+            .collect()
     }
 
     /// The options the port still owes a human answer for

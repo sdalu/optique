@@ -532,8 +532,23 @@ and poudriere's (`_lookup_portdir`), so the scanner, clean's vanished
 ports and MOVED's existence check all use it (`src/query/makerunner.rs`,
 `locate`). MOVED is every tree's in order, first entry winning, its chains
 collapsed in file order, as poudriere's `parse_MOVED.awk` does
-(`src/moved.rs`). Only the listed origins follow it, as poudriere applies
-it to the list alone: a dependency on an origin no tree holds is an error
+(`src/moved.rs`). Only the listed origins are looked up, as poudriere
+applies it to the list alone, each as an originspec (`origin@flavor`'s
+own entry, else the bare origin's with the flavor re-attached), and only
+where the build would: poudriere looks up an origin still in the tree
+too (its existence-first defect, which changes what gets built, so
+conformed to), a local build and synth one in no tree only
+(`src/roots.rs`, `apply_moved`). A listed origin MOVED moves is flagged,
+not followed: neither it nor its target is scanned, and `scan` counts it
+as pending, since the list names a port that is gone and needs fixing;
+`--follow-moved` scans the target in its place, as poudriere builds it,
+and says the list still names the old origin (never under `-s`: synth
+reads no MOVED, and would not build the target). MOVED is read on every
+run, never cached, which the cache's carry-over relies on. Rejected:
+following silently, as poudriere does and optique did, which configured
+the right port but hid a stale list; and never following, which stopped
+optique from predicting what poudriere builds. A dependency on an origin
+no tree holds is an error
 on the depending port, naming what MOVED says of it, since poudriere's
 `deps_sanity` fails the bulk on it and synth fails the port
 (`src/query/scanner.rs`, `register`); the dependencies of an IGNOREd or

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::cache::Cache;
 use crate::model::origin::PortKey;
-use crate::moved::{Moved, MovedResult};
+use crate::moved::{ListedMove, Moved, MovedResult};
 use crate::optfiles::OptionsFiles;
 use crate::query::makerunner::{MakeRunner, QueryCtx, ScanEvent};
 
@@ -125,37 +125,86 @@ pub fn synth_bare_flavored(
         .collect()
 }
 
-/// `roots` with each one that [`wants_all`] mapped through MOVED first, as
-/// poudriere applies MOVED to the listed originspec before FLAVOR_ALL and
-/// FLAVOR_DEFAULT_ALL expand it (`_check_moved`, common.sh ~9627-9636,
-/// ~9936-9966: `old@all` becomes `new@all`, a bare old origin the bare new
-/// one). Without this, `@all` and a bare origin under FLAVOR_DEFAULT_ALL
-/// would query the FLAVORS of the old origin, which has no directory, and
-/// fall back to its default flavor alone. A root the chase cannot place in
-/// the tree (removed, or a cycle) is left as given, for the scan to report.
-fn apply_moved(
-    roots: &[PortKey],
-    default_all: bool,
-    moved: &Moved,
-    exists: impl Fn(&str) -> bool,
-) -> Vec<PortKey> {
-    roots
-        .iter()
-        .map(|key| {
-            if !wants_all(key, default_all) {
-                return key.clone();
-            }
-            match moved.resolve(&key.origin, &exists) {
-                MovedResult::MovedTo { origin, .. } => PortKey::new(origin, key.flavor.clone()),
-                _ => key.clone(),
-            }
-        })
-        .collect()
+/// How the build reads MOVED for a listed origin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovedPolicy {
+    /// poudriere's `_listed_ports`: `check_moved` first, the origin's own
+    /// existence never tested, so a listed origin still in the tree but
+    /// with an entry moves (an upstream defect, conformed to).
+    Poudriere,
+    /// `make config` knows no MOVED: an origin in the tree is that port;
+    /// one in no tree is looked up, as poudriere would.
+    Local,
+    /// synth reads no MOVED: an origin in the tree is that port; one in no
+    /// tree that MOVED moves is flagged as for any build, but never
+    /// followed, synth never building the port it leads to.
+    Synth,
 }
 
-/// `roots` as the scan should take them, each [`wants_all`] one [`apply_moved`]ed
-/// first, [`expand`]ed, the FLAVORS of the ports that need them queried in
-/// between.
+/// The listed roots once MOVED has been read for them ([`apply_moved`]).
+#[derive(Debug, Default)]
+pub struct MovedRoots {
+    /// The roots to scan: those MOVED leaves alone, and the targets of
+    /// those followed.
+    pub roots: Vec<PortKey>,
+    /// Every listed origin MOVED moves, followed or not.
+    pub moves: Vec<ListedMove>,
+    /// A listed origin MOVED removes, or whose entries cycle or clash on a
+    /// flavor: left out of the scan, an error.
+    pub errors: Vec<(PortKey, String)>,
+}
+
+/// MOVED read for each of `roots` as `policy`'s build reads it, before
+/// `@all` and `@-` are expanded, as poudriere applies it to the listed
+/// originspec (`_listed_ports`, `_check_moved`: `old@all` becomes
+/// `new@all`). A root MOVED moves is left out unless `follow`
+/// (`--follow-moved`) asks for its target in its place: the list names a
+/// port that is no longer there, and needs fixing. A root it removes, or
+/// whose entries cycle or name another flavor, is an error. `follow` means
+/// nothing under synth, which never follows MOVED: there a flavor clash is
+/// no error of synth's, and the root, in no tree, is left for the scan to
+/// report.
+pub fn apply_moved(
+    roots: &[PortKey],
+    policy: MovedPolicy,
+    follow: bool,
+    moved: &Moved,
+    exists: impl Fn(&str) -> bool,
+) -> MovedRoots {
+    let mut out = MovedRoots::default();
+    let mut seen = HashSet::new();
+    for key in roots {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if policy != MovedPolicy::Poudriere && exists(&key.origin) {
+            out.roots.push(key.clone());
+            continue;
+        }
+        match moved.resolve(key, &exists) {
+            MovedResult::Unchanged => out.roots.push(key.clone()),
+            MovedResult::MovedTo { key: to, reason } => {
+                let can_follow = policy != MovedPolicy::Synth;
+                let followed = follow && can_follow;
+                if followed {
+                    out.roots.push(to.clone());
+                }
+                let in_tree = exists(&key.origin);
+                out.moves.push(ListedMove { listed: key.clone(), to, reason, followed, can_follow, in_tree });
+            }
+            MovedResult::FlavorClash { .. } if policy == MovedPolicy::Synth => out.roots.push(key.clone()),
+            gone => {
+                let reason = gone.gone_reason().expect("removed, cycle and clash all have a reason");
+                out.errors.push((key.clone(), reason));
+            }
+        }
+    }
+    out
+}
+
+/// `roots` as the scan should take them, MOVED already read for them
+/// ([`apply_moved`]): each one that [`wants_all`] is [`expand`]ed, the
+/// FLAVORS of the ports that need them queried in between.
 pub fn resolve(
     roots: &[PortKey],
     default_all: bool,
@@ -163,10 +212,7 @@ pub fn resolve(
     files: &OptionsFiles,
     jobs: usize,
     cache: &mut Cache,
-    moved: &Moved,
 ) -> Vec<PortKey> {
-    let exists = |o: &str| ctx.locate(o).is_some();
-    let roots = apply_moved(roots, default_all, moved, exists);
     let origins: BTreeSet<String> =
         roots.iter().filter(|k| wants_all(k, default_all)).map(|k| k.origin.clone()).collect();
     let flavors = if origins.is_empty() {
@@ -174,7 +220,7 @@ pub fn resolve(
     } else {
         query_flavors(&origins, ctx, files, jobs, cache)
     };
-    expand(&roots, &flavors, default_all)
+    expand(roots, &flavors, default_all)
 }
 
 /// One line's `SUBDIR` entry, the way synth's `grep_Makefile` regex reads
@@ -413,13 +459,14 @@ mod tests {
     }
 
     /// `cat/old@all` and, under FLAVOR_DEFAULT_ALL, bare `cat/old` root
-    /// every flavor of `cat/new` (MOVED `cat/old|cat/new|...`), not just its
-    /// default one: `resolve` must apply MOVED to the originspec before
-    /// querying FLAVORS, as poudriere's `_check_moved` does (common.sh
-    /// ~9627-9636, ~9936-9966), since the old origin has no directory for
-    /// the query to see.
+    /// every flavor of `cat/new` (MOVED `cat/old|cat/new|...`) once
+    /// followed, not just its default one: MOVED is read for the
+    /// originspec before its FLAVORS are queried, as poudriere's
+    /// `_check_moved` does (common.sh ~9627-9636, ~9936-9966), since the
+    /// old origin has no directory for the query to see. Not followed,
+    /// both are flagged and nothing is rooted; `@-` moves to `new@-`.
     #[test]
-    fn resolve_follows_moved_before_querying_flavors() {
+    fn moved_is_read_before_flavors_are_queried() {
         let _lock = crate::query::makerunner::make_test_lock();
         let tmp = fake_tree(&[("cat/new", "PKGNAME=new-1.0\nFLAVORS=\ta b\n")]);
         let ctx = QueryCtx {
@@ -433,9 +480,85 @@ mod tests {
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let mut cache = Cache::disabled();
+        let exists = |o: &str| ctx.locate(o).is_some();
         let roots = keys(&["cat/old@all", "cat/old"]);
-        let got = resolve(&roots, true, &ctx, &files, 1, &mut cache, &moved);
+        let followed = apply_moved(&roots, MovedPolicy::Poudriere, true, &moved, exists);
+        assert_eq!(followed.roots, keys(&["cat/new@all", "cat/new"]));
+        let got = resolve(&followed.roots, true, &ctx, &files, 1, &mut cache);
         assert_eq!(got, keys(&["cat/new@a", "cat/new@b"]));
+
+        let flagged = apply_moved(&roots, MovedPolicy::Poudriere, false, &moved, exists);
+        assert!(flagged.roots.is_empty(), "{:?}", flagged.roots);
+        let moves: Vec<String> = flagged.moves.iter().map(|m| format!("{} {} {}", m.listed, m.to, m.followed)).collect();
+        assert_eq!(moves, ["cat/old@all cat/new@all false", "cat/old cat/new false"]);
+
+        let default = apply_moved(&keys(&["cat/old@-"]), MovedPolicy::Poudriere, true, &moved, exists);
+        assert_eq!(resolve(&default.roots, false, &ctx, &files, 1, &mut cache), keys(&["cat/new"]));
+    }
+
+    /// The listed origins through MOVED, build by build: poudriere moves
+    /// math/mumps, still in the tree, local and synth builds take it as it
+    /// is; an origin in no tree is flagged by all three, followed under
+    /// `--follow-moved` but by synth, which reads no MOVED. A removal, a
+    /// cycle and (but under synth) a flavor clash are errors.
+    #[test]
+    fn listed_origins_through_moved_build_by_build() {
+        let moved = Moved::parse(
+            "math/mumps|math/mumps-edf|2026-10-07|Repomove to math/mumps-edf\n\
+             cat/old|cat/new|2026-01-01|renamed\n\
+             cat/gone||2026-01-01|Has expired\n\
+             cat/a|cat/b|d|r\ncat/b|cat/a|d|back\n\
+             editors/mg-static|editors/mg@static|2021-02-28|Flavored\n",
+        );
+        let tree = ["math/mumps", "math/mumps-edf", "cat/new", "editors/mg"];
+        let exists = |o: &str| tree.contains(&o);
+        let listed = keys(&["math/mumps", "cat/old", "cat/gone", "cat/a", "editors/mg-static@dynamic", "x/y"]);
+        let run = |policy, follow| {
+            let r = apply_moved(&listed, policy, follow, &moved, exists);
+            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            let moves: Vec<String> =
+                r.moves.iter().map(|m| format!("{}>{}{}", m.listed, m.to, if m.followed { "" } else { "?" })).collect();
+            let errors: Vec<String> = r.errors.iter().map(|(k, _)| k.to_string()).collect();
+            (roots, moves, errors)
+        };
+        let errors = ["cat/gone", "cat/a", "editors/mg-static@dynamic"];
+
+        let (roots, moves, errs) = run(MovedPolicy::Poudriere, false);
+        assert_eq!(roots, ["x/y"]);
+        assert_eq!(moves, ["math/mumps>math/mumps-edf?", "cat/old>cat/new?"]);
+        assert_eq!(errs, errors);
+        let (roots, moves, _) = run(MovedPolicy::Poudriere, true);
+        assert_eq!(roots, ["math/mumps-edf", "cat/new", "x/y"]);
+        assert_eq!(moves, ["math/mumps>math/mumps-edf", "cat/old>cat/new"]);
+        // The defect conformed to is named; a plain rename is not one.
+        let r = apply_moved(&listed, MovedPolicy::Poudriere, false, &moved, exists);
+        assert_eq!(
+            r.moves[0].message(),
+            "listed math/mumps moved to math/mumps-edf (Repomove to math/mumps-edf); math/mumps is in \
+             the tree too, but poudriere's check_moved moves it all the same (an upstream defect): \
+             fix the list, or --follow-moved to follow it"
+        );
+        assert!(!r.moves[1].message().contains("defect"), "{}", r.moves[1].message());
+
+        let (roots, moves, errs) = run(MovedPolicy::Local, false);
+        assert_eq!(roots, ["math/mumps", "x/y"]);
+        assert_eq!(moves, ["cat/old>cat/new?"]);
+        assert_eq!(errs, errors);
+        let (roots, moves, _) = run(MovedPolicy::Local, true);
+        assert_eq!(roots, ["math/mumps", "cat/new", "x/y"]);
+        assert_eq!(moves, ["cat/old>cat/new"]);
+
+        for follow in [false, true] {
+            let r = apply_moved(&listed, MovedPolicy::Synth, follow, &moved, exists);
+            let roots: Vec<String> = r.roots.iter().map(|k| k.to_string()).collect();
+            assert_eq!(roots, ["math/mumps", "editors/mg-static@dynamic", "x/y"]);
+            let errs: Vec<String> = r.errors.iter().map(|(k, _)| k.to_string()).collect();
+            assert_eq!(errs, ["cat/gone", "cat/a"]);
+            let only = &r.moves[..];
+            assert_eq!(only.len(), 1, "{only:?}");
+            assert!(!only[0].followed && !only[0].can_follow, "{only:?}");
+            assert_eq!(only[0].message(), "listed cat/old moved to cat/new (renamed): fix the list");
+        }
     }
 
     /// A ports tree of one-line Makefiles: make runs for real, but nothing

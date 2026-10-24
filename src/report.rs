@@ -25,10 +25,40 @@ pub struct ScanReport {
     pub ports: Vec<PortReport>,
     pub loops: Vec<LoopReport>,
     pub summary: ScanSummary,
-    /// Ports whose query failed, or that MOVED says are gone: missing
-    /// from `ports`, and so is whatever they depend on. Also one entry per
-    /// dependency of a port in `ports` on an origin that does not exist.
+    /// Ports whose query failed, or listed origins MOVED says are gone:
+    /// missing from `ports`, and so is whatever they depend on. Also one
+    /// entry per dependency of a port in `ports` on an origin that does not
+    /// exist.
     pub errors: Vec<ErrorEntry>,
+    /// The listed origins MOVED moves, followed (`--follow-moved`) or not.
+    pub moved: Vec<MovedEntry>,
+}
+
+/// A listed origin MOVED moves.
+#[derive(Clone, Serialize)]
+pub struct MovedEntry {
+    /// The originspec as the list gives it.
+    pub listed: String,
+    /// The originspec MOVED leads it to.
+    pub to: String,
+    /// The reason MOVED gives; may be empty.
+    pub reason: String,
+    /// `to` was configured in its place (`--follow-moved`); otherwise
+    /// neither was, and the entry is pending.
+    pub followed: bool,
+}
+
+/// The `moved` array of a report.
+pub fn moved_entries(moves: &[crate::moved::ListedMove]) -> Vec<MovedEntry> {
+    moves
+        .iter()
+        .map(|m| MovedEntry {
+            listed: m.listed.to_string(),
+            to: m.to.to_string(),
+            reason: m.reason.clone(),
+            followed: m.followed,
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -155,10 +185,13 @@ pub struct ScanSummary {
     pub loops: usize,
     /// Loops with at least one member that is not blacklisted.
     pub loops_blocking: usize,
+    /// The entries of `moved` not followed: listed origins the list must
+    /// fix.
+    pub moved: usize,
     /// The length of `errors`.
     pub errors: usize,
     /// What the exit status reports: `attention` + `loops_blocking` +
-    /// `errors`.
+    /// `moved` + `errors`.
     pub pending: usize,
 }
 
@@ -182,6 +215,8 @@ pub struct WriteReport {
     pub warnings: Vec<String>,
     pub errors: Vec<ErrorEntry>,
     pub summary: WriteSummary,
+    /// The listed origins MOVED moves, as `scan` reports them.
+    pub moved: Vec<MovedEntry>,
 }
 
 #[derive(Serialize)]

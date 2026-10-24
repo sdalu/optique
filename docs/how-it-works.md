@@ -66,14 +66,26 @@ a local build's with the invoking user's own: `bsd.ccache.mk` keeps ccache,
 and its `devel/ccache` dependency, for root alone. See
 [configuration](configuration.md) for the order the files are read in.
 
-The listed origins follow the tree's `MOVED` file as poudriere follows it:
-only an origin no longer in the tree, since a name moved away can be
-reused (math/mumps moved to math/mumps-edf, then math/mumps4 to
-math/mumps), its chains collapsed in file order as poudriere's
-`parse_MOVED.awk` collapses them, a chain stopping at the first origin that
-exists. A listed origin that is gone, or whose entries cycle without
-reaching one (poudriere loops forever on that, an upstream defect), is an
-error. Dependencies do not follow `MOVED`: a dependency on an origin in no
+The listed origins are looked up in the tree's `MOVED` file before the
+walk, its chains collapsed in file order as poudriere's `parse_MOVED.awk`
+collapses them, each as an originspec, as poudriere's `check_moved` looks
+it up: `origin@flavor`'s own entry, else the bare origin's, its target
+taking the listed flavor (an entry naming another flavor stops poudriere,
+and is an error), a chain stopping at the first target in a tree. Which
+origins are looked up follows the build. poudriere looks up every listed
+one before testing whether it is in the tree, so an entry moves a name the
+tree has since reused (math/mumps moved to math/mumps-edf, then math/mumps4
+to math/mumps): an upstream defect that changes what gets built, conformed
+to. `make config` knows no `MOVED`, and synth reads none: a local build and
+synth take an origin in the tree as it is. A listed origin `MOVED` moves is
+flagged rather than followed: left out of the walk with its target, and
+pending in `scan`'s exit status, since the list needs a fix;
+`--follow-moved` walks the target in its place, as poudriere builds it
+(never under `-s`: synth would not). A listed origin that is gone, or
+whose entries cycle without reaching one (poudriere loops forever on that,
+an upstream defect), is an error. This is read on every run, never cached:
+the cache's carry-over takes `MOVED` to be read each time. Dependencies do
+not follow `MOVED`: a dependency on an origin in no
 tree, moved, expired or never there, is an error on the depending port,
 naming what `MOVED` says of it, as poudriere refuses the bulk on it; the
 dependencies of an `IGNORE`d or blacklisted port, and test-only edges, are

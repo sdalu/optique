@@ -47,14 +47,14 @@ interfaces sit side by side on the session.
 | `main.rs` | Entry, dispatch, the shared scan, every command's body, the startup banner, exit status (1 = something pending, 2 = usage, 3 = error) | `run`, `run_scan`/`Scanned`, `cmd_scan`, `cmd_sync`, `cmd_decide`, `cmd_clean`, `clean_options_dir`, `find_redundant`, `cmd_tui`, `WritePass`, `commit_writes`, `needs_attention` |
 | `cli.rs` | The command line: clap definitions, the checks clap cannot do across levels, roots from arguments and `-f` lists | `disambiguate_synth`, `check_action_first`, `Cli::check_globals`, `collect_roots` |
 | `config.rs` | Which build is configured and how queries see it: tree, options dir, staged make.conf and its hash, query environment, blacklist, overlays, notes | `Request`, `Settings`, `QueryEnv`, `resolve`, `resolve_poudriere`, `resolve_local`, `resolve_synth`, `stage_make_conf`, `jail_system`, `plugin_make_confs`, `Blacklist` |
-| `roots.rs` | Roots as the build tool reads them, before the scan | `resolve`, `apply_moved`, `expand`, `query_flavors`, `synth_installed` |
+| `roots.rs` | Roots as the build tool reads them, before the scan: MOVED for the listed origins, build by build, then `@all`/`@-` | `apply_moved`, `MovedPolicy`, `MovedRoots`, `resolve`, `expand`, `query_flavors`, `synth_installed` |
 | `query/wrapper.rs` | The makefile piped to `make`: includes the port, prints `OPTIQUE\|TAG\|value` lines | `WRAPPER` |
 | `query/makerunner.rs` | One `make` per port, cleared environment, the builder's `USER` and `HOME`, a pool of workers, killable | `QueryCtx`, `Identity`, `run_query`, `MakeRunner`, `kill_active_makes` |
 | `query/parse.rs` | The dump into a `PortInfo` | `parse_dump`, `parse_depends` |
-| `query/scanner.rs` | The closure, breadth first: cache, MOVED for the roots, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
+| `query/scanner.rs` | The closure, breadth first from roots taken as given: cache, blacklist stop, a dependency on a nonexistent origin as an error | `scan`, `ScanResult`, `register` |
 | `query/refresher.rs` | The TUI's background re-scans over the staging dir | `spawn`, `RefreshEvent` |
 | `cache.rs` | Query results on disk, one generation per tree × make.conf, a new commit's starting with what the diff leaves of the last | `Cache`, `CacheEntry`, `tree_key`, `Invalidation`, `SCHEMA` |
-| `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does | `Moved::load_all`, `Moved::resolve` |
+| `moved.rs` | `MOVED` of the tree and its overlays, chains collapsed in file order as `parse_MOVED.awk` does, originspecs looked up as `check_moved` does | `Moved::load_all`, `Moved::resolve`, `MovedResult`, `ListedMove` |
 | `deps.rs` | Alias resolution, dependency loops | `resolve`, `detect` (Tarjan), `DepLoop` |
 | `model/origin.rs` | `category/port[@flavor]` | `PortKey::parse` |
 | `model/port.rs` | One port as `make` describes it | `PortInfo`, `DepEdge` |
@@ -86,7 +86,8 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   │                    conf_hash, QueryEnv, blacklist, overlays, notes   │
   │ Cache::open        generation v<SCHEMA>-<tree>-<make.conf>           │
   │ Moved::load_all    MOVED of the tree and every overlay               │
-  │ roots::resolve     @all, @-, FLAVOR_DEFAULT_ALL (through MOVED)      │
+  │ roots::apply_moved MOVED for the listed origins: flag or follow      │
+  │ roots::resolve     @all, @-, FLAVOR_DEFAULT_ALL                      │
   │ scanner::scan      breadth-first closure, cache first, wrapper make  │
   │ deps::detect       dependency loops (Tarjan)                         │
   └──────────────────────────────────────────────┬───────────────────────┘
@@ -119,7 +120,7 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   live), optionally drops those outside the closure (`--unused`) and
   those that change nothing (`--redundant`, one query per flavor sharing
   a file), never one optique cannot model; `--unused` refuses on any scan
-  error.
+  error, and on a listed origin MOVED moves that was not followed.
 - **tui** adds a staging copy of the options dir, a refresher thread
   and the event loop on top of the session.
 
@@ -146,11 +147,20 @@ port (`wrapper::FRAMEWORK_PROBE`) once under the settled tree, make.conf
 and environment, keeps the `_EXPORTED_VARS` bsd.port.mk reports
 (`Settings::framework`), and folds them into the hash.
 
-`roots::resolve` turns the listed origins into the scan's roots: `@all`
-and (under `FLAVOR_DEFAULT_ALL`) bare origins become every flavor of the
-port, after MOVED maps them to the port's current origin; `@-` becomes
-the default flavor. `scanner::scan` resolves the other roots through
-MOVED; a dependency never is. Under `-s` with no list, `run_scan` first takes the installed
+`roots::apply_moved` reads MOVED for each listed originspec, as the build
+reads it (`MovedPolicy` from `QueryEnv`: poudriere looks up every one,
+a local build and synth only one in no tree), before anything expands. A
+root MOVED moves becomes a `ListedMove`: left out with its target and
+counted as pending by `cmd_scan`, or, under `--follow-moved` (never under
+`-s`), replaced by its target, an alias kept from the old name. A removed
+one, a cycle or a flavor clash is an error. `Scanned::moves` carries them
+to every command: the JSON `moved`, `clean --unused`'s refusal, the TUI's
+`MOVED:` line and first message (`Session::listed_moves`). This runs on
+every invocation, never from the cache. `roots::resolve` then turns the
+roots into the scan's: `@all` and (under `FLAVOR_DEFAULT_ALL`) bare origins
+become every flavor of the port; `@-` becomes the default flavor.
+`scanner::scan` takes its roots as given; a dependency never goes through
+MOVED. Under `-s` with no list, `run_scan` first takes the installed
 packages and keeps those synth's index has (`roots::synth_installed`:
 the categories' `SUBDIR` lines and each port's flavors).
 
@@ -170,8 +180,8 @@ make.conf layer naming them, groups, per-option definitions
 BROKEN/IGNORE/DEPRECATED; `parse_dump` makes a `PortInfo` of it. An
 unreadable options file fails the port rather than reading as absent.
 
-`scanner::scan` walks breadth first from the roots, each first resolved
-through MOVED; a dependency goes to the cache, then a worker, when its
+`scanner::scan` walks breadth first from the roots `apply_moved` left;
+a dependency goes to the cache, then a worker, when its
 origin is in some tree. One in no tree is never walked nor redirected:
 `register` records it as an error on the depending port, saying what
 MOVED says of it, except for an IGNORE'd or blacklisted port and a

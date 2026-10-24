@@ -940,6 +940,15 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
             Style::default().fg(Color::DarkGray),
         )));
     }
+    for m in app.session.moved_to(info) {
+        let reason = if m.reason.is_empty() { String::new() } else { format!(" ({})", m.reason) };
+        let text = if m.followed {
+            format!("listed as {}{reason}; fix the list", m.listed)
+        } else {
+            format!("listed as {}{reason}, not followed; fix the list{}", m.listed, m.or_follow(""))
+        };
+        lines.extend(wrapped_banner("MOVED: ", &text, Style::default().fg(Color::Yellow), width));
+    }
     if let Some(u) = app.session.unmanaged(info) {
         lines.extend(wrapped_banner("UNMANAGED: ", &u.why, Style::default().fg(Color::Yellow), width));
     }

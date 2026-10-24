@@ -95,13 +95,16 @@ Verdicts:
 | A dependency on a nonexistent origin aborts the run, naming its MOVED target or EXPIRED reason ([ref](reference/poudriere.md#checks-on-the-result)) | `deps_sanity`, `gather_port_vars_port` | matches: an error on the depending port, counted in `scan`'s exit status; the moved-to port is not pulled in through that edge |
 | `TEST_DEPENDS` never gathered without `bulk -t` ([ref](reference/poudriere.md#gathering-metadata)) | `common.sh` | matches on a current tree; on a tree before ports `e7679b71cf89`, whose unified list folds them in, test-only dependencies are walked too, but never checked nor counted in a loop |
 | Origins: first word of a list line, `#` lines skipped, one leading and one trailing `/` trimmed ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` list reading | matches |
-| `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` flavor expansion | matches, MOVED applied to the listed origin first |
+| `origin@all`, `origin@-`, `FLAVOR_DEFAULT_ALL=yes` ([ref](reference/poudriere.md#ports-to-build)) | `common.sh` flavor expansion | matches, MOVED read for the listed originspec first (`old@all` is `new@all` once followed) |
 | `origin~subpackage` | `common.sh` | **known gap**: refused, or read as part of the flavor after `@` |
 | `-a` (every port) | `bulk.sh` | **known gap**: no `-a`; a full list roots only default flavors |
-| MOVED applied to listed origins only: renamed, removed, expired ([ref](reference/poudriere.md#moved)) | `check_moved` | matches |
+| MOVED applied to listed origins only: removed or expired is an error ([ref](reference/poudriere.md#moved)) | `_listed_ports`, `check_moved` | matches |
+| MOVED renames a listed origin, and poudriere builds the target, saying so ([ref](reference/poudriere.md#moved)) | `_listed_ports`, `check_moved` | **differs on purpose**: flagged, neither origin scanned, pending in `scan`'s exit status, the list needing a fix; `--follow-moved` matches, the target configured and the rename noted |
+| MOVED per originspec: `origin@flavor`'s own entry, else the bare origin's with the listed flavor re-attached; a target naming another flavor stops the run ([ref](reference/poudriere.md#moved)) | `_check_moved` | matches: the clash is an error on the listed origin, or in a dependency's `deps_sanity` message |
+| A chain ending at an origin in no tree with no entry of its own is no move ([ref](reference/poudriere.md#moved)) | `check_moved` | matches: the listed origin is taken as given, and fails as one in no tree |
 | MOVED chains collapsed in file order: `A\|B` then `B\|C` sends `A` to `C` even when `B` exists again ([ref](reference/poudriere.md#moved)) | `awk/parse_MOVED.awk` `update_forwards`, `check_moved` | **conforms to an upstream defect** |
 | A MOVED cycle (`a\|b`, `b\|a`) loops forever in `check_moved` when its collapsed target is missing ([ref](reference/poudriere.md#moved)) | `check_moved` | **conforms to an upstream defect** by reporting it: the origin is an error saying poudriere follows the cycle forever; optique never loops |
-| MOVED: a flavored entry (`origin@flavor\|new`); a listed origin that still exists but has an entry ([ref](reference/poudriere.md#moved)) | `check_moved` | **known gap**: optique looks up the bare origin, and keeps one that exists |
+| `_listed_ports` runs `check_moved` before testing the origin, so a listed origin still in the tree but with an entry moves (`math/mumps\|math/mumps-edf`, the name reused since) ([ref](reference/poudriere.md#moved)) | `_listed_ports`, `check_moved` | **conforms to an upstream defect** under poudriere: flagged as moved, or followed under `--follow-moved`. A local build (`make config`, no MOVED) and synth take an origin in the tree as it is |
 | Overlays: `-O` order, `OVERLAYS+=`, overlay MOVED files after the main one ([ref](reference/poudriere.md#makeconf-for-a-build)) | `bulk.sh`, `jail_start`, `load_moved` | matches |
 | Changed options: pkg's recorded options (`%Ok %Ov`) against `SELECTED_OPTIONS`/`DESELECTED_OPTIONS`, as exact strings ([ref](reference/poudriere.md#changed-options)) | `CHECK_CHANGED_OPTIONS` in `common.sh` | not modelled: optique rewrites a file only when the outcome or its option list changes, which changes nothing poudriere compares |
 | `poudriere options`: `make config` on the host, a make.conf without the prelude, `LOCALBASE` and overlays quirks ([ref](reference/poudriere.md#poudriere-options)) | `options.sh` | **differs on purpose**: optique asks what the jail's build will see |
@@ -133,6 +136,7 @@ Verdicts:
 | Implicit list: every installed package, its flavor from the `flavor` annotation, kept only where synth's index (the categories' `SUBDIR`, each port's flavors) has it ([ref](reference/synth.md#the-flavor-index)) | `portscan-pilot.adb`, `portscan.adb` `prescan_ports_tree` | matches |
 | Explicit list: exact index keys only; a comment, `@all`, `@-`, a bare origin of a flavored port, or several words refuse the whole list ([ref](reference/synth.md#the-port-list)) | `portscan-pilot.adb` `valid_file`, `portscan.adb` `input_origin_valid` | **differs on purpose**: optique reads poudriere's list syntax in every mode, and under `-s` names each entry synth will refuse |
 | A trailing `/` is stripped from an argument but kept, and refused, on a list-file line ([ref](reference/synth.md#the-port-list)) | `portscan-pilot.adb` | **conforms to an upstream defect**: named as an entry synth refuses |
+| No MOVED: a listed origin in no tree is missing from the index ([ref](reference/synth.md#the-port-list)) | `portscan.adb` `input_origin_valid` | **differs on purpose**: one MOVED moves is flagged as for any build, pending, the list needing a fix; never followed, `--follow-moved` ignored with a note, synth never building the target |
 | A dependency on a flavored port without `@flavor` goes to the first flavor in the index ([ref](reference/synth.md#parsing-dependencies)) | `portscan.adb` | matches: make's default flavor is the first in `FLAVORS` |
 | A dependency's existence is judged from synth's `SUBDIR` index ([ref](reference/synth.md#walking-the-closure)) | `portscan.adb` | **known gap**: optique tests for a directory with a Makefile, so a port missing from its category's `SUBDIR` is walked rather than an error |
 | `LIB_DEPENDS_ALL` parsed as a build dependency ([ref](reference/synth.md#parsing-dependencies)) | `portscan.adb` | not modelled: it moves synth's rebuild checks (`librun`), not the closure or a loop, which count every kind |
@@ -150,8 +154,8 @@ Two kinds of tests pin the table:
   layering, patterns, groups, flavors sharing a file, the file reader, the
   poudriere.d and synth.ini readers, MOVED, the query environment. They
   alone pin most poudriere and synth rows, driven through fake poudriere.d
-  and synth trees: no fixture test runs a poudriere (`-j`) or synth (`-s`)
-  build.
+  and synth trees: no fixture test runs a poudriere (`-j`) build, and one
+  alone a synth (`-s`) scan, for a listed moved origin.
 - Fixture tests run the binary over a handful of minimal ports laid on the
   host's real `/usr/ports/Mk` (`tests/ports`, `tests/common`), so `make`
   decides and optique must agree with it. `make tests-live` runs them:
@@ -159,7 +163,9 @@ Two kinds of tests pin the table:
     mail/faces), an `OPTIONS_SLAVE` flavor (`misc/slavey`, after
     databases/sqlite3@icu), three flavors sharing a file (`misc/flav`,
     after editors/emacs), a forced group member (`misc/forced`), a
-    Latin-1 make.conf, a dependency on a moved origin;
+    Latin-1 make.conf, a dependency on a moved origin, a listed moved
+    origin flagged, followed under `--follow-moved`, kept by a local build
+    while in the tree, and flagged under `-s`;
   - `tests/fixture_model.rs`: new options counted by line; a hand-written
     file, `:=`/`?=`, a continued line; `options.local` after the file,
     without one, kept by `-m`, locking `decide` by UNSET only, its SET a

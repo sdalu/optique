@@ -235,6 +235,14 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             scanned.result.errors.len()
         );
     }
+    if scanned.flagged_moves() > 0 {
+        // The port a listed origin moved to is not in the closure, so its
+        // options would go as unused while the list only needs a fix.
+        anyhow::bail!(
+            "{} listed origin(s) moved (see above): the list needs a fix; refusing to prune entries",
+            scanned.flagged_moves()
+        );
+    }
     let used = scanned.result.ports.values().map(|i| i.options_name.clone()).collect();
     let ctx = CleanCtx {
         settings: scanned.settings,
@@ -775,6 +783,7 @@ fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
         cli.minimal,
     );
     session.blacklist = scanned.settings.blacklist.clone();
+    session.listed_moves = scanned.moves;
 
     // Background refreshes query against a staging copy of the options files
     // so staged edits take effect before anything is applied for real.
@@ -821,7 +830,18 @@ struct Scanned {
     files: optfiles::OptionsFiles,
     cache: cache::Cache,
     moved: Moved,
+    /// The listed origins MOVED moves (already said on stderr): followed
+    /// under --follow-moved, else left out of the closure and pending.
+    moves: Vec<moved::ListedMove>,
     jobs: usize,
+}
+
+impl Scanned {
+    /// The listed origins MOVED moves that were not followed: each one
+    /// pending, the list needing a fix.
+    fn flagged_moves(&self) -> usize {
+        self.moves.iter().filter(|m| !m.followed).count()
+    }
 }
 
 /// Parallel `make` jobs: -J, else min(16, ncpu).
@@ -1053,17 +1073,40 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
     }
+    // MOVED, read for the listed origins as the build reads it, each time:
+    // never cached, as the cache's carry-over takes MOVED to be read per run.
+    let policy = match settings.env {
+        config::QueryEnv::Jail { .. } => roots::MovedPolicy::Poudriere,
+        config::QueryEnv::Host => roots::MovedPolicy::Local,
+        config::QueryEnv::Synth => roots::MovedPolicy::Synth,
+    };
+    let exists = |o: &str| ctx.locate(o).is_some();
+    let listing = roots::apply_moved(&given, policy, cli.follow_moved, &moved, exists);
+    if cli.follow_moved && policy == roots::MovedPolicy::Synth && !cli.quiet {
+        eprintln!(
+            "  {}        --follow-moved has no effect under -s: synth does not read MOVED",
+            tint(paint, ansi::YELLOW, "note:")
+        );
+    }
     let roots =
-        roots::resolve(&given, settings.flavor_default_all, &ctx, &files, jobs, &mut cache, &moved);
-    let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
+        roots::resolve(&listing.roots, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
+    let mut result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
         let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
         eprint!("\r{}", tint(paint, ansi::GRAY, &line));
         let _ = std::io::stderr().flush();
     });
     eprintln!();
 
-    for note in &result.moved_notes {
-        eprintln!("{} {note}", tint(paint, ansi::MAGENTA, "moved:"));
+    // A followed origin's old name leads to its target, for a plan naming
+    // it; never over a port of that name the closure holds.
+    for m in listing.moves.iter().filter(|m| m.followed) {
+        if !result.ports.contains_key(&m.listed) {
+            result.aliases.entry(m.listed.clone()).or_insert_with(|| m.to.clone());
+        }
+    }
+    result.errors.splice(0..0, listing.errors);
+    for m in &listing.moves {
+        eprintln!("{} {}", tint(paint, ansi::MAGENTA, "moved:"), m.message());
     }
     for (key, msg) in &result.errors {
         eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
@@ -1185,6 +1228,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         files,
         cache,
         moved,
+        moves: listing.moves,
         jobs,
     })
 }
@@ -1251,6 +1295,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     let scanned = run_scan(cli, rs)?;
     let (queried, from_cache, elapsed) =
         (scanned.result.queried, scanned.result.from_cache, scanned.elapsed);
+    let flagged_moves = scanned.flagged_moves();
     let settings = scanned.settings;
     let dep_loops = scanned.dep_loops;
     // Session gives owner-aware statuses (flavors sharing an options file
@@ -1400,9 +1445,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     // shut until it can be (run_scan already named each one on stderr). So
     // does a dependency on a nonexistent origin, which no build gets past.
     let query_errors = &scanned.result.errors;
-    // The gate: ports owing a decision, loops a human has to untangle, and
-    // errors: ports that could not be checked, or depend on no port.
-    let pending = attention + blocking_loops + query_errors.len();
+    // The gate: ports owing a decision, loops a human has to untangle,
+    // listed origins MOVED moves that were not followed (the list needs a
+    // fix), and errors: ports that could not be checked, or depend on no
+    // port.
+    let pending = attention + blocking_loops + flagged_moves + query_errors.len();
 
     if json {
         // stdout must stay pure JSON: one object, no table, quiet ignored.
@@ -1448,9 +1495,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
                 attention,
                 loops: dep_loops.len(),
                 loops_blocking: blocking_loops,
+                moved: flagged_moves,
                 errors: query_errors.len(),
                 pending,
             },
+            moved: report::moved_entries(&scanned.moves),
             errors: query_errors
                 .iter()
                 .map(|(key, msg)| report::ErrorEntry { subject: key.to_string(), message: msg.clone() })
@@ -1525,6 +1574,9 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
         0 => String::new(),
         n => format!(" · {n} dependency loop{}", if n == 1 { "" } else { "s" }),
     };
+    if flagged_moves > 0 {
+        loop_note.push_str(&format!(" · {flagged_moves} listed moved (see above)"));
+    }
     match query_errors.len() {
         0 => {}
         n => loop_note.push_str(&format!(" · {n} error{} (see above)", if n == 1 { "" } else { "s" })),
@@ -1637,6 +1689,7 @@ fn commit_writes(
             conflicts: pass.conflicts.len(),
         },
         errors,
+        moved: Vec::new(),
     }
 }
 
@@ -1716,7 +1769,8 @@ fn cmd_sync(cli: &Cli, rs: &RootSet, dry_run: bool, json: bool) -> Result<()> {
         }
     }
 
-    let report = commit_writes(&pass, &result.ports, &settings.options_dir, dry_run);
+    let mut report = commit_writes(&pass, &result.ports, &settings.options_dir, dry_run);
+    report.moved = report::moved_entries(&scanned.moves);
     if json {
         report::print(&report)?;
     }
@@ -1832,7 +1886,11 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         }
     }
 
-    let report = commit_writes(&pass, &sess.ports, &settings.options_dir, cli.dry_run);
+    // A listed origin MOVED moves is reported, not part of the gate: decide
+    // answers for the plan, and a plan naming such an origin not followed
+    // finds no port for it (`unknown`), which is.
+    let mut report = commit_writes(&pass, &sess.ports, &settings.options_dir, cli.dry_run);
+    report.moved = report::moved_entries(&scanned.moves);
     report::print(&report)?;
     for w in &report.warnings {
         eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));

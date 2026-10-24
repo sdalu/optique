@@ -15,7 +15,7 @@ mod common;
 
 use std::fs;
 
-use common::{option, stdout, Fixture};
+use common::{option, stderr, stdout, Fixture};
 
 /// A SINGLE group named after an option is checked only while that option
 /// is on: misc/cond with AUDIO off is no conflict, and under -m a file that
@@ -117,12 +117,12 @@ fn a_latin1_make_conf_is_read() {
     assert_eq!(docs["staged"], false, "{docs}");
 }
 
-/// MOVED applies to a listed origin only: misc/oldname listed is misc/cond,
-/// while a port depending on misc/oldname is refused as poudriere refuses
-/// it, misc/cond not queried on its account, and scan counts the error.
+/// A dependency never follows MOVED: a port depending on misc/oldname is
+/// refused as poudriere refuses it, misc/cond not queried on its account,
+/// and scan counts the error.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
-fn a_dependency_on_a_moved_origin_is_an_error_a_listed_one_is_followed() {
+fn a_dependency_on_a_moved_origin_is_an_error() {
     let f = Fixture::new();
     fs::write(f.tree.join("MOVED"), "misc/oldname|misc/cond|2026-01-01|Renamed\n").unwrap();
     let dir = f.tree.join("misc/brokendep");
@@ -147,8 +147,87 @@ fn a_dependency_on_a_moved_origin_is_an_error_a_listed_one_is_followed() {
         "{report}"
     );
     assert!(!report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+}
 
-    let report = common::json(&f.run("scan", &["--json", "misc/oldname"]));
-    assert_eq!(report["summary"]["errors"], 0, "{report}");
-    assert!(report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+fn ports_of(report: &serde_json::Value) -> Vec<String> {
+    report["ports"].as_array().unwrap().iter().map(|p| p["port"].as_str().unwrap().to_string()).collect()
+}
+
+/// A listed origin MOVED moves is flagged and not followed: misc/oldname
+/// is pending (exit 1, a `moved` entry), misc/cond not configured on its
+/// account. `--follow-moved` configures misc/cond, says the list still
+/// names misc/oldname, and does not hold the gate for it. A local build
+/// takes a listed origin in the tree as it is, whatever MOVED says
+/// (misc/forced). Under -s it is flagged too, and never followed: synth
+/// reads no MOVED.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_listed_moved_origin_is_flagged_unless_followed() {
+    let f = Fixture::new();
+    fs::write(
+        f.tree.join("MOVED"),
+        "misc/oldname|misc/cond|2026-01-01|Renamed\nmisc/forced|misc/condep|2026-02-01|Reused\n",
+    )
+    .unwrap();
+
+    let out = f.run("scan", &["--json", "misc/oldname", "misc/forced"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let report = common::json(&out);
+    assert_eq!(
+        report["moved"],
+        serde_json::json!([{"listed": "misc/oldname", "to": "misc/cond", "reason": "Renamed", "followed": false}]),
+        "{report}"
+    );
+    assert_eq!(report["summary"]["moved"], 1, "{report}");
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+    let ports = ports_of(&report);
+    assert!(!ports.contains(&"misc/cond".to_string()), "{ports:?}");
+    assert!(ports.contains(&"misc/forced".to_string()), "a local build keeps misc/forced: {ports:?}");
+    assert!(
+        stderr(&out).contains("listed misc/oldname moved to misc/cond (Renamed): fix the list, or --follow-moved"),
+        "{}",
+        stderr(&out)
+    );
+
+    // Followed: misc/cond configured, the move noted, the gate free of it.
+    f.run("sync", &["--follow-moved", "misc/oldname"]);
+    assert!(f.file("misc_cond").exists(), "sync configures the target");
+    let out = f.run("scan", &["--json", "--follow-moved", "misc/oldname"]);
+    let report = common::json(&out);
+    assert_eq!(report["moved"][0]["followed"], true, "{report}");
+    assert_eq!(report["summary"]["moved"], 0, "{report}");
+    assert_eq!(report["summary"]["pending"], 0, "{report}");
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(ports_of(&report).contains(&"misc/cond".to_string()), "{report}");
+    assert!(stderr(&out).contains("followed, but the list still names misc/oldname"), "{}", stderr(&out));
+
+    // clean --unused refuses to prune while the list names a moved origin.
+    let out = f.optique("clean").args(["--unused", "misc/oldname"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
+    assert!(stderr(&out).contains("refusing to prune"), "{}", stderr(&out));
+    assert!(f.file("misc_cond").exists());
+
+    // synth reads no MOVED: flagged all the same, --follow-moved ignored.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_optique"))
+        .env("XDG_CACHE_HOME", &f.cache)
+        .args(["scan", "--synth=optique-fixture-no-such-profile", "--follow-moved", "--json", "-P"])
+        .arg(&f.tree)
+        .arg("-o")
+        .arg(&f.options)
+        .arg("misc/oldname")
+        .output()
+        .unwrap();
+    let report = common::json(&out);
+    let err = stderr(&out);
+    assert!(err.contains("--follow-moved has no effect under -s"), "{err}");
+    assert!(err.contains("listed misc/oldname moved to misc/cond (Renamed): fix the list\n"), "{err}");
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert_eq!(
+        report["moved"],
+        serde_json::json!([{"listed": "misc/oldname", "to": "misc/cond", "reason": "Renamed", "followed": false}]),
+        "{report}"
+    );
+    assert_eq!(report["summary"]["moved"], 1, "{report}");
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+    assert!(!ports_of(&report).contains(&"misc/cond".to_string()), "{report}");
 }

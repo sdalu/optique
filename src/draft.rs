@@ -124,6 +124,7 @@ mod tests {
             minimal: false,
             blacklist: Default::default(),
             locals: HashMap::new(),
+            listed_moves: Vec::new(),
         }
     }
 

@@ -237,6 +237,13 @@ pub struct Cli {
     #[arg(short = 'f', long = "file", global = true, value_name = "PKGLIST")]
     pub files: Vec<PathBuf>,
 
+    /// Follow MOVED for a listed origin it moves, as the build does, and
+    /// configure the port it leads to; without it such an origin is
+    /// reported as pending, the list needing a fix. Ignored under -s:
+    /// synth does not read MOVED
+    #[arg(long = "follow-moved", global = true)]
+    pub follow_moved: bool,
+
     /// Parallel make jobs (default: min(16, ncpu))
     #[arg(short = 'J', long = "jobs", global = true)]
     pub jobs: Option<usize>,

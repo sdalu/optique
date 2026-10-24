@@ -1845,6 +1845,12 @@ impl App {
         .filter(|(status, _)| counts[*status] > 0)
         .map(|(status, label)| format!("{} {label}", counts[status]))
         .collect();
+        // A listed origin MOVED moves and that was not followed is in no
+        // row: the list names a port that is gone, and needs fixing.
+        let flagged = self.session.listed_moves.iter().filter(|m| !m.followed).count();
+        if flagged > 0 {
+            items.insert(0, format!("{flagged} listed moved (fix the list)"));
+        }
         let draft = draft.map(|(n, age)| {
             let ports = if n == 1 { "port" } else { "ports" };
             (
@@ -6188,6 +6194,38 @@ mod tests {
         terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
         let rows = ui::screen_rows(terminal.backend().buffer());
         assert!(rows.iter().any(|r| r.contains("UNMANAGED: options line 5 assigns OPTIONS_SET")), "{}", rows.join("\n"));
+    }
+
+    /// A listed origin MOVED moves: its target's pane says so in a MOVED:
+    /// line, followed or not, and one not followed, in no row, is counted
+    /// first in the first-run message.
+    #[test]
+    fn a_listed_moved_origin_shows_on_its_target_and_in_the_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = alpha_app(tmp.path(), &["A"]);
+        let moved = |listed: &str, to: &str, followed| crate::moved::ListedMove {
+            listed: PortKey::parse(listed).unwrap(),
+            to: PortKey::parse(to).unwrap(),
+            reason: "renamed".into(),
+            followed,
+            can_follow: true,
+            in_tree: false,
+        };
+        app.session.listed_moves = vec![moved("cat/old", "cat/alpha", true), moved("cat/gone", "cat/elsewhere", false)];
+        app.show_summary(None);
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let rows = ui::screen_rows(terminal.backend().buffer());
+        let shown = rows.join("\n");
+        assert!(shown.contains("MOVED: listed as cat/old (renamed); fix the list"), "{shown}");
+        assert!(!shown.contains("cat/gone"), "{shown}");
+        assert!(rows.last().unwrap().contains("1 listed moved (fix the list)"), "{shown}");
+
+        app.session.listed_moves = vec![moved("cat/old@all", "cat/alpha@all", false)];
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
+        assert!(shown.contains("MOVED: listed as cat/old@all (renamed), not followed;"), "{shown}");
+        assert!(shown.contains("fix the list, or --follow-moved"), "wrapped under its text: {shown}");
     }
 
     /// The make.conf column says what make.conf says whenever a layer names
