@@ -1,3 +1,7 @@
+//! Writing options files: which files a pass writes, from whose view when
+//! flavors share one, and which it removes; then the commit, which renames
+//! them into place only once every one is written.
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write as _;

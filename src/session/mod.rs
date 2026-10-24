@@ -1,3 +1,8 @@
+//! The editing session: the scanned ports and the option state staged for
+//! each options file, the rules an edit must keep (group kinds, IMPLIES,
+//! PREVENTS, the locks), which flavor owns a shared file, and which files
+//! optique leaves alone.
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::apply;

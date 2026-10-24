@@ -1,3 +1,7 @@
+//! Running make: the context every query runs in (trees, options dir,
+//! make.conf, identity, environment), the worker pool that turns ports into
+//! parsed dumps, and the one-off probes of make.conf and the framework.
+
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

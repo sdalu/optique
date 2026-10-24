@@ -1,3 +1,5 @@
+//! The TUI's staging options dir, where edits take effect before Apply.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

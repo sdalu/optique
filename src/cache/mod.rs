@@ -1,3 +1,7 @@
+//! The query cache: one generation file per ports tree and make.conf, an
+//! entry per port valid while its options files are unchanged, and the
+//! entries a new commit of a git tree carries over from the one before.
+
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;

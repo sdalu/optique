@@ -1,3 +1,8 @@
+//! What `clean` removes from the options dir: entries whose port vanished,
+//! entries the closure never reads and files that change nothing over
+//! defaults and make.conf; an entry make reads through a moved OPTIONS_FILE
+//! is kept, and so is a file that cannot be read.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
