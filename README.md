@@ -1,4 +1,4 @@
-# optique
+# optique 👓
 
 Configure the options of a whole build at once, in one screen: for
 poudriere, for synth, or for `make` on the host.
