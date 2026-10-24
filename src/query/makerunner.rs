@@ -355,26 +355,34 @@ fn unreadable_options_file(make_output: &str, port_dbdir: &Path) -> Option<Strin
 static ACTIVE_MAKES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<u32>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// The registry, poisoned or not. Nothing panics holding it, and each
+/// insert or remove is one call that leaves the set whole either way; were
+/// it poisoned, the quit path must still find every make, and a guard
+/// dropped while unwinding must not panic again and abort.
+fn active_makes() -> std::sync::MutexGuard<'static, std::collections::HashSet<u32>> {
+    ACTIVE_MAKES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Registration guard: the pid leaves the registry when the query is done,
 /// whichever way it ends.
 struct ActiveMake(u32);
 
 impl ActiveMake {
     fn register(pid: u32) -> Self {
-        ACTIVE_MAKES.lock().unwrap().insert(pid);
+        active_makes().insert(pid);
         ActiveMake(pid)
     }
 }
 
 impl Drop for ActiveMake {
     fn drop(&mut self) {
-        ACTIVE_MAKES.lock().unwrap().remove(&self.0);
+        active_makes().remove(&self.0);
     }
 }
 
 /// How many make processes are running right now.
 pub fn active_make_count() -> usize {
-    ACTIVE_MAKES.lock().unwrap().len()
+    active_makes().len()
 }
 
 /// Terminate every registered make process (the quit path). Returns how many
@@ -387,7 +395,7 @@ pub fn active_make_count() -> usize {
 /// (an orphan is re-parented and lost to the walk), then signalled in one
 /// `kill`: a child killed first would only let make go on and finish.
 pub fn kill_active_makes() -> usize {
-    let pids: Vec<u32> = ACTIVE_MAKES.lock().unwrap().iter().copied().collect();
+    let pids: Vec<u32> = active_makes().iter().copied().collect();
     if pids.is_empty() {
         return 0;
     }
@@ -741,6 +749,23 @@ mod tests {
         runner.shutdown();
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!sleeping(), "the grandchild outlived the kill");
+    }
+
+    /// A thread that panicked holding the registry leaves it usable: the
+    /// count still answers, and a guard's drop removes without panicking.
+    /// Nothing is registered here, so the other tests' counts stay right.
+    #[test]
+    fn a_poisoned_registry_still_answers() {
+        let _lock = make_test_lock();
+        let _ = std::thread::spawn(|| {
+            let _held = active_makes();
+            panic!("poisoning the registry");
+        })
+        .join();
+        assert!(ACTIVE_MAKES.is_poisoned());
+        let before = active_make_count();
+        drop(ActiveMake(u32::MAX));
+        assert_eq!(active_make_count(), before);
     }
 
     /// Quitting kills the makes still running: the query ends at once, as a
