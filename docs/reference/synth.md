@@ -519,28 +519,33 @@ crashes or loops, gives a result its own code intends otherwise, treats
 two equivalent inputs differently, or contradicts its manual. Each item is
 described where the link points.
 
+Items marked **radical** change what gets built (options, dependencies,
+which origin) or whether the tool runs at all; a tool predicting what
+synth will do follows them, and says so, until they are fixed upstream.
+Unmarked defects change neither and are not to be reproduced.
+
 **Crashes and wrong results**
 
-- The cached options check misses every flavored port: it looks for
-  `<cat>_<port>@<flavor>/options`, while the framework's default
+- **Radical.** The cached options check misses every flavored port: it looks
+  for `<cat>_<port>@<flavor>/options`, while the framework's default
   `OPTIONS_NAME` (`Mk/bsd.options.mk`) has no flavor, so the file is never
-  found and the port always passes. A port that sets its own
-  `OPTIONS_NAME` is checked against the wrong file the same way
-  ([Cached options check](#cached-options-check)).
-- `passed_options_cache_check` slices bytes 17-18 and 19-20 of each line
-  without checking its length, so a line shorter than 18 bytes, or an 18-
-  or 19-byte line without `+=` at 17-18, raises `Constraint_Error`, which
-  nothing on the call path (`limited_cached_options_check`,
+  found and the port always passes. A port that sets its own `OPTIONS_NAME`
+  is checked against the wrong file the same way ([Cached options
+  check](#cached-options-check)).
+- **Radical.** `passed_options_cache_check` slices bytes 17-18 and 19-20 of
+  each line without checking its length, so a line shorter than 18 bytes, or
+  an 18- or 19-byte line without `+=` at 17-18, raises `Constraint_Error`,
+  which nothing on the call path (`limited_cached_options_check`,
   `sanity_check_then_prefail`, `synth.adb`) catches. `default.gpr` keeps
   Ada's run-time checks. `make config` writes such lines itself for a
   package name of four or five characters: for `x11-wm/wmx`, both
   `_OPTIONS_READ=wmx-8` and `# Options for wmx-8` are 19 bytes.
-- The same check counts option lines, not distinct names, so a
+- **Radical.** The same check counts option lines, not distinct names, so a
   hand-written file naming an option twice fails a port whose options did
   not change.
-- The scan reads its 15 values by line position from a file into which
-  `make` writes both standard output and standard error: one diagnostic
-  line shifts every value after it ([The query](#the-query)).
+- **Radical.** The scan reads its 15 values by line position from a file
+  into which `make` writes both standard output and standard error: one
+  diagnostic line shifts every value after it ([The query](#the-query)).
 - The ccache test is `Ada.Directories.Exists` on the configured string,
   so the default `disabled` is a path relative to synth's working
   directory: a directory of that name there turns ccache on
@@ -548,22 +553,23 @@ described where the link points.
 - When the selected profile has no `Directory_packages`, a blank
   `[<profile>]` header is appended even if one already exists
   ([How missing keys are filled](#how-missing-keys-are-filled)).
-- The INI reader raises `Constraint_Error` on a header with no `]`, keeps
-  the `\r` of a CRLF file in every value, keeps a tab in a key, and takes
-  no indented `[name]` for a header
-  ([How a value is read](#how-a-value-is-read)).
+- **Radical.** The INI reader raises `Constraint_Error` on a header with no
+  `]`, keeps the `\r` of a CRLF file in every value, keeps a tab in a key,
+  and takes no indented `[name]` for a header ([How a value is
+  read](#how-a-value-is-read)).
 
 **Inconsistent treatment**
 
-- `<profile>-environment` is applied to builders but not to the scanner,
-  so a variable it sets can change what a port builds without changing
-  what the scan saw ([Environment of a make run](#environment-of-a-make-run)).
-- A port list given as arguments loses a trailing `/`; the same origin as
-  a line of a list file keeps it and is refused
-  ([The port list](#the-port-list)).
-- `LIB_DEPENDS_ALL`, the subpackages' library dependencies, is parsed as a
-  build dependency, so those entries do not count in `librun` and
-  `min_librun`, against which recorded package dependencies are checked
+- **Radical.** `<profile>-environment` is applied to builders but not to the
+  scanner, so a variable it sets can change what a port builds without
+  changing what the scan saw ([Environment of a make
+  run](#environment-of-a-make-run)).
+- **Radical.** A port list given as arguments loses a trailing `/`; the same
+  origin as a line of a list file keeps it and is refused ([The port
+  list](#the-port-list)).
+- **Radical.** `LIB_DEPENDS_ALL`, the subpackages' library dependencies, is
+  parsed as a build dependency, so those entries do not count in `librun`
+  and `min_librun`, against which recorded package dependencies are checked
   ([Parsing dependencies](#parsing-dependencies)).
 
 **Documentation**

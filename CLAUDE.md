@@ -7,6 +7,10 @@
 
 Gate: `make tests` (preflight before it: `make check`)
 
+Upstream defects: do not conform to the "Likely defects" listed at the
+end of each `docs/reference/` page, except those marked **radical**
+(DESIGN.md, "Upstream's behaviour, not its bugs").
+
 Traps:
 
 - A change to what the wrapper dumps or the parser keeps needs `SCHEMA`

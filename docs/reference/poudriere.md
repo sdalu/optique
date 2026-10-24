@@ -580,22 +580,27 @@ loops, gives a result its own code intends otherwise, treats two
 equivalent inputs differently, or contradicts its manual. Each item is
 described where the link points.
 
+Items marked **radical** change what gets built (options, dependencies,
+which origin) or whether the tool runs at all; a tool predicting what
+poudriere will do follows them, and says so, until they are fixed upstream.
+Unmarked defects change neither and are not to be reproduced.
+
 **Loops and wrong results**
 
-- A `MOVED` cycle such as `a|b`, `b|a` collapses to `a|a`, and
+- **Radical.** A `MOVED` cycle such as `a|b`, `b|a` collapses to `a|a`, and
   `check_moved` loops forever when `a` does not exist ([MOVED](#moved)).
-- `parse_MOVED.awk` collapses chains in file order, so `A|B` followed by
-  `B|C` sends `A` to `C` even when `B` exists again; `check_moved` never
-  tests `B` ([MOVED](#moved)).
+- **Radical.** `parse_MOVED.awk` collapses chains in file order, so `A|B`
+  followed by `B|C` sends `A` to `C` even when `B` exists again;
+  `check_moved` never tests `B` ([MOVED](#moved)).
 - In `_delete_old_pkg`, the `originspec_decode` after `return 0` on a
   `MOVED` origin can never run.
 
 **Inconsistent treatment**
 
-- `include_poudriere_confs` scans the arguments before the sub-command
-  defaults the tree to `default`, so a build without `-p` reads neither
-  `default-poudriere.conf` nor `<jail>-default-poudriere.conf`, while
-  `setup_makeconf`, called later, does read `default-make.conf` and
+- **Radical.** `include_poudriere_confs` scans the arguments before the
+  sub-command defaults the tree to `default`, so a build without `-p` reads
+  neither `default-poudriere.conf` nor `<jail>-default-poudriere.conf`,
+  while `setup_makeconf`, called later, does read `default-make.conf` and
   `<jail>-default-make.conf` ([Configuration files](#configuration-files),
   [The layered files](#the-layered-files)).
 - `poudriere options` gives `LOCALBASE=/nonexistent`, `DIALOG4PORTS` and

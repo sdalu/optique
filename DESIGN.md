@@ -98,16 +98,29 @@ nothing.
 ## Upstream's behaviour, not its bugs
 
 optique follows what the ports framework, poudriere and synth mean to do,
-read from their source, and docs/conformance.md records each behaviour.
-Where an upstream behaviour is a defect rather than a rule — synth
-aborting on an options-file line shorter than its fixed-offset probe
-reaches, its INI reader keeping a tab around a key, or the spaces of
-`[ name ]` — optique does the sane thing and says where it differs: a
-note naming the synth.ini line synth will misread, a row marked "differs
-on purpose" in the conformance table. Rejected: copying the defect so
-that optique and the tool always agree, which makes optique wrong in the
-same way and hides the fault from the user who could fix the file or
-report the bug.
+read from their source; docs/reference/ describes each upstream, and
+docs/conformance.md records how optique stands against each behaviour.
+Each reference page ends with "Likely defects": behaviour that reads as a
+bug rather than a rule. optique does not conform to a likely defect until
+it is shown not to be one; it does the sane thing and says where it
+differs ("differs on purpose" in the conformance table).
+
+The exception is a defect that changes behaviour radically: what gets
+built (the options a port ends up with, its dependencies, which origin is
+built) or whether the tool runs at all. Those are marked **radical** in
+docs/reference/, and optique conforms to them: it predicts what the
+upstream tool will actually do, tells the user that this follows an
+upstream defect, and the conformance table records it as "conforms to an
+upstream defect". So optique reads a synth.ini key with a tab in it as
+synth does (ignored, the default used) and names the line; it reports
+that synth will abort on an options file with a line its fixed-offset
+probe overruns, rather than accepting the file silently; it follows
+poudriere's collapsed MOVED chains.
+
+Rejected: copying every defect so that optique and the tool always agree,
+which makes optique wrong in the same way and hides the fault; and
+ignoring every defect, which leaves optique promising a result the tool
+will not produce where the difference is the one the user would notice.
 
 ## Which build is configured: poudriere.d, unless `-l` says otherwise
 

@@ -578,14 +578,19 @@ framework gives a result its own code intends otherwise, treats two
 equivalent inputs differently, or leaves a list incomplete. Each item is
 described where the link points.
 
+Items marked **radical** change what gets built (options, dependencies,
+which origin) or whether the build runs at all; a tool predicting what
+the framework will do follows them, and says so, until they are fixed upstream.
+Unmarked defects change neither and are not to be reproduced.
+
 **Wrong results**
 
-- Members of a conditional single or multi group whose option is off are
-  removed from `PORT_OPTIONS` by `pre-check-config`, after the option
-  helpers ran, so their `_DEPENDS`, `_USES` and other helpers stay
+- **Radical.** Members of a conditional single or multi group whose option
+  is off are removed from `PORT_OPTIONS` by `pre-check-config`, after the
+  option helpers ran, so their `_DEPENDS`, `_USES` and other helpers stay
   applied: on `mail/faces`, `make WITH=SOX` shows `SOX` off and
-  `play:audio/sox` still in `RUN_DEPENDS`
-  ([The config targets](#the-config-targets)).
+  `play:audio/sox` still in `RUN_DEPENDS` ([The config
+  targets](#the-config-targets)).
 - A set word is tested as a pattern but appended literally:
   `OPTIONS_SET=E*` (or `WITH=E*`) turns nothing on, yet removes every
   matching option from `NEW_OPTIONS`, so `config-conditional` stops
@@ -595,9 +600,9 @@ described where the link points.
   directory alone: two flavours of one port count as one, and only the
   first met is recursed into, so `all-depends-list` can miss the
   dependencies of the second ([Lists and closures](#lists-and-closures)).
-- `<KIND>_DEPENDS_ALL` and `_UNIFIED_DEPENDS` are assigned only inside
-  `.if !target(depends)`: a port that defines its own `depends` target has
-  none, and every list built on them comes out empty
+- **Radical.** `<KIND>_DEPENDS_ALL` and `_UNIFIED_DEPENDS` are assigned only
+  inside `.if !target(depends)`: a port that defines its own `depends`
+  target has none, and every list built on them comes out empty
   ([Assembly](#assembly)).
 - `do-config` marks an option set when `grep -qw` finds its name in the
   dialog's output; `-` is a word boundary for `grep`, and option names
@@ -606,14 +611,14 @@ described where the link points.
 
 **Inconsistent treatment**
 
-- `do-depends.sh` tests `@flavor` and `~subpkg` in one `case`, flavour
-  first, so an origin carrying both is split at the `@` only and the
+- **Radical.** `do-depends.sh` tests `@flavor` and `~subpkg` in one `case`,
+  flavour first, so an origin carrying both is split at the `@` only and the
   `~subpkg` stays in the flavour; `depends-list.sh` strips the `~` first
   ([Kinds and syntax](#kinds-and-syntax)).
-- `IMPLIES` is followed transitively when building `PORT_OPTIONS`, but
-  the pass that excludes an option implying an excluded one is one level
-  deep and looks only at `OPTIONS_DEFINE`, not at group members
-  ([The option list](#the-option-list)).
+- **Radical.** `IMPLIES` is followed transitively when building
+  `PORT_OPTIONS`, but the pass that excludes an option implying an excluded
+  one is one level deep and looks only at `OPTIONS_DEFINE`, not at group
+  members ([The option list](#the-option-list)).
 
 **Dead or misleading**
 
