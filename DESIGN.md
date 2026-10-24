@@ -323,7 +323,9 @@ the entries that change cannot reach (`cache::makeconf`):
   counted as a multiset of lines with their conditional depth. A changed
   variable must be assigned under no conditional anywhere, read by no
   line, and the make.conf must include no file: the value make gives it
-  outside any port is then the one every port sees.
+  outside any port is then the one every port sees. A changed line
+  expanding anything (`$`) is no option edit: the probe outside any port
+  cannot expand it as a port would (`${PORTNAME}` reads empty there).
 - make is asked those values under the old text and the new (two `make
   -V`s outside any port, `makerunner::make_conf_values`). The words in one
   value and not the other reach a port when one matches any of its
@@ -394,8 +396,10 @@ computed, so a file changed under it would file one option value's result
 under the other's bytes; due ports wait and go together once it is done.
 Apply writes every file atomically — temp file, `fsync`,
 rename — and skips a file that is semantically identical (same option list,
-a line for every option, and make reading the same options from it as from
-the file it would write), so a pkgname-only change does not force a rewrite,
+a line for every option, and make building with the same options from it as
+from the file it would write: before bsd.port.mk drops the members of a
+conditional group whose option is off, whose helpers ran with them,
+`session::built_with`), so a pkgname-only change does not force a rewrite,
 as with `make config-conditional` (`src/apply/mod.rs`). Identical is judged by
 running both files through the framework's own layering, IMPLIES last,
 never from the port's queried `effective`: in the TUI a refresh has queried

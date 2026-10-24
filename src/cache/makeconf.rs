@@ -104,7 +104,9 @@ fn is_option_variable(name: &str) -> bool {
 
 /// The option variables an edit from `old` to `new` touches, when that is
 /// all it does: every line one of the texts has and the other has not is a
-/// comment, a blank, or a top-level assignment to such a variable, each such
+/// comment, a blank, or a top-level assignment to such a variable whose value
+/// references nothing (a `$` may name a port's variable, `${PORTNAME}`,
+/// which the probe outside any port reads empty), each such
 /// variable is assigned nowhere under a conditional and read by no line,
 /// and neither text includes another file, whose content the texts do not
 /// show. None for any other edit, which is no option edit, and for no edit.
@@ -131,7 +133,7 @@ pub(super) fn option_edit(old: &str, new: &str) -> Option<Vec<String>> {
             continue;
         }
         let (name, op) = assignment(text)?;
-        if line.depth > 0 || op == "!=" || !is_option_variable(name) {
+        if line.depth > 0 || op == "!=" || !is_option_variable(name) || text.contains('$') {
             return None;
         }
         vars.insert(name.to_string());
@@ -296,6 +298,9 @@ mod tests {
             "OPTIONS_UNSET+=DOCS\n.include \"/etc/opts.conf\"\n",
             "OPTIONS_UNSET+=DOCS NLS\nX=${OPTIONS_UNSET}\n",
             "OPTIONS_FILE_SET+=A\nOPTIONS_UNSET+=DOCS\n",
+            // Its value per port: the probe reads it empty outside one.
+            "OPTIONS_UNSET+=DOCS\nOPTIONS_SET+=${PORTNAME:S/tmux/UTF8PROC/}\n",
+            "OPTIONS_UNSET+=DOCS\nsysutils_tmux_SET=${FLAVOR}\n",
         ] {
             assert_eq!(edit(base, new), None, "{new}");
         }

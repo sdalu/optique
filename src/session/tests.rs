@@ -2024,6 +2024,32 @@ fn an_unchecked_conditional_group_loses_its_members() {
         effective_with(info, Some(&on)),
         set(&["AUDIO", "NAS", "NLS"])
     );
+    // NAS's helpers ran before the drop: a file choosing SOX instead builds
+    // otherwise though PORT_OPTIONS is the same, so it is neither identical
+    // to nor redundant against the NAS one.
+    let sox = SavedOptionsFile {
+        set: set(&["NLS", "SOX"]),
+        unset: set(&["DOCS", "AUDIO", "NAS", "RPLAY"]),
+        ..file.clone()
+    };
+    assert_eq!(
+        effective_with(info, Some(&sox)),
+        effective_with(info, Some(&file))
+    );
+    assert_ne!(built_with(info, Some(&sox)), built_with(info, Some(&file)));
+    let mut queried = info.clone();
+    queried.options.effective = effective_with(info, Some(&sox));
+    // options.local saying what the NAS file says: the SOX file over it
+    // still changes the build.
+    let local = &file;
+    assert_eq!(
+        crate::clean::redundancy_diff(&queried, local, local),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        crate::clean::redundancy_diff(&queried, local, &sox),
+        ["+SOX", "-NAS"]
+    );
 }
 
 /// bsd.port.mk's pre-check-config takes a SINGLE or MULTI group for
@@ -2465,7 +2491,14 @@ fn what_an_option_implies_goes_in_listed_or_not() {
     ports.get_mut(&key).unwrap().options.effective = set(&["C", "D", "FOO"]);
     let info = ports[&key].clone();
     assert_eq!(nofile_effective(&info), set(&["C", "D", "FOO"]));
-    assert!(crate::clean::redundancy_diff(&info, &SavedOptionsFile::default()).is_empty());
+    assert!(
+        crate::clean::redundancy_diff(
+            &info,
+            &SavedOptionsFile::default(),
+            &SavedOptionsFile::default()
+        )
+        .is_empty()
+    );
     let s = session_for(ports);
     assert_eq!(s.state(&info).unwrap().staged, set(&["C", "D"]));
     assert_eq!(

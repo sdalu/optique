@@ -237,19 +237,33 @@ pub fn keep_read(
 /// empty file without one): make reads options.local either way
 /// (bsd.options.mk:342), so the file is redundant only when it alone
 /// changes nothing. `+OPT` = the file turns it on, `-OPT` = the file turns
-/// it off. Empty means the file is redundant.
+/// it off. Empty means the file is redundant. `file` is the options file
+/// with `local` read after it: a member of a conditional group whose option
+/// is off is gone from PORT_OPTIONS, but its helpers ran with it, so the
+/// file changes the build when it changes what is built with
+/// (`session::built_with`) even where PORT_OPTIONS is the same.
 pub fn redundancy_diff(
     info: &PortInfo,
     local: &crate::optionsfile::SavedOptionsFile,
+    file: &crate::optionsfile::SavedOptionsFile,
 ) -> Vec<String> {
-    let nofile = crate::session::effective_with(info, Some(local));
-    let effective = &info.options.effective;
-    let mut out: Vec<String> = effective
-        .difference(&nofile)
-        .map(|o| format!("+{o}"))
-        .collect();
-    out.extend(nofile.difference(effective).map(|o| format!("-{o}")));
-    out
+    use std::collections::BTreeSet;
+    let diff = |with: &BTreeSet<String>, without: &BTreeSet<String>| {
+        let mut out: Vec<String> = with.difference(without).map(|o| format!("+{o}")).collect();
+        out.extend(without.difference(with).map(|o| format!("-{o}")));
+        out
+    };
+    let out = diff(
+        &info.options.effective,
+        &crate::session::effective_with(info, Some(local)),
+    );
+    if !out.is_empty() {
+        return out;
+    }
+    diff(
+        &crate::session::built_with(info, Some(file)),
+        &crate::session::built_with(info, Some(local)),
+    )
 }
 
 /// Delete the options file and (when empty) its directory: `options`, or
@@ -431,7 +445,7 @@ mod tests {
             effective: ["B".to_string()].into(),
             ..Default::default()
         };
-        let d = redundancy_diff(&info_with(o), &Default::default());
+        let d = redundancy_diff(&info_with(o), &Default::default(), &Default::default());
         assert_eq!(d, vec!["+B".to_string(), "-A".to_string()]);
     }
 
@@ -445,11 +459,20 @@ mod tests {
             effective: ["A".to_string()].into(),
             ..Default::default()
         };
-        assert!(redundancy_diff(&info_with(o.clone()), &Default::default()).is_empty());
+        assert!(
+            redundancy_diff(
+                &info_with(o.clone()),
+                &Default::default(),
+                &Default::default()
+            )
+            .is_empty()
+        );
 
         // file deviates: B enabled although default+mc say off.
         o.effective = ["A".to_string(), "B".to_string()].into();
-        assert!(!redundancy_diff(&info_with(o), &Default::default()).is_empty());
+        assert!(
+            !redundancy_diff(&info_with(o), &Default::default(), &Default::default()).is_empty()
+        );
     }
 
     /// bsd.options.mk:342 reads options.local with or without the options
@@ -466,7 +489,7 @@ mod tests {
         };
         let local =
             crate::optionsfile::SavedOptionsFile::default().with_local("OPTIONS_FILE_SET+=B\n");
-        assert_eq!(redundancy_diff(&info_with(o), &local), ["-B"]);
+        assert_eq!(redundancy_diff(&info_with(o), &local, &local), ["-B"]);
     }
 
     /// A file nobody could read is not deleted: removing it needs only the

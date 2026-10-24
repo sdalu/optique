@@ -1247,6 +1247,15 @@ pub(crate) fn nofile_effective(info: &PortInfo) -> BTreeSet<String> {
 /// `file` is ignored outright when make.conf has an OPTIONS_OVERRIDE for
 /// the port — see below.
 pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
+    unchecked_groups(&info.options, built_with(info, file)).1
+}
+
+/// What the build reads from `file`: [`effective_with`] before bsd.port.mk
+/// drops the members of a conditional group whose option is off. Their
+/// helpers (`_DEPENDS`, `_CONFIGURE_ON`, ...) ran on this set first and stay
+/// applied, so two files only build the same when this set is the same:
+/// deciding a file is identical or redundant compares this, not PORT_OPTIONS.
+pub(crate) fn built_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -> BTreeSet<String> {
     let o = &info.options;
     let complete = &o.complete;
     // bsd.options.mk:300-304: OPTIONS_OVERRIDE, defined even empty, forgets
@@ -1295,12 +1304,12 @@ pub(crate) fn effective_with(info: &PortInfo, file: Option<&SavedOptionsFile>) -
         apply_layer(complete, &mut set, adds, list);
     }
     // IMPLIES (bsd.options.mk:411) and OPTIONS_SLAVE (:447) come last, not in
-    // the list but on whatever the layers above said. Then bsd.port.mk drops
+    // the list but on whatever the layers above said. bsd.port.mk then drops
     // the members of a conditional group whose option is off from
-    // PORT_OPTIONS (see `unchecked_groups`).
+    // PORT_OPTIONS (`effective_with`).
     let mut set = make_implies(info, set);
     set.extend(o.slave.iter().cloned());
-    unchecked_groups(o, set).1
+    set
 }
 
 /// The IMPLIES closure as bsd.options.mk:410-440 computes PORT_OPTIONS:

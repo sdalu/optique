@@ -475,8 +475,9 @@ impl<'a> RedundancyPass<'a> {
         let local = self
             .files
             .under_local(&entry.options_name, Default::default());
+        let file = self.files.combined(&entry.options_name);
         let deviates = session::moved(&f.infos[0]).is_none()
-            && shared_file_deviation(&f.infos, &local).is_some();
+            && shared_file_deviation(&f.infos, &local, &file).is_some();
         if others.is_empty() || deviates {
             self.settle(f);
             return Vec::new();
@@ -550,7 +551,8 @@ impl<'a> RedundancyPass<'a> {
         let local = self
             .files
             .under_local(&f.entry.options_name, Default::default());
-        match shared_file_deviation(&readers, &local) {
+        let file = self.files.combined(&f.entry.options_name);
+        match shared_file_deviation(&readers, &local, &file) {
             None => self.found.removals.push(clean::Removal {
                 options_name: f.entry.options_name.clone(),
                 dir: f.entry.dir.clone(),
@@ -569,6 +571,7 @@ impl<'a> RedundancyPass<'a> {
 fn shared_file_deviation(
     infos: &[PortInfo],
     local: &optionsfile::SavedOptionsFile,
+    file: &optionsfile::SavedOptionsFile,
 ) -> Option<String> {
     // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
     // the file; it is kept, not judged redundant, whatever it says.
@@ -579,7 +582,7 @@ fn shared_file_deviation(
         ));
     }
     infos.iter().find_map(|info| {
-        let diff = clean::redundancy_diff(info, local);
+        let diff = clean::redundancy_diff(info, local, file);
         if diff.is_empty() {
             None
         } else if info.is_default_flavor() {
@@ -615,11 +618,16 @@ mod tests {
         };
         let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
         assert_eq!(
-            super::shared_file_deviation(std::slice::from_ref(&mysql), &Default::default()),
+            super::shared_file_deviation(
+                std::slice::from_ref(&mysql),
+                &Default::default(),
+                &Default::default()
+            ),
             None
         );
-        let why = super::shared_file_deviation(&[mysql, pgsql], &Default::default())
-            .expect("@pgsql reads MYSQL from the file");
+        let why =
+            super::shared_file_deviation(&[mysql, pgsql], &Default::default(), &Default::default())
+                .expect("@pgsql reads MYSQL from the file");
         assert!(
             why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"),
             "{why}"
@@ -639,8 +647,12 @@ mod tests {
         info.options.defaults = ["DOCS".into()].into();
         info.options.effective = ["DOCS".into()].into();
         info.options.r#override = Some(["DOCS".to_string()].into());
-        let why = super::shared_file_deviation(std::slice::from_ref(&info), &Default::default())
-            .expect("an override must never be judged redundant");
+        let why = super::shared_file_deviation(
+            std::slice::from_ref(&info),
+            &Default::default(),
+            &Default::default(),
+        )
+        .expect("an override must never be judged redundant");
         assert!(why.contains("OPTIONS_OVERRIDE"), "{why}");
     }
 }

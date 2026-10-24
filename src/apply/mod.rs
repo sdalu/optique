@@ -285,8 +285,8 @@ pub fn plan_writes<'a>(
             let without = files.under_local(options_name, SavedOptionsFile::default());
             let redundant = !planned.foreign
                 && cands.iter().all(|c| {
-                    crate::session::effective_with(c.info, Some(&with_file))
-                        == crate::session::effective_with(c.info, Some(&without))
+                    crate::session::built_with(c.info, Some(&with_file))
+                        == crate::session::built_with(c.info, Some(&without))
                 });
             if redundant {
                 if files.bytes(options_name).is_some() {
@@ -427,8 +427,7 @@ fn up_to_date(
         return false;
     }
     let would = local(written_file(info, enabled));
-    crate::session::effective_with(info, Some(old))
-        == crate::session::effective_with(info, Some(&would))
+    crate::session::built_with(info, Some(old)) == crate::session::built_with(info, Some(&would))
 }
 
 /// The file `chosen` writes for the flavors `cands` sharing it, as make

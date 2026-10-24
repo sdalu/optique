@@ -183,7 +183,8 @@ it cannot reach the same way. When every line it adds or removes is a
 comment, a blank, or a top-level assignment to `OPTIONS_SET`,
 `OPTIONS_UNSET`, their `_FORCE` forms, `WITH`, `WITHOUT` or a per-port
 `<OPTIONS_NAME>_SET` and the like (none assigned under a conditional or
-read by another line, and no `.include` in the file), make is asked their
+read by another line, no changed one expanding anything with `$`, and no
+`.include` in the file), make is asked their
 values before and after. A port is queried again when a word in one value
 and not the other matches one of its options, or its own knob changed;
 the others are kept, their dump showing the new value. On an 879-port
