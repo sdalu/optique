@@ -41,6 +41,7 @@ Contents:
 - [The config targets](#the-config-targets)
 - [Dependencies](#dependencies)
 - [Querying with make -V](#querying-with-make--v)
+- [Likely defects](#likely-defects)
 - [Sources](#sources)
 
 ## Finding make.conf
@@ -451,9 +452,12 @@ pattern:origin[@flavor][:target]          origin may also be origin~subpkg
   the path.
 - A relative origin is looked up in each of `OVERLAYS`, then `PORTSDIR`;
   the first with a `Makefile` wins.
-- `target` replaces `DEPENDS_TARGET` (default `install`), `fetch` becoming
-  `checksum`. `DEPENDS_PRECLEAN` and `DEPENDS_CLEAN` add `clean`, but only
-  when a target field is given.
+- `target` replaces `DEPENDS_TARGET`, `fetch` becoming `checksum`, and
+  `DEPENDS_PRECLEAN` and `DEPENDS_CLEAN` put `clean` before and after it.
+  Without a target field, `DEPENDS_TARGET` already carries them:
+  `bsd.port.mk` builds it, when not defined, as `install` (`reinstall`
+  under `make reinstall`), preceded by `clean` with `DEPENDS_PRECLEAN` and
+  followed by `clean` with `DEPENDS_CLEAN`.
 
 The `depends` target runs `pkg-`, `extract-`, `patch-`, `lib-`, `fetch-`,
 `build-` and `run-depends` (not `test-depends`), each calling
@@ -566,6 +570,72 @@ Pitfalls:
 - `-V` builds no target, so it does not fail on `IGNORE` or an invalid
   configuration; those stop a build through `check-sanity` only and must
   be read as variables.
+
+## Likely defects
+
+Behaviour that reads as a defect rather than a design choice: the
+framework gives a result its own code intends otherwise, treats two
+equivalent inputs differently, or leaves a list incomplete. Each item is
+described where the link points.
+
+**Wrong results**
+
+- Members of a conditional single or multi group whose option is off are
+  removed from `PORT_OPTIONS` by `pre-check-config`, after the option
+  helpers ran, so their `_DEPENDS`, `_USES` and other helpers stay
+  applied: on `mail/faces`, `make WITH=SOX` shows `SOX` off and
+  `play:audio/sox` still in `RUN_DEPENDS`
+  ([The config targets](#the-config-targets)).
+- A set word is tested as a pattern but appended literally:
+  `OPTIONS_SET=E*` (or `WITH=E*`) turns nothing on, yet removes every
+  matching option from `NEW_OPTIONS`, so `config-conditional` stops
+  asking about options nobody chose
+  ([How the words are matched](#how-the-words-are-matched)).
+- Without `DEPENDS_SHOW_FLAVOR`, `depends-list.sh` deduplicates on the
+  directory alone: two flavours of one port count as one, and only the
+  first met is recursed into, so `all-depends-list` can miss the
+  dependencies of the second ([Lists and closures](#lists-and-closures)).
+- `<KIND>_DEPENDS_ALL` and `_UNIFIED_DEPENDS` are assigned only inside
+  `.if !target(depends)`: a port that defines its own `depends` target has
+  none, and every list built on them comes out empty
+  ([Assembly](#assembly)).
+- `do-config` marks an option set when `grep -qw` finds its name in the
+  dialog's output; `-` is a word boundary for `grep`, and option names
+  may contain `-` (`pre-check-config` accepts `[-_A-Z0-9]`), so `FOO`
+  matches inside `FOO-BAR`. By reading and a `grep` check, not a port.
+
+**Inconsistent treatment**
+
+- `do-depends.sh` tests `@flavor` and `~subpkg` in one `case`, flavour
+  first, so an origin carrying both is split at the `@` only and the
+  `~subpkg` stays in the flavour; `depends-list.sh` strips the `~` first
+  ([Kinds and syntax](#kinds-and-syntax)).
+- `IMPLIES` is followed transitively when building `PORT_OPTIONS`, but
+  the pass that excludes an option implying an excluded one is one level
+  deep and looks only at `OPTIONS_DEFINE`, not at group members
+  ([The option list](#the-option-list)).
+
+**Dead or misleading**
+
+- `do-config` writes `_OPTIONS_READ` and `_FILE_COMPLETE_OPTIONS_LIST`
+  into every options file; nothing under `Mk/` reads them back.
+
+**Questionable rather than wrong**
+
+- An options file is read after `OPTIONS_SET`, `OPTIONS_UNSET`, the
+  per-port lists and `OPTIONS_OVERRIDE` were used, so those assigned there
+  are silently inert, while FORCE and `WITH` assigned there work
+  ([How the words are matched](#how-the-words-are-matched)).
+- Every `OPTIONS_FILE_SET` of both files applies before every
+  `OPTIONS_FILE_UNSET`, so `options.local` cannot turn on an option the
+  options file turns off.
+- No unset variable can turn off an implied option: `IMPLIES` runs after
+  `WITHOUT` ([IMPLIES and PREVENTS](#implies-and-prevents)).
+- `config-recursive` computes its list once, so options chosen in its
+  dialogs that add dependencies are not configured in the same run.
+- The stock descriptions of `bsd.options.desc.mk` are loaded only under
+  `make(*config*)` or a `-V` of some `*_DESC`, so other queries see none
+  ([Querying with make -V](#querying-with-make--v)).
 
 ## Sources
 
