@@ -237,11 +237,19 @@ ownership, so `safe.directory=*` is given: `diff-tree` reads no work tree
 and runs no hook, and optique runs the tree's Makefiles anyway. A tree
 without git and an overlay that changed carry nothing over.
 
-Known gaps: an `exists()` probe of another port's directory
-(`Mk/Uses/python.mk` and `zig.mk` check that their interpreter's port is
-there) is not tracked, so a port appearing behind such a probe is not
-noticed; a port vanishing is, by the dependency on it failing. Uncommitted
-edits to the tree were already invisible to the key.
+Known gap: a port that a query found missing through an `exists()`
+probe, and that a later commit adds, is not noticed. Two probes in `Mk/`
+do this: `Uses/zig.mk` IGNOREs a port whose `lang/zig<N>` does not exist,
+and `Uses/electron.mk` one whose `devel/electron<N>/Makefile.version`
+does not, so such an IGNORE is carried over until the port, its master or
+the `.mk` changes (ten ports use either, and their version moves with the
+port that provides it). The opposite cases are caught: electron's file
+once present is included, so it is matched by name, and a `lang/zig<N>`
+that vanishes fails as the dependency on it. `Uses/python.mk` probes only
+under `_PORTS_ENV_CHECK`, which no query sets, so it always includes the
+version file. No port's Makefile in the tree probes another port's
+directory. Uncommitted edits to the tree were already invisible to the
+key.
 
 Rejected: synth's directory mtimes, which miss an edit made in place and
 cannot tell what a port reads outside its directory; fingerprinting every
