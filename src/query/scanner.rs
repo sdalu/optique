@@ -453,6 +453,7 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
+            identity: crate::query::makerunner::Identity::Invoker,
         };
         let moved = Moved::parse(
             "cat/old|cat/new|2026-01-01|renamed\n\
@@ -508,6 +509,7 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().join("options"),
             overlays: Vec::new(),
+            identity: crate::query::makerunner::Identity::Invoker,
         };
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let pd = tmp.path().join("poudriere.d");
