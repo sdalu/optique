@@ -830,12 +830,12 @@ fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
         let before = line.spans[..n.saturating_sub(1)].iter().any(|s| !s.content.trim().is_empty());
         if let Some(span) = line.spans.last_mut() {
             let text = span.content.as_ref();
-            if !text.ends_with(' ') {
-                if let Some(end) =
-                    text.rfind(' ').filter(|&e| before || !text[..e].trim().is_empty())
-                {
-                    span.content = text[..end].to_string().into();
-                }
+            if !text.ends_with(' ')
+                && let Some(end) = text
+                    .rfind(' ')
+                    .filter(|&e| before || !text[..e].trim().is_empty())
+            {
+                span.content = text[..end].to_string().into();
             }
         }
     }
@@ -1106,13 +1106,13 @@ fn option_line(
     // No badge for a make.conf contradiction: the magenta option name above
     // already says it, and the row needs the columns for the description.
 
-    if let Some(by) = app.session.implied_by(info, opt) {
-        if on {
-            spans.push(Span::styled(
-                format!(" implied by {by}"),
-                Style::default().fg(Color::Cyan),
-            ));
-        }
+    if let Some(by) = app.session.implied_by(info, opt)
+        && on
+    {
+        spans.push(Span::styled(
+            format!(" implied by {by}"),
+            Style::default().fg(Color::Cyan),
+        ));
     }
 
     if let Some(def) = opts.defs.get(opt) {

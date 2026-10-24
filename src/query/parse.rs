@@ -103,11 +103,11 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                 let name = name.trim();
                 let v = v.trim();
                 // Group descriptions land on the group, everything else on defs.
-                if tag == "DESC" {
-                    if let Some(g) = opts.groups.iter_mut().find(|g| g.name == name) {
-                        g.desc = v.to_string();
-                        continue;
-                    }
+                if tag == "DESC"
+                    && let Some(g) = opts.groups.iter_mut().find(|g| g.name == name)
+                {
+                    g.desc = v.to_string();
+                    continue;
                 }
                 let def = opts.defs.entry(name.to_string()).or_default();
                 match tag {

@@ -217,10 +217,10 @@ pub fn redundancy_diff(info: &PortInfo, local: &crate::optionsfile::SavedOptions
 /// else would stop the removal of a file whose content nobody has seen.
 pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
     let file = removal.dir.join("options");
-    if let Err(e) = fs::File::open(&file) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return Err(std::io::Error::new(e.kind(), format!("cannot read {}, left in place: {e}", file.display())));
-        }
+    if let Err(e) = fs::File::open(&file)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        return Err(std::io::Error::new(e.kind(), format!("cannot read {}, left in place: {e}", file.display())));
     }
     fs::remove_file(&file)?;
     if removal.dir.join("options.local").is_file() {

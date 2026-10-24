@@ -263,10 +263,10 @@ fn synth_selected_profile(
     ini: &(impl AsRef<[u8]> + ?Sized),
     env_profile: Option<&str>,
 ) -> (String, &'static str) {
-    if let Some(env) = env_profile.filter(|p| !p.is_empty()) {
-        if synth_ini_lookup(ini, env, "Directory_packages").is_some() {
-            return (env.to_string(), "SYNTHPROFILE");
-        }
+    if let Some(env) = env_profile.filter(|p| !p.is_empty())
+        && synth_ini_lookup(ini, env, "Directory_packages").is_some()
+    {
+        return (env.to_string(), "SYNTHPROFILE");
     }
     match synth_ini_lookup(ini, SYNTH_GLOBAL_SECTION, "profile_selected") {
         Some(p) => (p, "synth.ini profile_selected"),

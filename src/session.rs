@@ -278,10 +278,10 @@ impl Session {
             if !reachable.insert(key.clone()) {
                 continue;
             }
-            if let Some(info) = self.ports.get(&key) {
-                if !self.blacklist.matches(&info.canonical, info.is_default_flavor()) {
-                    stack.extend(self.resolved_deps(info));
-                }
+            if let Some(info) = self.ports.get(&key)
+                && !self.blacklist.matches(&info.canonical, info.is_default_flavor())
+            {
+                stack.extend(self.resolved_deps(info));
             }
         }
         let removed: Vec<PortKey> =
@@ -561,10 +561,10 @@ impl Session {
     pub fn revert(&mut self, key: &PortKey) {
         // A flavor reading a file of its own has nothing to revert, and the
         // shared state is not its own.
-        if let Some(info) = self.ports.get(key).filter(|i| moved(i).is_none()) {
-            if let Some(state) = self.states.get_mut(&info.options_name) {
-                state.staged = state.baseline.clone();
-            }
+        if let Some(info) = self.ports.get(key).filter(|i| moved(i).is_none())
+            && let Some(state) = self.states.get_mut(&info.options_name)
+        {
+            state.staged = state.baseline.clone();
         }
     }
 

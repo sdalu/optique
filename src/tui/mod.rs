@@ -1133,16 +1133,16 @@ impl App {
         let keep = self.selected_key();
         self.rebuild_visible(keep.clone());
         let mut why = None;
-        if let Some(key) = keep.filter(|k| Some(k) != self.selected_key().as_ref()) {
-            if self.focus == Focus::Editor {
-                self.focus = Focus::List;
-                let reason = match self.session.ports.get(&key) {
-                    None => "left the closure",
-                    Some(info) if !info.options.has_options() => "has no options any more",
-                    Some(_) => "is not in this view",
-                };
-                why = Some(format!("{key} {reason}: back to the list"));
-            }
+        if let Some(key) = keep.filter(|k| Some(k) != self.selected_key().as_ref())
+            && self.focus == Focus::Editor
+        {
+            self.focus = Focus::List;
+            let reason = match self.session.ports.get(&key) {
+                None => "left the closure",
+                Some(info) if !info.options.has_options() => "has no options any more",
+                Some(_) => "is not in this view",
+            };
+            why = Some(format!("{key} {reason}: back to the list"));
         }
         self.rebuild_editor();
         why
@@ -1351,43 +1351,42 @@ impl App {
             }
         }
         let owner_complete = &self.session.owner_info(info).options.complete;
-        if let Some(state) = self.session.state(info) {
-            if let Some(saved) = &state.saved {
-                let file_known: BTreeSet<String> = saved
-                    .complete
-                    .iter()
-                    .chain(saved.recorded())
-                    .filter(|o| !opts.complete.contains(*o))
-                    .cloned()
-                    .collect();
-                // Known to the owning (default) flavor: excluded here, not obsolete.
-                let (excluded, obsolete): (Vec<String>, Vec<String>) = file_known
-                    .into_iter()
-                    .partition(|o| owner_complete.contains(o));
-                if !excluded.is_empty() {
-                    self.editor_rows.push(EditorRow::ExcludedHeader);
-                    for o in excluded {
-                        self.editor_rows.push(EditorRow::Excluded(o));
-                    }
+        if let Some(state) = self.session.state(info)
+            && let Some(saved) = &state.saved
+        {
+            let file_known: BTreeSet<String> = saved
+                .complete
+                .iter()
+                .chain(saved.recorded())
+                .filter(|o| !opts.complete.contains(*o))
+                .cloned()
+                .collect();
+            // Known to the owning (default) flavor: excluded here, not obsolete.
+            let (excluded, obsolete): (Vec<String>, Vec<String>) = file_known
+                .into_iter()
+                .partition(|o| owner_complete.contains(o));
+            if !excluded.is_empty() {
+                self.editor_rows.push(EditorRow::ExcludedHeader);
+                for o in excluded {
+                    self.editor_rows.push(EditorRow::Excluded(o));
                 }
-                if !obsolete.is_empty() {
-                    self.editor_rows.push(EditorRow::ObsoleteHeader);
-                    for o in obsolete {
-                        self.editor_rows.push(EditorRow::Obsolete(o));
-                    }
+            }
+            if !obsolete.is_empty() {
+                self.editor_rows.push(EditorRow::ObsoleteHeader);
+                for o in obsolete {
+                    self.editor_rows.push(EditorRow::Obsolete(o));
                 }
             }
         }
         // Restore the cursor onto the same option if it still exists.
-        if let Some(prev) = previous {
-            if let Some(i) = self
+        if let Some(prev) = previous
+            && let Some(i) = self
                 .editor_rows
                 .iter()
                 .position(|r| matches!(r, EditorRow::Option(o) if *o == prev))
-            {
-                self.editor_idx = i;
-                return;
-            }
+        {
+            self.editor_idx = i;
+            return;
         }
         self.editor_select_first();
     }
@@ -1769,10 +1768,10 @@ impl App {
             .collect();
         let (changed, skipped) = self.session.bulk_set(&keys, &opt, on);
         for key in &changed {
-            if let Some(name) = self.session.ports.get(key).map(|i| i.options_name.clone()) {
-                if let Some(staged) = before.get(&name).cloned() {
-                    self.push_undo_entry(name, staged);
-                }
+            if let Some(name) = self.session.ports.get(key).map(|i| i.options_name.clone())
+                && let Some(staged) = before.get(&name).cloned()
+            {
+                self.push_undo_entry(name, staged);
             }
             self.mark_pending(key);
         }
@@ -2233,10 +2232,10 @@ impl App {
     /// not had the time to read — unless it is an error; and nothing but an
     /// error takes the place of an error.
     fn notify(&mut self, msg: &str, error: bool) {
-        if let Some((_, shown_error)) = &self.message {
-            if !error && (self.message_unread || *shown_error) {
-                return;
-            }
+        if let Some((_, shown_error)) = &self.message
+            && !error && (self.message_unread || *shown_error)
+        {
+            return;
         }
         self.flash(msg, error);
     }

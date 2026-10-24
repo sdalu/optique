@@ -273,10 +273,10 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
     // --unused had run_scan's banner say it already.
-    if used.is_none() {
-        if let Some(e) = settings.port_dbdir_error() {
-            eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
-        }
+    if used.is_none()
+        && let Some(e) = settings.port_dbdir_error()
+    {
+        eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
     }
 
     let (vanished, live, mut warnings) =

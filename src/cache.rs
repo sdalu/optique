@@ -108,20 +108,20 @@ impl Cache {
         };
         let mut note = None;
         let fresh = fs::metadata(&path).map_or(true, |m| m.len() == 0);
-        if fresh {
-            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
-                let mut text = serde_json::to_string(&Header { generation: here.clone() })
-                    .map(|h| h + "\n")
-                    .unwrap_or_default();
-                if let Some(carried) = carry_over(cache_dir, &generation, &here, &trees.portsdir) {
-                    for line in &carried.lines {
-                        text.push_str(line);
-                        text.push('\n');
-                    }
-                    note = Some(carried.note);
+        if fresh
+            && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path)
+        {
+            let mut text = serde_json::to_string(&Header { generation: here.clone() })
+                .map(|h| h + "\n")
+                .unwrap_or_default();
+            if let Some(carried) = carry_over(cache_dir, &generation, &here, &trees.portsdir) {
+                for line in &carried.lines {
+                    text.push_str(line);
+                    text.push('\n');
                 }
-                let _ = f.write_all(text.as_bytes());
+                note = Some(carried.note);
             }
+            let _ = f.write_all(text.as_bytes());
         }
         prune_old_generations(cache_dir, &generation);
 
@@ -172,10 +172,10 @@ impl Cache {
             moved_hashes: moved_hashes(info),
             info: info.clone(),
         };
-        if let Some(f) = &mut self.file {
-            if let Ok(line) = serde_json::to_string(&entry) {
-                let _ = writeln!(f, "{line}");
-            }
+        if let Some(f) = &mut self.file
+            && let Ok(line) = serde_json::to_string(&entry)
+        {
+            let _ = writeln!(f, "{line}");
         }
         self.map.insert(entry.info.key.clone(), entry);
     }
@@ -400,11 +400,11 @@ fn mk_files(dir: &Path) -> Vec<(String, String)> {
             let path = entry.path();
             if path.is_dir() {
                 walk(base, &path, out);
-            } else if path.extension().is_some_and(|e| e == "mk") {
-                if let (Ok(rel), Ok(text)) = (path.strip_prefix(base), fs::read(&path)) {
-                    let text = String::from_utf8_lossy(&text).into_owned();
-                    out.push((rel.to_string_lossy().into_owned(), text));
-                }
+            } else if path.extension().is_some_and(|e| e == "mk")
+                && let (Ok(rel), Ok(text)) = (path.strip_prefix(base), fs::read(&path))
+            {
+                let text = String::from_utf8_lossy(&text).into_owned();
+                out.push((rel.to_string_lossy().into_owned(), text));
             }
         }
     }
@@ -449,10 +449,10 @@ fn assignment(line: &str) -> Option<(&str, &str)> {
 /// value, every `${...:!cmd!}`, and the variable of every `${VAR:sh}`.
 fn parse_commands(line: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(at) = line.find("!=") {
-        if assignment(line).is_some_and(|(name, _)| line[..at].trim() == name) {
-            out.push(line[at + 2..].to_string());
-        }
+    if let Some(at) = line.find("!=")
+        && assignment(line).is_some_and(|(name, _)| line[..at].trim() == name)
+    {
+        out.push(line[at + 2..].to_string());
     }
     let mut rest = line;
     while let Some(at) = rest.find(":!") {

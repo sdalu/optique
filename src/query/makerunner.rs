@@ -452,10 +452,10 @@ fn process_table() -> Vec<(u32, u32)> {
                 break;
             }
             let record = &rest[..size];
-            if let (Some(pid), Some(ppid)) = (field(record, pid_at), field(record, ppid_at)) {
-                if let (Ok(pid), Ok(ppid)) = (u32::try_from(pid), u32::try_from(ppid)) {
-                    out.push((pid, ppid));
-                }
+            if let (Some(pid), Some(ppid)) = (field(record, pid_at), field(record, ppid_at))
+                && let (Ok(pid), Ok(ppid)) = (u32::try_from(pid), u32::try_from(ppid))
+            {
+                out.push((pid, ppid));
             }
             rest = &rest[size..];
         }
