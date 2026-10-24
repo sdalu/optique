@@ -103,10 +103,16 @@ of them ([the cache](how-it-works.md#what-it-does-not-see)).
 
 Every query is given the options directory as `PORT_DBDIR` on make's
 command line, where it wins over make.conf; a build is given none. So
-once per run, with the make.conf settled, optique asks make, outside any
-port and in the queries' own environment, what that make.conf alone sets
-of `PORT_DBDIR` and `OPTIONS_FILE` (`make -f /dev/null -V ...`; outside
-bsd.port.mk nothing else sets them).
+once per run, with the make.conf settled, optique asks make, reading no
+port's Makefile and in the queries' own environment, what that make.conf
+alone sets of `PORT_DBDIR` and `OPTIONS_FILE` (`make -f /dev/null -V
+...`; outside bsd.port.mk nothing else sets them). make runs from a
+port's directory, `ports-mgmt/pkg` (else the tree's top), so that a
+make.conf testing `.CURDIR` (`.if ${.CURDIR:M*/ports/*}`) answers as it
+does for a build. For a local build make is given the environment's
+`PORT_DBDIR` too, which a make.conf `PORT_DBDIR?=` defers to, as in the
+user's own make; a builder's environment is not the user's, and is not
+given.
 
 A `PORT_DBDIR` other than the directory the build reads options from —
 the options directory itself for a local build, the jail's
@@ -244,21 +250,29 @@ section of `/usr/local/etc/synth/synth.ini` alone, as synth reads them
 (`[Global Configuration]` never stands in for a profile). A profile
 without `Directory_portsdir` takes the first that exists of `PORTSDIR`,
 make's `PORTSDIR`, `/usr/dports` and `/usr/ports`, in that order, as synth
-does, a note naming which; one without `Directory_options` takes
-`/var/db/ports`. A missing synth.ini reads as empty; one that cannot be
-read is an error, since synth will not run without it.
+does, a note naming which. make is asked as synth asks it, `make -f
+/usr/share/mk/bsd.port.mk -V PORTSDIR` from the directory optique runs
+in; that file falls back to a tree found above that directory, else to
+`/usr/ports`, so `/usr/dports` is reached only when make fails. A profile
+without `Directory_options` takes `/var/db/ports`. A missing synth.ini
+reads as empty; one that cannot be read is an error, since synth will not
+run without it.
 
 optique reads synth.ini as synth's own reader reads it, defects
 included, since that decides which settings synth uses: a section header
 is `[name]` with its `[` in the first column, the name running untrimmed
 to the first `]` and anything after it ignored, so `[ name ]` names the
 section ` name ` and an indented header is none, its lines staying in the
-section above; keys and values are trimmed of spaces only, a tab or the
-CR of a CRLF line end staying part of them; and a key's first match
-within its section wins, a bare or empty one included, so it ends the
-search there rather than reading on to a later, real assignment of the
-same key. Each line synth reads otherwise than it seems to say is named
-in a note, saying it is read as synth reads it. A section header with no
+section above; a UTF-8 byte-order mark is part of the first line, so a
+header there is none and the lines after it are in no section; keys and
+values are trimmed of spaces only, a tab or the CR of a CRLF line end
+staying part of them; and a key's first match within its section wins, a
+bare or empty one included, so it ends the search there rather than
+reading on to a later, real assignment of the same key. Each line synth
+reads otherwise than it seems to say is named in a note, saying it is
+read as synth reads it. The file is read as bytes, as synth reads it: a
+path setting keeps them, so a path in Latin-1 is the directory synth
+uses. A section header with no
 `]` is no header and is skipped; synth fails to load such a file, which is
 left to the user to fix.
 make.conf is the single file

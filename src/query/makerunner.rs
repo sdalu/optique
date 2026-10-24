@@ -181,17 +181,29 @@ fn bare_make(identity: Identity, make_conf: Option<&Path>) -> Command {
 }
 
 /// What make.conf alone makes of `PORT_DBDIR` and `OPTIONS_FILE`: one make
-/// with no port and neither on its command line, under the queries' own
-/// environment (`identity`) and `make_conf`. Outside bsd.port.mk only
-/// make.conf sets them (sys.mk sets neither). `PORT_DBDIR` comes expanded,
-/// as a build uses it; `OPTIONS_FILE` as written, its `${OPTIONS_NAME}`
-/// meaning nothing outside a port. Empty is unset; None when make cannot
-/// be asked or fails.
-pub fn options_place(identity: Identity, make_conf: Option<&Path>) -> Option<(String, String)> {
+/// reading no Makefile and given neither on its command line, under the
+/// queries' own environment (`identity`) and `make_conf`. Outside
+/// bsd.port.mk only make.conf sets them (sys.mk sets neither). It runs in
+/// `dir`, a port's directory, so that a make.conf testing `.CURDIR` (`.if
+/// ${.CURDIR:M*/ports/*}`) answers as it does for a build. `port_dbdir`,
+/// the environment's `PORT_DBDIR` for a build on the host, goes into make's
+/// environment, so that make.conf's `PORT_DBDIR?=` defers to it as in the
+/// user's own make. `PORT_DBDIR` comes expanded, as a build uses it;
+/// `OPTIONS_FILE` as written, its `${OPTIONS_NAME}` meaning nothing outside
+/// a port. Empty is unset; None when make cannot be asked or fails.
+pub fn options_place(
+    identity: Identity,
+    make_conf: Option<&Path>,
+    dir: &Path,
+    port_dbdir: Option<&std::ffi::OsStr>,
+) -> Option<(String, String)> {
     let mut cmd = bare_make(identity, make_conf);
+    if let Some(value) = port_dbdir {
+        cmd.env("PORT_DBDIR", value);
+    }
     // -dV prints a variable as written; a name holding `$` is expanded
     // all the same.
-    cmd.current_dir("/")
+    cmd.current_dir(dir)
         .args(["-f", "/dev/null", "-dV", "-V", "${PORT_DBDIR}", "-V", "OPTIONS_FILE"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

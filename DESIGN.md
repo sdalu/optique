@@ -186,10 +186,16 @@ creates; guessing a local build from `-o /var/db/ports`; reading
 
 ## Persistent cache, keyed on what actually changed
 
-Results are cached under `~/.cache/optique/`, keyed on the ports tree's git
-HEAD, the make.conf hash, and the content of the options file and of the
-`options.local` bsd.options.mk reads after it (`src/cache.rs`), with
-a schema number bumped whenever the parsed shape changes. `tree_key` reads
+Results are cached under `~/.cache/optique/`, keyed on the ports tree's
+canonical path and git HEAD, the make.conf hash, and the content of the
+options file and of the `options.local` bsd.options.mk reads after it, or,
+when make.conf moves `OPTIONS_FILE`, of the file it names and its
+`.local` (`src/cache.rs`), with a schema number bumped whenever the parsed
+shape changes. The path is part of the key because two trees at one
+commit are not one tree: poudriere's `-p default` and `-p dev`, or a
+clone, hold their own uncommitted edits, and an entry holds absolute
+paths into its tree (`pkg-descr`, `pkg-help`); keyed on the commit alone,
+they shared a generation and carried each other's entries over. `tree_key` reads
 `.git` directly — the loose ref, packed-refs, or a `gitdir` file — rather
 than spawning `git`. When `.git` is missing or anything it does not
 recognise, the key is the mtimes of `Mk/bsd.port.mk`, `MOVED` and
@@ -209,9 +215,10 @@ paid a full cold scan. synth judges its flavor index port by port, by the
 mtimes of each port's directory; optique now does the same per entry, from
 what make itself read. The wrapper dumps `.MAKE.MAKEFILES`, and each entry
 keeps the main tree's files in it (`PortInfo::makefiles`). A generation
-file starts with a header naming its commit, overlays and make.conf hash.
-When a new generation of a git tree opens, the latest earlier one made for
-the same make.conf and overlays is diffed against it (`git diff-tree`),
+file starts with a header naming its tree's path, commit, overlays and
+make.conf hash. When a new generation of a git tree opens, the latest
+earlier one made for the same tree path, make.conf and overlays is diffed
+against it (`git diff-tree`),
 and its entries that the changed paths leave alone start the new file
 (`cache::Invalidation`):
 
@@ -222,11 +229,15 @@ and its entries that the changed paths leave alone start the new file
   `pkg-help`, `Makefile.local`, `Makefile.${ARCH}`, `files/`.
 - A change to a category's own files, other than its SUBDIR `Makefile`,
   takes the entries owning a port there (`../Makefile.inc` is probed).
-- Everything goes for a new `Mk/*.mk` (`bsd.local.mk` is `.sinclude`d) and
-  for a top-level file not known to be unread (PORTSDIR's `Makefile.inc`
-  is probed). `MOVED`, `UPDATING`, `UIDs`, `GIDs` and the like, `Tools/`,
-  `Templates/` and `Keywords/` reach make only through a target, never
-  while it parses.
+- Everything goes for a new `.mk` anywhere under `Mk/` and for a
+  top-level file not known to be unread (PORTSDIR's `Makefile.inc` is
+  probed). `bsd.local.mk` is `.sinclude`d; and a port whose `USES` named
+  `X` before `Mk/Uses/X.mk` existed was only probed for it, bsd.port.mk
+  setting an `ERROR` the query answers with, so no entry's makefiles name
+  the file its arrival changes. A modified `.mk` takes only its readers.
+  `MOVED`, `UPDATING`, `UIDs`, `GIDs` and the like, `Tools/`, `Templates/`
+  and `Keywords/` reach make only through a target, never while it
+  parses.
 - A script under `Mk/` that make runs while parsing counts as a change to
   the makefile running it (`parse_time_readers`). `Uses/cargo.mk` runs
   three awk scripts in a `${:!...!}` through `${_CARGO_AWK}`, and the
@@ -412,7 +423,14 @@ The queries' own command line hides two make.conf settings from them:
 the make.conf is staged, one make with no port and neither on its command
 line (`makerunner::options_place`) asks what that make.conf alone sets:
 outside bsd.port.mk nothing else sets either, and the framework probe
-cannot answer, as it passes its own `PORT_DBDIR`. A `PORT_DBDIR` other
+cannot answer, as it passes its own `PORT_DBDIR`. It reads no Makefile
+but runs in `ports-mgmt/pkg`, which every port depends on, so that a
+make.conf testing `.CURDIR` (`.if ${.CURDIR:M*/ports/*}`) answers as for a
+build; run from `/`, such a setting went unseen. For a local build it is
+given the environment's `PORT_DBDIR`, which a make.conf `?=` defers to in
+the user's own make, as it did when that make named the options dir: the
+probe's bare environment otherwise reported a mismatch that was none. A
+builder's environment is not the user's, and is not given. A `PORT_DBDIR` other
 than where the build reads options (the options dir on the host, the
 jail's /var/db/ports, synth's /options) is an error: the whole build reads
 an empty directory while optique edits files nobody reads. scan counts it

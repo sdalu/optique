@@ -12,10 +12,12 @@ use crate::optfiles::OptionsFiles;
 
 /// Persistent per-generation query cache.
 ///
-/// A generation is one (ports tree state, layered make.conf) pair; any change
-/// to either starts a fresh file. Within a generation, an entry is valid as
-/// long as the port's options file and `options.local` (in the PORT_DBDIR
-/// the query saw) are unchanged — their content is part of the entry. A new
+/// A generation is one (ports tree and its state, layered make.conf) pair;
+/// any change to either, another tree at the same commit included, starts
+/// a fresh file. Within a generation, an entry is valid as long as the
+/// port's options file and `options.local` (in the PORT_DBDIR the query
+/// saw), or the pair make.conf moved OPTIONS_FILE to, are unchanged — their
+/// content is part of the entry. A new
 /// generation of a git tree starts with the entries of the one before it
 /// that the commits between them leave alone ([`Invalidation`]).
 pub struct Cache {
@@ -35,6 +37,10 @@ struct Header {
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct Generation {
+    /// The main tree's canonical path: two trees at one commit (poudriere's
+    /// `-p default` and `-p dev`, a clone) are two generations, since each
+    /// holds its own uncommitted edits and its entries name its own files.
+    portsdir: String,
     /// The main tree's git commit; None for a tree without one.
     commit: Option<String>,
     /// The overlays' part of the tree key (see [`Trees`]).
@@ -47,6 +53,7 @@ struct Generation {
 pub struct Trees {
     /// The tree part of the generation's name ([`trees_key`]).
     pub key: String,
+    /// The main tree, canonical where it can be made so.
     portsdir: PathBuf,
     /// The main tree's git commit, when [`tree_key`] read one.
     commit: Option<String>,
@@ -60,6 +67,11 @@ struct CacheEntry {
     options_hash: String,
     /// The `options.local` make read after the options file, hashed alike.
     local_hash: String,
+    /// When make.conf moved OPTIONS_FILE (`PortOptions::moved_file`), the
+    /// file make reads instead and its `.local`, hashed alike: make reads
+    /// those, not the two above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    moved_hashes: Option<(String, String)>,
     info: PortInfo,
 }
 
@@ -89,6 +101,7 @@ impl Cache {
         let path = cache_dir.join(&generation);
         let _ = fs::create_dir_all(cache_dir);
         let here = Generation {
+            portsdir: trees.portsdir.to_string_lossy().into_owned(),
             commit: trees.commit.clone(),
             overlays: trees.overlays.clone(),
             conf: conf_hash.to_string(),
@@ -131,7 +144,8 @@ impl Cache {
     }
 
     /// Return the cached PortInfo if the options file and `options.local` it
-    /// was computed against are still byte-identical.
+    /// was computed against are still byte-identical, and so are the file
+    /// make.conf moved OPTIONS_FILE to and its `.local`, when it did.
     pub fn lookup(&self, key: &PortKey, files: &OptionsFiles) -> Option<PortInfo> {
         if !self.enabled {
             return None;
@@ -139,6 +153,7 @@ impl Cache {
         let entry = self.map.get(key)?;
         if files.hash(&entry.options_name) == entry.options_hash
             && files.local_hash(&entry.options_name) == entry.local_hash
+            && moved_hashes(&entry.info) == entry.moved_hashes
         {
             Some(entry.info.clone())
         } else {
@@ -154,6 +169,7 @@ impl Cache {
             options_name: info.options_name.clone(),
             options_hash: files.hash(&info.options_name),
             local_hash: files.local_hash(&info.options_name),
+            moved_hashes: moved_hashes(info),
             info: info.clone(),
         };
         if let Some(f) = &mut self.file {
@@ -162,6 +178,25 @@ impl Cache {
             }
         }
         self.map.insert(entry.info.key.clone(), entry);
+    }
+}
+
+/// The hashes of the file make.conf moved `info`'s OPTIONS_FILE to and of
+/// its `.local`, which bsd.options.mk reads in place of the options dir's
+/// pair: the path as make expanded it, so one under PORT_DBDIR names the
+/// directory the query saw. None when OPTIONS_FILE was not moved.
+fn moved_hashes(info: &PortInfo) -> Option<(String, String)> {
+    let file = info.options.moved_file.as_deref().filter(|f| !f.is_empty())?;
+    Some((file_hash(Path::new(file)), file_hash(Path::new(&format!("{file}.local")))))
+}
+
+/// A file's hash as [`OptionsFiles::hash`] records one: its SHA-256,
+/// `ABSENT` or `UNREADABLE`.
+fn file_hash(path: &Path) -> String {
+    match fs::read(path) {
+        Ok(bytes) => sha256_hex(&bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => crate::optfiles::ABSENT.to_string(),
+        Err(_) => crate::optfiles::UNREADABLE.to_string(),
     }
 }
 
@@ -198,9 +233,11 @@ pub fn tree_key(portsdir: &Path) -> String {
     format!("mtime-{}", mtimes.join("-"))
 }
 
-/// Identity of the ports tree and the overlays laid over it, in order: the
-/// main tree's `tree_key` alone without overlays (generation names stay as
-/// they were), else a digest of it and each overlay's path and identity.
+/// Identity of the ports tree and the overlays laid over it, in order: a
+/// digest of the main tree's `tree_key`, its canonical path and each
+/// overlay's path and identity. The path is part of it: two trees at one
+/// commit (poudriere's `-p default` and `-p dev`, a clone) differ in their
+/// uncommitted edits and in the absolute paths their entries hold.
 #[cfg(test)]
 pub fn trees_key(portsdir: &Path, overlays: &[PathBuf]) -> String {
     trees(portsdir, overlays).key
@@ -209,14 +246,11 @@ pub fn trees_key(portsdir: &Path, overlays: &[PathBuf]) -> String {
 /// The trees' identity ([`trees_key`]) with its parts kept apart.
 pub fn trees(portsdir: &Path, overlays: &[PathBuf]) -> Trees {
     let main = tree_key(portsdir);
+    let portsdir = fs::canonicalize(portsdir).unwrap_or_else(|_| portsdir.to_path_buf());
     let overlays: String =
         overlays.iter().map(|o| format!("\n{} {}", o.display(), overlay_key(o))).collect();
-    let key = if overlays.is_empty() {
-        main.clone()
-    } else {
-        sha256_hex(format!("{main}{overlays}").as_bytes())
-    };
-    Trees { key, portsdir: portsdir.to_path_buf(), commit: object_id(&main), overlays }
+    let key = sha256_hex(format!("{main}\n{portsdir:?}{overlays}").as_bytes());
+    Trees { key, portsdir, commit: object_id(&main), overlays }
 }
 
 /// What [`carry_over`] found for a new generation.
@@ -228,7 +262,8 @@ struct Carried {
 
 /// The entries of the latest earlier generation that the commits since
 /// leave alone, for a new generation `here` (`name`): one made for the same
-/// make.conf and overlays, and another commit of the same git tree. None
+/// make.conf and overlays, and another commit of the same git tree, at the
+/// same path: another tree at that commit holds its own edits. None
 /// when there is no such generation or git cannot list the changes.
 fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) -> Option<Carried> {
     let new = here.commit.as_deref()?;
@@ -247,7 +282,7 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
         let text = fs::read_to_string(path).ok()?;
         let header: Header = serde_json::from_str(text.lines().next()?).ok()?;
         let g = header.generation;
-        let same = g.conf == here.conf && g.overlays == here.overlays;
+        let same = g.portsdir == here.portsdir && g.conf == here.conf && g.overlays == here.overlays;
         let old = g.commit.filter(|old| same && old != new)?;
         Some((text, old))
     })?;
@@ -482,8 +517,10 @@ const UNREAD_TOP: [&str; 10] = [
 /// change in a category's own files, other than its SUBDIR Makefile, takes
 /// the entries owning a port there (bsd.port.mk probes `../Makefile.inc`).
 /// Everything goes for a top-level file a query may read (PORTSDIR's
-/// `Makefile.inc`, probed too) and for a new `Mk/*.mk` (`bsd.local.mk` is
-/// `.sinclude`d). A `Mk/` script run while make parses counts as its
+/// `Makefile.inc`, probed too) and for a new `.mk` anywhere under `Mk/`:
+/// `bsd.local.mk` is `.sinclude`d, and a `Uses/X.mk` a port named before
+/// it existed was only probed with `exists()`, the query answering with an
+/// ERROR no entry's makefiles record. A `Mk/` script run while make parses counts as its
 /// makefile ([`parse_time_readers`]); the rest of `Mk/`, `Tools/`,
 /// `Templates/` and `Keywords/` only reach make through a target.
 struct Invalidation {
@@ -507,7 +544,7 @@ impl Invalidation {
             let parts: Vec<&str> = path.split('/').collect();
             let everything = match parts.as_slice() {
                 [first, ..] if first.starts_with('.') => false,
-                ["Mk", file] => *status == 'A' && file.ends_with(".mk"),
+                ["Mk", .., file] if *status == 'A' && file.ends_with(".mk") => true,
                 ["Mk" | "Tools" | "Templates" | "Keywords", ..] => false,
                 [file] => !UNREAD_TOP.contains(file),
                 [_, "Makefile"] => false,
@@ -928,9 +965,9 @@ mod tests {
         std::fs::create_dir_all(over.join("cat/port")).unwrap();
         let makefile = over.join("cat/port/Makefile");
         std::fs::write(&makefile, "PORTVERSION=1\n").unwrap();
-        assert_eq!(trees_key(&main, &[]), tree_key(&main));
+        assert_eq!(trees_key(&main, &[]), trees_key(&main, &[]));
         let before = trees_key(&main, std::slice::from_ref(&over));
-        assert_ne!(before, tree_key(&main));
+        assert_ne!(before, trees_key(&main, &[]));
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
         File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
         assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "an edited port is a new generation");
@@ -1163,7 +1200,7 @@ mod tests {
             ('M', "Tools/scripts/x.sh"),
             ('M', "Keywords/sample.ucl"),
             ('M', "Mk/Scripts/qa.sh"),
-            ('A', "Mk/Uses/new.mk"),
+            ('A', "Mk/Scripts/new.sh"),
             ('M', "Mk/Uses/qt.mk"),
             ('M', "cat/Makefile"),
             ('M', "lang/python312/pkg-plist"),
@@ -1189,6 +1226,86 @@ mod tests {
         }
         // An entry that knows nothing of what make read cannot be judged.
         assert!(!Invalidation::of(&[]).keeps(&read("cat/port", &[])));
+    }
+
+    /// A port whose USES named `newuses` before `Mk/Uses/newuses.mk`
+    /// existed: bsd.port.mk only probed for the file and set ERROR, so its
+    /// entry's makefiles do not name it. Its arrival takes everything, as
+    /// does any new `.mk` under `Mk/`; a modified one takes its readers.
+    #[test]
+    fn a_new_uses_file_takes_everything() {
+        let port = read("cat/port", &["Mk/bsd.port.mk", "cat/port/Makefile"]);
+        for path in ["Mk/Uses/newuses.mk", "Mk/Features/new.mk", "Mk/bsd.new.mk"] {
+            let inv = Invalidation::of(&[('A', path.to_string())]);
+            assert_eq!(inv.all.as_deref(), Some(path), "A {path} takes everything");
+            assert!(!inv.keeps(&port), "A {path}");
+        }
+        assert!(Invalidation::of(&[('M', "Mk/Uses/newuses.mk".into())]).keeps(&port));
+        assert!(Invalidation::of(&[('D', "Mk/Uses/old.mk".into())]).keeps(&port));
+    }
+
+    /// A git tree `ports` with a commit, and `clone`, a clone of it, in
+    /// `tmp`; None when git cannot run here.
+    fn two_trees(tmp: &Path) -> Option<(PathBuf, PathBuf)> {
+        let (ports, clone) = (tmp.join("ports"), tmp.join("clone"));
+        for dir in ["Mk", "cat/a", "cat/b"] {
+            std::fs::create_dir_all(ports.join(dir)).unwrap();
+        }
+        std::fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
+        std::fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
+        std::fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
+        git(&ports, &["init", "-q"])?;
+        git(&ports, &["add", "-A"])?;
+        git(&ports, &["commit", "-q", "-m", "one"])?;
+        git(tmp, &["clone", "-q", "ports", "clone"])?;
+        assert_eq!(tree_key(&ports), tree_key(&clone), "one commit");
+        Some((ports, clone))
+    }
+
+    /// Two trees at one commit under one make.conf (poudriere's `-p
+    /// default` and `-p dev`, a clone) are two generations.
+    #[test]
+    fn two_trees_at_one_commit_share_no_generation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((ports, clone)) = two_trees(tmp.path()) else {
+            eprintln!("git cannot run here; skipped");
+            return;
+        };
+        let (dbdir, cache_dir) = (tmp.path().join("db"), tmp.path().join("cache"));
+        let files = OptionsFiles::new(&dbdir);
+        let b = PortKey::parse("cat/b").unwrap();
+        let mut c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
+        c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
+        drop(c);
+        let c = Cache::open_trees(&cache_dir, &trees(&clone, &[]), "conf");
+        assert!(c.lookup(&b, &files).is_none(), "the clone does not share the generation");
+        drop(c);
+        let c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
+        assert!(c.lookup(&b, &files).is_some(), "the first tree keeps its own");
+    }
+
+    /// The clone's next commit carries nothing over from the first tree's
+    /// generation, made at the commit before it under the same make.conf.
+    #[test]
+    fn carry_over_needs_the_same_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Some((ports, clone)) = two_trees(tmp.path()) else {
+            eprintln!("git cannot run here; skipped");
+            return;
+        };
+        let (dbdir, cache_dir) = (tmp.path().join("db"), tmp.path().join("cache"));
+        let files = OptionsFiles::new(&dbdir);
+        let b = PortKey::parse("cat/b").unwrap();
+        let mut c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
+        c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
+        drop(c);
+
+        std::fs::write(clone.join("cat/a/pkg-help"), "help\n").unwrap();
+        git(&clone, &["add", "-A"]).unwrap();
+        git(&clone, &["commit", "-q", "-m", "two"]).unwrap();
+        let c = Cache::open_trees(&cache_dir, &trees(&clone, &[]), "conf");
+        assert_eq!(c.note(), None, "nothing carried over from another tree");
+        assert!(c.lookup(&b, &files).is_none());
     }
 
     /// git, quietly, in `dir`; None when git cannot be run here.

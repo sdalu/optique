@@ -113,9 +113,11 @@ the reasons, the measurements and what was rejected are in
 Answers are grouped in generations, one JSON Lines file each, named
 `v<schema>-<tree>-<make.conf hash>.jsonl`. A generation is one state of:
 
-- the ports tree: its git HEAD, read from `.git` without running git, or
-  on a tree without git the mtimes of `Mk/bsd.port.mk`, `MOVED` and
-  `UPDATING`;
+- the ports tree: its path, so that two trees at one commit (poudriere's
+  `-p default` and `-p dev`, a clone) share nothing, each holding its own
+  uncommitted edits, and its git HEAD, read from `.git` without running
+  git, or on a tree without git the mtimes of `Mk/bsd.port.mk`, `MOVED`
+  and `UPDATING`;
 - every overlay: the count and newest mtime of its files, even in a git
   checkout, since overlay ports are edited before any commit;
 - the text of the staged make.conf, layers and all;
@@ -136,7 +138,9 @@ wrote in another format.
 
 Within a generation, an entry answers for its port while the port's
 options file and the `options.local` beside it, which make reads after it,
-hold the bytes the query saw.
+hold the bytes the query saw. When make.conf moves `OPTIONS_FILE`, make
+reads the file it names and that file's `.local` instead, and those must
+hold the bytes the query saw too.
 
 Each options file is read once per run, whoever needs it: the cache check,
 the session, the TUI's staging copy and the write planning all share that
@@ -146,8 +150,9 @@ port, never mistaken for a missing one.
 ### After a tree update
 
 When the tree moves to another git commit, the new generation starts with
-the entries of the latest one made under the same make.conf and overlays
-that the commits in between leave alone. optique runs `git diff-tree`
+the entries of the latest one made for the same tree, at the same path,
+under the same make.conf and overlays that the commits in between leave
+alone. optique runs `git diff-tree`
 between the two commits; each entry keeps the list of the tree's files
 make read for it (`.MAKE.MAKEFILES`), and goes when:
 
@@ -159,8 +164,10 @@ make read for it (`.MAKE.MAKEFILES`), and goes when:
 - a file of its category changed other than the category's `Makefile`
   (`../Makefile.inc` is probed).
 
-A new `Mk/*.mk`, or a top-level file other than `MOVED`, `UPDATING`,
-`CHANGES`, `UIDs`, `GIDs` and the like, takes every entry. A `Mk/` script
+A new `.mk` anywhere under `Mk/`, or a top-level file other than `MOVED`,
+`UPDATING`, `CHANGES`, `UIDs`, `GIDs` and the like, takes every entry: a
+port whose `USES` named a `Mk/Uses/X.mk` before it existed was only
+probed for it, its query answering with an error that names no file. A `Mk/` script
 make runs while it parses (`Uses/cargo.mk`'s awk scripts, whose crates add
 build dependencies) counts as a change to the makefile running it; the
 other scripts, `Tools/`, `Templates/` and `Keywords/` take none, since

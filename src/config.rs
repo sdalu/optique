@@ -113,8 +113,8 @@ fn synth_prelude(profile: &str, ccache: bool) -> String {
 
 /// Does synth turn ccache on for a profile whose `Directory_ccache` is
 /// `setting`? Only when that path exists; unset is synth's `disabled`.
-fn synth_ccache(setting: Option<&str>) -> bool {
-    setting.is_some_and(|dir| dir != "disabled" && Path::new(dir).exists())
+fn synth_ccache(setting: Option<&Path>) -> bool {
+    setting.is_some_and(|dir| dir != Path::new("disabled") && dir.exists())
 }
 
 const SYNTH_DIR: &str = "/usr/local/etc/synth";
@@ -435,11 +435,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         let env_profile = std::env::var("SYNTHPROFILE").ok();
         let env_portsdir =
             std::env::var_os("PORTSDIR").filter(|v| !v.is_empty()).map(PathBuf::from);
-        let make_portsdir = || {
-            let text = make_values(&["PORTSDIR"], None, &[])?;
-            let dir = text.trim();
-            (!dir.is_empty()).then(|| PathBuf::from(dir))
-        };
+        let make_portsdir = || synth_make_portsdir(None);
         let host = SynthHost {
             env_profile: env_profile.as_deref(),
             env_portsdir: env_portsdir.as_deref(),
@@ -777,16 +773,24 @@ fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Sett
     let settings = with_overlays(settings, given);
     let settings = key_installed_packages(settings, pkg_db);
     let settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
-    Ok(with_options_place(with_framework(settings)))
+    Ok(with_options_place(with_framework(settings), std::env::var_os("PORT_DBDIR")))
 }
 
-/// Settle `settings.options_place` on what make.conf says outside any
-/// port, where the queries' own command line cannot hide it: a build
-/// given no `PORT_DBDIR` there reads whatever make.conf names. A probe
-/// that fails is noted for the banner.
-fn with_options_place(mut settings: Settings) -> Settings {
-    let probed =
-        crate::query::makerunner::options_place(settings.env.identity(), settings.make_conf.as_deref());
+/// Settle `settings.options_place` on what make.conf says where the
+/// queries' own command line cannot hide it: a build given no `PORT_DBDIR`
+/// there reads whatever make.conf names. make is asked from a port's
+/// directory ([`probe_dir`]), as a build would, and for a build on the
+/// host with `env_port_dbdir`, the environment's `PORT_DBDIR`, which a
+/// make.conf `?=` defers to there; a builder's environment is not the
+/// user's, and goes unasked. A probe that fails is noted for the banner.
+fn with_options_place(mut settings: Settings, env_port_dbdir: Option<std::ffi::OsString>) -> Settings {
+    let env_port_dbdir = env_port_dbdir.filter(|_| settings.env == QueryEnv::Host);
+    let probed = crate::query::makerunner::options_place(
+        settings.env.identity(),
+        settings.make_conf.as_deref(),
+        &probe_dir(&settings.portsdir),
+        env_port_dbdir.as_deref(),
+    );
     let nonempty = |v: String| (!v.is_empty()).then_some(v);
     settings.options_place = probed.map(|(port_dbdir, options_file)| OptionsPlace {
         port_dbdir: nonempty(port_dbdir),
@@ -798,6 +802,20 @@ fn with_options_place(mut settings: Settings) -> Settings {
         );
     }
     settings
+}
+
+/// Where [`with_options_place`] asks make: a real port's directory, so that
+/// a make.conf testing `.CURDIR` sees what a build sees. ports-mgmt/pkg,
+/// which every port depends on, else the tree itself, else `/`.
+fn probe_dir(portsdir: &Path) -> PathBuf {
+    let pkg = portsdir.join("ports-mgmt/pkg");
+    if pkg.join("Makefile").is_file() {
+        pkg
+    } else if portsdir.is_dir() {
+        portsdir.to_path_buf()
+    } else {
+        PathBuf::from("/")
+    }
 }
 
 /// Settle `settings.framework` on what the probe port reports, and key it:
@@ -1147,7 +1165,7 @@ fn resolve_synth(
     } else {
         profile
     };
-    let setting = |key: &str| synth_ini_lookup(&ini, profile, key);
+    let path_setting = |key: &str| synth_ini_path(&ini, profile, key);
     notes.extend(synth_ini_misreads(&ini));
     // A named profile that synth.ini doesn't know silently gets built-in
     // defaults — say so, it is usually a typo.
@@ -1157,10 +1175,9 @@ fn resolve_synth(
         ));
     }
 
-    let portsdir = match (portsdir_flag, setting("Directory_portsdir")) {
+    let portsdir = match (portsdir_flag, path_setting("Directory_portsdir")) {
         (Some(dir), _) => checked_portsdir(dir)?,
-        (None, Some(dir)) => {
-            let p = PathBuf::from(dir);
+        (None, Some(p)) => {
             if !is_ports_tree(&p) {
                 bail!(
                     "synth profile '{profile}' points Directory_portsdir at {} \
@@ -1192,9 +1209,7 @@ fn resolve_synth(
 
     let options_dir = match options_dir_flag {
         Some(d) => d.to_path_buf(),
-        None => setting("Directory_options")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/var/db/ports")),
+        None => path_setting("Directory_options").unwrap_or_else(|| PathBuf::from("/var/db/ports")),
     };
     if options_dir == Path::new("/var/db/ports") {
         notes.push(
@@ -1207,7 +1222,7 @@ fn resolve_synth(
     // synth reads ports in a chroot with nothing installed, under its own
     // header and the profile's make.conf alone: never the host's
     // /etc/make.conf, whose absence the always non-empty staged file keeps.
-    let ccache = synth_ccache(setting("Directory_ccache").as_deref());
+    let ccache = synth_ccache(path_setting("Directory_ccache").as_deref());
     let (make_conf, conf_hash, make_conf_sources) = stage_make_conf(
         synth_prelude(profile, ccache),
         &[synth_dir.join(format!("{profile}-make.conf"))],
@@ -1237,35 +1252,59 @@ struct SynthHost<'a> {
     env_profile: Option<&'a str>,
     /// The environment's `PORTSDIR`, when non-empty.
     env_portsdir: Option<&'a Path>,
-    /// `PORTSDIR` as the host's make answers it outside any tree (the
-    /// environment's, else /etc/make.conf's), when it gives one; asked
-    /// only when the profile names no tree.
+    /// `PORTSDIR` as synth asks make for it ([`synth_make_portsdir`]), when
+    /// make gives one; asked only when the profile names no tree.
     make_portsdir: &'a dyn Fn() -> Option<PathBuf>,
     /// The trees synth tries last, in order: /usr/dports, /usr/ports.
     standard_portsdirs: &'a [&'a str],
 }
 
-/// synth.ini as text: missing is empty, as for synth, which then writes a
-/// fresh one; any other read error stops the run, as synth stops on it
-/// ("Configuration failed to load"). Bytes that are not UTF-8 are decoded
-/// lossily, as a make.conf is read, rather than losing the whole file.
-fn read_synth_ini(path: &Path) -> Result<String> {
+/// synth.ini as bytes, as synth reads it: missing is empty, as for synth,
+/// which then writes a fresh one; any other read error stops the run, as
+/// synth stops on it ("Configuration failed to load"). Bytes that are not
+/// UTF-8 stay as they are: a path keeps them ([`synth_ini_path`]), text
+/// decodes them lossily.
+fn read_synth_ini(path: &Path) -> Result<Vec<u8>> {
     match fs::read(path) {
-        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Ok(bytes) => Ok(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(e) => Err(e)
             .with_context(|| format!("reading {} (synth will not run without it)", path.display())),
     }
 }
 
+/// `PORTSDIR` as synth asks make for it (parameters.adb `query_portsdir`):
+/// `make -f /usr/share/mk/bsd.port.mk -V PORTSDIR`, from the directory
+/// synth was run in (it never changes directory; `cwd` None is optique's
+/// own), with its environment. That file takes the environment's or
+/// /etc/make.conf's `PORTSDIR`, else a tree found at or up to three levels
+/// above that directory, else /usr/ports, and includes that tree's
+/// bsd.port.mk: make fails when the tree is missing. None when make fails
+/// or answers nothing.
+fn synth_make_portsdir(cwd: Option<&Path>) -> Option<PathBuf> {
+    let mut cmd = std::process::Command::new("/usr/bin/make");
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    cmd.args(["-f", "/usr/share/mk/bsd.port.mk", "-V", "PORTSDIR"])
+        .env_remove("MAKEFLAGS")
+        .env_remove("MAKELEVEL")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let out = cmd.output().ok().filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let dir = text.lines().next()?.trim();
+    (!dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
 /// The ports tree synth takes for a profile naming none, and what gave it
 /// (parameters.adb `determine_portsdirs`): the first that exists of the
-/// environment's `PORTSDIR`, make's `PORTSDIR` (synth asks `make -f
-/// /usr/share/mk/bsd.port.mk -V PORTSDIR`, which reads the environment
-/// and /etc/make.conf), /usr/dports, /usr/ports. synth's query includes the
-/// tree's own bsd.port.mk, and fails, stopping synth with a "blank
-/// PORTSDIR", whenever the tree it names is missing; optique asks make
-/// outside any tree and goes on to the next candidate instead.
+/// environment's `PORTSDIR`, make's `PORTSDIR` as synth asks for it
+/// ([`synth_make_portsdir`]: /usr/ports when nothing sets one, so
+/// /usr/dports is reached only when make fails), /usr/dports, /usr/ports.
+/// synth's query fails, stopping synth with a "blank PORTSDIR", whenever
+/// the tree it names is missing; optique goes on to the next candidate
+/// instead.
 fn synth_default_portsdir(host: &SynthHost) -> Option<(PathBuf, &'static str)> {
     if let Some(dir) = host.env_portsdir.filter(|d| d.exists()) {
         return Some((dir.to_path_buf(), "from PORTSDIR"));
@@ -1284,7 +1323,10 @@ fn synth_default_portsdir(host: &SynthHost) -> Option<(PathBuf, &'static str)> {
 /// (parameters.adb:64-71, `load_configuration`): `env_profile`, the
 /// environment's `SYNTHPROFILE`, when synth.ini has a section for it with
 /// `Directory_packages` set, else `profile_selected`, else `LiveSystem`.
-fn synth_selected_profile(ini: &str, env_profile: Option<&str>) -> (String, &'static str) {
+fn synth_selected_profile(
+    ini: &(impl AsRef<[u8]> + ?Sized),
+    env_profile: Option<&str>,
+) -> (String, &'static str) {
     if let Some(env) = env_profile.filter(|p| !p.is_empty()) {
         if synth_ini_lookup(ini, env, "Directory_packages").is_some() {
             return (env.to_string(), "SYNTHPROFILE");
@@ -1300,19 +1342,29 @@ fn synth_selected_profile(ini: &str, env_profile: Option<&str>) -> (String, &'st
 /// a comment that runs to the end of the line (config.adb's `Get_Value`,
 /// its `Comment_Ind := Index (..., Set => To_Set ("#;"))`, read only for a
 /// line that is not itself a section header).
-fn ini_strip_comment(line: &str) -> &str {
-    match line.find([';', '#']) {
+fn ini_strip_comment(line: &[u8]) -> &[u8] {
+    match line.iter().position(|b| matches!(b, b';' | b'#')) {
         Some(i) => &line[..i],
         None => line,
     }
 }
 
-/// synth.ini's lines as synth reads them (config.adb's `Get_Value`): split
-/// at LF alone, a CR left in place, and a line of fewer than two characters
-/// skipped.
-fn ini_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    text.split('\n').enumerate().map(|(n, l)| (n + 1, l)).filter(|(_, l)| l.len() > 1)
+/// synth.ini's lines as synth reads them (config.adb's `Get_Value`): bytes,
+/// as synth reads them, split at LF alone, a CR left in place, and a line
+/// of fewer than two bytes skipped.
+fn ini_lines(text: &[u8]) -> impl Iterator<Item = (usize, &[u8])> {
+    text.split(|&b| b == b'\n').enumerate().map(|(n, l)| (n + 1, l)).filter(|(_, l)| l.len() > 1)
 }
+
+/// `s` without the leading and trailing bytes `trim` matches.
+fn trim_bytes(s: &[u8], trim: impl Fn(u8) -> bool) -> &[u8] {
+    let start = s.iter().position(|&b| !trim(b)).unwrap_or(s.len());
+    let end = s.iter().rposition(|&b| !trim(b)).map_or(start, |e| e + 1);
+    &s[start..end]
+}
+
+/// The UTF-8 byte-order mark, which synth reads as part of the first line.
+const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// A synth.ini section header as synth reads it: a `[` in column 1, the
 /// name running untrimmed to the first `]`, anything after it ignored. An
@@ -1323,61 +1375,81 @@ fn ini_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
 /// line). A header with no `]` is no header: it makes synth fail to load
 /// its configuration, which is the user's file to fix, not optique's to
 /// report.
-fn ini_section_header(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix('[')?;
-    rest.find(']').map(|end| &rest[..end])
+fn ini_section_header(line: &[u8]) -> Option<&[u8]> {
+    let rest = line.strip_prefix(b"[")?;
+    rest.iter().position(|&b| b == b']').map(|end| &rest[..end])
 }
 
 /// Trim a key or value as config.adb does: spaces alone (`Index_Non_Blank`),
 /// a tab or a CRLF file's CR staying part of it, as for synth.
-fn ini_trim(s: &str) -> &str {
-    s.trim_matches(' ')
+fn ini_trim(s: &[u8]) -> &[u8] {
+    trim_bytes(s, |b| b == b' ')
 }
 
 /// The synth.ini lines synth reads otherwise than they seem to say, each as
 /// a note: a tab around a key or value is part of it, the spaces of
 /// `[ name ]` are part of the name, an indented `[name]` is no header but a
 /// data line of the section above, and a CRLF file's CR stays in each key
-/// or value. optique reads them as synth does (`ini_section_header`,
-/// `ini_trim`), so a profile, key or path may not be the one meant; the note
-/// says why, for the user to fix the file.
+/// or value, and a UTF-8 byte-order mark is part of the first line, so a
+/// header there is no header and the lines after it are in no section.
+/// optique reads them as synth does (`ini_section_header`, `ini_trim`), so
+/// a profile, key or path may not be the one meant; the note says why, for
+/// the user to fix the file.
 ///
 /// A line with no data once its comment is cut (blank, tab-only, a
 /// tab-indented comment) holds nothing synth could misread; a header
 /// ignores its CR, which comes after the `]`.
-fn synth_ini_misreads(text: &str) -> Vec<String> {
+fn synth_ini_misreads(text: &(impl AsRef<[u8]> + ?Sized)) -> Vec<String> {
     const WHY: &str = "read as synth reads it (a synth defect)";
+    let text = text.as_ref();
     let mut notes = Vec::new();
     let mut crlf = Vec::new();
     for (n, raw) in ini_lines(text) {
+        if let Some(rest) = raw.strip_prefix(BOM).filter(|_| n == 1) {
+            let hidden = match ini_section_header(rest) {
+                Some(name) => format!(
+                    ", so [{}] there is no section header and the lines after it are in no section",
+                    String::from_utf8_lossy(name)
+                ),
+                None => String::new(),
+            };
+            notes.push(format!(
+                "synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line{hidden}; {WHY}"
+            ));
+            continue;
+        }
         if let Some(name) = ini_section_header(raw) {
-            if name.trim() != name {
+            if name.trim_ascii() != name {
+                let name = String::from_utf8_lossy(name);
                 notes.push(format!(
                     "synth.ini line {n}: synth keeps the spaces of the section name '{name}'; {WHY}"
                 ));
             }
             continue;
         }
-        if raw.trim_start().starts_with('[') && raw.contains(']') {
+        if raw.trim_ascii_start().starts_with(b"[") && raw.contains(&b']') {
             notes.push(format!(
                 "synth.ini line {n}: synth takes no indented [name] for a section header, \
                  the lines after it staying in the section above; {WHY}"
             ));
             continue;
         }
-        if raw.starts_with([';', '#']) {
+        if raw.starts_with(b";") || raw.starts_with(b"#") {
             continue;
         }
         let data = ini_strip_comment(raw);
-        if data.trim().is_empty() {
+        if data.trim_ascii().is_empty() {
             continue;
         }
         // A comment cut drops the CR with it.
-        if data.ends_with('\r') {
+        if data.ends_with(b"\r") {
             crlf.push(n);
         }
-        let (k, v) = data.split_once('=').unwrap_or((data, ""));
-        let tabbed = |s: &str| s.trim_matches([' ', '\r']) != s.trim();
+        let (k, v) = match data.iter().position(|&b| b == b'=') {
+            Some(at) => (&data[..at], &data[at + 1..]),
+            None => (data, &b""[..]),
+        };
+        let tabbed = |s: &[u8]| trim_bytes(s, |b| b == b' ' || b == b'\r') != s.trim_ascii();
         if tabbed(k) || tabbed(v) {
             notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value; {WHY}"));
         }
@@ -1407,8 +1479,8 @@ fn line_ranges(lines: &[usize]) -> String {
 }
 
 /// Does synth.ini contain a `[name]` section header?
-fn synth_ini_has_section(text: &str, name: &str) -> bool {
-    ini_lines(text).any(|(_, line)| ini_section_header(line) == Some(name))
+fn synth_ini_has_section(text: &(impl AsRef<[u8]> + ?Sized), name: &str) -> bool {
+    ini_lines(text.as_ref()).any(|(_, line)| ini_section_header(line) == Some(name.as_bytes()))
 }
 
 /// Minimal INI reader for synth.ini: the value of `key` in section
@@ -1421,31 +1493,46 @@ fn synth_ini_has_section(text: &str, name: &str) -> bool {
 /// of the whole file the moment one is found, matched or not, so even a
 /// bare key with no `=`, or one given an empty value, ends the search
 /// there, giving the default rather than reading on to a later, real
-/// assignment of the same key.
-fn synth_ini_lookup(text: &str, profile: &str, key: &str) -> Option<String> {
+/// assignment of the same key. The value comes as text, any byte that is
+/// not UTF-8 decoded lossily; [`synth_ini_path`] keeps a path's bytes.
+fn synth_ini_lookup(text: &(impl AsRef<[u8]> + ?Sized), profile: &str, key: &str) -> Option<String> {
+    synth_ini_value(text.as_ref(), profile, key).map(|v| String::from_utf8_lossy(v).into_owned())
+}
+
+/// [`synth_ini_lookup`] for a setting that is a path (`Directory_*`): its
+/// bytes as synth hands them to the system, so a path in Latin-1 is still
+/// the directory synth uses.
+fn synth_ini_path(text: &(impl AsRef<[u8]> + ?Sized), profile: &str, key: &str) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    synth_ini_value(text.as_ref(), profile, key).map(|v| PathBuf::from(std::ffi::OsStr::from_bytes(v)))
+}
+
+/// The bytes of [`synth_ini_lookup`]'s value.
+fn synth_ini_value<'a>(text: &'a [u8], profile: &str, key: &str) -> Option<&'a [u8]> {
+    let (profile, key) = (profile.as_bytes(), key.as_bytes());
     let mut in_section = false;
     for (_, line) in ini_lines(text) {
-        if line.starts_with('[') {
+        if line.starts_with(b"[") {
             // A header with no `]` is skipped, the section going on.
             if let Some(name) = ini_section_header(line) {
                 in_section = name == profile;
             }
             continue;
         }
-        if !in_section || line.starts_with([';', '#']) {
+        if !in_section || line.starts_with(b";") || line.starts_with(b"#") {
             continue;
         }
         let data = ini_strip_comment(line);
-        let Some((k, v)) = data.split_once('=') else {
+        let Some(at) = data.iter().position(|&b| b == b'=') else {
             // No `=` at all: config.adb still compares the whole
             // (trimmed) line against `key`, as a bare mark with no value.
             return if ini_trim(data) == key { None } else { continue };
         };
-        if ini_trim(k) != key {
+        if ini_trim(&data[..at]) != key {
             continue;
         }
-        let v = ini_trim(v);
-        return if v.is_empty() { None } else { Some(v.to_string()) };
+        let v = ini_trim(&data[at + 1..]);
+        return if v.is_empty() { None } else { Some(v) };
     }
     None
 }
@@ -2738,9 +2825,9 @@ not a key value line
     /// given an empty value, so a later, real assignment is never reached.
     #[test]
     fn synth_ini_reads_as_synth_and_names_what_it_misreads() {
-        assert_eq!(ini_section_header("[B] extra"), Some("B"), "anything after ] is ignored");
-        assert_eq!(ini_section_header("[ C ]"), Some(" C "), "the name is not trimmed");
-        assert_eq!(ini_section_header("   [P]"), None, "an indented header is none");
+        assert_eq!(ini_section_header(b"[B] extra"), Some(&b"B"[..]), "anything after ] is ignored");
+        assert_eq!(ini_section_header(b"[ C ]"), Some(&b" C "[..]), "the name is not trimmed");
+        assert_eq!(ini_section_header(b"   [P]"), None, "an indented header is none");
 
         let ini = "[A]\nk\t= d\n[ C ]\nDirectory_portsdir=/c\n[P]\n  [Q]\nkey=2\n";
         assert_eq!(synth_ini_lookup(ini, "A", "k"), None, "the key is `k\\t`");
@@ -2827,7 +2914,7 @@ not a key value line
     #[test]
     fn synth_ini_read_errors_stop_and_bad_bytes_are_kept_lossily() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(read_synth_ini(&tmp.path().join("absent")).unwrap(), "");
+        assert!(read_synth_ini(&tmp.path().join("absent")).unwrap().is_empty());
         let err = read_synth_ini(tmp.path()).unwrap_err();
         assert!(format!("{err:#}").contains("synth will not run"), "{err:#}");
 
@@ -2844,6 +2931,55 @@ not a key value line
         let tree = tmp.path().join("ports");
         fake_tree(&tree);
         assert!(resolve_synth(&synth, "A", &synth_host(None), Some(&tree), Some(&tree), &stage).is_err());
+    }
+
+    /// synth reads a UTF-8 byte-order mark as part of the first line, so
+    /// the header there is none: its settings are in no section, and the
+    /// profile gets its defaults. optique reads it so, and says why.
+    #[test]
+    fn synth_ini_bom_is_named() {
+        let ini = b"\xEF\xBB\xBF[A]\nDirectory_options=/opts\n[B]\nDirectory_options=/b\n";
+        assert_eq!(synth_ini_lookup(ini, "A", "Directory_options"), None);
+        assert!(!synth_ini_has_section(ini, "A"));
+        assert_eq!(synth_ini_lookup(ini, "B", "Directory_options").as_deref(), Some("/b"));
+        assert_eq!(
+            synth_ini_misreads(ini),
+            ["synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line, so [A] there \
+              is no section header and the lines after it are in no section; read as synth reads it (a synth defect)"]
+        );
+        let comment = synth_ini_misreads(b"\xEF\xBB\xBF; settings\n[A]\nk=v\n");
+        assert_eq!(
+            comment,
+            ["synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line; \
+              read as synth reads it (a synth defect)"]
+        );
+        assert!(synth_ini_misreads(b"[A]\nk=\xEF\xBB\xBFv\n").is_empty(), "only a leading one");
+    }
+
+    /// A Latin-1 path in synth.ini is the directory synth uses, byte for
+    /// byte, never its lossy decoding; a line of one Latin-1 byte is one
+    /// byte long, and skipped as synth skips it.
+    #[test]
+    fn synth_ini_latin1_path_is_kept() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let ini = b"[A]\nDirectory_options=/opt/r\xe9glages\n\xe9\nDirectory_portsdir=/p\n";
+        let path = synth_ini_path(ini, "A", "Directory_options").unwrap();
+        assert_eq!(path.as_os_str().as_bytes(), b"/opt/r\xe9glages");
+        assert_eq!(synth_ini_path(ini, "A", "Directory_portsdir").as_deref(), Some(Path::new("/p")));
+        assert!(synth_ini_misreads(ini).is_empty());
+
+        // Through the resolution: the options dir is the Latin-1 path.
+        let tmp = tempfile::tempdir().unwrap();
+        let [synth, stage, tree] = ["synth", "stage", "ports"].map(|d| tmp.path().join(d));
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fake_tree(&tree);
+        let mut text = b"[A]\nDirectory_options=".to_vec();
+        text.extend_from_slice(tmp.path().as_os_str().as_bytes());
+        text.extend_from_slice(b"/r\xe9glages\n");
+        fs::write(synth.join("synth.ini"), &text).unwrap();
+        let s = resolve_synth(&synth, "A", &synth_host(None), Some(&tree), None, &stage).unwrap();
+        assert!(s.options_dir.as_os_str().as_bytes().ends_with(b"/r\xe9glages"), "{:?}", s.options_dir);
     }
 
     /// With no Directory_portsdir, synth takes the first that exists of
@@ -3155,7 +3291,7 @@ not a key value line
 
         // Unset is synth's "disabled", never a path looked up.
         assert!(!synth_ccache(None));
-        assert!(!synth_ccache(Some("disabled")));
+        assert!(!synth_ccache(Some(Path::new("disabled"))));
     }
 
     /// poudriere.conf's `CCACHE_DIR`, when it is a directory, adds
@@ -3491,7 +3627,7 @@ not a key value line
         let conf = tmp.path().join("make.conf");
         let probe = |text: &str| {
             fs::write(&conf, text).unwrap();
-            crate::query::makerunner::options_place(Identity::Invoker, Some(&conf))
+            crate::query::makerunner::options_place(Identity::Invoker, Some(&conf), Path::new("/"), None)
         };
         assert_eq!(probe(""), Some((String::new(), String::new())));
         let moved = "D=/var/db\nPORT_DBDIR=${D}/my\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/x\n";
@@ -3500,5 +3636,105 @@ not a key value line
             Some(("/var/db/my".to_string(), "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string()))
         );
         assert_eq!(probe(".error broken\n"), None);
+    }
+
+    /// synth asks make for PORTSDIR through /usr/share/mk/bsd.port.mk from
+    /// the directory it runs in: a tree found above that directory, else
+    /// /usr/ports, never /usr/dports; a missing tree fails the query.
+    #[test]
+    fn synth_default_portsdir_asks_make_as_synth_does() {
+        if std::env::var_os("PORTSDIR").is_some()
+            || make_values(&["PORTSDIR"], None, &[]).is_some_and(|t| !t.trim().is_empty())
+        {
+            eprintln!("PORTSDIR set by the environment or /etc/make.conf; skipped");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        fs::create_dir_all(tree.join("Mk")).unwrap();
+        fs::create_dir_all(tree.join("cat/port/files")).unwrap();
+        fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
+        let real = tree.canonicalize().unwrap();
+        assert_eq!(synth_make_portsdir(Some(&tree.join("cat/port"))), Some(real.clone()));
+        assert_eq!(synth_make_portsdir(Some(&tree.join("cat/port/files"))), Some(real));
+        // Outside any tree: /usr/ports, which make reads, or a failure.
+        let outside = synth_make_portsdir(Some(tmp.path()));
+        if Path::new("/usr/ports/Mk/bsd.port.mk").is_file() {
+            assert_eq!(outside.as_deref(), Some(Path::new("/usr/ports")));
+        } else {
+            assert_eq!(outside, None);
+        }
+    }
+
+    /// Settings for `env` over the tree `portsdir`, options dir `db` and
+    /// make.conf `conf`, the options place not probed yet.
+    fn probe_settings(env: QueryEnv, portsdir: &Path, db: &Path, conf: &Path) -> Settings {
+        Settings {
+            portsdir: portsdir.to_path_buf(),
+            options_dir: db.to_path_buf(),
+            make_conf: Some(conf.to_path_buf()),
+            make_conf_sources: Vec::new(),
+            conf_hash: String::new(),
+            env,
+            blacklist: Blacklist::default(),
+            notes: Vec::new(),
+            overlays: Vec::new(),
+            flavor_default_all: false,
+            framework: Vec::new(),
+            options_place: None,
+        }
+    }
+
+    /// A make.conf `PORT_DBDIR?=` defers to the environment's PORT_DBDIR in
+    /// the user's own make, which named the options dir: on the host the
+    /// probe sees the same, and there is nothing to report. A plain `=`
+    /// wins over the environment, as in make; a builder's environment is
+    /// not the user's, and is not asked.
+    #[test]
+    fn port_dbdir_conditional_assignment_defers_to_the_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (conf, db) = (tmp.path().join("make.conf"), tmp.path().join("db"));
+        fs::create_dir_all(&db).unwrap();
+        let env_value = Some(db.clone().into_os_string());
+        let probe = |env: QueryEnv, given: Option<std::ffi::OsString>| {
+            with_options_place(probe_settings(env, tmp.path(), &db, &conf), given)
+        };
+        let dbdir = |s: &Settings| s.options_place.as_ref().unwrap().port_dbdir.clone();
+
+        fs::write(&conf, "PORT_DBDIR?=/from/make.conf\n").unwrap();
+        let s = probe(QueryEnv::Host, env_value.clone());
+        assert_eq!(dbdir(&s), Some(db.display().to_string()));
+        assert_eq!(s.port_dbdir_error(), None);
+        // No PORT_DBDIR in the environment: make.conf's own applies.
+        assert!(probe(QueryEnv::Host, None).port_dbdir_error().is_some());
+        // A builder's queries never see optique's environment.
+        assert_eq!(dbdir(&probe(QueryEnv::Synth, env_value.clone())).as_deref(), Some("/from/make.conf"));
+
+        fs::write(&conf, "PORT_DBDIR=/from/make.conf\n").unwrap();
+        let s = probe(QueryEnv::Host, env_value);
+        assert_eq!(dbdir(&s).as_deref(), Some("/from/make.conf"));
+        assert!(s.port_dbdir_error().is_some());
+    }
+
+    /// A make.conf setting PORT_DBDIR only inside the ports tree (`.if
+    /// ${.CURDIR:M*/ports/*}`) moves every build's options dir: the probe
+    /// asks make from a port's directory, so it sees the setting.
+    #[test]
+    fn options_place_sees_a_curdir_conditional_port_dbdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (conf, db, ports) = (tmp.path().join("make.conf"), tmp.path().join("db"), tmp.path().join("ports"));
+        fs::create_dir_all(&db).unwrap();
+        fs::create_dir_all(ports.join("ports-mgmt/pkg")).unwrap();
+        fs::write(ports.join("ports-mgmt/pkg/Makefile"), "PORTNAME=pkg\n").unwrap();
+        fs::write(&conf, ".if ${.CURDIR:M*/ports/*}\nPORT_DBDIR=/elsewhere\n.endif\n").unwrap();
+        assert_eq!(probe_dir(&ports), ports.join("ports-mgmt/pkg"));
+        let s = with_options_place(probe_settings(QueryEnv::Host, &ports, &db, &conf), None);
+        assert_eq!(s.options_place.as_ref().unwrap().port_dbdir.as_deref(), Some("/elsewhere"));
+        assert!(s.port_dbdir_error().is_some());
+
+        // A tree without ports-mgmt/pkg is asked from its top, one missing
+        // from `/`.
+        assert_eq!(probe_dir(&db), db);
+        assert_eq!(probe_dir(&tmp.path().join("none")), Path::new("/"));
     }
 }

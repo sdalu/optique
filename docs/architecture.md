@@ -149,8 +149,10 @@ the build, are part of its answer. Last, `with_framework` runs the probe
 port (`wrapper::FRAMEWORK_PROBE`) once under the settled tree, make.conf
 and environment, keeps the `_EXPORTED_VARS` bsd.port.mk reports
 (`Settings::framework`), and folds them into the hash. Then
-`with_options_place` asks make, with no port and no `PORT_DBDIR` on its
-command line (`makerunner::options_place`), what the make.conf alone sets
+`with_options_place` asks make, reading no port's Makefile but run from
+`ports-mgmt/pkg` (`config::probe_dir`), with no `PORT_DBDIR` on its
+command line but, for a local build, the environment's in its own
+(`makerunner::options_place`), what the make.conf alone sets
 of `PORT_DBDIR` and `OPTIONS_FILE` (`Settings::options_place`, None when
 make cannot say): `Settings::port_dbdir_error` compares the first with
 where the build reads options, and `config::relocated_options` tells

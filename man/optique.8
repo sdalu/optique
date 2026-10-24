@@ -202,12 +202,27 @@ settled,
 .Nm
 asks
 .Xr make 1 ,
-outside any port, what that
+reading no port's
+.Pa Makefile
+but run from a port's directory
+.Pq Pa ports-mgmt/pkg , No else the tree's top ,
+so that a test of
+.Va .CURDIR
+answers as for a build, what that
 .Pa make.conf
 alone sets of
 .Va PORT_DBDIR
 and
 .Va OPTIONS_FILE .
+For a local build make is given the environment's
+.Ev PORT_DBDIR ,
+which a
+.Ql PORT_DBDIR?=
+in
+.Pa make.conf
+defers to, as in the user's own
+.Xr make 1 ;
+a builder's environment is not the user's, and is not given.
 A
 .Va PORT_DBDIR
 other than the directory the build reads options from \(em the options
@@ -339,7 +354,8 @@ Answers are grouped in generations, one file each, and a generation is one
 state of:
 .Bl -bullet
 .It
-the ports tree: the git commit its
+the ports tree: its path, since two trees at one commit hold their own
+uncommitted edits, and the git commit its
 .Pa .git
 names, or, on a tree without git, the modification times of
 .Pa Mk/bsd.port.mk ,
@@ -371,10 +387,19 @@ and the invoking
 Within a generation, an entry answers for its port as long as the port's
 options file and the
 .Pa options.local
-beside it hold the bytes the query saw.
+beside it hold the bytes the query saw; when
+.Pa make.conf
+moves
+.Va OPTIONS_FILE ,
+so do the file it names and its
+.Pa .local ,
+which
+.Nm make
+reads instead.
 .Pp
 When a git tree moves to another commit, the new generation starts with the
-entries of the latest one made under the same
+entries of the latest one made for the same tree, at the same path, under
+the same
 .Pa make.conf
 and overlays that the commits in between leave alone, as
 .Ql git diff-tree
@@ -387,7 +412,15 @@ when anything changed in the port's own directory or, for a slave port, its
 master's, or when its category's own files changed
 .Pq not its Pa Makefile ;
 a new
-.Pa Mk/*.mk ,
+.Pa .mk
+anywhere under
+.Pa Mk/
+.Po
+a
+.Pa Uses/
+file a port named before it existed was only probed for, its query
+answering with an error that names no file
+.Pc ,
 or a top-level file other than
 .Pa MOVED , UPDATING , CHANGES , UIDs , GIDs
 and the like, takes them all.
@@ -2783,7 +2816,17 @@ takes the first of
 .Pa /usr/dports
 and
 .Pa /usr/ports
-that exists, in that order, as synth does, a note naming which; one without
+that exists, in that order, as synth does, a note naming which.
+make is asked as synth asks it,
+.Ql make -f /usr/share/mk/bsd.port.mk -V PORTSDIR
+from the directory
+.Nm
+runs in: that file falls back to a tree found above that directory, else
+.Pa /usr/ports ,
+so
+.Pa /usr/dports
+is reached only when make fails.
+A profile without
 .Va Directory_options
 takes
 .Pa /var/db/ports .
@@ -2801,11 +2844,15 @@ anything after it ignored, so
 names the section
 .Ql " name " ,
 and an indented header is none, its lines staying in the section above;
+a UTF-8 byte-order mark is part of the first line, so a header there is
+none and the lines after it are in no section;
 keys and values are trimmed of spaces only, a tab or the CR of a CRLF line
 end staying part of them; and a key's first match within its section wins,
 a bare or empty one included, ending the search there rather than reading
 on to a later, real assignment of the same key.
 Each line synth reads otherwise than it seems to say is named in a note.
+The file is read as bytes: a path setting keeps them, so a path in Latin-1
+is the directory synth uses.
 A section header with no
 .Ql \&]
 is no header and is skipped; synth fails to load such a file, which is

@@ -400,3 +400,21 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
     assert!(f.file("misc_flav-nox").exists(), "{err}");
     assert!(!f.file("misc_gone").exists(), "{err}");
 }
+
+/// A make.conf moving OPTIONS_FILE: make reads the moved file, so an edit
+/// to it is a new answer, never the cached one made before it.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_moved_options_file_edit_is_not_served_from_cache() {
+    let f = Fixture::new();
+    fs::write(&f.make_conf, "OPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/alt\n").unwrap();
+    let report = common::json(&f.run("scan", &["--json", "--options", "misc/cond"]));
+    assert!(!ports_of(&report).contains(&"misc/condep".to_string()), "{report}");
+
+    fs::create_dir_all(f.options.join("misc_cond")).unwrap();
+    fs::write(f.options.join("misc_cond/alt"), "OPTIONS_FILE_UNSET+=DOCS\nOPTIONS_FILE_SET+=SOX\n").unwrap();
+    let report = common::json(&f.run("scan", &["--json", "--options", "misc/cond"]));
+    assert!(ports_of(&report).contains(&"misc/condep".to_string()), "{report}");
+    let port = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "misc/cond").unwrap();
+    assert_eq!(option(port, "DOCS")["staged"], false, "{port}");
+}
