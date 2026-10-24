@@ -14,12 +14,14 @@ pub struct ScanResult {
     /// Ports keyed by canonical key (origin + resolved flavor).
     pub ports: BTreeMap<PortKey, PortInfo>,
     /// Requested key -> canonical key (for dedup of default-flavor aliases),
-    /// and a MOVED origin -> the key it moved to; `deps::resolve` follows
+    /// and a MOVED root -> the key it moved to; `deps::resolve` follows
     /// the chain.
     pub aliases: HashMap<PortKey, PortKey>,
-    /// Ports whose query failed: (requested key, error).
+    /// (key, error): a port whose query failed, a root MOVED says is gone
+    /// (both missing from `ports`), or a port in `ports` depending on an
+    /// origin that does not exist, once per such dependency.
     pub errors: Vec<(PortKey, String)>,
-    /// MOVED redirections applied during the scan (informational).
+    /// MOVED redirections applied to the roots (informational).
     pub moved_notes: Vec<String>,
     pub from_cache: usize,
     pub queried: usize,
@@ -33,12 +35,14 @@ pub struct ScanProgress {
 
 /// Breadth-first scan of the dependency closure of `roots`.
 ///
-/// Every discovered dep target is resolved through MOVED, deduplicated,
-/// looked up in the cache, and queried via the runner on a miss. Cached
-/// ports still contribute their dep edges to the traversal. `files` reads
-/// the options files of `ctx.port_dbdir` for the cache, each once. A port
-/// `blacklist` matches is kept but not walked through, as poudriere gathers
-/// no dependency of a blacklisted port.
+/// The roots, the listed origins, are resolved through MOVED; dependencies
+/// are not, as poudriere applies MOVED to listed origins only and refuses
+/// a dependency on an origin that does not exist (see [`register`]). Every
+/// target is deduplicated, looked up in the cache, and queried via the
+/// runner on a miss. Cached ports still contribute their dep edges to the
+/// traversal. `files` reads the options files of `ctx.port_dbdir` for the
+/// cache, each once. A port `blacklist` matches is kept but not walked
+/// through, as poudriere gathers no dependency of a blacklisted port.
 #[allow(clippy::too_many_arguments)]
 pub fn scan(
     roots: &[PortKey],
@@ -52,49 +56,47 @@ pub fn scan(
 ) -> ScanResult {
     let runner = MakeRunner::new(ctx.clone(), jobs);
     let mut result = ScanResult::default();
+    // Every key ever queued, deduplicated as it is queued, so a renamed or
+    // removed root is noted once and a port queried once.
     let mut seen: HashSet<PortKey> = HashSet::new();
     let mut in_flight = 0usize;
     let mut done = 0usize;
-    // Keys in `seen` that are no port to query: a moved port's old name and
-    // a removed port. Done as soon as resolved, so progress reaches its total.
+    // Keys in `seen` that are no port to query: a moved root's old name and
+    // a removed one. Done as soon as resolved, so progress reaches its total.
     let mut resolved_away = 0usize;
+    let exists = |o: &str| ctx.locate(o).is_some();
 
-    let mut pending: Vec<PortKey> = roots.to_vec();
+    let mut pending: Vec<PortKey> = Vec::new();
+    for key in roots {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        match moved.resolve(&key.origin, exists) {
+            MovedResult::Unchanged => pending.push(key.clone()),
+            MovedResult::MovedTo { origin, reason } => {
+                result.moved_notes.push(format!("{} moved to {origin} ({reason})", key.origin));
+                resolved_away += 1;
+                let new_key = key.with_origin(&origin);
+                // The session's roots still name the old origin: resolved
+                // through this alias, then the new key's own, to the port.
+                result.aliases.insert(key.clone(), new_key.clone());
+                if seen.insert(new_key.clone()) {
+                    pending.push(new_key);
+                }
+            }
+            gone @ (MovedResult::Removed { .. } | MovedResult::Cycle) => {
+                let reason = gone.gone_reason().expect("removed and cycle both have a reason");
+                result.errors.push((key.clone(), reason));
+                resolved_away += 1;
+            }
+        }
+    }
     loop {
         while let Some(key) = pending.pop() {
-            // Dedup on the raw key first so renamed/removed ports are noted
-            // once, not once per referencing dep edge.
-            if !seen.insert(key.clone()) {
-                continue;
-            }
-            // Resolve renames/removals before anything else.
-            let exists = |o: &str| ctx.locate(o).is_some();
-            let key = match moved.resolve(&key.origin, exists) {
-                MovedResult::Unchanged => key,
-                MovedResult::MovedTo { origin, reason } => {
-                    result
-                        .moved_notes
-                        .push(format!("{} moved to {origin} ({reason})", key.origin));
-                    resolved_away += 1;
-                    let new_key = key.with_origin(&origin);
-                    // Dep edges still name the old origin: resolved through
-                    // this alias, then the new key's own, to the port.
-                    result.aliases.insert(key.clone(), new_key.clone());
-                    if !seen.insert(new_key.clone()) {
-                        continue;
-                    }
-                    new_key
-                }
-                gone @ (MovedResult::Removed { .. } | MovedResult::Cycle) => {
-                    let reason = gone.gone_reason().expect("removed and cycle both have a reason");
-                    result.errors.push((key.clone(), reason));
-                    resolved_away += 1;
-                    continue;
-                }
-            };
             if let Some(info) = cache.lookup(&key, files) {
                 result.from_cache += 1;
-                pending.extend(register(info, blacklist, &mut result));
+                let targets = register(info, blacklist, moved, &exists, &mut result);
+                pending.extend(targets.into_iter().filter(|t| seen.insert(t.clone())));
             } else {
                 runner.submit(key);
                 in_flight += 1;
@@ -109,7 +111,8 @@ pub fn scan(
                 done += 1;
                 result.queried += 1;
                 cache.insert(&info, files);
-                pending.extend(register(*info, blacklist, &mut result));
+                let targets = register(*info, blacklist, moved, &exists, &mut result);
+                pending.extend(targets.into_iter().filter(|t| seen.insert(t.clone())));
             }
             Ok(ScanEvent::PortError { key, msg }) => {
                 in_flight -= 1;
@@ -134,15 +137,53 @@ pub fn scan(
 /// poudriere does not gather (`gather_port_vars_port` in its common.sh
 /// returns on IGNORE, which its blacklist sets). An IGNORE'd port is still
 /// walked: its IGNORE may follow the very options being configured.
-fn register(info: PortInfo, blacklist: &Blacklist, result: &mut ScanResult) -> Vec<PortKey> {
-    result.aliases.insert(info.key.clone(), info.canonical.clone());
-    let targets: Vec<PortKey> = if blacklist.matches(&info.canonical, info.is_default_flavor()) {
-        Vec::new()
-    } else {
-        info.deps.iter().map(|d| d.target.clone()).collect()
-    };
-    result.ports.entry(info.canonical.clone()).or_insert(info);
+///
+/// A dependency on an origin that is in no tree is never walked, and never
+/// redirected through MOVED: the framework cannot build it there, and
+/// poudriere's `deps_sanity` (common.sh) aborts the bulk on it, naming the
+/// MOVED entry; synth fails the listed port with `nonexistent_port`. It is
+/// an error on the depending port, once per such dependency, except where
+/// `deps_sanity` never looks: an IGNORE'd or blacklisted port's
+/// dependencies, and a `TEST_DEPENDS` edge, which poudriere never reads.
+fn register(
+    info: PortInfo,
+    blacklist: &Blacklist,
+    moved: &Moved,
+    exists: &dyn Fn(&str) -> bool,
+    result: &mut ScanResult,
+) -> Vec<PortKey> {
+    let canonical = info.canonical.clone();
+    result.aliases.insert(info.key.clone(), canonical.clone());
+    // A port met under a second key (bare and default flavor) was checked
+    // the first time.
+    let check = !result.ports.contains_key(&canonical) && info.ignore.is_none();
+    let mut targets = Vec::new();
+    if !blacklist.matches(&canonical, info.is_default_flavor()) {
+        for dep in &info.deps {
+            if exists(&dep.target.origin) {
+                targets.push(dep.target.clone());
+            } else if check && !dep.test_only {
+                let error = nonexistent_dependency(&dep.target.origin, moved, exists);
+                result.errors.push((canonical.clone(), error));
+            }
+        }
+    }
+    result.ports.entry(canonical).or_insert(info);
     targets
+}
+
+/// `deps_sanity`'s refusal of a dependency on `origin`, which is in no
+/// tree, with what MOVED says of it.
+fn nonexistent_dependency(origin: &str, moved: &Moved, exists: &dyn Fn(&str) -> bool) -> String {
+    let why = match moved.resolve(origin, exists) {
+        MovedResult::MovedTo { origin: new, .. } if exists(&new) => format!(" (moved to {new})"),
+        MovedResult::MovedTo { origin: new, .. } => format!(" (moved to nonexistent {new})"),
+        MovedResult::Removed { reason } if reason.is_empty() => " (port EXPIRED)".to_string(),
+        MovedResult::Removed { reason } => format!(" (port EXPIRED: {reason})"),
+        MovedResult::Cycle => " (its MOVED entries form a cycle)".to_string(),
+        MovedResult::Unchanged => String::new(),
+    };
+    format!("depends on nonexistent origin {origin}{why}")
 }
 
 #[cfg(test)]
@@ -284,9 +325,9 @@ mod tests {
 
     /// An IGNORE'd port is not a blacklisted one: `register`'s own doc says
     /// its dependencies are still queried, since its IGNORE may follow the
-    /// very options being configured (unlike a blacklisted port, gathered
-    /// without its dependencies, matching poudriere's `gather_port_vars_port`
-    /// returning on IGNORE only for a port its own blacklist already drops).
+    /// very options being configured. poudriere's `gather_port_vars_port`
+    /// returns on any IGNORE, so this differs on purpose (conformance.md);
+    /// a blacklisted port, IGNORE'd by poudriere itself, is not walked.
     #[test]
     fn an_ignored_ports_dependencies_are_still_queried() {
         let _lock = crate::query::makerunner::make_test_lock();
@@ -384,15 +425,108 @@ mod tests {
         assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
     }
 
-    /// A dependency on a MOVED origin resolves to the port it moved to: the
-    /// loop through it is found, and a refresh's GC keeps the port.
+    /// A dependency on an origin in no tree is an error on the depending
+    /// port, worded as poudriere's `deps_sanity` words it: never redirected
+    /// through MOVED, so the port it moved to is not queried through it,
+    /// and no loop runs through it. The depending port stays in the
+    /// closure, and a refresh's GC keeps it.
     #[test]
-    fn a_dependency_on_a_moved_origin_resolves_to_its_new_one() {
+    fn a_dependency_on_a_nonexistent_origin_is_the_dependers_error() {
         let _lock = crate::query::makerunner::make_test_lock();
-        let dep = |o: &str| format!("_UNIFIED_DEPENDS=x:{o}\nRUN_DEPENDS_ALL=x:{o}\n");
+        let dep = |o: &[&str]| {
+            let list: Vec<String> = o.iter().map(|o| format!("x:{o}")).collect();
+            format!("_UNIFIED_DEPENDS={0}\nRUN_DEPENDS_ALL={0}\n", list.join(" "))
+        };
         let tmp = fake_tree(&[
-            ("cat/a", &format!("PKGNAME=a-1.0\n{}", dep("cat/old"))),
-            ("cat/new", &format!("PKGNAME=new-1.0\n{}", dep("cat/a"))),
+            ("cat/a", &format!("PKGNAME=a-1.0\n{}", dep(&["cat/old", "cat/expired", "cat/never", "cat/b"]))),
+            ("cat/b", "PKGNAME=b-1.0\n"),
+            ("cat/new", &format!("PKGNAME=new-1.0\n{}", dep(&["cat/a"]))),
+        ]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+        };
+        let moved = Moved::parse(
+            "cat/old|cat/new|2026-01-01|renamed\n\
+             cat/expired||2026-01-01|Has expired: unmaintained\n",
+        );
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let roots = vec![PortKey::parse("cat/a").unwrap()];
+        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
+        let errors: Vec<String> = result.errors.iter().map(|(k, m)| format!("{k}: {m}")).collect();
+        assert_eq!(
+            errors,
+            [
+                "cat/a: depends on nonexistent origin cat/old (moved to cat/new)",
+                "cat/a: depends on nonexistent origin cat/expired (port EXPIRED: Has expired: unmaintained)",
+                "cat/a: depends on nonexistent origin cat/never",
+            ]
+        );
+        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        assert_eq!(got, ["cat/a", "cat/b"], "cat/new is not queried through cat/old");
+        assert!(result.moved_notes.is_empty(), "{:?}", result.moved_notes);
+        let old = PortKey::parse("cat/old").unwrap();
+        assert_eq!(crate::deps::resolve(&result.ports, &result.aliases, &old), None);
+        assert!(crate::deps::detect(&result.ports, &result.aliases).is_empty());
+
+        let mut session =
+            crate::session::Session::new(result.ports, result.aliases, &roots, &files, false);
+        let refresh = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
+        assert_eq!(refresh.errors.len(), 3, "{:?}", refresh.errors);
+        let (_, removed) = session.merge(refresh, &files);
+        assert!(removed.is_empty(), "the GC dropped {removed:?}");
+        assert_eq!(session.ports.len(), 2);
+    }
+
+    /// `deps_sanity` never looks at an IGNORE'd port's dependencies, nor at
+    /// a blacklisted one's, nor at `TEST_DEPENDS`, which poudriere never
+    /// reads: a nonexistent origin there is no error, and is not walked.
+    /// The IGNORE'd port's other dependencies are still queried.
+    #[test]
+    fn a_nonexistent_origin_poudriere_never_checks_is_no_error() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let tmp = fake_tree(&[
+            (
+                "cat/ignored",
+                "PKGNAME=ignored-1.0\nIGNORE=not here\n\
+                 _UNIFIED_DEPENDS=x:cat/gone x:cat/dep\nRUN_DEPENDS_ALL=x:cat/gone x:cat/dep\n",
+            ),
+            ("cat/listed", "PKGNAME=listed-1.0\n_UNIFIED_DEPENDS=x:cat/gone\nRUN_DEPENDS_ALL=x:cat/gone\n"),
+            ("cat/tested", "PKGNAME=tested-1.0\n_UNIFIED_DEPENDS=x:cat/gone\n"),
+            ("cat/dep", "PKGNAME=dep-1.0\n"),
+        ]);
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            make_conf: None,
+            port_dbdir: tmp.path().join("options"),
+            overlays: Vec::new(),
+        };
+        let files = OptionsFiles::new(&ctx.port_dbdir);
+        let pd = tmp.path().join("poudriere.d");
+        std::fs::create_dir_all(&pd).unwrap();
+        std::fs::write(pd.join("blacklist"), "cat/listed\n").unwrap();
+        let bl = Blacklist::load(&pd, None, "default", None);
+        let roots: Vec<PortKey> =
+            ["cat/ignored", "cat/listed", "cat/tested"].iter().map(|o| PortKey::parse(o).unwrap()).collect();
+        let moved = Moved::parse("cat/gone|cat/dep|2026-01-01|renamed\n");
+        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &bl, |_| {});
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        assert_eq!(got, ["cat/dep", "cat/ignored", "cat/listed", "cat/tested"]);
+        assert!(result.ports[&PortKey::parse("cat/tested").unwrap()].deps[0].test_only);
+    }
+
+    /// A root follows MOVED (the existing `moved_and_missing_ports_reported_once`
+    /// covers the note); a dependency naming that same old origin is still
+    /// refused, the root's resolution notwithstanding.
+    #[test]
+    fn a_moved_root_does_not_excuse_a_dependency_on_its_old_name() {
+        let _lock = crate::query::makerunner::make_test_lock();
+        let tmp = fake_tree(&[
+            ("cat/a", "PKGNAME=a-1.0\n_UNIFIED_DEPENDS=x:cat/old\nRUN_DEPENDS_ALL=x:cat/old\n"),
+            ("cat/new", "PKGNAME=new-1.0\n"),
         ]);
         let ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
@@ -402,24 +536,13 @@ mod tests {
         };
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let roots = vec![PortKey::parse("cat/a").unwrap()];
+        let roots: Vec<PortKey> = ["cat/old", "cat/a"].iter().map(|o| PortKey::parse(o).unwrap()).collect();
         let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
-        assert!(result.errors.is_empty(), "{:?}", result.errors);
-        assert_eq!(result.ports.len(), 2);
-        let old = PortKey::parse("cat/old").unwrap();
-        assert_eq!(
-            crate::deps::resolve(&result.ports, &result.aliases, &old),
-            Some(PortKey::parse("cat/new").unwrap())
-        );
-        let loops = crate::deps::detect(&result.ports, &result.aliases);
-        assert_eq!(loops.len(), 1, "cat/a → cat/old=cat/new → cat/a");
-
-        let mut session =
-            crate::session::Session::new(result.ports, result.aliases, &roots, &files, false);
-        let refresh = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
-        let (_, removed) = session.merge(refresh, &files);
-        assert!(removed.is_empty(), "the GC dropped {removed:?}");
-        assert_eq!(session.ports.len(), 2);
+        assert_eq!(result.moved_notes, ["cat/old moved to cat/new (renamed)"]);
+        let errors: Vec<String> = result.errors.iter().map(|(k, m)| format!("{k}: {m}")).collect();
+        assert_eq!(errors, ["cat/a: depends on nonexistent origin cat/old (moved to cat/new)"]);
+        let got: Vec<String> = result.ports.keys().map(|k| k.to_string()).collect();
+        assert_eq!(got, ["cat/a", "cat/new"]);
     }
 
     /// make reads `options.local` after the options file (bsd.options.mk's

@@ -241,7 +241,7 @@ impl Blacklist {
         bl
     }
 
-    /// Is this port blacklisted, matching as poudriere(8)'s `check_bl` does
+    /// Is this port blacklisted, matching as poudriere's `deps_fetch_vars` does
     /// (common.sh): entries are exact origins, never globs. A port with no
     /// flavors (`key.flavor` is `None`) matches only its bare origin. A
     /// flavored port always matches `origin` or `origin@all`, and

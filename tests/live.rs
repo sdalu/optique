@@ -257,7 +257,7 @@ fn scan_gate_counts_ports_it_could_not_check() {
     assert!(report["summary"]["pending"].as_u64().unwrap() >= 1);
     assert_eq!(report["errors"][0]["subject"], "misc/optique-no-such-port", "{report}");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("1 port not checked (query failed)"), "{stderr}");
+    assert!(stderr.contains(" · 1 error (see above)"), "{stderr}");
 }
 
 /// `clean --redundant` removes the files that only repeat defaults and

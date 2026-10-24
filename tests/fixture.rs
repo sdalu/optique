@@ -116,3 +116,39 @@ fn a_latin1_make_conf_is_read() {
     assert_eq!(docs["makeconf"]["scope"], "port", "{docs}");
     assert_eq!(docs["staged"], false, "{docs}");
 }
+
+/// MOVED applies to a listed origin only: misc/oldname listed is misc/cond,
+/// while a port depending on misc/oldname is refused as poudriere refuses
+/// it, misc/cond not queried on its account, and scan counts the error.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_dependency_on_a_moved_origin_is_an_error_a_listed_one_is_followed() {
+    let f = Fixture::new();
+    fs::write(f.tree.join("MOVED"), "misc/oldname|misc/cond|2026-01-01|Renamed\n").unwrap();
+    let dir = f.tree.join("misc/brokendep");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("Makefile"),
+        "PORTNAME=\tbrokendep\nPORTVERSION=\t1.0\nCATEGORIES=\tmisc\n\
+         MAINTAINER=\tnobody@example.org\nCOMMENT=\tDepends on a moved origin\n\
+         WWW=\t\thttps://example.org/\nNO_BUILD=\tyes\n\
+         RUN_DEPENDS=\tcond>0:misc/oldname\n\n.include <bsd.port.mk>\n",
+    )
+    .unwrap();
+
+    let out = f.run("scan", &["--json", "misc/brokendep"]);
+    assert_eq!(out.status.code(), Some(1), "{}", common::stderr(&out));
+    let report = common::json(&out);
+    assert_eq!(report["summary"]["errors"], 1, "{report}");
+    assert_eq!(report["errors"][0]["subject"], "misc/brokendep", "{report}");
+    assert_eq!(
+        report["errors"][0]["message"],
+        "depends on nonexistent origin misc/oldname (moved to misc/cond)",
+        "{report}"
+    );
+    assert!(!report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+
+    let report = common::json(&f.run("scan", &["--json", "misc/oldname"]));
+    assert_eq!(report["summary"]["errors"], 0, "{report}");
+    assert!(report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+}

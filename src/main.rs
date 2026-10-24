@@ -230,10 +230,11 @@ fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     let rs = roots_or_installed(cli, &args.origins)?;
     let scanned = run_scan(cli, &rs)?;
     if !scanned.result.errors.is_empty() {
-        // A port that failed to query is absent from the closure and would be
-        // pruned as unused — refuse rather than delete on partial knowledge.
+        // A port that failed to query, or a dependency on a nonexistent
+        // origin, leaves the closure short: what it misses would be pruned
+        // as unused — refuse rather than delete on partial knowledge.
         anyhow::bail!(
-            "{} port(s) failed to query: the dependency closure is incomplete, \
+            "{} error(s): the dependency closure is incomplete, \
              refusing to prune entries",
             scanned.result.errors.len()
         );
@@ -1337,10 +1338,11 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     let attention = rows.iter().filter(|r| r.needs_attention()).count();
     // A port whose query failed is missing from the closure, with whatever
     // it depends on: neither it nor they were checked, so the gate stays
-    // shut until it can be (run_scan already named each one on stderr).
+    // shut until it can be (run_scan already named each one on stderr). So
+    // does a dependency on a nonexistent origin, which no build gets past.
     let query_errors = &scanned.result.errors;
     // The gate: ports owing a decision, loops a human has to untangle, and
-    // ports that could not be checked at all.
+    // errors: ports that could not be checked, or depend on no port.
     let pending = attention + blocking_loops + query_errors.len();
 
     if json {
@@ -1466,7 +1468,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     };
     match query_errors.len() {
         0 => {}
-        n => loop_note.push_str(&format!(" · {n} port{} not checked (query failed)", if n == 1 { "" } else { "s" })),
+        n => loop_note.push_str(&format!(" · {n} error{} (see above)", if n == 1 { "" } else { "s" })),
     }
     eprintln!(
         "{} ports with options ({} unconfigured, {} stale, {} conflict; \

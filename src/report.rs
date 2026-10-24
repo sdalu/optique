@@ -25,8 +25,9 @@ pub struct ScanReport {
     pub ports: Vec<PortReport>,
     pub loops: Vec<LoopReport>,
     pub summary: ScanSummary,
-    /// Ports whose query failed: missing from `ports`, and so is whatever
-    /// they depend on.
+    /// Ports whose query failed, or that MOVED says are gone: missing
+    /// from `ports`, and so is whatever they depend on. Also one entry per
+    /// dependency of a port in `ports` on an origin that does not exist.
     pub errors: Vec<ErrorEntry>,
 }
 
@@ -152,7 +153,7 @@ pub struct ScanSummary {
     pub loops: usize,
     /// Loops with at least one member that is not blacklisted.
     pub loops_blocking: usize,
-    /// Ports whose query failed (`errors`).
+    /// The length of `errors`.
     pub errors: usize,
     /// What the exit status reports: `attention` + `loops_blocking` +
     /// `errors`.

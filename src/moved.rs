@@ -33,8 +33,12 @@ impl MovedResult {
 
 #[derive(Debug, Default)]
 pub struct Moved {
-    /// old origin -> (new origin or None if removed, reason)
+    /// old origin -> (new origin or None if removed, reason), chains
+    /// collapsed as `parse_MOVED.awk` collapses them (see `add`).
     map: HashMap<String, (Option<String>, String)>,
+    /// new origin -> the old origins whose entry now leads to it, the
+    /// awk's `backrefs`: what a later entry moving that origin repoints.
+    backrefs: HashMap<String, Vec<String>>,
 }
 
 impl Moved {
@@ -61,6 +65,13 @@ impl Moved {
         moved
     }
 
+    /// Read entries in file order, collapsing chains as `update_forwards`
+    /// in poudriere's `awk/parse_MOVED.awk` does: an entry `B|C` repoints
+    /// every earlier entry that led to `B` so it leads to `C` (or is
+    /// removed with `B|C`'s reason, when `C` is empty). An entry `X|B`
+    /// read after `B|C` keeps `B`: only earlier entries are repointed.
+    /// A line without a `|`, or with an empty old origin, names no move
+    /// and is skipped.
     fn add(&mut self, text: &str, file: &str, warnings: &mut Vec<String>) {
         for line in text.lines() {
             let line = line.trim();
@@ -71,30 +82,46 @@ impl Moved {
             let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
                 continue;
             };
+            let old = old.trim();
+            if old.is_empty() {
+                continue;
+            }
+            if self.map.contains_key(old) {
+                warnings.push(format!("MOVED: {old} has duplicate entries ({file})"));
+                continue;
+            }
             let reason = fields.nth(1).unwrap_or("").to_string();
             let new = new.trim();
-            let entry = (if new.is_empty() { None } else { Some(new.to_string()) }, reason);
-            match self.map.entry(old.trim().to_string()) {
-                std::collections::hash_map::Entry::Occupied(o) => {
-                    warnings.push(format!("MOVED: {} has duplicate entries ({file})", o.key()));
-                }
-                std::collections::hash_map::Entry::Vacant(v) => {
-                    v.insert(entry);
-                }
+            let target = (!new.is_empty()).then(|| new.to_string());
+            let led_here = self.backrefs.remove(old).unwrap_or_default();
+            for earlier in &led_here {
+                self.map.insert(earlier.clone(), (target.clone(), reason.clone()));
+            }
+            self.map.insert(old.to_string(), (target.clone(), reason));
+            if let Some(target) = target {
+                let refs = self.backrefs.entry(target).or_default();
+                refs.push(old.to_string());
+                refs.extend(led_here);
             }
         }
     }
 
-    /// Chase MOVED chains for a bare origin (no flavor). MOVED is history and
-    /// an origin moved away can be reused later, so the chase stops at the
-    /// first origin `exists` says is in the tree, the one asked for included.
-    /// A chain that comes back to an origin it passed leads to no port: it
-    /// is reported as a cycle.
+    /// Chase MOVED for a bare origin (no flavor), as poudriere's
+    /// `check_moved` follows the collapsed entries: the target if it is in
+    /// the tree, else that target's own entry, and so on. MOVED is history
+    /// and an origin moved away can be reused later, so an origin `exists`
+    /// says is in the tree is that port and is not chased. The collapse
+    /// can leave an entry leading to itself (`a|b` then `b|a` give `a|a`
+    /// and `b|a`); where poudriere then loops forever, the chase reports a
+    /// cycle once it comes back to an origin it passed.
     pub fn resolve(&self, origin: &str, exists: impl Fn(&str) -> bool) -> MovedResult {
+        if exists(origin) {
+            return MovedResult::Unchanged;
+        }
         let mut current = origin.to_string();
         let mut reason = String::new();
         let mut passed = HashSet::new();
-        while let Some((next, why)) = self.map.get(&current).filter(|_| !exists(&current)) {
+        while let Some((next, why)) = self.map.get(&current) {
             if !passed.insert(current.clone()) {
                 return MovedResult::Cycle;
             }
@@ -102,6 +129,9 @@ impl Moved {
             match next {
                 Some(n) => current = n.clone(),
                 None => return MovedResult::Removed { reason },
+            }
+            if exists(&current) {
+                break;
             }
         }
         if current == origin {
@@ -150,9 +180,6 @@ mod tests {
         );
     }
 
-    /// A cycle among origins absent from the tree leads nowhere: reported,
-    /// never redirected to whichever origin the chase stopped at. One of
-    /// its origins in the tree ends the chase there as any chain does.
     /// The main tree's MOVED, then each overlay's: a chain runs across
     /// them, and a repeated origin keeps its first entry, with a warning.
     #[test]
@@ -171,16 +198,55 @@ mod tests {
         assert!(warnings[0].starts_with("MOVED: x/x has duplicate entries"), "{warnings:?}");
     }
 
+    /// `a|b`, `b|c`, `x|b`: the awk repoints `a` to `c` and leaves `x`
+    /// on `b`, read after `b|c`. `a` goes to `c` even with `b` back in the
+    /// tree, never tested; `x` stops at `b` when it exists, else goes on.
     #[test]
-    fn cycle_guard() {
-        let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|r\nc/c|a/a|d|into the cycle\n");
-        let cycle = MovedResult::Cycle;
-        assert_eq!(m.resolve("a/a", |_| false), cycle);
-        assert_eq!(m.resolve("b/b", |_| false), cycle);
-        assert_eq!(m.resolve("c/c", |_| false), cycle);
+    fn chains_collapse_in_file_order() {
+        let m = Moved::parse("a/a|b/b|2026-01-01|one\nb/b|c/c|2026-02-01|two\nx/x|b/b|2026-03-01|three\n");
+        let to = |o: &str, r: &str| MovedResult::MovedTo { origin: o.into(), reason: r.into() };
+        let b_back = |o: &str| o == "b/b" || o == "c/c";
+        let c_only = |o: &str| o == "c/c";
+        assert_eq!(m.resolve("a/a", b_back), to("c/c", "two"));
+        assert_eq!(m.resolve("a/a", c_only), to("c/c", "two"));
+        assert_eq!(m.resolve("x/x", b_back), to("b/b", "three"));
+        assert_eq!(m.resolve("x/x", c_only), to("c/c", "two"));
+        assert_eq!(m.resolve("b/b", b_back), MovedResult::Unchanged);
+    }
+
+    /// A removal read later repoints earlier entries to it, with its reason.
+    #[test]
+    fn a_later_removal_ends_the_earlier_chain() {
+        let m = Moved::parse("a/a|b/b|2026-01-01|renamed\nb/b||2026-02-01|expired\n");
+        let removed = MovedResult::Removed { reason: "expired".into() };
+        assert_eq!(m.resolve("a/a", |o| o == "b/b"), removed);
+        assert_eq!(m.resolve("b/b", |_| false), removed);
+    }
+
+    /// `a|b`, `b|a` collapse to `a|a` and `b|a`. With `a` in the tree both
+    /// lead there; without it poudriere's `check_moved` loops forever, and
+    /// the chase reports a cycle, `b` there or not, as for an entry
+    /// leading into the cycle.
+    #[test]
+    fn a_cycle_resolves_to_its_collapsed_target_or_is_reported() {
+        let m = Moved::parse("a/a|b/b|d|r\nb/b|a/a|d|back\nc/c|a/a|d|into the cycle\n");
+        let a_there = |o: &str| o == "a/a";
+        assert_eq!(m.resolve("a/a", a_there), MovedResult::Unchanged);
         assert_eq!(
-            m.resolve("c/c", |o| o == "b/b"),
-            MovedResult::MovedTo { origin: "b/b".into(), reason: "r".into() }
+            m.resolve("b/b", a_there),
+            MovedResult::MovedTo { origin: "a/a".into(), reason: "back".into() }
         );
+        assert_eq!(
+            m.resolve("c/c", a_there),
+            MovedResult::MovedTo { origin: "a/a".into(), reason: "into the cycle".into() }
+        );
+        let nothing = |_: &str| false;
+        let b_only = |o: &str| o == "b/b";
+        for exists in [&nothing as &dyn Fn(&str) -> bool, &b_only] {
+            assert_eq!(m.resolve("a/a", exists), MovedResult::Cycle);
+            assert_eq!(m.resolve("c/c", exists), MovedResult::Cycle);
+        }
+        assert_eq!(m.resolve("b/b", nothing), MovedResult::Cycle);
+        assert!(MovedResult::Cycle.gone_reason().unwrap().contains("cycle"));
     }
 }
