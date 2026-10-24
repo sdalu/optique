@@ -35,7 +35,9 @@ pub fn draft_path_in(cache_dir: &Path, options_dir: &Path) -> PathBuf {
     // The dir string is hashed as given: the TUI always gets the same
     // configured path, and hashing avoids escaping separators in a filename.
     let digest = cache::sha256_hex(options_dir.to_string_lossy().as_bytes());
-    cache_dir.join("drafts").join(format!("{}.json", &digest[..16]))
+    cache_dir
+        .join("drafts")
+        .join(format!("{}.json", &digest[..16]))
 }
 
 /// Write the session's dirty staged sets as the draft for `options_dir`.
@@ -100,7 +102,10 @@ pub fn age_label(secs: u64) -> String {
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -117,7 +122,10 @@ mod tests {
     fn session_with(states: Vec<(&str, OptState)>) -> Session {
         Session {
             ports: BTreeMap::new(),
-            states: states.into_iter().map(|(n, s)| (n.to_string(), s)).collect(),
+            states: states
+                .into_iter()
+                .map(|(n, s)| (n.to_string(), s))
+                .collect(),
             moved_states: HashMap::new(),
             aliases: HashMap::new(),
             roots: Vec::new(),
@@ -138,11 +146,19 @@ mod tests {
         let session = session_with(vec![
             (
                 "cat_dirty",
-                OptState { saved: None, baseline: set(&["A"]), staged: set(&["A", "B"]) },
+                OptState {
+                    saved: None,
+                    baseline: set(&["A"]),
+                    staged: set(&["A", "B"]),
+                },
             ),
             (
                 "cat_clean",
-                OptState { saved: None, baseline: set(&["X"]), staged: set(&["X"]) },
+                OptState {
+                    saved: None,
+                    baseline: set(&["X"]),
+                    staged: set(&["X"]),
+                },
             ),
         ]);
 
@@ -169,12 +185,19 @@ mod tests {
         let b = tmp.path().join("b");
         let session = session_with(vec![(
             "cat_port",
-            OptState { saved: None, baseline: set(&[]), staged: set(&["A"]) },
+            OptState {
+                saved: None,
+                baseline: set(&[]),
+                staged: set(&["A"]),
+            },
         )]);
 
         save_in(&cache_dir, &session, &a).unwrap();
         assert!(load_in(&cache_dir, &a).is_some());
-        assert!(load_in(&cache_dir, &b).is_none(), "another dir has its own draft");
+        assert!(
+            load_in(&cache_dir, &b).is_none(),
+            "another dir has its own draft"
+        );
     }
 
     #[test]

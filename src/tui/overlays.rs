@@ -39,7 +39,11 @@ impl WhyLoop {
         let extra = dl.extra_members();
         WhyLoop {
             walk,
-            tangled: extra.iter().take(EXTRA_SHOWN).map(|k| (*k).clone()).collect(),
+            tangled: extra
+                .iter()
+                .take(EXTRA_SHOWN)
+                .map(|k| (*k).clone())
+                .collect(),
             hidden: extra.len().saturating_sub(EXTRA_SHOWN),
         }
     }
@@ -73,7 +77,11 @@ impl WhyInfo {
             out.extend(dl.walk.iter());
             out.extend(dl.tangled.iter());
         }
-        out.extend(self.dependents.iter().take(crate::tui::ui::WHY_MAX_DEPENDENTS));
+        out.extend(
+            self.dependents
+                .iter()
+                .take(crate::tui::ui::WHY_MAX_DEPENDENTS),
+        );
         out
     }
 }
@@ -135,7 +143,9 @@ impl App {
 
     /// Open the "why" overlay on the selected port.
     pub(super) fn open_why(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         self.why = Some(self.why_for(key));
     }
 
@@ -154,7 +164,10 @@ impl App {
             return;
         }
         if !info.options.has_options() {
-            self.flash(&format!("{target} has no options and is not listed: not jumped to"), true);
+            self.flash(
+                &format!("{target} has no options and is not listed: not jumped to"),
+                true,
+            );
             return;
         }
         let mut widened = Vec::new();
@@ -175,25 +188,36 @@ impl App {
         }
         // A port with options is listed once no view hides it.
         self.rebuild_editor();
-        self.flash(&format!("jumped to {target} ({})", widened.join(", ")), false);
+        self.flash(
+            &format!("jumped to {target} ({})", widened.join(", ")),
+            false,
+        );
     }
 
     /// Open the detail overlay on the option under the editor cursor. Only
     /// the port and option name are stored; everything shown is looked up at
     /// draw time so the popup follows background refreshes.
     pub(super) fn open_opt_info(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         let Some(EditorRow::Option(opt)) = self.editor_rows.get(self.editor_idx) else {
             return;
         };
-        self.opt_info = Some(OptInfo { key, opt: opt.clone(), scroll: 0 });
+        self.opt_info = Some(OptInfo {
+            key,
+            opt: opt.clone(),
+            scroll: 0,
+        });
     }
 
     /// Open the selected port's pkg-help. Read here rather than at query time
     /// so the overlay always shows what is on disk now; only the fact that the
     /// file exists comes from the query.
     pub(super) fn open_port_help(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         let Some(path) = self.session.ports[&key].pkg_help.clone() else {
             self.flash("this port ships no pkg-help", false);
             return;
@@ -201,7 +225,12 @@ impl App {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
                 let lines = text.lines().map(str::to_string).collect();
-                self.port_help = Some(PortHelp { title: "pkg-help", key, lines, scroll: 0 });
+                self.port_help = Some(PortHelp {
+                    title: "pkg-help",
+                    key,
+                    lines,
+                    scroll: 0,
+                });
             }
             Err(e) => self.flash(&format!("cannot read {path}: {e}"), true),
         }
@@ -211,7 +240,8 @@ impl App {
     /// on a terminal of ABOUT_MIN_ROWS rows or more, where it leaves the
     /// option rows room enough.
     pub fn about_shown(&self) -> bool {
-        self.about_choice.unwrap_or(self.screen_rows >= ABOUT_MIN_ROWS)
+        self.about_choice
+            .unwrap_or(self.screen_rows >= ABOUT_MIN_ROWS)
     }
 
     /// Take the terminal's height at a frame, before it is drawn. A frame
@@ -244,7 +274,9 @@ impl App {
         if !self.about_shown() {
             return;
         }
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         if self.about_text.contains_key(&key) {
             return;
         }
@@ -260,18 +292,26 @@ impl App {
     /// to flash when it cannot be read. The one reader of the file, for the
     /// panel and the `v` overlay alike.
     fn read_descr(&self, key: &PortKey) -> Result<Option<String>, String> {
-        let Some(path) = &self.session.ports[key].about.pkg_descr else { return Ok(None) };
-        std::fs::read_to_string(path).map(Some).map_err(|e| format!("cannot read {path}: {e}"))
+        let Some(path) = &self.session.ports[key].about.pkg_descr else {
+            return Ok(None);
+        };
+        std::fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| format!("cannot read {path}: {e}"))
     }
 
     /// Open the selected port's description: its COMMENT and WWW, then its
     /// pkg-descr as written. A port whose pkg-descr cannot be read still
     /// shows the rest.
     pub(super) fn open_port_about(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         let about = &self.session.ports[&key].about;
-        let mut lines: Vec<String> =
-            Some(about.comment.clone()).filter(|c| !c.is_empty()).into_iter().collect();
+        let mut lines: Vec<String> = Some(about.comment.clone())
+            .filter(|c| !c.is_empty())
+            .into_iter()
+            .collect();
         for url in about.www.split_whitespace() {
             lines.push(format!("WWW: {url}"));
         }
@@ -285,7 +325,12 @@ impl App {
             Ok(None) => {}
             Err(e) => self.flash(&e, true),
         }
-        self.port_help = Some(PortHelp { title: "about", key, lines, scroll: 0 });
+        self.port_help = Some(PortHelp {
+            title: "about",
+            key,
+            lines,
+            scroll: 0,
+        });
     }
 
     /// Open the bulk-decision prompt, pre-filled with the option under the
@@ -302,7 +347,10 @@ impl App {
     /// what narrows them when anything does (the filter, t, L).
     pub(crate) fn bulk_scope(&self) -> String {
         let n = self.visible.len();
-        let mut out = format!("bulk over the {n} listed port{}", if n == 1 { "" } else { "s" });
+        let mut out = format!(
+            "bulk over the {n} listed port{}",
+            if n == 1 { "" } else { "s" }
+        );
         if !self.filter.is_empty() {
             out.push_str(&format!(" (filter: {})", self.filter));
         }

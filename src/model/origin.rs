@@ -11,7 +11,10 @@ pub struct PortKey {
 
 impl PortKey {
     pub fn new(origin: impl Into<String>, flavor: Option<String>) -> Self {
-        PortKey { origin: origin.into(), flavor }
+        PortKey {
+            origin: origin.into(),
+            flavor,
+        }
     }
 
     /// Parse `category/name[@flavor]`. Returns None on malformed input.
@@ -25,7 +28,10 @@ impl PortKey {
         if !valid_origin(origin) {
             return None;
         }
-        Some(PortKey { origin: origin.to_string(), flavor })
+        Some(PortKey {
+            origin: origin.to_string(),
+            flavor,
+        })
     }
 
     /// A dependency's `origin[@flavor][~subpkg]` as the framework's
@@ -40,7 +46,11 @@ impl PortKey {
         if s.contains('@') {
             return Self::parse(s);
         }
-        Self::parse(s.rsplit_once('~').filter(|(_, sub)| !sub.contains('/')).map_or(s, |(o, _)| o))
+        Self::parse(
+            s.rsplit_once('~')
+                .filter(|(_, sub)| !sub.contains('/'))
+                .map_or(s, |(o, _)| o),
+        )
     }
 
     /// A listed `origin[@flavor][~subpkg]` as poudriere's
@@ -72,7 +82,9 @@ pub fn valid_origin(s: &str) -> bool {
                 && cat
                     .chars()
                     .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-                && name.chars().all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
         }
         _ => false,
     }
@@ -106,14 +118,23 @@ mod tests {
     fn subpackages_name_their_port() {
         let dep = |s| PortKey::parse_dependency(s).map(|k| k.to_string());
         assert_eq!(dep("devel/bar~lib").as_deref(), Some("devel/bar"));
-        assert_eq!(dep("devel/bar@py311~lib").as_deref(), Some("devel/bar@py311~lib"));
+        assert_eq!(
+            dep("devel/bar@py311~lib").as_deref(),
+            Some("devel/bar@py311~lib")
+        );
         assert_eq!(dep("devel/bar@py311").as_deref(), Some("devel/bar@py311"));
         assert_eq!(dep("devel/bar").as_deref(), Some("devel/bar"));
         let listed = |s| PortKey::parse_listed(s).map(|k| k.to_string());
         assert_eq!(listed("devel/bar~lib").as_deref(), Some("devel/bar"));
-        assert_eq!(listed("devel/bar@py311~lib").as_deref(), Some("devel/bar@py311"));
+        assert_eq!(
+            listed("devel/bar@py311~lib").as_deref(),
+            Some("devel/bar@py311")
+        );
         assert_eq!(listed("devel/bar@all").as_deref(), Some("devel/bar@all"));
-        assert!(PortKey::parse("devel/bar~lib").is_none(), "plain parse still refuses it");
+        assert!(
+            PortKey::parse("devel/bar~lib").is_none(),
+            "plain parse still refuses it"
+        );
     }
 
     #[test]

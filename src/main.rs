@@ -64,7 +64,9 @@ fn run() -> Result<()> {
     let args = cli::disambiguate_synth(std::env::args_os());
     if let Err(msg) = cli::check_action_first(&args) {
         use clap::CommandFactory as _;
-        Cli::command().error(clap::error::ErrorKind::ArgumentConflict, msg).exit();
+        Cli::command()
+            .error(clap::error::ErrorKind::ArgumentConflict, msg)
+            .exit();
     }
     let cli = cli::parse(args);
     if let Err(e) = cli.check_globals() {
@@ -74,7 +76,11 @@ fn run() -> Result<()> {
     if cli.clear_cache {
         let dir = cache::default_cache_dir();
         let (files, bytes) = cache::clear(&dir);
-        eprintln!("cache cleared: {files} file(s), {} KiB in {}", bytes / 1024, dir.display());
+        eprintln!(
+            "cache cleared: {files} file(s), {} KiB in {}",
+            bytes / 1024,
+            dir.display()
+        );
         // Given alone, clearing IS the action.
         if cli.command.is_none() && cli.files.is_empty() {
             return Ok(());

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::model::options::{GroupKind, OptionGroup, PortOptions};
 use crate::model::origin::PortKey;
@@ -30,7 +30,9 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     let mut saw_sentinel = false;
 
     for line in text.lines() {
-        let Some(pos) = line.find("OPTIQUE|") else { continue };
+        let Some(pos) = line.find("OPTIQUE|") else {
+            continue;
+        };
         saw_sentinel = true;
         let rest = &line[pos + "OPTIQUE|".len()..];
         let (tag, value) = rest.split_once('|').unwrap_or((rest, ""));
@@ -99,7 +101,9 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                 });
             }
             "DESC" | "IMPLIES" | "PREVENTS" | "PREVENTS_MSG" | "OPT_BROKEN" | "OPT_IGNORE" => {
-                let Some((name, v)) = value.split_once('|') else { continue };
+                let Some((name, v)) = value.split_once('|') else {
+                    continue;
+                };
                 let name = name.trim();
                 let v = v.trim();
                 // Group descriptions land on the group, everything else on defs.
@@ -123,8 +127,12 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             // USES) a single option contributes. Exotic specs are silently
             // skipped — option-level noise does not belong in info.warnings.
             "OPT_DEP" => {
-                let Some((name, rest)) = value.split_once('|') else { continue };
-                let Some((class, v)) = rest.split_once('|') else { continue };
+                let Some((name, rest)) = value.split_once('|') else {
+                    continue;
+                };
+                let Some((class, v)) = rest.split_once('|') else {
+                    continue;
+                };
                 let name = name.trim();
                 let class = class.trim();
                 let def = opts.defs.entry(name.to_string()).or_default();
@@ -153,10 +161,16 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     }
 
     if !saw_sentinel {
-        bail!("no OPTIQUE output found (make failed?):\n{}", last_lines(text, 6, "\n"));
+        bail!(
+            "no OPTIQUE output found (make failed?):\n{}",
+            last_lines(text, 6, "\n")
+        );
     }
     if pkgname.is_empty() {
-        bail!("wrapper dump incomplete (no PKGNAME):\n{}", last_lines(text, 6, "\n"));
+        bail!(
+            "wrapper dump incomplete (no PKGNAME):\n{}",
+            last_lines(text, 6, "\n")
+        );
     }
 
     // bsd.options.mk:288: "Some options are always enabled by default" —
@@ -174,15 +188,22 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
     // they are in the closure, but poudriere builds them only under
     // `bulk -t` (on a current tree none is). Warnings from this pass are
     // dropped — the unified list already reported every unparsable entry.
-    let built: BTreeSet<PortKey> =
-        parse_depends(&build_deps).0.into_iter().map(|e| e.target).collect();
+    let built: BTreeSet<PortKey> = parse_depends(&build_deps)
+        .0
+        .into_iter()
+        .map(|e| e.target)
+        .collect();
     for edge in &mut deps {
         edge.test_only = !built.contains(&edge.target);
     }
 
     let canonical = PortKey::new(
         requested.origin.clone(),
-        if flavors.is_empty() || flavor.is_empty() { None } else { Some(flavor) },
+        if flavors.is_empty() || flavor.is_empty() {
+            None
+        } else {
+            Some(flavor)
+        },
     );
 
     Ok(PortInfo {
@@ -200,7 +221,10 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         // ${PKGHELP} is always defined; only the minority of ports that ship
         // the file get the marker, so the path is kept only when it is there.
         pkg_help: existing_file(pkg_help),
-        about: PortAbout { pkg_descr: existing_file(descr), ..about },
+        about: PortAbout {
+            pkg_descr: existing_file(descr),
+            ..about
+        },
         default_versions,
         warnings,
         makefiles,
@@ -218,7 +242,10 @@ pub fn parse_depends(value: &str) -> (Vec<DepEdge>, Vec<String>) {
         let fields: Vec<&str> = entry.split(':').collect();
         // The origin is the first field after the spec that parses as one;
         // specs may be absolute paths (no ':' inside in practice).
-        let target = fields.iter().skip(1).find_map(|f| PortKey::parse_dependency(f));
+        let target = fields
+            .iter()
+            .skip(1)
+            .find_map(|f| PortKey::parse_dependency(f));
         match target {
             Some(t) => {
                 if seen.insert(t.clone()) {
@@ -245,8 +272,10 @@ fn parse_subpackage_deps(value: &str) -> Vec<PortKey> {
     let mut seen = BTreeSet::new();
     for entry in value.split_whitespace() {
         let fields: Vec<&str> = entry.split(':').collect();
-        let Some((field, target)) =
-            fields.iter().skip(1).find_map(|f| PortKey::parse_dependency(f).map(|t| (*f, t)))
+        let Some((field, target)) = fields
+            .iter()
+            .skip(1)
+            .find_map(|f| PortKey::parse_dependency(f).map(|t| (*f, t)))
         else {
             continue;
         };
@@ -291,7 +320,15 @@ mod tests {
              py312-foo>=1:devel/py-foo@py312 msgfmt:devel/gettext:build garbage",
         );
         let targets: Vec<String> = edges.iter().map(|e| e.target.to_string()).collect();
-        assert_eq!(targets, vec!["ports-mgmt/pkg", "devel/pcre2", "devel/py-foo@py312", "devel/gettext"]);
+        assert_eq!(
+            targets,
+            vec![
+                "ports-mgmt/pkg",
+                "devel/pcre2",
+                "devel/py-foo@py312",
+                "devel/gettext"
+            ]
+        );
         assert_eq!(warns.len(), 1);
     }
 
@@ -380,7 +417,10 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let info = parse_dump(&key, &dump(&present)).unwrap();
         assert_eq!(info.about.comment, "Does foo things");
         assert_eq!(info.about.www, "https://a.example/ https://b.example/");
-        assert_eq!(info.about.pkg_descr.as_deref(), Some(present.to_str().unwrap()));
+        assert_eq!(
+            info.about.pkg_descr.as_deref(),
+            Some(present.to_str().unwrap())
+        );
 
         let info = parse_dump(&key, &dump(&tmp.path().join("absent"))).unwrap();
         assert_eq!(info.about.pkg_descr, None);
@@ -437,16 +477,41 @@ OPTIQUE|MULTI|SOME|G H
         assert_eq!(o.moved_file.as_deref(), Some("/elsewhere/options"));
         assert_eq!(info.default_versions, ["ssl=base", "python=3.12"]);
         // Absent, OPTIONS_FILE is the file optique manages.
-        assert_eq!(parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\n").unwrap().options.moved_file, None);
-        let groups: Vec<(GroupKind, &str, Vec<String>)> =
-            o.groups.iter().map(|g| (g.kind, g.name.as_str(), g.members.clone())).collect();
+        assert_eq!(
+            parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\n")
+                .unwrap()
+                .options
+                .moved_file,
+            None
+        );
+        let groups: Vec<(GroupKind, &str, Vec<String>)> = o
+            .groups
+            .iter()
+            .map(|g| (g.kind, g.name.as_str(), g.members.clone()))
+            .collect();
         assert_eq!(
             groups,
             [
-                (GroupKind::Group, "FREE", vec!["A".to_string(), "B".to_string()]),
-                (GroupKind::Single, "ONE", vec!["C".to_string(), "D".to_string()]),
-                (GroupKind::Radio, "MAYBE", vec!["E".to_string(), "F".to_string()]),
-                (GroupKind::Multi, "SOME", vec!["G".to_string(), "H".to_string()]),
+                (
+                    GroupKind::Group,
+                    "FREE",
+                    vec!["A".to_string(), "B".to_string()]
+                ),
+                (
+                    GroupKind::Single,
+                    "ONE",
+                    vec!["C".to_string(), "D".to_string()]
+                ),
+                (
+                    GroupKind::Radio,
+                    "MAYBE",
+                    vec!["E".to_string(), "F".to_string()]
+                ),
+                (
+                    GroupKind::Multi,
+                    "SOME",
+                    vec!["G".to_string(), "H".to_string()]
+                ),
             ]
         );
     }
@@ -459,7 +524,8 @@ OPTIQUE|MULTI|SOME|G H
         let key = PortKey::parse("cat/foo").unwrap();
         let undefined = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\n").unwrap();
         assert_eq!(undefined.options.r#override, None);
-        let defined_empty = parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\nOPTIQUE|OVERRIDE|\n").unwrap();
+        let defined_empty =
+            parse_dump(&key, "OPTIQUE|PKGNAME|foo-1.0\nOPTIQUE|OVERRIDE|\n").unwrap();
         assert_eq!(defined_empty.options.r#override, Some(BTreeSet::new()));
     }
 
@@ -535,7 +601,10 @@ OPTIQUE|OPT_BROKEN|B|B is busted
         let text = "OPTIQUE|PKGNAME|foo-1\nOPTIQUE|COMPLETE|DOCS NLS X11\nOPTIQUE|DEFAULT|X11\n";
         let info = parse_dump(&key, text).unwrap();
         for opt in ["DOCS", "NLS", "X11"] {
-            assert!(info.options.defaults.contains(opt), "{opt} must be a default");
+            assert!(
+                info.options.defaults.contains(opt),
+                "{opt} must be a default"
+            );
         }
         // EXAMPLES/IPV6 are not in this port's option list: not added.
         assert!(!info.options.defaults.contains("EXAMPLES"));
@@ -605,8 +674,11 @@ OPTIQUE|DEPENDS|a.so:cat/lib b>0:cat/tester c:cat/both
 OPTIQUE|BUILDDEPS|a.so:cat/lib c:cat/both
 ";
         let info = parse_dump(&key, text).unwrap();
-        let flags: Vec<(String, bool)> =
-            info.deps.iter().map(|d| (d.target.to_string(), d.test_only)).collect();
+        let flags: Vec<(String, bool)> = info
+            .deps
+            .iter()
+            .map(|d| (d.target.to_string(), d.test_only))
+            .collect();
         assert_eq!(
             flags,
             vec![
@@ -643,7 +715,10 @@ OPTIQUE|OPT_DEP|A|run|y:cat/two x:cat/one
         assert_eq!(def.deps.len(), 1, "unparsable-only record adds no class");
         assert_eq!(def.deps[0].0, "run");
         assert_eq!(def.deps[0].1, vec!["cat/one", "cat/two"]);
-        assert!(info.warnings.is_empty(), "option-level noise stays out of warnings");
+        assert!(
+            info.warnings.is_empty(),
+            "option-level noise stays out of warnings"
+        );
     }
 
     /// Cached PortInfos are read back from JSONL written by older versions:

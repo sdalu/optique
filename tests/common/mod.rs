@@ -14,7 +14,10 @@ pub fn tree(tmp: &Path) -> PathBuf {
     for dir in ["Mk", "Templates", "Keywords"] {
         std::os::unix::fs::symlink(Path::new("/usr/ports").join(dir), tree.join(dir)).unwrap();
     }
-    copy_dir(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ports"), &tree);
+    copy_dir(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ports"),
+        &tree,
+    );
     tree
 }
 
@@ -50,22 +53,39 @@ impl Fixture {
         let make_conf = tmp.path().join("make.conf");
         fs::write(&make_conf, "").unwrap();
         let cache = tmp.path().join("cache");
-        Fixture { tree, options, make_conf, cache, _tmp: tmp }
+        Fixture {
+            tree,
+            options,
+            make_conf,
+            cache,
+            _tmp: tmp,
+        }
     }
 
     /// `optique <action> -l -P <tree> -o <options>`, the host's make.conf
     /// replaced by the fixture's.
     pub fn optique(&self, action: &str) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_optique"));
-        c.env("XDG_CACHE_HOME", &self.cache).env("__MAKE_CONF", &self.make_conf);
-        c.args([action, "-l", "-P"]).arg(&self.tree).arg("-o").arg(&self.options);
+        c.env("XDG_CACHE_HOME", &self.cache)
+            .env("__MAKE_CONF", &self.make_conf);
+        c.args([action, "-l", "-P"])
+            .arg(&self.tree)
+            .arg("-o")
+            .arg(&self.options);
         c
     }
 
     pub fn run(&self, action: &str, args: &[&str]) -> std::process::Output {
         let out = self.optique(action).args(args).output().unwrap();
-        let code = out.status.code().expect("optique must exit, not be signalled");
-        assert!(code == 0 || code == 1, "{action} {args:?} exited {code}: {}", stderr(&out));
+        let code = out
+            .status
+            .code()
+            .expect("optique must exit, not be signalled");
+        assert!(
+            code == 0 || code == 1,
+            "{action} {args:?} exited {code}: {}",
+            stderr(&out)
+        );
         out
     }
 
@@ -88,7 +108,12 @@ impl Fixture {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.as_mut().unwrap().write_all(plan.as_bytes()).unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(plan.as_bytes())
+            .unwrap();
         json(&child.wait_with_output().unwrap())
     }
 
@@ -112,7 +137,10 @@ impl Fixture {
     pub fn make_v(&self, origin: &str, var: &str) -> Vec<String> {
         let out = self.make(origin, &["-V", var]);
         assert!(out.status.success(), "make -V {var}: {}", stderr(&out));
-        let mut words: Vec<String> = stdout(&out).split_whitespace().map(str::to_string).collect();
+        let mut words: Vec<String> = stdout(&out)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
         words.sort();
         words
     }

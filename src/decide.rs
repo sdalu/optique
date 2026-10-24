@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::model::options::on_off;
 use crate::model::origin::PortKey;
@@ -61,16 +61,17 @@ impl Plan {
         )?;
         let mut ports = BTreeMap::new();
         for (name, value) in obj {
-            let key = PortKey::parse(name)
-                .with_context(|| format!("{name:?} is not a port origin (category/name[@flavor])"))?;
+            let key = PortKey::parse(name).with_context(|| {
+                format!("{name:?} is not a port origin (category/name[@flavor])")
+            })?;
             let wanted = value
                 .as_object()
                 .with_context(|| format!("{name}: expected an object of OPTION: true|false"))?;
             let mut opts = BTreeMap::new();
             for (opt, v) in wanted {
-                let on = v.as_bool().with_context(|| {
-                    format!("{name}.{opt}: expected true or false, got {v}")
-                })?;
+                let on = v
+                    .as_bool()
+                    .with_context(|| format!("{name}.{opt}: expected true or false, got {v}"))?;
                 opts.insert(opt.clone(), on);
             }
             if opts.is_empty() {
@@ -98,7 +99,10 @@ impl Plan {
 /// error, and must not lead to the target and close a loop through it.
 fn resolve(sess: &Session, requested: &PortKey) -> Option<PortKey> {
     sess.resolve(requested).or_else(|| {
-        let m = sess.listed_moves.iter().find(|m| m.followed && m.listed == *requested)?;
+        let m = sess
+            .listed_moves
+            .iter()
+            .find(|m| m.followed && m.listed == *requested)?;
         sess.resolve(&m.to)
     })
 }
@@ -167,13 +171,17 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
     // anything. Check what each port ended up with once the whole plan ran,
     // so `complete()` means every asked value is the final value.
     for (key, wanted, refused) in asked {
-        let Some(info) = sess.ports.get(&key) else { continue };
+        let Some(info) = sess.ports.get(&key) else {
+            continue;
+        };
         for (opt, on) in wanted {
             if refused.contains(opt) {
                 continue;
             }
             if sess.is_staged(info, opt) != *on {
-                outcome.rejected.push((key.clone(), opt.clone(), why_not(sess, &key, opt, *on)));
+                outcome
+                    .rejected
+                    .push((key.clone(), opt.clone(), why_not(sess, &key, opt, *on)));
             }
         }
     }
@@ -197,8 +205,12 @@ fn why_not(sess: &Session, key: &PortKey, opt: &str, wanted: bool) -> String {
         // Something took it away again: in practice the sibling of a
         // single-choice or radio group enabled later in the plan.
         if let Some(g) = info.options.group_of(opt) {
-            let on: Vec<&str> =
-                g.members.iter().filter(|m| sess.is_staged(info, m)).map(String::as_str).collect();
+            let on: Vec<&str> = g
+                .members
+                .iter()
+                .filter(|m| sess.is_staged(info, m))
+                .map(String::as_str)
+                .collect();
             if !on.is_empty() {
                 return format!(
                     "group {} ({}) ended up with {} instead",
@@ -233,7 +245,10 @@ mod tests {
     #[test]
     fn a_flavor_is_part_of_the_port_name() {
         let plan = Plan::parse(r#"{"devel/git@lite": {"CONTRIB": false}}"#).unwrap();
-        assert_eq!(plan.roots(), vec![PortKey::parse("devel/git@lite").unwrap()]);
+        assert_eq!(
+            plan.roots(),
+            vec![PortKey::parse("devel/git@lite").unwrap()]
+        );
     }
 
     #[test]
@@ -251,7 +266,10 @@ mod tests {
         ];
         for (input, needle) in cases {
             let err = Plan::parse(input).unwrap_err().to_string();
-            assert!(err.contains(needle), "{input:?} -> {err:?} must mention {needle:?}");
+            assert!(
+                err.contains(needle),
+                "{input:?} -> {err:?} must mention {needle:?}"
+            );
         }
     }
 
@@ -270,7 +288,10 @@ mod tests {
                 complete: complete.iter().map(ToString::to_string).collect(),
                 defaults: defaults.iter().map(ToString::to_string).collect(),
                 effective,
-                defs: defs.iter().map(|(n, d)| (n.to_string(), d.clone())).collect(),
+                defs: defs
+                    .iter()
+                    .map(|(n, d)| (n.to_string(), d.clone()))
+                    .collect(),
                 ..Default::default()
             },
             ..crate::model::port::PortInfo::stub(origin)
@@ -281,8 +302,10 @@ mod tests {
     /// starts unconfigured and staged at its defaults).
     fn session(ports: Vec<crate::model::port::PortInfo>) -> (Session, tempfile::TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let map: BTreeMap<_, _> =
-            ports.into_iter().map(|i| (i.canonical.clone(), i)).collect();
+        let map: BTreeMap<_, _> = ports
+            .into_iter()
+            .map(|i| (i.canonical.clone(), i))
+            .collect();
         let roots: Vec<PortKey> = map.keys().cloned().collect();
         let files = crate::optfiles::OptionsFiles::new(tmp.path());
         let sess = Session::new(map, Default::default(), &roots, &files, false);
@@ -297,8 +320,7 @@ mod tests {
 
     #[test]
     fn applies_values_and_names_options_the_port_lacks() {
-        let (mut sess, _tmp) =
-            session(vec![port("cat/one", &["DOCS", "SSL"], &["DOCS"], &[])]);
+        let (mut sess, _tmp) = session(vec![port("cat/one", &["DOCS", "SSL"], &["DOCS"], &[])]);
         let plan =
             Plan::parse(r#"{"cat/one": {"SSL": true, "DOCS": false, "NOPE": true}}"#).unwrap();
         let out = apply_plan(&mut sess, &plan);
@@ -307,7 +329,10 @@ mod tests {
         assert_eq!(out.rejected.len(), 1);
         assert_eq!(out.rejected[0].1, "NOPE");
         assert!(out.rejected[0].2.contains("has no option NOPE"));
-        assert!(!out.complete(), "a refused value means the plan was not honoured");
+        assert!(
+            !out.complete(),
+            "a refused value means the plan was not honoured"
+        );
     }
 
     /// The plan goes through the same rules as the interface: an option held
@@ -315,9 +340,14 @@ mod tests {
     #[test]
     fn implied_options_cannot_be_turned_off() {
         use crate::model::options::OptionDef;
-        let defs = [("SSL", OptionDef { implies: vec!["CRYPTO".into()], ..Default::default() })];
-        let (mut sess, _tmp) =
-            session(vec![port("cat/one", &["SSL", "CRYPTO"], &[], &defs)]);
+        let defs = [(
+            "SSL",
+            OptionDef {
+                implies: vec!["CRYPTO".into()],
+                ..Default::default()
+            },
+        )];
+        let (mut sess, _tmp) = session(vec![port("cat/one", &["SSL", "CRYPTO"], &[], &defs)]);
         let plan = Plan::parse(r#"{"cat/one": {"SSL": true, "CRYPTO": false}}"#).unwrap();
         let out = apply_plan(&mut sess, &plan);
         // Options are applied in name order, so CRYPTO=false runs first and
@@ -327,7 +357,11 @@ mod tests {
         assert_eq!(staged(&sess, "cat/one"), vec!["CRYPTO", "SSL"]);
         assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
         assert_eq!(out.rejected[0].1, "CRYPTO");
-        assert!(out.rejected[0].2.contains("implied by SSL"), "{:?}", out.rejected[0]);
+        assert!(
+            out.rejected[0].2.contains("implied by SSL"),
+            "{:?}",
+            out.rejected[0]
+        );
         assert!(!out.complete());
     }
 
@@ -351,7 +385,11 @@ mod tests {
         assert_eq!(staged(&sess, "cat/one"), vec!["ZZZ"]);
         assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
         assert_eq!(out.rejected[0].1, "AAA");
-        assert!(out.rejected[0].2.contains("group IMPL"), "{:?}", out.rejected[0]);
+        assert!(
+            out.rejected[0].2.contains("group IMPL"),
+            "{:?}",
+            out.rejected[0]
+        );
     }
 
     /// Two flavors share one options state: a later entry asking the other
@@ -366,16 +404,27 @@ mod tests {
             info
         };
         let (mut sess, _tmp) = session(vec![flavor("default"), flavor("lite")]);
-        let plan =
-            Plan::parse(r#"{"devel/git@default": {"NLS": true}, "devel/git@lite": {"NLS": false}}"#)
-                .unwrap();
+        let plan = Plan::parse(
+            r#"{"devel/git@default": {"NLS": true}, "devel/git@lite": {"NLS": false}}"#,
+        )
+        .unwrap();
         let out = apply_plan(&mut sess, &plan);
         assert!(staged(&sess, "devel/git@default").is_empty());
         assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
-        assert_eq!(out.rejected[0].0, PortKey::parse("devel/git@default").unwrap());
+        assert_eq!(
+            out.rejected[0].0,
+            PortKey::parse("devel/git@default").unwrap()
+        );
         assert_eq!(out.rejected[0].1, "NLS");
-        assert!(out.rejected[0].2.contains("turned it off again"), "{:?}", out.rejected[0]);
-        assert!(!out.complete(), "a plan contradicting itself is not honoured");
+        assert!(
+            out.rejected[0].2.contains("turned it off again"),
+            "{:?}",
+            out.rejected[0]
+        );
+        assert!(
+            !out.complete(),
+            "a plan contradicting itself is not honoured"
+        );
     }
 
     /// A `*_FORCE` knob is named as such rather than as a mystery.
@@ -389,7 +438,11 @@ mod tests {
         let plan = Plan::parse(r#"{"cat/one": {"DOCS": true}}"#).unwrap();
         let out = apply_plan(&mut sess, &plan);
         assert_eq!(out.rejected.len(), 1, "{:?}", out.rejected);
-        assert!(out.rejected[0].2.contains("*_FORCE"), "{:?}", out.rejected[0]);
+        assert!(
+            out.rejected[0].2.contains("*_FORCE"),
+            "{:?}",
+            out.rejected[0]
+        );
     }
 
     /// A single-choice group switches rather than refusing, exactly as Space
@@ -425,8 +478,7 @@ mod tests {
     /// error, so a plan can be replayed idempotently.
     #[test]
     fn asking_for_the_current_value_is_not_a_change() {
-        let (mut sess, _tmp) =
-            session(vec![port("cat/one", &["DOCS", "SSL"], &["DOCS"], &[])]);
+        let (mut sess, _tmp) = session(vec![port("cat/one", &["DOCS", "SSL"], &["DOCS"], &[])]);
         let plan = Plan::parse(r#"{"cat/one": {"DOCS": true, "SSL": false}}"#).unwrap();
         let out = apply_plan(&mut sess, &plan);
         assert!(out.touched.is_empty(), "nothing to do");

@@ -1,12 +1,12 @@
 //! The option editor pane: its banner, rules, option rows and detail.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
-use ratatui::Frame;
 
-use crate::model::options::{on_off, McLayer};
+use crate::model::options::{McLayer, on_off};
 use crate::model::port::PortInfo;
 use crate::session::UiStatus;
 use crate::tui::{App, EditorRow, Focus};
@@ -78,7 +78,8 @@ pub(super) fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
 
     // Keep the selected row in view: scroll so it sits inside the rows.
     let rows_height = layout.rows.height as usize;
-    let selected_line = (banner + (app.editor_idx + 1).min(app.editor_rows.len())).saturating_sub(1);
+    let selected_line =
+        (banner + (app.editor_idx + 1).min(app.editor_rows.len())).saturating_sub(1);
     let mut scroll = selected_line.saturating_sub(rows_height.saturating_sub(1));
     // On the last option, the sections after it (not in this flavor,
     // obsolete), which the cursor never reaches, come into view as far as
@@ -104,12 +105,15 @@ pub(super) fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
     if info.pkg_help.is_some() {
         let marker = " [h] notes ";
         room = room.saturating_sub(marker.len() + 1);
-        block = block.title_top(
-            Line::from(Span::styled(marker, key_hint())).right_aligned(),
-        );
+        block = block.title_top(Line::from(Span::styled(marker, key_hint())).right_aligned());
     }
     block = block.title(fit_title_line(Line::from(title), room));
-    let (left, right) = editor_footer(app, info, &key.origin, (area.width as usize).saturating_sub(2));
+    let (left, right) = editor_footer(
+        app,
+        info,
+        &key.origin,
+        (area.width as usize).saturating_sub(2),
+    );
     if let Some(left) = left {
         block = block.title_bottom(Line::from(left));
     }
@@ -124,13 +128,23 @@ pub(super) fn draw_editor(f: &mut Frame, app: &App, area: Rect) -> u16 {
         let cut = mark_if_clipped(&mut about, panel.height as usize, inner_width);
         f.render_widget(Paragraph::new(about), panel);
         let hint = cut.then(|| RuleLabel::Hint(Span::styled(" [v] full text ", key_hint())));
-        draw_rule(f, area, panel.y + panel.height, hint, border_style, border_type);
+        draw_rule(
+            f,
+            area,
+            panel.y + panel.height,
+            hint,
+            border_style,
+            border_type,
+        );
     }
     f.render_widget(Paragraph::new(lines).scroll((scroll, 0)), layout.rows);
     if let Some(panel) = layout.detail {
         mark_if_clipped(&mut detail, panel.height as usize, inner_width);
         let label = opt.map(|o| {
-            RuleLabel::Title(Span::styled(format!(" {o} "), Style::default().add_modifier(Modifier::BOLD)))
+            RuleLabel::Title(Span::styled(
+                format!(" {o} "),
+                Style::default().add_modifier(Modifier::BOLD),
+            ))
         });
         draw_rule(f, area, panel.y - 1, label, border_style, border_type);
         f.render_widget(Paragraph::new(detail), panel);
@@ -155,7 +169,11 @@ fn editor_footer(
         .state(info)
         .map(|s| crate::session::staged_diff(&s.baseline, &s.staged))
         .filter(|d| !d.is_empty());
-    let options = || app.editor_rows.iter().filter(|r| matches!(r, EditorRow::Option(_)));
+    let options = || {
+        app.editor_rows
+            .iter()
+            .filter(|r| matches!(r, EditorRow::Option(_)))
+    };
     let place = match app.editor_rows.get(app.editor_idx) {
         Some(EditorRow::Option(_)) if app.focus == Focus::Editor => {
             let at = app.editor_rows[..=app.editor_idx]
@@ -212,7 +230,11 @@ pub(super) fn editor_layout(inner: Rect, about: bool) -> EditorLayout {
     let lines = detail_lines(inner.width);
     let detail = (inner.height >= lines + 1 + MIN_ROWS).then(|| {
         rows.height -= lines + 1;
-        Rect { y: inner.y + inner.height - lines, height: lines, ..inner }
+        Rect {
+            y: inner.y + inner.height - lines,
+            height: lines,
+            ..inner
+        }
     });
     let room = rows.height.saturating_sub(1 + MIN_ROWS);
     let n = if about { room.min(ABOUT_LINES) } else { 0 };
@@ -222,7 +244,11 @@ pub(super) fn editor_layout(inner: Rect, about: bool) -> EditorLayout {
         rows.height -= n + 1;
         panel
     });
-    EditorLayout { about, rows, detail }
+    EditorLayout {
+        about,
+        rows,
+        detail,
+    }
 }
 
 /// What a rule across the pane carries: a title on the left (the option the
@@ -258,11 +284,22 @@ fn draw_rule(
         }
     };
     // Its ends join the pane's sides, double ones while it has the focus.
-    let (left, right) = if border == BorderType::Double { ("╟", "╢") } else { ("├", "┤") };
+    let (left, right) = if border == BorderType::Double {
+        ("╟", "╢")
+    } else {
+        ("├", "┤")
+    };
     let mut spans = vec![Span::styled(left, style)];
     spans.extend(middle);
     spans.push(Span::styled(right, style));
-    f.render_widget(Paragraph::new(Line::from(spans)), Rect { y, height: 1, ..pane });
+    f.render_widget(
+        Paragraph::new(Line::from(spans)),
+        Rect {
+            y,
+            height: 1,
+            ..pane
+        },
+    );
 }
 
 /// What the port is: its COMMENT, then its pkg-descr `text` re-wrapped to
@@ -274,16 +311,27 @@ fn draw_rule(
 pub(super) fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     if !info.about.comment.is_empty() {
-        lines.extend(wrap_text(&info.about.comment, width, 0).into_iter().map(|t| {
-            Line::from(Span::styled(t, Style::default().add_modifier(Modifier::BOLD)))
-        }));
+        lines.extend(
+            wrap_text(&info.about.comment, width, 0)
+                .into_iter()
+                .map(|t| {
+                    Line::from(Span::styled(
+                        t,
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ))
+                }),
+        );
     }
     let style = Style::default().fg(Color::Gray);
     for para in text.split("\n\n") {
         // A bullet starts an item of its own, wrapped under its text; any
         // other line joins the item before it.
         let mut items: Vec<(String, usize)> = Vec::new();
-        for line in para.lines().map(str::trim).filter(|l| !l.starts_with("WWW:")) {
+        for line in para
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("WWW:"))
+        {
             let bullet = ["- ", "* ", "• "].iter().any(|b| line.starts_with(b));
             match items.last_mut() {
                 Some((item, _)) if !bullet => {
@@ -316,14 +364,24 @@ pub(super) fn about_lines(info: &PortInfo, text: &str, width: usize) -> Vec<Line
 /// With no option highlighted — the port list has the focus, or the cursor
 /// sits on a header — the panel keeps its place and says how to get one.
 fn option_detail(app: &App, info: &PortInfo, width: u16) -> (Option<String>, Vec<Line<'static>>) {
-    let dim = |t: &str| vec![Line::from(Span::styled(t.to_string(), Style::default().fg(Color::DarkGray)))];
+    let dim = |t: &str| {
+        vec![Line::from(Span::styled(
+            t.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ))]
+    };
     if app.focus != Focus::Editor {
         return (None, dim("  Enter: edit the options"));
     }
     let Some(EditorRow::Option(opt)) = app.editor_rows.get(app.editor_idx) else {
         return (None, dim("  no option selected"));
     };
-    let desc = info.options.defs.get(opt).map(|d| d.desc.as_str()).unwrap_or("");
+    let desc = info
+        .options
+        .defs
+        .get(opt)
+        .map(|d| d.desc.as_str())
+        .unwrap_or("");
     let lines = if desc.is_empty() {
         dim("  (no description)")
     } else {
@@ -347,8 +405,12 @@ fn flavor_summary(app: &App, info: &PortInfo) -> Option<Vec<Span<'static>>> {
     }
     let owner = app.session.owner_info(info).canonical.flavor.clone();
     let current = info.canonical.flavor.clone();
-    let present: Vec<Option<String>> =
-        app.session.siblings(&info.canonical).into_iter().map(|k| k.flavor).collect();
+    let present: Vec<Option<String>> = app
+        .session
+        .siblings(&info.canonical)
+        .into_iter()
+        .map(|k| k.flavor)
+        .collect();
     let mut spans = Vec::new();
     for (i, f) in info.flavors.iter().enumerate() {
         if i > 0 {
@@ -421,14 +483,18 @@ fn row_lines(
         let selected = app.focus == Focus::Editor && i == app.editor_idx;
         match row {
             EditorRow::GroupHeader(gi) => {
-                let Some(g) = info.options.groups.get(*gi) else { continue };
+                let Some(g) = info.options.groups.get(*gi) else {
+                    continue;
+                };
                 let mut text = format!("── {} — {}", g.name, g.kind.label());
                 if !g.desc.is_empty() {
                     text.push_str(&format!(": {}", g.desc));
                 }
                 lines.push(Line::from(Span::styled(
                     text,
-                    Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
             // A row cuts itself: its columns stay, its description goes first.
@@ -439,7 +505,9 @@ fn row_lines(
             EditorRow::ExcludedHeader => {
                 lines.push(Line::from(Span::styled(
                     "── not in this flavor (managed via the default flavor)",
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
             EditorRow::Excluded(opt) => {
@@ -452,7 +520,9 @@ fn row_lines(
             EditorRow::ObsoleteHeader => {
                 lines.push(Line::from(Span::styled(
                     "── obsolete (no longer exist; dropped on apply)",
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
             EditorRow::Obsolete(opt) => {
@@ -466,7 +536,9 @@ fn row_lines(
                     Span::raw("  "),
                     Span::styled(
                         format!("[{}] {}", if was_on { "x" } else { " " }, opt),
-                        Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::CROSSED_OUT),
                     ),
                 ]));
             }
@@ -487,7 +559,9 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
     if let Some(blame) = blame_of(app, info) {
         lines.push(Line::from(Span::styled(
             format!("likely cause: {blame}"),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
         )));
     }
     if let Some(m) = &info.deprecated {
@@ -498,21 +572,42 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
     }
     if let Some(owner) = foreign_owner(app, info) {
         lines.push(Line::from(Span::styled(
-            format!("options file owned by {} (default flavor view)", owner.canonical),
+            format!(
+                "options file owned by {} (default flavor view)",
+                owner.canonical
+            ),
             Style::default().fg(Color::DarkGray),
         )));
     }
     for m in app.session.moved_to(info) {
-        let reason = if m.reason.is_empty() { String::new() } else { format!(" ({})", m.reason) };
+        let reason = if m.reason.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", m.reason)
+        };
         let text = if m.followed {
             format!("listed as {}{reason}; fix the list", m.listed)
         } else {
-            format!("listed as {}{reason}, not followed; fix the list{}", m.listed, m.or_follow(""))
+            format!(
+                "listed as {}{reason}, not followed; fix the list{}",
+                m.listed,
+                m.or_follow("")
+            )
         };
-        lines.extend(wrapped_banner("MOVED: ", &text, Style::default().fg(Color::Yellow), width));
+        lines.extend(wrapped_banner(
+            "MOVED: ",
+            &text,
+            Style::default().fg(Color::Yellow),
+            width,
+        ));
     }
     if let Some(u) = app.session.unmanaged(info) {
-        lines.extend(wrapped_banner("UNMANAGED: ", &u.why, Style::default().fg(Color::Yellow), width));
+        lines.extend(wrapped_banner(
+            "UNMANAGED: ",
+            &u.why,
+            Style::default().fg(Color::Yellow),
+            width,
+        ));
     }
     for c in app.session.conflicts(info) {
         let text = match &c.cause {
@@ -528,7 +623,9 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
             text.push_str(settled_by(app, info));
             Style::default().fg(Color::DarkGray)
         } else {
-            Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD)
         };
         lines.extend(wrapped_banner("STALE: ", &text, style, width));
     }
@@ -613,10 +710,14 @@ fn option_line(
     // as the STALE line and the list's +N count it (Session::stale_delta).
     // A column of its own rather than a badge, so the eye finds every new
     // option down the left edge of the pane.
-    let is_new = state.and_then(|s| s.saved.as_ref()).is_some_and(|saved| !saved.decides(opt));
+    let is_new = state
+        .and_then(|s| s.saved.as_ref())
+        .is_some_and(|saved| !saved.decides(opt));
     let mut spans: Vec<Span> = vec![Span::styled(
         if is_new { "N" } else { " " },
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
     )];
     // Magenta: contradicts make.conf policy; yellow: deviates from the
     // port default; plain: matches the port default.
@@ -631,7 +732,11 @@ fn option_line(
     let base = format!(" {checkbox} {opt:<name_width$}");
     spans.push(Span::styled(
         base,
-        if selected { name_style.add_modifier(Modifier::REVERSED) } else { name_style },
+        if selected {
+            name_style.add_modifier(Modifier::REVERSED)
+        } else {
+            name_style
+        },
     ));
 
     // default value column (fixed width so following badges line up)
@@ -654,7 +759,10 @@ fn option_line(
     // reading it may hold its own assignments. Not under an override, which
     // has make read no file at all.
     let unmanaged = overridden.is_none() && app.session.unmanaged(info).is_some();
-    let (mc, mc_style) = match (opts.mc_value(opt).filter(|_| !unmanaged), overridden.filter(|_| !unmanaged)) {
+    let (mc, mc_style) = match (
+        opts.mc_value(opt).filter(|_| !unmanaged),
+        overridden.filter(|_| !unmanaged),
+    ) {
         (Some((v, McLayer::Force | McLayer::With)), _) => (on_off(v), locked),
         (_, Some(v)) => (on_off(v), locked),
         (value, None) => match value {
@@ -702,13 +810,22 @@ fn option_line(
     if !desc.is_empty() && room >= DESC_MIN_WIDTH {
         let mut text = Line::from(desc.to_string());
         let cut = ellipsize(&mut text, room);
-        let kept = text.spans.first().map_or("", |s| s.content.as_ref()).to_string();
+        let kept = text
+            .spans
+            .first()
+            .map_or("", |s| s.content.as_ref())
+            .to_string();
         // A cut that kept only part of a word, or a single word, drops the
         // description.
         let whole = !cut || (desc[kept.len()..].starts_with(' ') && kept.trim().contains(' '));
         if whole && !kept.is_empty() {
-            let shown = if cut { format!("  {kept}…") } else { format!("  {kept}") };
-            line.spans.push(Span::styled(shown, Style::default().fg(Color::DarkGray)));
+            let shown = if cut {
+                format!("  {kept}…")
+            } else {
+                format!("  {kept}")
+            };
+            line.spans
+                .push(Span::styled(shown, Style::default().fg(Color::DarkGray)));
         }
     }
     line
@@ -746,11 +863,16 @@ fn cut_last_column(line: &mut Line<'static>, width: usize) {
     }
     line.spans.truncate(at + 1);
     loop {
-        let Some(span) = line.spans.last_mut() else { return };
+        let Some(span) = line.spans.last_mut() else {
+            return;
+        };
         let own = span.content.trim_end().to_string();
         // Its own text up to the edge, one column for `…`, and always at
         // least a character short of whole.
-        let keep = Line::from(own.as_str()).width().min(width - before).saturating_sub(1);
+        let keep = Line::from(own.as_str())
+            .width()
+            .min(width - before)
+            .saturating_sub(1);
         let mut kept = String::new();
         for c in own.chars() {
             kept.push(c);
@@ -765,7 +887,9 @@ fn cut_last_column(line: &mut Line<'static>, width: usize) {
         }
         // Nothing of its own text would show: cut into the column before.
         line.spans.pop();
-        let Some(prev) = line.spans.last() else { return };
+        let Some(prev) = line.spans.last() else {
+            return;
+        };
         before -= prev.width();
     }
 }

@@ -4,9 +4,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-use super::{checked_portsdir, is_ports_tree, stage_make_conf, QueryEnv, Request, Settings};
+use super::{QueryEnv, Request, Settings, checked_portsdir, is_ports_tree, stage_make_conf};
 
 /// What synth(1) writes at the top of its scan slave's make.conf, ahead of
 /// `<profile>-make.conf` (`create_make_conf` in its replicant.adb), as far as
@@ -64,7 +64,9 @@ const SYNTH_GLOBAL_SECTION: &str = "Global Configuration";
 /// environment's `SYNTHPROFILE` and `PORTSDIR`.
 pub(super) fn resolve(profile: &str, req: &Request, staging_dir: &Path) -> Result<Settings> {
     let env_profile = std::env::var("SYNTHPROFILE").ok();
-    let env_portsdir = std::env::var_os("PORTSDIR").filter(|v| !v.is_empty()).map(PathBuf::from);
+    let env_portsdir = std::env::var_os("PORTSDIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
     let make_portsdir = || synth_make_portsdir(None);
     let host = SynthHost {
         env_profile: env_profile.as_deref(),
@@ -72,7 +74,14 @@ pub(super) fn resolve(profile: &str, req: &Request, staging_dir: &Path) -> Resul
         make_portsdir: &make_portsdir,
         standard_portsdirs: SYNTH_STANDARD_PORTSDIRS,
     };
-    resolve_synth(Path::new(SYNTH_DIR), profile, &host, req.portsdir, req.options_dir, staging_dir)
+    resolve_synth(
+        Path::new(SYNTH_DIR),
+        profile,
+        &host,
+        req.portsdir,
+        req.options_dir,
+        staging_dir,
+    )
 }
 
 /// synth(1) layout: one `synth.ini` describing every profile, the profile's
@@ -138,7 +147,10 @@ fn resolve_synth(
                     dir.display()
                 );
             }
-            notes.push(format!("no Directory_portsdir: ports tree {} ({source})", dir.display()));
+            notes.push(format!(
+                "no Directory_portsdir: ports tree {} ({source})",
+                dir.display()
+            ));
             dir
         }
     };
@@ -166,7 +178,13 @@ fn resolve_synth(
         staging_dir,
     )?;
 
-    Ok(Settings::new(portsdir, options_dir, staged, QueryEnv::Synth, notes))
+    Ok(Settings::new(
+        portsdir,
+        options_dir,
+        staged,
+        QueryEnv::Synth,
+        notes,
+    ))
 }
 
 /// What synth reads from the host besides synth.ini.
@@ -276,7 +294,10 @@ fn ini_strip_comment(line: &[u8]) -> &[u8] {
 /// as synth reads them, split at LF alone, a CR left in place, and a line
 /// of fewer than two bytes skipped.
 fn ini_lines(text: &[u8]) -> impl Iterator<Item = (usize, &[u8])> {
-    text.split(|&b| b == b'\n').enumerate().map(|(n, l)| (n + 1, l)).filter(|(_, l)| l.len() > 1)
+    text.split(|&b| b == b'\n')
+        .enumerate()
+        .map(|(n, l)| (n + 1, l))
+        .filter(|(_, l)| l.len() > 1)
 }
 
 /// `s` without the leading and trailing bytes `trim` matches.
@@ -374,7 +395,9 @@ fn synth_ini_misreads(text: &(impl AsRef<[u8]> + ?Sized)) -> Vec<String> {
         };
         let tabbed = |s: &[u8]| trim_bytes(s, |b| b == b' ' || b == b'\r') != s.trim_ascii();
         if tabbed(k) || tabbed(v) {
-            notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value; {WHY}"));
+            notes.push(format!(
+                "synth.ini line {n}: synth keeps a tab around the key or value; {WHY}"
+            ));
         }
     }
     if !crlf.is_empty() {
@@ -396,7 +419,13 @@ fn line_ranges(lines: &[usize]) -> String {
         }
     }
     runs.iter()
-        .map(|&(a, b)| if a == b { a.to_string() } else { format!("{a}-{b}") })
+        .map(|&(a, b)| {
+            if a == b {
+                a.to_string()
+            } else {
+                format!("{a}-{b}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -418,7 +447,11 @@ fn synth_ini_has_section(text: &(impl AsRef<[u8]> + ?Sized), name: &str) -> bool
 /// there, giving the default rather than reading on to a later, real
 /// assignment of the same key. The value comes as text, any byte that is
 /// not UTF-8 decoded lossily; [`synth_ini_path`] keeps a path's bytes.
-fn synth_ini_lookup(text: &(impl AsRef<[u8]> + ?Sized), profile: &str, key: &str) -> Option<String> {
+fn synth_ini_lookup(
+    text: &(impl AsRef<[u8]> + ?Sized),
+    profile: &str,
+    key: &str,
+) -> Option<String> {
     synth_ini_value(text.as_ref(), profile, key).map(|v| String::from_utf8_lossy(v).into_owned())
 }
 
@@ -427,7 +460,8 @@ fn synth_ini_lookup(text: &(impl AsRef<[u8]> + ?Sized), profile: &str, key: &str
 /// the directory synth uses.
 fn synth_ini_path(text: &(impl AsRef<[u8]> + ?Sized), profile: &str, key: &str) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStrExt as _;
-    synth_ini_value(text.as_ref(), profile, key).map(|v| PathBuf::from(std::ffi::OsStr::from_bytes(v)))
+    synth_ini_value(text.as_ref(), profile, key)
+        .map(|v| PathBuf::from(std::ffi::OsStr::from_bytes(v)))
 }
 
 /// The bytes of [`synth_ini_lookup`]'s value.
@@ -449,7 +483,11 @@ fn synth_ini_value<'a>(text: &'a [u8], profile: &str, key: &str) -> Option<&'a [
         let Some(at) = data.iter().position(|&b| b == b'=') else {
             // No `=` at all: config.adb still compares the whole
             // (trimmed) line against `key`, as a bare mark with no value.
-            return if ini_trim(data) == key { None } else { continue };
+            return if ini_trim(data) == key {
+                None
+            } else {
+                continue;
+            };
         };
         if ini_trim(&data[..at]) != key {
             continue;
@@ -479,8 +517,8 @@ pub(crate) fn stage_synth_make_conf(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{key_installed_packages, make_values};
     use crate::config::testutil::*;
+    use crate::config::{key_installed_packages, make_values};
 
     /// synth sees no host package, so the pkg database keys nothing for it;
     /// its profile names a cache generation of its own.
@@ -493,9 +531,14 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&synth).unwrap();
         fs::create_dir_all(&stage).unwrap();
-        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
-            .unwrap();
-        let resolve = |profile| resolve_synth(&synth, profile, &synth_host(None), None, None, &stage).unwrap();
+        fs::write(
+            synth.join("synth.ini"),
+            format!("[A]\nDirectory_portsdir={}\n", tree.display()),
+        )
+        .unwrap();
+        let resolve = |profile| {
+            resolve_synth(&synth, profile, &synth_host(None), None, None, &stage).unwrap()
+        };
 
         let pkg_db = tmp.path().join("local.sqlite");
         fs::write(&pkg_db, "one package").unwrap();
@@ -527,7 +570,10 @@ Directory_portsdir = /other/ports
         );
         // Key absent from the profile: unset, as synth reads it — the
         // global section never stands in for a profile.
-        assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_options"), None);
+        assert_eq!(
+            synth_ini_lookup(ini, "LiveSystem", "Directory_options"),
+            None
+        );
         // Sections are not confused with each other.
         assert_eq!(
             synth_ini_lookup(ini, "Other", "Directory_portsdir").as_deref(),
@@ -540,8 +586,14 @@ Directory_portsdir = /other/ports
             Some("/global/ports")
         );
         // An unknown key is None, and keys are case-sensitive.
-        assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_packages"), None);
-        assert_eq!(synth_ini_lookup(ini, "LiveSystem", "directory_portsdir"), None);
+        assert_eq!(
+            synth_ini_lookup(ini, "LiveSystem", "Directory_packages"),
+            None
+        );
+        assert_eq!(
+            synth_ini_lookup(ini, "LiveSystem", "directory_portsdir"),
+            None
+        );
     }
 
     #[test]
@@ -561,9 +613,15 @@ not a key value line
             synth_ini_lookup(ini, "LiveSystem", "Directory_portsdir").as_deref(),
             Some("/spaced/ports")
         );
-        assert_eq!(synth_ini_lookup(ini, "LiveSystem", "Directory_options"), None);
+        assert_eq!(
+            synth_ini_lookup(ini, "LiveSystem", "Directory_options"),
+            None
+        );
         // Nothing at all: no panic, no value.
-        assert_eq!(synth_ini_lookup("", "LiveSystem", "Directory_portsdir"), None);
+        assert_eq!(
+            synth_ini_lookup("", "LiveSystem", "Directory_portsdir"),
+            None
+        );
     }
 
     /// config.adb's own syntax (`Get_Value`), each claim checked on its own,
@@ -576,17 +634,36 @@ not a key value line
     /// given an empty value, so a later, real assignment is never reached.
     #[test]
     fn synth_ini_reads_as_synth_and_names_what_it_misreads() {
-        assert_eq!(ini_section_header(b"[B] extra"), Some(&b"B"[..]), "anything after ] is ignored");
-        assert_eq!(ini_section_header(b"[ C ]"), Some(&b" C "[..]), "the name is not trimmed");
-        assert_eq!(ini_section_header(b"   [P]"), None, "an indented header is none");
+        assert_eq!(
+            ini_section_header(b"[B] extra"),
+            Some(&b"B"[..]),
+            "anything after ] is ignored"
+        );
+        assert_eq!(
+            ini_section_header(b"[ C ]"),
+            Some(&b" C "[..]),
+            "the name is not trimmed"
+        );
+        assert_eq!(
+            ini_section_header(b"   [P]"),
+            None,
+            "an indented header is none"
+        );
 
         let ini = "[A]\nk\t= d\n[ C ]\nDirectory_portsdir=/c\n[P]\n  [Q]\nkey=2\n";
         assert_eq!(synth_ini_lookup(ini, "A", "k"), None, "the key is `k\\t`");
         assert_eq!(synth_ini_lookup(ini, "A", "k\t").as_deref(), Some("d"));
         assert_eq!(synth_ini_lookup(ini, "C", "Directory_portsdir"), None);
-        assert_eq!(synth_ini_lookup(ini, " C ", "Directory_portsdir").as_deref(), Some("/c"));
+        assert_eq!(
+            synth_ini_lookup(ini, " C ", "Directory_portsdir").as_deref(),
+            Some("/c")
+        );
         assert_eq!(synth_ini_lookup(ini, "Q", "key"), None, "no section Q");
-        assert_eq!(synth_ini_lookup(ini, "P", "key").as_deref(), Some("2"), "still in [P]");
+        assert_eq!(
+            synth_ini_lookup(ini, "P", "key").as_deref(),
+            Some("2"),
+            "still in [P]"
+        );
         assert!(!synth_ini_has_section(ini, "C") && synth_ini_has_section(ini, " C "));
         // Each line synth reads otherwise than it seems is named.
         let why = "read as synth reads it (a synth defect)";
@@ -594,14 +671,19 @@ not a key value line
             synth_ini_misreads(ini),
             [
                 format!("synth.ini line 2: synth keeps a tab around the key or value; {why}"),
-                format!("synth.ini line 3: synth keeps the spaces of the section name ' C '; {why}"),
+                format!(
+                    "synth.ini line 3: synth keeps the spaces of the section name ' C '; {why}"
+                ),
                 format!(
                     "synth.ini line 6: synth takes no indented [name] for a section header, \
                      the lines after it staying in the section above; {why}"
                 ),
             ]
         );
-        assert!(synth_ini_misreads("[A]\nk = v\n").is_empty(), "spaces are fine");
+        assert!(
+            synth_ini_misreads("[A]\nk = v\n").is_empty(),
+            "spaces are fine"
+        );
 
         // The format's own rule: the first match ends the search, an empty
         // value giving the default rather than a later assignment.
@@ -630,17 +712,25 @@ not a key value line
     #[test]
     fn synth_ini_misreads_skip_empty_lines_and_name_crlf() {
         let ini = "[A]\n\t\n\t# comment\n \t; comment\nk = v ; tab\there\n";
-        assert!(synth_ini_misreads(ini).is_empty(), "{:?}", synth_ini_misreads(ini));
+        assert!(
+            synth_ini_misreads(ini).is_empty(),
+            "{:?}",
+            synth_ini_misreads(ini)
+        );
 
         let ini = "[A]\r\nk=v\r\nj=w\r\n\r\n; c\r\nm=x ; c\r\nn=y\r\n";
         let why = "read as synth reads it (a synth defect)";
         assert_eq!(
             synth_ini_misreads(ini),
-            [format!("synth.ini lines 2-3, 7: synth keeps the CR of a CRLF line end in the key or value; {why}")]
+            [format!(
+                "synth.ini lines 2-3, 7: synth keeps the CR of a CRLF line end in the key or value; {why}"
+            )]
         );
         assert_eq!(
             synth_ini_misreads("[A]\nk=v\r\n"),
-            [format!("synth.ini line 2: synth keeps the CR of a CRLF line end in the key or value; {why}")]
+            [format!(
+                "synth.ini line 2: synth keeps the CR of a CRLF line end in the key or value; {why}"
+            )]
         );
         // As synth reads it: the value keeps the CR, a comment cut drops it.
         assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v\r"));
@@ -657,7 +747,11 @@ not a key value line
         assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v"));
         assert_eq!(synth_ini_lookup(ini, "A", "j").as_deref(), Some("w"));
         assert!(!synth_ini_has_section(ini, "B"));
-        assert!(synth_ini_misreads(ini).is_empty(), "{:?}", synth_ini_misreads(ini));
+        assert!(
+            synth_ini_misreads(ini).is_empty(),
+            "{:?}",
+            synth_ini_misreads(ini)
+        );
     }
 
     /// A missing synth.ini is none; one that cannot be read stops the run,
@@ -665,14 +759,21 @@ not a key value line
     #[test]
     fn synth_ini_read_errors_stop_and_bad_bytes_are_kept_lossily() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(read_synth_ini(&tmp.path().join("absent")).unwrap().is_empty());
+        assert!(
+            read_synth_ini(&tmp.path().join("absent"))
+                .unwrap()
+                .is_empty()
+        );
         let err = read_synth_ini(tmp.path()).unwrap_err();
         assert!(format!("{err:#}").contains("synth will not run"), "{err:#}");
 
         let ini = tmp.path().join("synth.ini");
         fs::write(&ini, b"; caf\xe9\n[A]\nDirectory_options=/opts\n").unwrap();
         let text = read_synth_ini(&ini).unwrap();
-        assert_eq!(synth_ini_lookup(&text, "A", "Directory_options").as_deref(), Some("/opts"));
+        assert_eq!(
+            synth_ini_lookup(&text, "A", "Directory_options").as_deref(),
+            Some("/opts")
+        );
 
         // Through the resolution: an unreadable synth.ini is an error.
         let synth = tmp.path().join("synth");
@@ -681,7 +782,17 @@ not a key value line
         fs::create_dir_all(&stage).unwrap();
         let tree = tmp.path().join("ports");
         fake_tree(&tree);
-        assert!(resolve_synth(&synth, "A", &synth_host(None), Some(&tree), Some(&tree), &stage).is_err());
+        assert!(
+            resolve_synth(
+                &synth,
+                "A",
+                &synth_host(None),
+                Some(&tree),
+                Some(&tree),
+                &stage
+            )
+            .is_err()
+        );
     }
 
     /// synth reads a UTF-8 byte-order mark as part of the first line, so
@@ -692,19 +803,29 @@ not a key value line
         let ini = b"\xEF\xBB\xBF[A]\nDirectory_options=/opts\n[B]\nDirectory_options=/b\n";
         assert_eq!(synth_ini_lookup(ini, "A", "Directory_options"), None);
         assert!(!synth_ini_has_section(ini, "A"));
-        assert_eq!(synth_ini_lookup(ini, "B", "Directory_options").as_deref(), Some("/b"));
+        assert_eq!(
+            synth_ini_lookup(ini, "B", "Directory_options").as_deref(),
+            Some("/b")
+        );
         assert_eq!(
             synth_ini_misreads(ini),
-            ["synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line, so [A] there \
-              is no section header and the lines after it are in no section; read as synth reads it (a synth defect)"]
+            [
+                "synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line, so [A] there \
+              is no section header and the lines after it are in no section; read as synth reads it (a synth defect)"
+            ]
         );
         let comment = synth_ini_misreads(b"\xEF\xBB\xBF; settings\n[A]\nk=v\n");
         assert_eq!(
             comment,
-            ["synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line; \
-              read as synth reads it (a synth defect)"]
+            [
+                "synth.ini line 1: synth reads the UTF-8 byte-order mark as part of the line; \
+              read as synth reads it (a synth defect)"
+            ]
         );
-        assert!(synth_ini_misreads(b"[A]\nk=\xEF\xBB\xBFv\n").is_empty(), "only a leading one");
+        assert!(
+            synth_ini_misreads(b"[A]\nk=\xEF\xBB\xBFv\n").is_empty(),
+            "only a leading one"
+        );
     }
 
     /// A Latin-1 path in synth.ini is the directory synth uses, byte for
@@ -716,7 +837,10 @@ not a key value line
         let ini = b"[A]\nDirectory_options=/opt/r\xe9glages\n\xe9\nDirectory_portsdir=/p\n";
         let path = synth_ini_path(ini, "A", "Directory_options").unwrap();
         assert_eq!(path.as_os_str().as_bytes(), b"/opt/r\xe9glages");
-        assert_eq!(synth_ini_path(ini, "A", "Directory_portsdir").as_deref(), Some(Path::new("/p")));
+        assert_eq!(
+            synth_ini_path(ini, "A", "Directory_portsdir").as_deref(),
+            Some(Path::new("/p"))
+        );
         assert!(synth_ini_misreads(ini).is_empty());
 
         // Through the resolution: the options dir is the Latin-1 path.
@@ -730,7 +854,14 @@ not a key value line
         text.extend_from_slice(b"/r\xe9glages\n");
         fs::write(synth.join("synth.ini"), &text).unwrap();
         let s = resolve_synth(&synth, "A", &synth_host(None), Some(&tree), None, &stage).unwrap();
-        assert!(s.options_dir.as_os_str().as_bytes().ends_with(b"/r\xe9glages"), "{:?}", s.options_dir);
+        assert!(
+            s.options_dir
+                .as_os_str()
+                .as_bytes()
+                .ends_with(b"/r\xe9glages"),
+            "{:?}",
+            s.options_dir
+        );
     }
 
     /// With no Directory_portsdir, synth takes the first that exists of
@@ -759,10 +890,16 @@ not a key value line
         fake_tree(&dports);
         assert_eq!(pick(Some(&env)), Some((dports.clone(), "synth's default")));
         fake_tree(&make);
-        assert_eq!(pick(Some(&env)), Some((make.clone(), "from make's PORTSDIR")));
+        assert_eq!(
+            pick(Some(&env)),
+            Some((make.clone(), "from make's PORTSDIR"))
+        );
         fake_tree(&env);
         assert_eq!(pick(Some(&env)), Some((env.clone(), "from PORTSDIR")));
-        assert_eq!(pick(Some(&absent)), Some((make.clone(), "from make's PORTSDIR")));
+        assert_eq!(
+            pick(Some(&absent)),
+            Some((make.clone(), "from make's PORTSDIR"))
+        );
         *answer.borrow_mut() = None;
         assert_eq!(pick(None), Some((dports.clone(), "synth's default")));
 
@@ -775,11 +912,26 @@ not a key value line
         fs::write(synth.join("synth.ini"), "[A]\n").unwrap();
         let s = resolve_synth(&synth, "A", &host(Some(&env)), None, Some(&stage), &stage).unwrap();
         assert_eq!(s.portsdir, env);
-        let note = format!("no Directory_portsdir: ports tree {} (from PORTSDIR)", env.display());
+        let note = format!(
+            "no Directory_portsdir: ports tree {} (from PORTSDIR)",
+            env.display()
+        );
         assert!(s.notes.contains(&note), "{:?}", s.notes);
-        let s = resolve_synth(&synth, "A", &host(Some(&env)), Some(&ports), Some(&stage), &stage).unwrap();
+        let s = resolve_synth(
+            &synth,
+            "A",
+            &host(Some(&env)),
+            Some(&ports),
+            Some(&stage),
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.portsdir, ports);
-        assert!(!s.notes.iter().any(|n| n.contains("Directory_portsdir")), "{:?}", s.notes);
+        assert!(
+            !s.notes.iter().any(|n| n.contains("Directory_portsdir")),
+            "{:?}",
+            s.notes
+        );
         let err = resolve_synth(&synth, "A", &host(Some(&stage)), None, Some(&stage), &stage)
             .unwrap_err()
             .to_string();
@@ -802,18 +954,40 @@ not a key value line
         // Unknown named profile: noted, defaults still apply (/var/db/ports
         // triggers the live-dir note too). /usr/ports exists on this host.
         let s = resolve_synth(&synth, "typo", &synth_host(None), None, None, &stage).unwrap();
-        assert!(s.notes.iter().any(|n| n.contains("'typo' has no section")), "{:?}", s.notes);
-        assert!(s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
+        assert!(
+            s.notes.iter().any(|n| n.contains("'typo' has no section")),
+            "{:?}",
+            s.notes
+        );
+        assert!(
+            s.notes.iter().any(|n| n.contains("live /var/db/ports")),
+            "{:?}",
+            s.notes
+        );
 
         // Bare -s honours profile_selected; known section → no missing note.
         let s = resolve_synth(&synth, "", &synth_host(None), None, None, &stage).unwrap();
-        assert!(s.notes.iter().any(|n| n.contains("profile Live (synth.ini")), "{:?}", s.notes);
-        assert!(!s.notes.iter().any(|n| n.contains("no section")), "{:?}", s.notes);
+        assert!(
+            s.notes
+                .iter()
+                .any(|n| n.contains("profile Live (synth.ini")),
+            "{:?}",
+            s.notes
+        );
+        assert!(
+            !s.notes.iter().any(|n| n.contains("no section")),
+            "{:?}",
+            s.notes
+        );
 
         // -o override: no live-dir note.
         let o = tmp.path().join("other");
         let s = resolve_synth(&synth, "Live", &synth_host(None), None, Some(&o), &stage).unwrap();
-        assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
+        assert!(
+            !s.notes.iter().any(|n| n.contains("live /var/db/ports")),
+            "{:?}",
+            s.notes
+        );
     }
 
     /// synth has no jail: nothing stages the jail system lines poudriere's
@@ -828,8 +1002,11 @@ not a key value line
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&synth).unwrap();
         fs::create_dir_all(&stage).unwrap();
-        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
-            .unwrap();
+        fs::write(
+            synth.join("synth.ini"),
+            format!("[A]\nDirectory_portsdir={}\n", tree.display()),
+        )
+        .unwrap();
         fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
 
         let s = resolve_synth(&synth, "A", &synth_host(None), None, None, &stage).unwrap();
@@ -857,28 +1034,48 @@ not a key value line
         )
         .unwrap();
         let picked = |profile, env| {
-            let s = resolve_synth(&synth, profile, &synth_host(env), None, Some(&o), &stage).unwrap();
+            let s =
+                resolve_synth(&synth, profile, &synth_host(env), None, Some(&o), &stage).unwrap();
             let staged = fs::read_to_string(s.make_conf.unwrap()).unwrap();
-            let name = staged.lines().find_map(|l| l.strip_prefix("SYNTHPROFILE=")).unwrap().to_string();
+            let name = staged
+                .lines()
+                .find_map(|l| l.strip_prefix("SYNTHPROFILE="))
+                .unwrap()
+                .to_string();
             (name, s.notes)
         };
 
         let (name, notes) = picked("", Some("Env"));
         assert_eq!(name, "Env");
-        assert!(notes.iter().any(|n| n == "synth profile Env (SYNTHPROFILE)"), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n == "synth profile Env (SYNTHPROFILE)"),
+            "{notes:?}"
+        );
         // A section without Directory_packages, an unknown one, an empty
         // value: synth ignores the variable.
         for env in [Some("Bare"), Some("Nope"), Some(""), None] {
             let (name, notes) = picked("", env);
             assert_eq!(name, "Live", "{env:?}");
-            assert!(notes.iter().any(|n| n == "synth profile Live (synth.ini profile_selected)"), "{notes:?}");
+            assert!(
+                notes
+                    .iter()
+                    .any(|n| n == "synth profile Live (synth.ini profile_selected)"),
+                "{notes:?}"
+            );
         }
         assert_eq!(picked("Bare", Some("Env")).0, "Bare");
 
         fs::write(synth.join("synth.ini"), "[LiveSystem]\n").unwrap();
         let (name, notes) = picked("", None);
         assert_eq!(name, "LiveSystem");
-        assert!(notes.iter().any(|n| n == "synth profile LiveSystem (synth's default)"), "{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n == "synth profile LiveSystem (synth's default)"),
+            "{notes:?}"
+        );
     }
 
     #[test]
@@ -903,7 +1100,11 @@ not a key value line
             ),
         )
         .unwrap();
-        fs::write(synth.join("LiveSystem-make.conf"), "DEFAULT_VERSIONS+=ssl=openssl\n").unwrap();
+        fs::write(
+            synth.join("LiveSystem-make.conf"),
+            "DEFAULT_VERSIONS+=ssl=openssl\n",
+        )
+        .unwrap();
         // A second profile's make.conf must not be picked up.
         fs::write(synth.join("Other-make.conf"), "A=1\n").unwrap();
 
@@ -911,7 +1112,10 @@ not a key value line
         assert_eq!(s.portsdir, tree);
         assert_eq!(s.options_dir, opts);
         assert!(s.options_dir.is_dir());
-        assert_eq!(s.make_conf_sources, vec![synth.join("LiveSystem-make.conf")]);
+        assert_eq!(
+            s.make_conf_sources,
+            vec![synth.join("LiveSystem-make.conf")]
+        );
         assert_eq!(s.env, QueryEnv::Synth);
         let staged = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
         assert!(staged.contains("ssl=openssl"), "{staged}");
@@ -919,11 +1123,21 @@ not a key value line
         // synth's scan slave: its header before the profile's make.conf,
         // PACKAGE_BUILDING without _FLAVORS, and an empty LOCALBASE after it
         // so the profile cannot undo it.
-        let at = |needle: &str| staged.find(needle).unwrap_or_else(|| panic!("{needle}: {staged}"));
-        assert!(at("SYNTHPROFILE=LiveSystem\n") < at("ssl=openssl"), "{staged}");
+        let at = |needle: &str| {
+            staged
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {staged}"))
+        };
+        assert!(
+            at("SYNTHPROFILE=LiveSystem\n") < at("ssl=openssl"),
+            "{staged}"
+        );
         assert!(at("PACKAGE_BUILDING=yes\n") < at("ssl=openssl"), "{staged}");
         assert!(!staged.contains("PACKAGE_BUILDING_FLAVORS"), "{staged}");
-        assert!(at("ssl=openssl") < at("LOCALBASE=/nonexistent\n"), "{staged}");
+        assert!(
+            at("ssl=openssl") < at("LOCALBASE=/nonexistent\n"),
+            "{staged}"
+        );
         assert!(staged.ends_with("LOCALBASE=/nonexistent\n"), "{staged}");
         // synth has no blacklist, and nothing to note.
         assert!(s.blacklist.is_empty());
@@ -933,9 +1147,19 @@ not a key value line
         // -o wins over Directory_options, -P over Directory_portsdir.
         let elsewhere = tmp.path().join("elsewhere");
         fake_tree(&elsewhere);
-        let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), Some(&elsewhere), Some(&elsewhere), &stage)
-            .unwrap();
-        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (elsewhere.as_path(), elsewhere.as_path()));
+        let s = resolve_synth(
+            &synth,
+            "LiveSystem",
+            &synth_host(None),
+            Some(&elsewhere),
+            Some(&elsewhere),
+            &stage,
+        )
+        .unwrap();
+        assert_eq!(
+            (s.portsdir.as_path(), s.options_dir.as_path()),
+            (elsewhere.as_path(), elsewhere.as_path())
+        );
         assert!(s.notes.is_empty(), "{:?}", s.notes);
     }
 
@@ -972,8 +1196,15 @@ not a key value line
 
         fs::create_dir_all(&ccache).unwrap();
         let present = staged();
-        let at = |needle: &str| present.find(needle).unwrap_or_else(|| panic!("{needle}: {present}"));
-        assert!(at("BATCH=yes\n") < at("WITH_CCACHE_BUILD=yes\nCCACHE_DIR=/ccache\n"), "{present}");
+        let at = |needle: &str| {
+            present
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {present}"))
+        };
+        assert!(
+            at("BATCH=yes\n") < at("WITH_CCACHE_BUILD=yes\nCCACHE_DIR=/ccache\n"),
+            "{present}"
+        );
         assert!(at("CCACHE_DIR=/ccache\n") < at("X=1\n"), "{present}");
 
         // Unset is synth's "disabled", never a path looked up.
@@ -1011,20 +1242,36 @@ not a key value line
         // No profile make.conf still stages synth's header: left unset, make
         // would read the host's (/etc/make.conf or the environment's
         // __MAKE_CONF), which a synth builder never does.
-        assert_eq!(s.make_conf.as_deref(), Some(stage.join("make.conf").as_path()));
+        assert_eq!(
+            s.make_conf.as_deref(),
+            Some(stage.join("make.conf").as_path())
+        );
         assert!(s.make_conf_sources.is_empty());
         let staged = fs::read_to_string(stage.join("make.conf")).unwrap();
-        assert_eq!(staged, format!("{}{SYNTH_SCAN_TRAILER}", synth_prelude("LiveSystem", false)));
+        assert_eq!(
+            staged,
+            format!("{}{SYNTH_SCAN_TRAILER}", synth_prelude("LiveSystem", false))
+        );
 
         // Directory_portsdir naming a non-tree is an error, not a fallback.
         fs::write(
             synth.join("synth.ini"),
-            format!("[LiveSystem]\nDirectory_portsdir={}/nope\n", tmp.path().display()),
+            format!(
+                "[LiveSystem]\nDirectory_portsdir={}/nope\n",
+                tmp.path().display()
+            ),
         )
         .unwrap();
-        let err = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, Some(&opts), &stage)
-            .unwrap_err()
-            .to_string();
+        let err = resolve_synth(
+            &synth,
+            "LiveSystem",
+            &synth_host(None),
+            None,
+            Some(&opts),
+            &stage,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("not a ports tree"), "{err}");
 
         // A setting in [Global Configuration] alone is no profile's: synth
@@ -1047,7 +1294,8 @@ not a key value line
         // only exercised through -o here).
         fs::remove_file(synth.join("synth.ini")).unwrap();
         if is_ports_tree(Path::new("/usr/ports")) {
-            let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
+            let s =
+                resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
             assert_eq!(s.options_dir, Path::new("/var/db/ports"));
         }
     }
@@ -1069,8 +1317,14 @@ not a key value line
         fs::create_dir_all(tree.join("cat/port/files")).unwrap();
         fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
         let real = tree.canonicalize().unwrap();
-        assert_eq!(synth_make_portsdir(Some(&tree.join("cat/port"))), Some(real.clone()));
-        assert_eq!(synth_make_portsdir(Some(&tree.join("cat/port/files"))), Some(real));
+        assert_eq!(
+            synth_make_portsdir(Some(&tree.join("cat/port"))),
+            Some(real.clone())
+        );
+        assert_eq!(
+            synth_make_portsdir(Some(&tree.join("cat/port/files"))),
+            Some(real)
+        );
         // Outside any tree: /usr/ports, which make reads, or a failure.
         let outside = synth_make_portsdir(Some(tmp.path()));
         if Path::new("/usr/ports/Mk/bsd.port.mk").is_file() {

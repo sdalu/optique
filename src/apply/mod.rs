@@ -66,8 +66,12 @@ impl PendingWrite {
         // (SavedOptionsFile::decides), and is on only when a SET entry
         // names it and no UNSET entry matches it (SavedOptionsFile::value).
         let was_on = |o: &str| old.value(o) == Some(true);
-        let mentioned: BTreeSet<&str> =
-            old.complete.iter().chain(old.recorded()).map(String::as_str).collect();
+        let mentioned: BTreeSet<&str> = old
+            .complete
+            .iter()
+            .chain(old.recorded())
+            .map(String::as_str)
+            .collect();
         Changes {
             turned_on: now_known
                 .iter()
@@ -101,7 +105,11 @@ impl PendingWrite {
     pub fn describe(&self) -> String {
         if self.old.is_none() {
             // The file records every option, on or off.
-            return format!("new file ({} of {} on)", self.enabled.len(), self.complete.len());
+            return format!(
+                "new file ({} of {} on)",
+                self.enabled.len(),
+                self.complete.len()
+            );
         }
         let c = self.changes();
         let mut parts = Vec::new();
@@ -209,12 +217,15 @@ pub fn plan_writes<'a>(
             continue;
         }
         let preferred = crate::session::is_preferred(info);
-        groups.entry(info.options_name.clone()).or_default().push(Candidate {
-            key: key.clone(),
-            info,
-            enabled,
-            preferred,
-        });
+        groups
+            .entry(info.options_name.clone())
+            .or_default()
+            .push(Candidate {
+                key: key.clone(),
+                info,
+                enabled,
+                preferred,
+            });
     }
 
     let mut writes = Vec::new();
@@ -240,13 +251,21 @@ pub fn plan_writes<'a>(
         // the first on ties.
         let chosen = cands
             .iter()
-            .reduce(|owner, c| if crate::session::outranks(c.info, owner.info) { c } else { owner })
+            .reduce(|owner, c| {
+                if crate::session::outranks(c.info, owner.info) {
+                    c
+                } else {
+                    owner
+                }
+            })
             .expect("a group holds at least one candidate");
         // Read with its options.local, as make reads it; what a write
         // carries over comes from the file alone, which is all it writes.
         // Without an options file there is no old file, options.local or
         // not: the write is a new one.
-        let old = files.own(options_name).map(|own| files.under_local(options_name, own));
+        let old = files
+            .own(options_name)
+            .map(|own| files.under_local(options_name, own));
         let planned = planned_file(chosen, cands, files.own(options_name).as_ref());
         if minimal {
             // The file decides every flavor sharing it: it goes only when
@@ -270,8 +289,7 @@ pub fn plan_writes<'a>(
                     removals.push(crate::clean::Removal {
                         options_name: options_name.clone(),
                         dir: files.entry_dir(options_name),
-                        reason: "defaults + make.conf produce this exact configuration"
-                            .to_string(),
+                        reason: "defaults + make.conf produce this exact configuration".to_string(),
                     });
                 }
                 continue;
@@ -290,7 +308,9 @@ pub fn plan_writes<'a>(
             if chosen.preferred {
                 up_to_date(old, info, enabled, &local)
             } else {
-                cands.iter().all(|c| up_to_date(old, c.info, &c.enabled, &local))
+                cands
+                    .iter()
+                    .all(|c| up_to_date(old, c.info, &c.enabled, &local))
             }
         };
         if old.as_ref().is_some_and(current) {
@@ -311,7 +331,11 @@ pub fn plan_writes<'a>(
             content,
         });
     }
-    PlannedWrites { writes, removals, warnings }
+    PlannedWrites {
+        writes,
+        removals,
+        warnings,
+    }
 }
 
 /// A port wanting to write an options file, which the other flavors of its
@@ -344,7 +368,11 @@ fn divergence_warning(options_name: &str, chosen: &Candidate, other: &Candidate)
     if shared_diff.is_empty() {
         return None;
     }
-    let why = if chosen.preferred { "default flavor" } else { "widest view" };
+    let why = if chosen.preferred {
+        "default flavor"
+    } else {
+        "widest view"
+    };
     Some(format!(
         "{}: flavors disagree on shared options file {} — using {} ({}); \
          differing shared options: {}",
@@ -395,7 +423,8 @@ fn up_to_date(
         return false;
     }
     let would = local(written_file(info, enabled));
-    crate::session::effective_with(info, Some(old)) == crate::session::effective_with(info, Some(&would))
+    crate::session::effective_with(info, Some(old))
+        == crate::session::effective_with(info, Some(&would))
 }
 
 /// The file `chosen` writes for the flavors `cands` sharing it, as make
@@ -416,12 +445,20 @@ struct Planned {
 /// flavor's next write drops it): so the options another flavor in the
 /// closure has go in with that flavor's staged value, and the rest of
 /// `old`'s with the lines they had.
-fn planned_file(chosen: &Candidate, cands: &[Candidate], old: Option<&SavedOptionsFile>) -> Planned {
+fn planned_file(
+    chosen: &Candidate,
+    cands: &[Candidate],
+    old: Option<&SavedOptionsFile>,
+) -> Planned {
     let mut file = written_file(chosen.info, &chosen.enabled);
     let mut kept: Vec<String> = Vec::new();
     let mut foreign = false;
     if chosen.preferred {
-        return Planned { file, kept, foreign };
+        return Planned {
+            file,
+            kept,
+            foreign,
+        };
     }
     for c in cands {
         for o in &c.info.options.complete {
@@ -451,7 +488,11 @@ fn planned_file(chosen: &Candidate, cands: &[Candidate], old: Option<&SavedOptio
             }
         }
     }
-    Planned { file, kept, foreign }
+    Planned {
+        file,
+        kept,
+        foreign,
+    }
 }
 
 /// `content` (a rendered file) with the `kept` options of `file` added:
@@ -484,7 +525,13 @@ fn written_file(info: &PortInfo, enabled: &BTreeSet<String>) -> SavedOptionsFile
     SavedOptionsFile {
         complete: info.options.complete.clone(),
         set: enabled.clone(),
-        unset: info.options.complete.iter().filter(|o| !enabled.contains(*o)).cloned().collect(),
+        unset: info
+            .options
+            .complete
+            .iter()
+            .filter(|o| !enabled.contains(*o))
+            .cloned()
+            .collect(),
         ..Default::default()
     }
 }
@@ -537,7 +584,10 @@ pub struct ApplySummary {
 /// files already written are removed and nothing is renamed, so a failed pass
 /// leaves the options dir as it was.
 pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
-    let mut summary = ApplySummary { written: 0, failed: Vec::new() };
+    let mut summary = ApplySummary {
+        written: 0,
+        failed: Vec::new(),
+    };
     let mut staged: Vec<(&PendingWrite, Staged)> = Vec::new();
     for w in writes {
         match write_temp(w) {
@@ -555,9 +605,10 @@ pub fn apply(writes: &[PendingWrite]) -> ApplySummary {
         match fs::rename(&s.tmp, &w.path) {
             Ok(()) => summary.written += 1,
             Err(e) => {
-                summary
-                    .failed
-                    .push((w.key.clone(), format!("renaming into place: {}: {e}", w.path.display())));
+                summary.failed.push((
+                    w.key.clone(),
+                    format!("renaming into place: {}: {e}", w.path.display()),
+                ));
                 s.discard();
             }
         }
@@ -617,7 +668,10 @@ fn write_temp(w: &PendingWrite) -> Result<Staged> {
             return Err(e).with_context(|| format!("creating {}", staged.tmp.display()));
         }
     };
-    if let Err(e) = f.write_all(w.content.as_bytes()).and_then(|()| f.sync_all()) {
+    if let Err(e) = f
+        .write_all(w.content.as_bytes())
+        .and_then(|()| f.sync_all())
+    {
         let tmp = staged.tmp.display().to_string();
         staged.discard();
         return Err(e).with_context(|| format!("writing {tmp}"));

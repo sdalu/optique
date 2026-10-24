@@ -2,10 +2,7 @@
 
 use std::path::Path;
 
-
-
 use crate::{apply, clean, model, report};
-
 
 /// One write pass, whatever assembled it: the files to write, the entries to
 /// remove, and everything that stopped the pass from being complete.
@@ -19,7 +16,11 @@ pub(super) struct WritePass {
 }
 
 impl WritePass {
-    pub(super) fn new(writes: Vec<apply::PendingWrite>, removals: Vec<clean::Removal>, warnings: Vec<String>) -> Self {
+    pub(super) fn new(
+        writes: Vec<apply::PendingWrite>,
+        removals: Vec<clean::Removal>,
+        warnings: Vec<String>,
+    ) -> Self {
         WritePass {
             writes,
             removals,
@@ -63,7 +64,11 @@ pub(super) fn commit_writes(
         written = done.summary.written;
         removed = done.removed.count;
         notes = done.removed.notes;
-        let failed = done.summary.failed.into_iter().map(|(key, m)| (key.to_string(), m));
+        let failed = done
+            .summary
+            .failed
+            .into_iter()
+            .map(|(key, m)| (key.to_string(), m));
         for (subject, message) in failed.chain(done.removed.failed) {
             errors.push(report::ErrorEntry { subject, message });
         }
@@ -102,7 +107,12 @@ pub(super) fn commit_writes(
 }
 
 /// The closing stderr line of a write pass, for sync and decide alike.
-pub(super) fn print_write_summary(pass: &WritePass, report: &report::WriteReport, dir: &Path, dry_run: bool) {
+pub(super) fn print_write_summary(
+    pass: &WritePass,
+    report: &report::WriteReport,
+    dir: &Path,
+    dry_run: bool,
+) {
     if dry_run {
         eprintln!(
             "dry run: {} file(s) would be written, {} removed in {}",
@@ -154,6 +164,9 @@ mod tests {
         let report = super::commit_writes(&pass, &Default::default(), tmp.path(), false);
         assert_eq!(report.summary.failed, 1);
         assert_eq!(report.summary.removed, 0);
-        assert!(dead.join("options").exists(), "the removal waited for the writes");
+        assert!(
+            dead.join("options").exists(),
+            "the removal waited for the writes"
+        );
     }
 }

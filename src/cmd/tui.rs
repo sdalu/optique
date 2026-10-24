@@ -1,17 +1,19 @@
 //! The TUI over a fresh scan, or driven headless.
 
-
 use anyhow::Result;
 
 use crate::cli::Cli;
 use crate::color::{ansi, stderr_color, tint};
 use crate::{query, session, staging, tui};
 
-use super::{query_ctx, run_scan, RootSet};
+use super::{RootSet, query_ctx, run_scan};
 
 pub(crate) fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     if cli.dry_run {
-        eprintln!("{} --dry-run has no effect in the TUI; the apply dialog previews changes", tint(stderr_color(cli), ansi::YELLOW, "note:"));
+        eprintln!(
+            "{} --dry-run has no effect in the TUI; the apply dialog previews changes",
+            tint(stderr_color(cli), ansi::YELLOW, "note:")
+        );
     }
     // Fail before the (possibly minute-long) scan, not after. The headless
     // driver renders into memory, so it has no use for a terminal.
@@ -48,9 +50,25 @@ pub(crate) fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     let overlays = scanned.settings.overlays;
     let files = scanned.files;
     if drive {
-        tui::run_driver(session, files, db, refresher, blacklist, overlays, cli.minimal)
+        tui::run_driver(
+            session,
+            files,
+            db,
+            refresher,
+            blacklist,
+            overlays,
+            cli.minimal,
+        )
     } else {
-        tui::run(session, files, db, refresher, blacklist, overlays, cli.minimal)
+        tui::run(
+            session,
+            files,
+            db,
+            refresher,
+            blacklist,
+            overlays,
+            cli.minimal,
+        )
     }
     // scanned.staging (make.conf + staging db) lives until here
 }

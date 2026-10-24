@@ -4,11 +4,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use super::{
-    checked_portsdir, is_ports_tree, make_values, stage_make_conf, HostPaths, Overlay, QueryEnv, Request,
-    Settings,
+    HostPaths, Overlay, QueryEnv, Request, Settings, checked_portsdir, is_ports_tree, make_values,
+    stage_make_conf,
 };
 
 /// PORTSDIR and PORT_DBDIR as make(1) sees them on this host, from the
@@ -64,13 +64,19 @@ pub(super) fn resolve(
             host.db.to_path_buf()
         }
     };
-    let (staged, mut conf_hash, make_conf_sources) =
-        stage_make_conf(String::new(), &[host.make_conf.to_path_buf()], "", staging_dir)?;
+    let (staged, mut conf_hash, make_conf_sources) = stage_make_conf(
+        String::new(),
+        &[host.make_conf.to_path_buf()],
+        "",
+        staging_dir,
+    )?;
     // Queries run with a cleared environment, so make would fall back to
     // /etc/make.conf, unhashed, when the one it was given cannot be read:
     // /dev/null stands for "none", as an unreadable __MAKE_CONF is for make.
-    let mut make_conf =
-        Some(staged.map_or_else(|| PathBuf::from("/dev/null"), |_| host.make_conf.to_path_buf()));
+    let mut make_conf = Some(staged.map_or_else(
+        || PathBuf::from("/dev/null"),
+        |_| host.make_conf.to_path_buf(),
+    ));
     // --overlay-dir, then the environment's OVERLAYS (absolute), then the
     // make.conf's own: a small make.conf including the real one first,
     // still read in place for its own .includes, then putting them in
@@ -95,14 +101,20 @@ pub(super) fn resolve(
         make_conf = Some(path);
     }
     let staged = (make_conf, conf_hash, make_conf_sources);
-    Ok(Settings::new(portsdir, options_dir, staged, QueryEnv::Host, notes))
+    Ok(Settings::new(
+        portsdir,
+        options_dir,
+        staged,
+        QueryEnv::Host,
+        notes,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{resolve_host, OverlaySpec};
     use crate::config::testutil::*;
+    use crate::config::{OverlaySpec, resolve_host};
 
     /// A local build reads its make.conf in place; --overlay-dir comes first
     /// through a small make.conf that includes it, and an overlay that
@@ -120,25 +132,66 @@ mod tests {
         let etc = tmp.path().join("etc");
         fs::create_dir_all(&etc).unwrap();
         fs::write(etc.join("make.conf"), ".include \"overlays.conf\"\n").unwrap();
-        fs::write(etc.join("overlays.conf"), format!("OVERLAYS+={}\n", theirs.display())).unwrap();
+        fs::write(
+            etc.join("overlays.conf"),
+            format!("OVERLAYS+={}\n", theirs.display()),
+        )
+        .unwrap();
         let absent = tmp.path().join("no-poudriere.d");
         let conf = etc.join("make.conf");
-        let host = HostPaths { make_conf: &conf, ..host(tmp.path(), &absent, &ports, tmp.path()) };
+        let host = HostPaths {
+            make_conf: &conf,
+            ..host(tmp.path(), &absent, &ports, tmp.path())
+        };
         let specs = [OverlaySpec::Dir(mine.clone())];
 
-        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                overlays: &specs,
+                ..Request::default()
+            },
+            &stage,
+        )
+        .unwrap();
         let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
-        assert_eq!(paths, [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]);
-        assert!(s.notes.iter().any(|n| n.contains("set by make.conf")), "{:?}", s.notes);
+        assert_eq!(
+            paths,
+            [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]
+        );
+        assert!(
+            s.notes.iter().any(|n| n.contains("set by make.conf")),
+            "{:?}",
+            s.notes
+        );
         let plain = resolve_host(&host, &Request::default(), &stage).unwrap();
-        assert_eq!(plain.make_conf.as_deref(), Some(conf.as_path()), "read in place without one");
+        assert_eq!(
+            plain.make_conf.as_deref(),
+            Some(conf.as_path()),
+            "read in place without one"
+        );
         assert_ne!(s.conf_hash, plain.conf_hash);
 
         // A make.conf that assigns rather than appends keeps --overlay-dir.
-        fs::write(etc.join("overlays.conf"), format!("OVERLAYS={}\n", theirs.display())).unwrap();
-        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        fs::write(
+            etc.join("overlays.conf"),
+            format!("OVERLAYS={}\n", theirs.display()),
+        )
+        .unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                overlays: &specs,
+                ..Request::default()
+            },
+            &stage,
+        )
+        .unwrap();
         let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
-        assert_eq!(paths, [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]);
+        assert_eq!(
+            paths,
+            [mine.canonicalize().unwrap(), theirs.canonicalize().unwrap()]
+        );
     }
 
     /// A local build's overlays, in make's order: --overlay-dir, then the
@@ -156,11 +209,25 @@ mod tests {
         fs::create_dir_all(&env).unwrap();
         let absent = tmp.path().join("no-poudriere.d");
         let envs = [env.clone()];
-        let host = HostPaths { env_overlays: &envs, ..host(tmp.path(), &absent, &ports, tmp.path()) };
+        let host = HostPaths {
+            env_overlays: &envs,
+            ..host(tmp.path(), &absent, &ports, tmp.path())
+        };
         let specs = [OverlaySpec::Dir(mine.clone())];
-        let s = resolve_host(&host, &Request { overlays: &specs, ..Request::default() }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                overlays: &specs,
+                ..Request::default()
+            },
+            &stage,
+        )
+        .unwrap();
         let paths: Vec<_> = s.overlays.iter().map(|o| o.path.clone()).collect();
-        assert_eq!(paths, [mine.canonicalize().unwrap(), env.canonicalize().unwrap()]);
+        assert_eq!(
+            paths,
+            [mine.canonicalize().unwrap(), env.canonicalize().unwrap()]
+        );
         // Without --overlay-dir the environment's alone, through make.conf.
         let s = resolve_host(&host, &Request::default(), &stage).unwrap();
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
@@ -184,15 +251,33 @@ mod tests {
             ..host(tmp.path(), &absent, &ports, &db)
         };
         let s = resolve_host(&host, &Request::default(), &stage).unwrap();
-        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
-        assert!(s.notes.iter().any(|n| n.ends_with("from PORTSDIR")), "{:?}", s.notes);
-        assert!(s.notes.iter().any(|n| n.ends_with("from PORT_DBDIR")), "{:?}", s.notes);
+        assert_eq!(
+            (s.portsdir.as_path(), s.options_dir.as_path()),
+            (ports.as_path(), db.as_path())
+        );
+        assert!(
+            s.notes.iter().any(|n| n.ends_with("from PORTSDIR")),
+            "{:?}",
+            s.notes
+        );
+        assert!(
+            s.notes.iter().any(|n| n.ends_with("from PORT_DBDIR")),
+            "{:?}",
+            s.notes
+        );
         // -P and -o win, and then there is nothing to note.
         let other = tmp.path().join("other");
         fake_tree(&other);
-        let req = Request { portsdir: Some(&other), options_dir: Some(&other), ..Request::default() };
+        let req = Request {
+            portsdir: Some(&other),
+            options_dir: Some(&other),
+            ..Request::default()
+        };
         let s = resolve_host(&host, &req, &stage).unwrap();
-        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (other.as_path(), other.as_path()));
+        assert_eq!(
+            (s.portsdir.as_path(), s.options_dir.as_path()),
+            (other.as_path(), other.as_path())
+        );
         assert!(s.notes.is_empty(), "{:?}", s.notes);
     }
 
@@ -212,17 +297,35 @@ mod tests {
         fs::write(pd.join("blacklist"), "www/nginx\n").unwrap();
         let host = host(tmp.path(), &pd, &ports, &db);
 
-        let local = Request { local: true, ..Request::default() };
+        let local = Request {
+            local: true,
+            ..Request::default()
+        };
         let s = resolve_host(&host, &local, &stage).unwrap();
-        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
+        assert_eq!(
+            (s.portsdir.as_path(), s.options_dir.as_path()),
+            (ports.as_path(), db.as_path())
+        );
         assert_eq!(s.env, QueryEnv::Host);
-        assert_eq!(s.make_conf.as_deref(), Some(Path::new("/dev/null")), "none to read, not /etc/make.conf");
+        assert_eq!(
+            s.make_conf.as_deref(),
+            Some(Path::new("/dev/null")),
+            "none to read, not /etc/make.conf"
+        );
         assert!(s.make_conf_sources.is_empty());
         assert!(s.blacklist.is_empty());
         // The host's make.conf, not poudriere.d's, staged and keyed.
         let etc = tmp.path().join("etc-make.conf");
         fs::write(&etc, "DEFAULT_VERSIONS+=ssl=base\n").unwrap();
-        let s = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap();
+        let s = resolve_host(
+            &HostPaths {
+                make_conf: &etc,
+                ..host
+            },
+            &local,
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.make_conf_sources, vec![etc.clone()]);
         // Read in place, for its relative .includes, and keyed all the same.
         assert_eq!(s.make_conf.as_ref(), Some(&etc));
@@ -232,12 +335,31 @@ mod tests {
         // included, is read and keyed, not taken for none; one that exists
         // but cannot be read stops the run, as it would stop make.
         fs::write(&etc, b"# r\xe9glages\nDEFAULT_VERSIONS+=ssl=base\n").unwrap();
-        let s = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap();
-        assert_eq!((s.make_conf.as_ref(), s.make_conf_sources.as_slice()), (Some(&etc), [etc.clone()].as_slice()));
+        let s = resolve_host(
+            &HostPaths {
+                make_conf: &etc,
+                ..host
+            },
+            &local,
+            &stage,
+        )
+        .unwrap();
+        assert_eq!(
+            (s.make_conf.as_ref(), s.make_conf_sources.as_slice()),
+            (Some(&etc), [etc.clone()].as_slice())
+        );
         if !nix_is_root() {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&etc, fs::Permissions::from_mode(0o000)).unwrap();
-            let err = resolve_host(&HostPaths { make_conf: &etc, ..host }, &local, &stage).unwrap_err();
+            let err = resolve_host(
+                &HostPaths {
+                    make_conf: &etc,
+                    ..host
+                },
+                &local,
+                &stage,
+            )
+            .unwrap_err();
             assert!(format!("{err:#}").contains("etc-make.conf"), "{err:#}");
             fs::set_permissions(&etc, fs::Permissions::from_mode(0o644)).unwrap();
         }

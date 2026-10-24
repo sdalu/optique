@@ -25,7 +25,7 @@ use crate::session::{Session, UiStatus};
 use crate::staging::StagingDb;
 
 use apply_modal::ApplyModal;
-use keys::{clamp_u16, dispatch_key, KeyOutcome};
+use keys::{KeyOutcome, clamp_u16, dispatch_key};
 use overlays::WhyInfo;
 
 #[derive(PartialEq)]
@@ -217,7 +217,9 @@ pub struct PageRows {
 pub fn ensure_terminal() -> Result<()> {
     use std::io::IsTerminal as _;
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
-        anyhow::bail!("the TUI needs a real terminal; use `optique scan` or `optique sync` in scripts");
+        anyhow::bail!(
+            "the TUI needs a real terminal; use `optique scan` or `optique sync` in scripts"
+        );
     }
     Ok(())
 }
@@ -232,7 +234,9 @@ pub fn run(
     minimal: bool,
 ) -> Result<()> {
     ensure_terminal()?;
-    let mut app = build_app(session, files, staging_db, refresher, blacklist, overlays, minimal);
+    let mut app = build_app(
+        session, files, staging_db, refresher, blacklist, overlays, minimal,
+    );
     let mut terminal = ratatui::init();
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
@@ -262,7 +266,11 @@ pub(crate) fn build_app(
     overlays: Vec<crate::config::Overlay>,
     minimal: bool,
 ) -> App {
-    let hidden = session.ports.values().filter(|p| !p.options.has_options()).count();
+    let hidden = session
+        .ports
+        .values()
+        .filter(|p| !p.options.has_options())
+        .count();
     let loops = session.dep_loops();
     let mut app = App {
         session,
@@ -345,7 +353,11 @@ impl Summary {
                 return full;
             }
         }
-        let head = self.draft.as_ref().map(|(short, _)| short.clone()).unwrap_or_default();
+        let head = self
+            .draft
+            .as_ref()
+            .map(|(short, _)| short.clone())
+            .unwrap_or_default();
         let tokens = self.tokens(!head.is_empty());
         let mut out = head;
         for (i, (sep, tok)) in tokens.iter().enumerate() {
@@ -400,7 +412,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
         if !event::poll(Duration::from_millis(150))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else { continue };
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
         if key.kind != KeyEventKind::Press {
             continue;
         }
@@ -414,7 +428,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<
 
 impl App {
     pub fn selected_key(&self) -> Option<PortKey> {
-        self.list_state.selected().and_then(|i| self.visible.get(i)).cloned()
+        self.list_state
+            .selected()
+            .and_then(|i| self.visible.get(i))
+            .cloned()
     }
 
     /// The list's row for the port at index `idx` of `visible`: one further
@@ -525,7 +542,8 @@ impl App {
 
     /// Is this port blacklisted for the current jail/tree/set?
     pub fn is_blacklisted(&self, info: &crate::model::port::PortInfo) -> bool {
-        self.blacklist.matches(&info.canonical, info.is_default_flavor())
+        self.blacklist
+            .matches(&info.canonical, info.is_default_flavor())
     }
 
     /// The dependency loop this port is caught in, if any.
@@ -549,10 +567,7 @@ impl App {
         {
             status = UiStatus::Ok;
         }
-        if self.warn_mc
-            && status == UiStatus::Ok
-            && !self.session.mc_deviations(info).is_empty()
-        {
+        if self.warn_mc && status == UiStatus::Ok && !self.session.mc_deviations(info).is_empty() {
             status = UiStatus::McDeviation;
         }
         status
@@ -571,7 +586,8 @@ impl App {
         if self.visible.is_empty() {
             self.list_state.select(None);
         } else {
-            self.list_state.select(Some(idx.min(self.visible.len() - 1)));
+            self.list_state
+                .select(Some(idx.min(self.visible.len() - 1)));
         }
         // Moved away: the port a refresh held goes at the next rebuild.
         if self.held.is_some() && self.selected_key() != self.held {
@@ -667,7 +683,12 @@ impl App {
         .collect();
         // A listed origin MOVED moves and that was not followed is in no
         // row: the list names a port that is gone, and needs fixing.
-        let flagged = self.session.listed_moves.iter().filter(|m| !m.followed).count();
+        let flagged = self
+            .session
+            .listed_moves
+            .iter()
+            .filter(|m| !m.followed)
+            .count();
         if flagged > 0 {
             items.insert(0, format!("{flagged} listed moved (fix the list)"));
         }
@@ -678,7 +699,11 @@ impl App {
                 format!("restored draft ({n} {ports}, {age}, U per port reverts)"),
             )
         });
-        let next = if draft.is_some() { "n: next" } else { "n: next problem" };
+        let next = if draft.is_some() {
+            "n: next"
+        } else {
+            "n: next problem"
+        };
         let hints = if items.is_empty() && draft.is_none() {
             items.push(format!("all {} ports are configured", self.visible.len()));
             vec!["?: help".to_string()]
@@ -686,9 +711,16 @@ impl App {
             // The ports never configured take their defaults in one go.
             let defaults = (counts[UiStatus::Unconfigured as usize] > 0)
                 .then(|| "a: write defaults for all".to_string());
-            defaults.into_iter().chain([next.to_string(), "?: help".to_string()]).collect()
+            defaults
+                .into_iter()
+                .chain([next.to_string(), "?: help".to_string()])
+                .collect()
         };
-        let summary = Summary { draft, items, hints };
+        let summary = Summary {
+            draft,
+            items,
+            hints,
+        };
         self.flash(&summary.fit(usize::MAX), false);
         self.summary = Some(summary);
     }
@@ -713,7 +745,8 @@ impl App {
     /// error takes the place of an error.
     fn notify(&mut self, msg: &str, error: bool) {
         if let Some((_, shown_error)) = &self.message
-            && !error && (self.message_unread || *shown_error)
+            && !error
+            && (self.message_unread || *shown_error)
         {
             return;
         }

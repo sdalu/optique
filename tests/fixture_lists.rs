@@ -6,7 +6,7 @@ mod common;
 
 use std::collections::BTreeSet;
 
-use common::{json, stderr, Fixture};
+use common::{Fixture, json, stderr};
 
 /// The misc/flav keys a `scan --json` of `args` reports.
 fn flav_ports(f: &Fixture, args: &[&str]) -> BTreeSet<String> {

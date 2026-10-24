@@ -55,7 +55,10 @@ fn scan_smoke_and_cache_warmup() {
     assert!(stdout.contains("ports-mgmt/pkg"), "{stdout}");
     // Second run must be served entirely from the cache.
     let (_, stderr) = run();
-    assert!(stderr.contains(" 0 queried"), "warm scan should not invoke make: {stderr}");
+    assert!(
+        stderr.contains(" 0 queried"),
+        "warm scan should not invoke make: {stderr}"
+    );
 }
 
 #[test]
@@ -75,23 +78,30 @@ fn scan_json_and_exit_code() {
 
     // stdout must be nothing but the report object.
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let report: serde_json::Value =
-        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"));
+    let report: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"));
     let ports = report["ports"].as_array().expect("ports must be an array");
     let pkg = ports
         .iter()
         .find(|p| p["port"] == "ports-mgmt/pkg")
         .unwrap_or_else(|| panic!("ports-mgmt/pkg missing from {stdout}"));
-    assert!(pkg["pkgname"].as_str().unwrap().starts_with("pkg-"), "{pkg}");
+    assert!(
+        pkg["pkgname"].as_str().unwrap().starts_with("pkg-"),
+        "{pkg}"
+    );
     assert!(pkg["undecided"].is_array() && pkg["added"].is_array() && pkg["removed"].is_array());
     assert!(report["options_dir"].as_str().unwrap().contains("options"));
 
     // The gate: attention > 0 <=> exit 1. pkg's DOCS is normally undecided
     // (no make.conf stance) so this is usually the exit-1 side, but the
     // assertion holds either way.
-    assert!(report["summary"]["attention"].is_u64(), "summary.attention must be a number");
-    let pending =
-        report["summary"]["pending"].as_u64().expect("summary.pending must be a number");
+    assert!(
+        report["summary"]["attention"].is_u64(),
+        "summary.attention must be a number"
+    );
+    let pending = report["summary"]["pending"]
+        .as_u64()
+        .expect("summary.pending must be a number");
     assert_eq!(
         pending > 0,
         code == 1,
@@ -127,7 +137,11 @@ fn scan_gate_counts_each_status() {
         if json {
             c.arg("--json");
         }
-        c.arg("-o").arg(&optdir).args(["www/nginx", "ports-mgmt/pkg"]).output().unwrap()
+        c.arg("-o")
+            .arg(&optdir)
+            .args(["www/nginx", "ports-mgmt/pkg"])
+            .output()
+            .unwrap()
     };
     let row = |report: &serde_json::Value, port: &str| {
         report["ports"]
@@ -162,20 +176,35 @@ fn scan_gate_counts_each_status() {
     assert_eq!(pkg["added"], serde_json::json!(["DOCS"]), "{pkg}");
     assert_eq!(pkg["removed"], serde_json::json!(["OBSOLETE"]), "{pkg}");
     let summary = &report["summary"];
-    assert_eq!(summary["attention"].as_u64().unwrap(), attention(&report), "{summary}");
+    assert_eq!(
+        summary["attention"].as_u64().unwrap(),
+        attention(&report),
+        "{summary}"
+    );
     assert!(summary["conflict"].as_u64().unwrap() >= 1, "{summary}");
     assert!(summary["stale"].as_u64().unwrap() >= 1, "{summary}");
-    assert_eq!(out.status.code(), Some(1), "a conflict always holds the gate");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a conflict always holds the gate"
+    );
 
     // The table carries the same verdicts, markers included.
     let out = scan(false);
     assert_eq!(out.status.code(), Some(1));
     let table = String::from_utf8_lossy(&out.stdout);
     let line = |port: &str| {
-        table.lines().find(|l| l.contains(port)).unwrap_or_else(|| panic!("{port}:\n{table}")).to_string()
+        table
+            .lines()
+            .find(|l| l.contains(port))
+            .unwrap_or_else(|| panic!("{port}:\n{table}"))
+            .to_string()
     };
     assert!(line("www/nginx ").contains("CONFLICT"), "{table}");
-    assert!(line("ports-mgmt/pkg ").contains("STALE +DOCS -OBSOLETE"), "{table}");
+    assert!(
+        line("ports-mgmt/pkg ").contains("STALE +DOCS -OBSOLETE"),
+        "{table}"
+    );
 
     // Synced, pkg is ok and counts for nothing; nginx's conflict remains.
     let synced = optique(tmp.path(), "sync")
@@ -184,10 +213,17 @@ fn scan_gate_counts_each_status() {
         .arg("ports-mgmt/pkg")
         .output()
         .unwrap();
-    assert!(synced.status.success(), "{}", String::from_utf8_lossy(&synced.stderr));
+    assert!(
+        synced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&synced.stderr)
+    );
     let report = parse_json(&scan(true));
     assert_eq!(row(&report, "ports-mgmt/pkg")["status"], "ok");
-    assert_eq!(report["summary"]["attention"].as_u64().unwrap(), attention(&report));
+    assert_eq!(
+        report["summary"]["attention"].as_u64().unwrap(),
+        attention(&report)
+    );
 
     // With nginx's conflict resolved too, the gate opens if make.conf leaves
     // nothing undecided, and says why otherwise.
@@ -202,7 +238,12 @@ fn scan_gate_counts_each_status() {
     let out = scan(true);
     let report = parse_json(&out);
     let pending = report["summary"]["pending"].as_u64().unwrap();
-    assert_eq!(out.status.code(), Some(i32::from(pending > 0)), "{}", report["summary"]);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(pending > 0)),
+        "{}",
+        report["summary"]
+    );
 }
 
 /// An options file optique cannot read is never taken for a missing one:
@@ -223,18 +264,35 @@ fn an_unreadable_options_file_is_reported_not_overwritten() {
     if fs::read(&file).is_ok() {
         return; // root reads it anyway: the case only exists for others
     }
-    let sync = optique(tmp.path(), "sync").arg("-o").arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
-    let scan = optique(tmp.path(), "scan").args(["--json", "-o"]).arg(&optdir).arg("ports-mgmt/pkg").output().unwrap();
+    let sync = optique(tmp.path(), "sync")
+        .arg("-o")
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
+    let scan = optique(tmp.path(), "scan")
+        .args(["--json", "-o"])
+        .arg(&optdir)
+        .arg("ports-mgmt/pkg")
+        .output()
+        .unwrap();
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
 
-    assert_eq!(fs::read_to_string(&file).unwrap(), saved, "sync must not rewrite it");
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        saved,
+        "sync must not rewrite it"
+    );
     let stderr = String::from_utf8_lossy(&sync.stderr);
     assert!(stderr.contains("cannot read options file"), "{stderr}");
     assert_eq!(scan.status.code(), Some(1));
     let report = parse_json(&scan);
     assert_eq!(report["summary"]["errors"], 1, "{report}");
     let message = report["errors"][0]["message"].as_str().unwrap();
-    assert!(message.starts_with("cannot read options file") && message.contains("Permission denied"), "{message}");
+    assert!(
+        message.starts_with("cannot read options file") && message.contains("Permission denied"),
+        "{message}"
+    );
 }
 
 /// A port whose query fails was not checked, and neither was what it
@@ -251,11 +309,19 @@ fn scan_gate_counts_ports_it_could_not_check() {
         .arg("misc/optique-no-such-port")
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let report = parse_json(&out);
     assert_eq!(report["summary"]["errors"], 1, "{report}");
     assert!(report["summary"]["pending"].as_u64().unwrap() >= 1);
-    assert_eq!(report["errors"][0]["subject"], "misc/optique-no-such-port", "{report}");
+    assert_eq!(
+        report["errors"][0]["subject"], "misc/optique-no-such-port",
+        "{report}"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains(" · 1 error (see above)"), "{stderr}");
 }
@@ -273,19 +339,31 @@ fn clean_redundant_keeps_only_files_that_decide_something() {
         .args(["ports-mgmt/pkg", "www/nginx"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     // nginx now deviates: IPV6 is on by default, the file turns it off.
     let nginx = optdir.join("www_nginx/options");
     let text = fs::read_to_string(&nginx).unwrap();
     assert!(text.contains("OPTIONS_FILE_SET+=IPV6\n"), "{text}");
-    fs::write(&nginx, text.replace("OPTIONS_FILE_SET+=IPV6\n", "OPTIONS_FILE_UNSET+=IPV6\n")).unwrap();
+    fs::write(
+        &nginx,
+        text.replace("OPTIONS_FILE_SET+=IPV6\n", "OPTIONS_FILE_UNSET+=IPV6\n"),
+    )
+    .unwrap();
 
     let out = optique(tmp.path(), "clean")
         .args(["--redundant", "--json", "-o"])
         .arg(&optdir)
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let report = parse_json(&out);
     let removed: Vec<&str> = report["removals"]
         .as_array()
@@ -295,7 +373,11 @@ fn clean_redundant_keeps_only_files_that_decide_something() {
         .collect();
     assert!(removed.contains(&"ports-mgmt_pkg"), "{report}");
     assert!(!removed.contains(&"www_nginx"), "{report}");
-    assert_eq!(report["summary"]["removed"].as_u64().unwrap(), removed.len() as u64, "{report}");
+    assert_eq!(
+        report["summary"]["removed"].as_u64().unwrap(),
+        removed.len() as u64,
+        "{report}"
+    );
     assert!(!optdir.join("ports-mgmt_pkg").exists());
     assert!(nginx.is_file());
 }
@@ -309,14 +391,18 @@ fn with_stdin(mut cmd: Command, input: &str) -> std::process::Output {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawning optique");
-    child.stdin.as_mut().expect("stdin is piped").write_all(input.as_bytes()).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes())
+        .unwrap();
     child.wait_with_output().expect("collecting output")
 }
 
 fn parse_json(out: &std::process::Output) -> serde_json::Value {
     let stdout = String::from_utf8_lossy(&out.stdout);
-    serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"))
+    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("stdout is not JSON ({e}):\n{stdout}"))
 }
 
 /// The machine path end to end: read the option detail, plan one change from
@@ -351,11 +437,18 @@ fn decide_writes_a_plan_and_is_replayable() {
         .iter()
         .find(|p| p["port"] == "ports-mgmt/pkg")
         .unwrap_or_else(|| panic!("ports-mgmt/pkg missing from {report}"));
-    let options = pkg["options"].as_array().expect("--options must fill in options");
+    let options = pkg["options"]
+        .as_array()
+        .expect("--options must fill in options");
     assert!(!options.is_empty(), "ports-mgmt/pkg has options");
     for o in options {
-        for key in ["name", "staged", "default", "saved", "new", "locked", "desc"] {
-            assert!(!o[key].is_null() || key == "saved", "{key} missing from {o}");
+        for key in [
+            "name", "staged", "default", "saved", "new", "locked", "desc",
+        ] {
+            assert!(
+                !o[key].is_null() || key == "saved",
+                "{key} missing from {o}"
+            );
         }
     }
     let target = options
@@ -370,7 +463,11 @@ fn decide_writes_a_plan_and_is_replayable() {
     let mut cmd = decide();
     cmd.arg("-n");
     let out = with_stdin(cmd, &plan);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let preview = parse_json(&out);
     assert_eq!(preview["dry_run"], true);
     assert_eq!(preview["applied"], false);
@@ -379,7 +476,11 @@ fn decide_writes_a_plan_and_is_replayable() {
 
     // For real.
     let out = with_stdin(decide(), &plan);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let done = parse_json(&out);
     assert_eq!(done["applied"], true, "{done}");
     assert_eq!(done["summary"]["written"], 1, "{done}");
@@ -390,11 +491,18 @@ fn decide_writes_a_plan_and_is_replayable() {
     } else {
         format!("OPTIONS_FILE_UNSET+={name}")
     };
-    assert!(text.contains(&expected), "{file:?} must record {expected}:\n{text}");
+    assert!(
+        text.contains(&expected),
+        "{file:?} must record {expected}:\n{text}"
+    );
 
     // Replaying the same plan asks for values the port already has.
     let out = with_stdin(decide(), &plan);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let again = parse_json(&out);
     assert_eq!(again["applied"], false, "a replay changes nothing: {again}");
     assert!(again["writes"].as_array().unwrap().is_empty(), "{again}");
@@ -410,11 +518,13 @@ fn decide_refuses_a_plan_it_cannot_honour() {
 
     let mut cmd = optique(tmp.path(), "decide");
     cmd.arg("-o").arg(&optdir).arg("ports-mgmt/pkg");
-    let out = with_stdin(
-        cmd,
-        r#"{"ports-mgmt/pkg": {"NO_SUCH_OPTION_HERE": true}}"#,
+    let out = with_stdin(cmd, r#"{"ports-mgmt/pkg": {"NO_SUCH_OPTION_HERE": true}}"#);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(out.status.code(), Some(1), "{}", String::from_utf8_lossy(&out.stderr));
     let report = parse_json(&out);
     assert_eq!(report["applied"], false);
     assert!(report["writes"].as_array().unwrap().is_empty(), "{report}");
@@ -422,11 +532,17 @@ fn decide_refuses_a_plan_it_cannot_honour() {
     assert_eq!(rejected.len(), 1, "{report}");
     assert_eq!(rejected[0]["option"], "NO_SUCH_OPTION_HERE");
     assert!(
-        rejected[0]["reason"].as_str().unwrap().contains("no option"),
+        rejected[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("no option"),
         "{}",
         rejected[0]
     );
-    assert!(!optdir.join("ports-mgmt_pkg").exists(), "nothing may be written");
+    assert!(
+        !optdir.join("ports-mgmt_pkg").exists(),
+        "nothing may be written"
+    );
 }
 
 #[test]
@@ -457,10 +573,17 @@ fn sync_drops_obsolete_options_and_optionless_files() {
         .args(["ports-mgmt/pkg", "print/indexinfo"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let rewritten = fs::read_to_string(optdir.join("ports-mgmt_pkg/options")).unwrap();
-    assert!(!rewritten.contains("OBSOLETE"), "obsolete option must be dropped:\n{rewritten}");
+    assert!(
+        !rewritten.contains("OBSOLETE"),
+        "obsolete option must be dropped:\n{rewritten}"
+    );
     assert!(rewritten.contains("DOCS"));
     assert!(
         !optdir.join("print_indexinfo").exists(),
@@ -489,14 +612,22 @@ fn sync_completes_a_file_missing_lines() {
     fs::create_dir_all(optdir.join("textproc_expat2")).unwrap();
     let list = String::from_utf8(
         Command::new("make")
-            .args(["-C", "/usr/ports/textproc/expat2", "-V", "COMPLETE_OPTIONS_LIST"])
+            .args([
+                "-C",
+                "/usr/ports/textproc/expat2",
+                "-V",
+                "COMPLETE_OPTIONS_LIST",
+            ])
             .output()
             .unwrap()
             .stdout,
     )
     .unwrap();
     let opts: Vec<&str> = list.split_whitespace().collect();
-    assert!(opts.len() >= 2, "expat2 needs two options for this test: {list}");
+    assert!(
+        opts.len() >= 2,
+        "expat2 needs two options for this test: {list}"
+    );
     // Only the last option has a line.
     fs::write(
         optdir.join("textproc_expat2/options"),
@@ -517,7 +648,11 @@ fn sync_completes_a_file_missing_lines() {
             .unwrap()
     };
     let out = sync();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("textproc_expat2/options has no SET or UNSET line for"),
@@ -554,13 +689,24 @@ fn clean_removes_gone_ports_only() {
     fs::create_dir_all(optdir.join("astro_no-such-port-xyz")).unwrap();
     fs::write(optdir.join("astro_no-such-port-xyz/options"), "# x\n").unwrap();
 
-    let out = optique(tmp.path(), "clean").arg("-o").arg(&optdir).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = optique(tmp.path(), "clean")
+        .arg("-o")
+        .arg(&optdir)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("astro_no-such-port-xyz"), "{stdout}");
 
     assert!(!optdir.join("astro_no-such-port-xyz").exists());
-    assert!(optdir.join("ports-mgmt_pkg/options").exists(), "live entry must survive");
+    assert!(
+        optdir.join("ports-mgmt_pkg/options").exists(),
+        "live entry must survive"
+    );
 }
 
 #[test]
@@ -590,13 +736,23 @@ fn clean_unused_prunes_outside_closure() {
         .arg("ports-mgmt/pkg")
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("www_nginx"), "{stdout}");
     assert!(stdout.contains("not needed by the given list"), "{stdout}");
 
-    assert!(!optdir.join("www_nginx").exists(), "entry outside the closure must go");
-    assert!(optdir.join("ports-mgmt_pkg/options").exists(), "closure entry must survive");
+    assert!(
+        !optdir.join("www_nginx").exists(),
+        "entry outside the closure must go"
+    );
+    assert!(
+        optdir.join("ports-mgmt_pkg/options").exists(),
+        "closure entry must survive"
+    );
 }
 
 /// Drive the real TUI headlessly: the keymap, the App and the drawing code
@@ -637,7 +793,12 @@ quit
         .unwrap();
     // The scan runs before the driver reads a byte, so the whole script can
     // go in upfront; closing stdin also guarantees an exit.
-    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
@@ -651,7 +812,13 @@ quit
     let dumps: Vec<String> = stdout
         .split("screen ")
         .skip(1)
-        .map(|chunk| chunk.split("\nend\n").next().unwrap_or_default().to_string())
+        .map(|chunk| {
+            chunk
+                .split("\nend\n")
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        })
         .collect();
     assert_eq!(dumps.len(), 3, "expected 3 dumps:\n{stdout}");
 
@@ -668,7 +835,11 @@ quit
     assert!(dumps[0].contains("ports-mgmt/pkg"), "{}", dumps[0]);
     assert!(dumps[0].contains("Ports ("), "{}", dumps[0]);
     // '?' opens the help overlay on its first tab...
-    assert!(dumps[1].contains("1:Markers"), "help tab bar missing:\n{}", dumps[1]);
+    assert!(
+        dumps[1].contains("1:Markers"),
+        "help tab bar missing:\n{}",
+        dumps[1]
+    );
     // ...and '2' switches to the option-row legend.
     assert!(
         dumps[2].contains("on | off = 1st column: the port's default value"),
@@ -707,7 +878,10 @@ fn wrapper_metadata_matches_known_nginx_facts() {
         .unwrap_or_default();
     // Radio-group members and a well-known option must be present.
     for opt in ["GSSAPI_MIT", "HTTP_PERL", "IPV6"] {
-        assert!(nginx_state.contains(opt), "expected {opt} in: {nginx_state}");
+        assert!(
+            nginx_state.contains(opt),
+            "expected {opt} in: {nginx_state}"
+        );
     }
 }
 
@@ -723,7 +897,11 @@ fn local_make_conf_is_the_environments_and_read_in_place() {
     let conf_dir = tmp.path().join("conf");
     fs::create_dir_all(&conf_dir).unwrap();
     fs::write(conf_dir.join("make.conf"), ".include \"make.conf.local\"\n").unwrap();
-    fs::write(conf_dir.join("make.conf.local"), "ports-mgmt_pkg_SET+=DOCS\n").unwrap();
+    fs::write(
+        conf_dir.join("make.conf.local"),
+        "ports-mgmt_pkg_SET+=DOCS\n",
+    )
+    .unwrap();
 
     let out = optique(tmp.path(), "scan")
         .env("__MAKE_CONF", conf_dir.join("make.conf"))
@@ -749,7 +927,10 @@ fn local_make_conf_is_the_environments_and_read_in_place() {
         .find(|o| o["name"] == "DOCS")
         .unwrap_or_else(|| panic!("DOCS missing from {pkg}"))
         .clone();
-    assert_eq!(docs["makeconf"]["value"], true, "the included file's stance: {docs}");
+    assert_eq!(
+        docs["makeconf"]["value"], true,
+        "the included file's stance: {docs}"
+    );
     assert_ne!(docs["makeconf"]["scope"], "global", "{docs}");
 }
 
@@ -769,7 +950,12 @@ fn synth_without_a_profile_make_conf_reads_none() {
     let out = Command::new(env!("CARGO_BIN_EXE_optique"))
         .env("XDG_CACHE_HOME", tmp.path())
         .env("__MAKE_CONF", &trap)
-        .args(["scan", "--synth=optique-live-tests-no-such-profile", "-P", "/usr/ports"])
+        .args([
+            "scan",
+            "--synth=optique-live-tests-no-such-profile",
+            "-P",
+            "/usr/ports",
+        ])
         .args(["--json", "-o"])
         .arg(&optdir)
         .arg("ports-mgmt/pkg")
@@ -791,7 +977,11 @@ fn a_relative_options_dir_is_the_one_make_reads() {
     let file = tmp.path().join("opts/devel_gmake/options");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     // NLS is on by default: turning it off is a real choice.
-    fs::write(&file, "_FILE_COMPLETE_OPTIONS_LIST=NLS\nOPTIONS_FILE_UNSET+=NLS\n").unwrap();
+    fs::write(
+        &file,
+        "_FILE_COMPLETE_OPTIONS_LIST=NLS\nOPTIONS_FILE_UNSET+=NLS\n",
+    )
+    .unwrap();
 
     let out = optique(tmp.path(), "clean")
         .current_dir(tmp.path())
@@ -801,7 +991,10 @@ fn a_relative_options_dir_is_the_one_make_reads() {
     let err = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{err}");
-    assert!(!stdout.contains("redundant"), "a real choice taken for a redundant one:\n{stdout}{err}");
+    assert!(
+        !stdout.contains("redundant"),
+        "a real choice taken for a redundant one:\n{stdout}{err}"
+    );
     assert!(file.exists());
 }
 
@@ -826,10 +1019,12 @@ fn an_overlay_port_shadows_the_trees() {
     let makefile: String = makefile
         .lines()
         .filter(|l| !l.starts_with("PORTREVISION="))
-        .map(|l| if l.starts_with("PORTVERSION=") || l.starts_with("DISTVERSION=") {
-            format!("{l}\nPORTREVISION=\t99\n")
-        } else {
-            format!("{l}\n")
+        .map(|l| {
+            if l.starts_with("PORTVERSION=") || l.starts_with("DISTVERSION=") {
+                format!("{l}\nPORTREVISION=\t99\n")
+            } else {
+                format!("{l}\n")
+            }
         })
         .collect();
     fs::write(port.join("Makefile"), makefile).unwrap();
@@ -864,7 +1059,10 @@ fn an_overlay_port_shadows_the_trees() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&table.stdout);
-    let row = text.lines().find(|l| l.contains("sysutils/tmux")).unwrap_or_default();
+    let row = text
+        .lines()
+        .find(|l| l.contains("sysutils/tmux"))
+        .unwrap_or_default();
     assert!(row.ends_with(&format!("[overlay {overlay}]")), "{text}");
 }
 
@@ -887,13 +1085,29 @@ fn minimal_scan_counts_bare_defaults_as_done() {
     };
     let out = run(false);
     let text = String::from_utf8_lossy(&out.stdout);
-    let row = text.lines().find(|l| l.contains("ports-mgmt/pkg")).unwrap_or_default();
-    assert!(row.ends_with("ok (no file: defaults + make.conf)"), "{text}");
+    let row = text
+        .lines()
+        .find(|l| l.contains("ports-mgmt/pkg"))
+        .unwrap_or_default();
+    assert!(
+        row.ends_with("ok (no file: defaults + make.conf)"),
+        "{text}"
+    );
     assert!(!text.contains("UNCONFIGURED"), "{text}");
 
     let report = parse_json(&run(true));
-    let pkg = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "ports-mgmt/pkg").unwrap().clone();
-    assert_eq!((pkg["status"].as_str(), pkg["mc_covered"].as_bool()), (Some("unconfigured"), Some(true)), "{pkg}");
+    let pkg = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "ports-mgmt/pkg")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (pkg["status"].as_str(), pkg["mc_covered"].as_bool()),
+        (Some("unconfigured"), Some(true)),
+        "{pkg}"
+    );
 }
 
 /// Under -m the rows shown as ok (no file, defaults decide) sort with the
@@ -920,6 +1134,9 @@ fn minimal_scan_lists_problems_first() {
     assert_eq!(scan_exit_code(&out), 1, "a conflict is pending");
     let text = String::from_utf8_lossy(&out.stdout);
     let first = text.lines().next().unwrap_or_default();
-    assert!(first.contains("textproc/rxp") && first.contains("CONFLICT"), "{text}");
+    assert!(
+        first.contains("textproc/rxp") && first.contains("CONFLICT"),
+        "{text}"
+    );
     assert!(text.contains("ok (no file"), "{text}");
 }

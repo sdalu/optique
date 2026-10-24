@@ -1,14 +1,13 @@
 //! `optique decide`: a JSON plan applied, and written.
 
-
 use anyhow::{Context as _, Result};
 
 use crate::cli::Cli;
 use crate::color::{ansi, stderr_color, tint};
 use crate::{apply, cli, decide, report, roots, session};
 
-use super::write::{commit_writes, print_write_summary, WritePass};
-use super::{listed_roots, run_scan, RootSet};
+use super::write::{WritePass, commit_writes, print_write_summary};
+use super::{RootSet, listed_roots, run_scan};
 
 /// Apply a JSON plan of option values read on stdin. Answers with one JSON
 /// object on stdout and exits 1 when the plan was not honoured in full, so a
@@ -86,8 +85,10 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
             }
             let violations = sess.violations(info);
             if !violations.is_empty() {
-                pass.conflicts
-                    .push(report::ConflictEntry { port: key.to_string(), violations });
+                pass.conflicts.push(report::ConflictEntry {
+                    port: key.to_string(),
+                    violations,
+                });
             }
         }
     }
@@ -102,7 +103,12 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
     for e in &report.errors {
-        eprintln!("{} {}: {}", tint(paint, ansi::RED, "error:"), e.subject, e.message);
+        eprintln!(
+            "{} {}: {}",
+            tint(paint, ansi::RED, "error:"),
+            e.subject,
+            e.message
+        );
     }
     if pass.blocked() {
         let what = if outcome.complete() {

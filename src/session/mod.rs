@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::apply;
-use crate::model::options::{str_match, GroupKind, McLayer, PortOptions};
+use crate::model::options::{GroupKind, McLayer, PortOptions, str_match};
 use crate::model::origin::PortKey;
 use crate::model::port::PortInfo;
 use crate::optfiles::OptionsFiles;
@@ -83,7 +83,8 @@ pub(crate) fn is_preferred(info: &PortInfo) -> bool {
 /// holds @nox's).
 pub(crate) fn outranks(candidate: &PortInfo, owner: &PortInfo) -> bool {
     !is_preferred(owner)
-        && (is_preferred(candidate) || candidate.options.complete.len() > owner.options.complete.len())
+        && (is_preferred(candidate)
+            || candidate.options.complete.len() > owner.options.complete.len())
 }
 
 /// Why optique leaves an options file alone: it neither writes nor removes
@@ -118,7 +119,11 @@ pub(crate) fn moved(info: &PortInfo) -> Option<Unmanaged> {
 /// (`moved`).
 pub(crate) fn unmanaged_file(combined: &SavedOptionsFile) -> Option<Unmanaged> {
     combined.unmanaged().map(|(file, why)| Unmanaged {
-        by: if file == "options.local" { "options.local" } else { "options file" },
+        by: if file == "options.local" {
+            "options.local"
+        } else {
+            "options file"
+        },
         why,
     })
 }
@@ -171,7 +176,10 @@ impl Session {
             if !info.options.has_options() || moved(info).is_some() {
                 continue;
             }
-            match owners.get(&info.options_name).and_then(|k| self.ports.get(k)) {
+            match owners
+                .get(&info.options_name)
+                .and_then(|k| self.ports.get(k))
+            {
                 Some(existing) if !outranks(info, existing) => {}
                 _ => {
                     owners.insert(info.options_name.clone(), key.clone());
@@ -197,7 +205,11 @@ impl Session {
     /// All closure ports that are flavors of the same origin, sorted;
     /// includes `key` itself.
     pub fn siblings(&self, key: &PortKey) -> Vec<PortKey> {
-        self.ports.keys().filter(|k| k.origin == key.origin).cloned().collect()
+        self.ports
+            .keys()
+            .filter(|k| k.origin == key.origin)
+            .cloned()
+            .collect()
     }
 
     /// Resolve a (possibly non-canonical) key to the canonical ports-map key.
@@ -213,7 +225,9 @@ impl Session {
     }
 
     fn ensure_state(&mut self, key: &PortKey, files: &OptionsFiles) {
-        let Some(info) = self.ports.get(key) else { return };
+        let Some(info) = self.ports.get(key) else {
+            return;
+        };
         if !info.options.has_options() {
             return;
         }
@@ -223,7 +237,11 @@ impl Session {
             let effective = info.options.effective.clone();
             self.moved_states.insert(
                 info.canonical.clone(),
-                OptState { saved: None, staged: effective.clone(), baseline: effective },
+                OptState {
+                    saved: None,
+                    staged: effective.clone(),
+                    baseline: effective,
+                },
             );
             return;
         }
@@ -242,7 +260,11 @@ impl Session {
             self.locals.insert(info.options_name.clone(), combined);
             self.states.insert(
                 info.options_name.clone(),
-                OptState { saved, staged: baseline.clone(), baseline },
+                OptState {
+                    saved,
+                    staged: baseline.clone(),
+                    baseline,
+                },
             );
         }
     }
@@ -279,13 +301,19 @@ impl Session {
                 continue;
             }
             if let Some(info) = self.ports.get(&key)
-                && !self.blacklist.matches(&info.canonical, info.is_default_flavor())
+                && !self
+                    .blacklist
+                    .matches(&info.canonical, info.is_default_flavor())
             {
                 stack.extend(self.resolved_deps(info));
             }
         }
-        let removed: Vec<PortKey> =
-            self.ports.keys().filter(|k| !reachable.contains(*k)).cloned().collect();
+        let removed: Vec<PortKey> = self
+            .ports
+            .keys()
+            .filter(|k| !reachable.contains(*k))
+            .cloned()
+            .collect();
         self.ports.retain(|k, _| reachable.contains(k));
         self.moved_states.retain(|k, _| reachable.contains(k));
         // The GC may have dropped an owner whose sibling flavor stays.
@@ -302,10 +330,16 @@ impl Session {
     /// the real one. Such a state takes no edit, so nothing staged is lost.
     fn refresh_unmanaged(&mut self) {
         for (name, state) in self.states.iter_mut() {
-            if !self.locals.get(name).is_some_and(|l| unmanaged_file(l).is_some()) {
+            if !self
+                .locals
+                .get(name)
+                .is_some_and(|l| unmanaged_file(l).is_some())
+            {
                 continue;
             }
-            let Some(owner) = self.owners.get(name).and_then(|k| self.ports.get(k)) else { continue };
+            let Some(owner) = self.owners.get(name).and_then(|k| self.ports.get(k)) else {
+                continue;
+            };
             state.baseline = owner.options.effective.clone();
             state.staged = state.baseline.clone();
         }
@@ -337,7 +371,11 @@ impl Session {
     /// other state keeps the baseline the scan gave it, since recomputing it
     /// would read the port's `effective`, which a TUI refresh may have
     /// queried with an edit staged since undone.
-    pub fn reload_saved<'a>(&mut self, files: &OptionsFiles, touched: impl IntoIterator<Item = &'a str>) {
+    pub fn reload_saved<'a>(
+        &mut self,
+        files: &OptionsFiles,
+        touched: impl IntoIterator<Item = &'a str>,
+    ) {
         for name in touched {
             let owner = self.owners.get(name).and_then(|k| self.ports.get(k));
             let (Some(state), Some(owner)) = (self.states.get_mut(name), owner) else {
@@ -371,7 +409,9 @@ impl Session {
     /// (`SavedOptionsFile::local_decides`): every SET entry goes in before
     /// any UNSET one, so an edit to the file cannot turn it back on.
     pub fn local_decides(&self, info: &PortInfo, opt: &str) -> bool {
-        self.locals.get(&info.options_name).is_some_and(|l| l.local_decides(opt))
+        self.locals
+            .get(&info.options_name)
+            .is_some_and(|l| l.local_decides(opt))
     }
 
     /// Why the port's options file is one optique cannot manage: make.conf
@@ -394,7 +434,9 @@ impl Session {
             .filter(|m| match m.to.flavor.as_deref() {
                 Some(FLAVOR_ALL) => m.to.origin == info.canonical.origin,
                 Some(FLAVOR_DEFAULT) => {
-                    self.resolve(&PortKey::new(m.to.origin.clone(), None)).as_ref() == Some(&info.canonical)
+                    self.resolve(&PortKey::new(m.to.origin.clone(), None))
+                        .as_ref()
+                        == Some(&info.canonical)
                 }
                 _ => self.resolve(&m.to).as_ref() == Some(&info.canonical),
             })
@@ -408,7 +450,11 @@ impl Session {
         if self.unmanaged(info).is_some() {
             return Vec::new();
         }
-        undecided_options(info, self.state(info).and_then(|s| s.saved.as_ref()), self.minimal)
+        undecided_options(
+            info,
+            self.state(info).and_then(|s| s.saved.as_ref()),
+            self.minimal,
+        )
     }
 
     /// Why no edit of the port's options file is taken, whatever the
@@ -432,7 +478,10 @@ impl Session {
         if let Some(why) = self.edit_refusal(key) {
             return Err(why);
         }
-        let info = self.ports.get(key).ok_or_else(|| "unknown port".to_string())?;
+        let info = self
+            .ports
+            .get(key)
+            .ok_or_else(|| "unknown port".to_string())?;
         // Checked before `states` is borrowed mutably.
         let by_local = self.local_decides(info, opt);
         let state = self
@@ -467,7 +516,10 @@ impl Session {
             after.remove(opt);
             let outcome = staged_effective(info, &after);
             let (unchecked, _) = unchecked_groups(opts, outcome.clone());
-            if let Some(g) = opts.group_of(opt).filter(|g| !unchecked.contains(g.name.as_str())) {
+            if let Some(g) = opts
+                .group_of(opt)
+                .filter(|g| !unchecked.contains(g.name.as_str()))
+            {
                 let on = g.count_on(&outcome);
                 match g.kind {
                     GroupKind::Single if on == 0 => {
@@ -477,7 +529,10 @@ impl Session {
                         ));
                     }
                     GroupKind::Multi if on == 0 => {
-                        return Err(format!("{}: multi group needs at least one option enabled", g.name));
+                        return Err(format!(
+                            "{}: multi group needs at least one option enabled",
+                            g.name
+                        ));
                     }
                     _ => {}
                 }
@@ -487,7 +542,11 @@ impl Session {
             // Turning on: single/radio groups deselect siblings.
             if let Some(g) = opts.exclusive_group_of(opt) {
                 // A forced-on sibling stays on whatever the file says.
-                if let Some(m) = g.members.iter().find(|m| *m != opt && opts.forced_value(m) == Some(true)) {
+                if let Some(m) = g
+                    .members
+                    .iter()
+                    .find(|m| *m != opt && opts.forced_value(m) == Some(true))
+                {
                     return Err(format!(
                         "{}: {m} is forced on by make.conf (*_FORCE) and the group allows one option; fix it there",
                         g.name
@@ -521,7 +580,9 @@ impl Session {
         // other flavors of an origin never report a second change.
         let mut visited: BTreeSet<String> = BTreeSet::new();
         for key in keys {
-            let Some(info) = self.ports.get(key) else { continue };
+            let Some(info) = self.ports.get(key) else {
+                continue;
+            };
             if !info.options.complete.iter().any(|o| o == opt) {
                 continue;
             }
@@ -530,7 +591,9 @@ impl Session {
             if moved(info).is_none() && !visited.insert(info.options_name.clone()) {
                 continue;
             }
-            let Some(state) = self.state(info) else { continue };
+            let Some(state) = self.state(info) else {
+                continue;
+            };
             if state.staged.contains(opt) == on {
                 continue; // already the wanted value; not an error
             }
@@ -548,11 +611,17 @@ impl Session {
         if self.edit_refusal(key).is_some() {
             return;
         }
-        let Some(info) = self.ports.get(key) else { return };
+        let Some(info) = self.ports.get(key) else {
+            return;
+        };
         // The shared state follows the file OWNER's view, like the
         // baseline: a flavor lacking some of its options must not drop them.
         // (owner_info would borrow all of self, states included.)
-        let owner = self.owners.get(&info.options_name).and_then(|k| self.ports.get(k)).unwrap_or(info);
+        let owner = self
+            .owners
+            .get(&info.options_name)
+            .and_then(|k| self.ports.get(k))
+            .unwrap_or(info);
         if let Some(state) = self.states.get_mut(&owner.options_name) {
             state.staged = close_implies(owner, port_defaults(&owner.options));
         }
@@ -576,17 +645,27 @@ impl Session {
     /// The rules the staged set breaks, in `violations` order, each with
     /// the options it is about and what make.conf did to it.
     pub fn conflicts(&self, info: &PortInfo) -> Vec<Conflict> {
-        let Some(state) = self.state(info) else { return Vec::new() };
+        let Some(state) = self.state(info) else {
+            return Vec::new();
+        };
         let staged = &state.staged;
         let saved = state.saved.as_ref();
         // Where optique cannot read the files, it cannot say what make.conf
         // had to do with a rule broken.
         let unmanaged = self.unmanaged(info).is_some();
         let on_cause = |staged: &BTreeSet<String>, members: &[String]| {
-            if unmanaged { None } else { on_cause(info, saved, staged, members) }
+            if unmanaged {
+                None
+            } else {
+                on_cause(info, saved, staged, members)
+            }
         };
         let pick_cause = |staged: &BTreeSet<String>, members: &[String]| {
-            if unmanaged { None } else { pick_cause(info, saved, staged, members) }
+            if unmanaged {
+                None
+            } else {
+                pick_cause(info, saved, staged, members)
+            }
         };
         let o = &info.options;
         // Judged on what make computes from the staged set as the options
@@ -601,7 +680,8 @@ impl Session {
         for opt in staged {
             if let Some(def) = o.defs.get(opt) {
                 for p in &def.prevents {
-                    let hit: Vec<String> = staged.iter().filter(|s| str_match(s, p)).cloned().collect();
+                    let hit: Vec<String> =
+                        staged.iter().filter(|s| str_match(s, p)).cloned().collect();
                     if !hit.is_empty() {
                         let msg = def
                             .prevents_msg
@@ -618,17 +698,31 @@ impl Session {
                 }
             }
         }
-        for g in o.groups.iter().filter(|g| !unchecked.contains(g.name.as_str())) {
+        for g in o
+            .groups
+            .iter()
+            .filter(|g| !unchecked.contains(g.name.as_str()))
+        {
             let on = g.count_on(staged);
-            let members: Vec<String> =
-                g.members.iter().filter(|m| o.complete.contains(*m)).cloned().collect();
+            let members: Vec<String> = g
+                .members
+                .iter()
+                .filter(|m| o.complete.contains(*m))
+                .cloned()
+                .collect();
             let (text, cause) = match g.kind {
                 GroupKind::Single if on == 0 => (
-                    format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
+                    format!(
+                        "group {} needs exactly one member enabled ({on} enabled)",
+                        g.name
+                    ),
                     pick_cause(staged, &members),
                 ),
                 GroupKind::Single if on > 1 => (
-                    format!("group {} needs exactly one member enabled ({on} enabled)", g.name),
+                    format!(
+                        "group {} needs exactly one member enabled ({on} enabled)",
+                        g.name
+                    ),
                     on_cause(staged, &members),
                 ),
                 GroupKind::Multi if on == 0 => (
@@ -636,12 +730,19 @@ impl Session {
                     pick_cause(staged, &members),
                 ),
                 GroupKind::Radio if on > 1 => (
-                    format!("group {} allows at most one member enabled ({on} enabled)", g.name),
+                    format!(
+                        "group {} allows at most one member enabled ({on} enabled)",
+                        g.name
+                    ),
                     on_cause(staged, &members),
                 ),
                 _ => continue,
             };
-            out.push(Conflict { text, members, cause });
+            out.push(Conflict {
+                text,
+                members,
+                cause,
+            });
         }
         // Deduplicate the symmetric PREVENTS pairs.
         out.sort_by(|a, b| a.text.cmp(&b.text));
@@ -693,14 +794,23 @@ impl Session {
         // a non-default flavor cannot tell that from what it merely lacks,
         // and a write keeps those lines (apply::planned_file), so none.
         let mentioned: BTreeSet<&str> = if is_preferred(owner) {
-            saved.complete.iter().chain(saved.recorded()).map(String::as_str).collect()
+            saved
+                .complete
+                .iter()
+                .chain(saved.recorded())
+                .map(String::as_str)
+                .collect()
         } else {
             BTreeSet::new()
         };
         Some((
             cur.iter().filter(|o| !saved.decides(o)).cloned().collect(),
             // An entry that is a pattern is obsolete once it matches none.
-            mentioned.into_iter().filter(|o| !cur.iter().any(|c| str_match(c, o))).map(String::from).collect(),
+            mentioned
+                .into_iter()
+                .filter(|o| !cur.iter().any(|c| str_match(c, o)))
+                .map(String::from)
+                .collect(),
         ))
     }
 
@@ -722,7 +832,9 @@ impl Session {
     /// So is every option of a file optique cannot manage: what the
     /// make.conf layers hold may be the file's own assignments.
     pub fn mc_deviates(&self, info: &PortInfo, opt: &str) -> bool {
-        let Some(state) = self.state(info) else { return false };
+        let Some(state) = self.state(info) else {
+            return false;
+        };
         let o = &info.options;
         if o.is_forced(opt) || self.unmanaged(info).is_some() {
             return false;
@@ -762,7 +874,9 @@ impl Session {
         let mut pred: HashMap<PortKey, Option<PortKey>> = HashMap::new();
         let mut queue: VecDeque<PortKey> = VecDeque::new();
         for root in &self.roots {
-            let Some(root) = self.resolve(root) else { continue };
+            let Some(root) = self.resolve(root) else {
+                continue;
+            };
             if pred.contains_key(&root) {
                 continue;
             }
@@ -773,7 +887,9 @@ impl Session {
             queue.push_back(root);
         }
         while let Some(key) = queue.pop_front() {
-            let Some(info) = self.ports.get(&key) else { continue };
+            let Some(info) = self.ports.get(&key) else {
+                continue;
+            };
             for dep in self.resolved_deps(info) {
                 // Never rewrite a settled predecessor: a dependency cycle
                 // would otherwise make the chain walk loop forever.
@@ -793,7 +909,9 @@ impl Session {
     /// Direct dependents of `target` within the closure: ports with a dep edge
     /// resolving to it, in key order.
     pub fn dependents(&self, target: &PortKey) -> Vec<PortKey> {
-        let Some(target) = self.resolve(target) else { return Vec::new() };
+        let Some(target) = self.resolve(target) else {
+            return Vec::new();
+        };
         self.ports
             .iter()
             .filter(|(_, info)| self.resolved_deps(info).any(|d| d == target))
@@ -811,8 +929,10 @@ impl Session {
             // Judge against the file OWNER's option list, like the baseline:
             // that is the view apply writes the file from.
             let filtered = {
-                let Some(owner) =
-                    self.owners.get(options_name).and_then(|key| self.ports.get(key))
+                let Some(owner) = self
+                    .owners
+                    .get(options_name)
+                    .and_then(|key| self.ports.get(key))
                 else {
                     continue; // the draft names a port no longer in the closure
                 };
@@ -826,7 +946,9 @@ impl Session {
                     .cloned()
                     .collect::<BTreeSet<String>>()
             };
-            let Some(state) = self.states.get_mut(options_name) else { continue };
+            let Some(state) = self.states.get_mut(options_name) else {
+                continue;
+            };
             if state.staged != filtered {
                 state.staged = filtered;
                 changed += 1;
@@ -859,7 +981,11 @@ fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<Stri
     let file = SavedOptionsFile {
         complete: complete.clone(),
         set: staged.clone(),
-        unset: complete.iter().filter(|o| !staged.contains(*o)).cloned().collect(),
+        unset: complete
+            .iter()
+            .filter(|o| !staged.contains(*o))
+            .cloned()
+            .collect(),
         ..Default::default()
     };
     effective_with(info, Some(&file))
@@ -874,7 +1000,10 @@ fn staged_effective(info: &PortInfo, staged: &BTreeSet<String>) -> BTreeSet<Stri
 /// group is not checked. The SINGLE groups go first, then the MULTI ones,
 /// each judged on the set the ones before left. RADIO and GROUP are never
 /// conditional, and PREVENTS is judged after all of them.
-fn unchecked_groups(o: &PortOptions, mut set: BTreeSet<String>) -> (BTreeSet<&str>, BTreeSet<String>) {
+fn unchecked_groups(
+    o: &PortOptions,
+    mut set: BTreeSet<String>,
+) -> (BTreeSet<&str>, BTreeSet<String>) {
     let mut unchecked = BTreeSet::new();
     for kind in [GroupKind::Single, GroupKind::Multi] {
         for g in o.groups.iter().filter(|g| g.kind == kind) {
@@ -939,7 +1068,10 @@ fn on_cause(
         .map(|(knob, opts)| format!("{} on by make.conf {knob}", opts.join(", ")))
         .collect();
     if !forced.is_empty() {
-        parts.push(format!("{} forced on by make.conf; fix it there", forced.join(", ")));
+        parts.push(format!(
+            "{} forced on by make.conf; fix it there",
+            forced.join(", ")
+        ));
     }
     (!parts.is_empty()).then(|| parts.join("; "))
 }
@@ -985,14 +1117,23 @@ pub fn staged_diff(before: &BTreeSet<String>, after: &BTreeSet<String>) -> Strin
 pub fn signed_options(complete: &[String], on: &BTreeSet<String>) -> String {
     complete
         .iter()
-        .map(|o| if on.contains(o) { format!("+{o}") } else { format!("-{o}") })
+        .map(|o| {
+            if on.contains(o) {
+                format!("+{o}")
+            } else {
+                format!("-{o}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
 
 /// The saved file of the port owning an options file, and the baseline it
 /// gives: the file read as make reads it, IMPLIES-closed.
-fn saved_baseline(owner: &PortInfo, files: &OptionsFiles) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
+fn saved_baseline(
+    owner: &PortInfo,
+    files: &OptionsFiles,
+) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
     let saved = files.saved(&owner.options_name);
     // bsd.options.mk:300-304: with an OPTIONS_OVERRIDE, the file (even one
     // left on disk saying otherwise) is never read; the baseline is make's
@@ -1008,7 +1149,11 @@ fn saved_baseline(owner: &PortInfo, files: &OptionsFiles) -> (Option<SavedOption
 
 /// OPTIONS_DEFAULT restricted to the options the port has.
 fn port_defaults(o: &PortOptions) -> BTreeSet<String> {
-    o.defaults.iter().filter(|d| o.complete.contains(d)).cloned().collect()
+    o.defaults
+        .iter()
+        .filter(|d| o.complete.contains(d))
+        .cloned()
+        .collect()
 }
 
 /// Does the port refuse to build as queried (port-level BROKEN or IGNORE)?
@@ -1047,8 +1192,12 @@ pub fn undecided_options(
     let o = &info.options;
     // IMPLIES runs after FORCE (bsd.options.mk:411): what a forced-on option
     // implies is on whatever the file says.
-    let forced_on: BTreeSet<String> =
-        o.complete.iter().filter(|opt| o.forced_value(opt) == Some(true)).cloned().collect();
+    let forced_on: BTreeSet<String> = o
+        .complete
+        .iter()
+        .filter(|opt| o.forced_value(opt) == Some(true))
+        .cloned()
+        .collect();
     let forced_implied = close_implies(info, forced_on);
     let mc_decided = |opt: &str| o.mc_decides(opt) || forced_implied.contains(opt);
     // Selected means make.conf ENDS UP enabling it, not merely that some layer
@@ -1160,7 +1309,9 @@ fn make_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> 
         if !complete.contains(opt.as_str()) {
             continue;
         }
-        let Some(def) = info.options.defs.get(&opt) else { continue };
+        let Some(def) = info.options.defs.get(&opt) else {
+            continue;
+        };
         for imp in &def.implies {
             if !set.iter().any(|s| str_match(s, imp)) {
                 set.insert(imp.clone());
@@ -1174,7 +1325,12 @@ fn make_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTreeSet<String> 
 /// One SET/UNSET layer applied to `set`: a SET entry goes in word for word
 /// when it matches an option of the port (`COMPLETE_OPTIONS_LIST:M${opt}`);
 /// an UNSET entry takes out every option it matches (`PORT_OPTIONS:N${opt}`).
-fn apply_layer(complete: &[String], set: &mut BTreeSet<String>, adds: bool, list: &BTreeSet<String>) {
+fn apply_layer(
+    complete: &[String],
+    set: &mut BTreeSet<String>,
+    adds: bool,
+    list: &BTreeSet<String>,
+) {
     for entry in list.iter() {
         if adds {
             if complete.iter().any(|c| str_match(c, entry)) {
@@ -1193,7 +1349,9 @@ pub(crate) fn close_implies(info: &PortInfo, mut set: BTreeSet<String>) -> BTree
     // Each option is expanded once: when it enters the set.
     let mut todo: Vec<String> = set.iter().cloned().collect();
     while let Some(opt) = todo.pop() {
-        let Some(def) = info.options.defs.get(&opt) else { continue };
+        let Some(def) = info.options.defs.get(&opt) else {
+            continue;
+        };
         for imp in &def.implies {
             if complete.contains(imp.as_str()) && set.insert(imp.clone()) {
                 todo.push(imp.clone());

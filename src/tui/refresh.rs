@@ -4,8 +4,6 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
-
-
 use crate::model::origin::PortKey;
 use crate::optionsfile;
 use crate::query::refresher::RefreshEvent;
@@ -19,7 +17,11 @@ pub(super) const REFRESH_DEBOUNCE: Duration = Duration::from_millis(300);
 /// at most three of them, else how many came in and went.
 pub(super) fn refreshed_message(added: &[PortKey], removed: &[PortKey]) -> String {
     if added.len() + removed.len() > 3 {
-        return format!("dependencies refreshed: +{} −{} port(s)", added.len(), removed.len());
+        return format!(
+            "dependencies refreshed: +{} −{} port(s)",
+            added.len(),
+            removed.len()
+        );
     }
     let names: Vec<String> = added
         .iter()
@@ -71,8 +73,12 @@ impl App {
         let mut batch = Vec::new();
         for key in due {
             self.pending.remove(&key);
-            let Some(info) = self.session.ports.get(&key) else { continue };
-            let Some(state) = self.session.state(info) else { continue };
+            let Some(info) = self.session.ports.get(&key) else {
+                continue;
+            };
+            let Some(state) = self.session.state(info) else {
+                continue;
+            };
             // A flavor make.conf moves OPTIONS_FILE for reads a file of its
             // own, not the staged one: its state is no content for the
             // shared file the other flavors are queried with.
@@ -86,10 +92,13 @@ impl App {
             // for byte as the scan's cache knows it; an edited one, the
             // edit.
             let written = if self.to_seed.contains(&options_name) && staged == state.baseline {
-                self.staging_db.seed(&self.options_files, &options_name).map(|_| ())
+                self.staging_db
+                    .seed(&self.options_files, &options_name)
+                    .map(|_| ())
             } else {
                 let local = if self.to_seed.remove(&options_name) {
-                    self.staging_db.seed_local(&self.options_files, &options_name)
+                    self.staging_db
+                        .seed_local(&self.options_files, &options_name)
                 } else {
                     Ok(())
                 };
@@ -201,8 +210,7 @@ impl App {
                     let first_error = result.errors.first().cloned();
                     // Blame before the merge: it needs the pre-merge flags.
                     let blamed = self.attribute_blame(&result.ports);
-                    let (added, removed) =
-                        self.session.merge(*result, &self.options_files);
+                    let (added, removed) = self.session.merge(*result, &self.options_files);
                     let (a, r) = merged.get_or_insert((Vec::new(), Vec::new()));
                     a.extend(added);
                     r.extend(removed);
@@ -228,7 +236,9 @@ impl App {
             // A newcomer was queried without its real options file, which
             // staging never had: it is copied in and the port queried again.
             for key in &added {
-                let Some(info) = self.session.ports.get(key) else { continue };
+                let Some(info) = self.session.ports.get(key) else {
+                    continue;
+                };
                 // One reading a file of its own was queried with it.
                 if crate::session::moved(info).is_some() {
                     continue;
@@ -242,8 +252,12 @@ impl App {
                 }
             }
             // The list's title counts the optionless ports the merge left.
-            self.hidden =
-                self.session.ports.values().filter(|p| !p.options.has_options()).count();
+            self.hidden = self
+                .session
+                .ports
+                .values()
+                .filter(|p| !p.options.has_options())
+                .count();
             if !(added.is_empty() && removed.is_empty()) && !alerted {
                 self.notify(&refreshed_message(&added, &removed), false);
             }

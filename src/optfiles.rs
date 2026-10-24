@@ -81,7 +81,9 @@ impl OptionsFiles {
     }
 
     fn read(&self, options_name: &str) -> Read {
-        read_once(&self.memo, &self.disk_reads, options_name, || self.path(options_name))
+        read_once(&self.memo, &self.disk_reads, options_name, || {
+            self.path(options_name)
+        })
     }
 
     fn read_local(&self, options_name: &str) -> Read {
@@ -192,7 +194,8 @@ fn read_once(
         Err(e) if e.kind() == ErrorKind::NotFound => Read::Absent,
         Err(_) => Read::Unreadable,
     };
-    memo.borrow_mut().insert(options_name.to_string(), read.clone());
+    memo.borrow_mut()
+        .insert(options_name.to_string(), read.clone());
     read
 }
 
@@ -231,7 +234,11 @@ mod tests {
         let hash = files.hash("cat_port");
         let saved = files.saved("cat_port").unwrap();
         assert_eq!(files.bytes("cat_port").unwrap(), bytes);
-        assert_eq!(files.disk_reads(), 1, "bytes, hash and saved share one read");
+        assert_eq!(
+            files.disk_reads(),
+            1,
+            "bytes, hash and saved share one read"
+        );
         assert_eq!(&*bytes, b"OPTIONS_FILE_SET+=A\n");
         assert_eq!(hash, crate::cache::sha256_hex(b"OPTIONS_FILE_SET+=A\n"));
         assert!(saved.set.contains("A"));
@@ -268,7 +275,11 @@ mod tests {
         put(tmp.path(), "cat_b", b"b2\n");
         files.forget(["cat_a", "cat_unknown"]);
         assert_eq!(files.bytes("cat_a").as_deref(), Some(&b"a2\n"[..]));
-        assert_eq!(files.bytes("cat_b").as_deref(), Some(&b"b1\n"[..]), "still as first read");
+        assert_eq!(
+            files.bytes("cat_b").as_deref(),
+            Some(&b"b1\n"[..]),
+            "still as first read"
+        );
         assert_eq!(files.disk_reads(), 3);
     }
 
@@ -279,7 +290,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         put(tmp.path(), "cat_port", b"");
         let h = OptionsFiles::new(tmp.path()).hash("cat_port");
-        assert_eq!(h, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     /// A stray byte that is not UTF-8 does not void the saved choices: make
@@ -287,7 +301,11 @@ mod tests {
     #[test]
     fn a_non_utf8_file_keeps_its_bytes_and_its_choices() {
         let tmp = tempfile::tempdir().unwrap();
-        put(tmp.path(), "cat_port", b"# by hand \xff\xfe\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
+        put(
+            tmp.path(),
+            "cat_port",
+            b"# by hand \xff\xfe\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n",
+        );
         let files = OptionsFiles::new(tmp.path());
         let saved = files.saved("cat_port").expect("the choices survive");
         assert!(saved.set.contains("A") && saved.unset.contains("B"));
@@ -304,7 +322,11 @@ mod tests {
         fs::create_dir_all(tmp.path().join("cat_dir/options")).unwrap();
         let files = OptionsFiles::new(tmp.path());
         assert!(files.bytes("cat_dir").is_none() && files.saved("cat_dir").is_none());
-        assert_eq!(files.hash("cat_dir"), UNREADABLE, "a directory in its place");
+        assert_eq!(
+            files.hash("cat_dir"),
+            UNREADABLE,
+            "a directory in its place"
+        );
         assert_eq!(files.hash("cat_none"), ABSENT, "really missing");
 
         use std::os::unix::fs::PermissionsExt;
@@ -325,16 +347,29 @@ mod tests {
     #[test]
     fn saved_reads_options_local_after_the_file() {
         let tmp = tempfile::tempdir().unwrap();
-        put(tmp.path(), "cat_port", b"OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n");
-        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n")
-            .unwrap();
+        put(
+            tmp.path(),
+            "cat_port",
+            b"OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n",
+        );
+        fs::write(
+            tmp.path().join("cat_port/options.local"),
+            "OPTIONS_FILE_UNSET+=A\nOPTIONS_FILE_SET+=B\n",
+        )
+        .unwrap();
         let files = OptionsFiles::new(tmp.path());
         let saved = files.saved("cat_port").unwrap();
         let v: Vec<_> = ["A", "B", "C"].iter().map(|o| saved.value(o)).collect();
         assert_eq!(v, [Some(false), Some(false), Some(false)]);
         assert_eq!(files.own("cat_port").unwrap().value("A"), Some(true));
         let both = files.combined("cat_port");
-        assert_eq!(both.local_set.into_iter().chain(both.local_unset).collect::<Vec<_>>(), ["B", "A"]);
+        assert_eq!(
+            both.local_set
+                .into_iter()
+                .chain(both.local_unset)
+                .collect::<Vec<_>>(),
+            ["B", "A"]
+        );
         assert_eq!(files.combined("cat_none"), SavedOptionsFile::default());
     }
 
@@ -345,12 +380,17 @@ mod tests {
     fn saved_reads_options_local_without_an_options_file() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
-        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A
+        fs::write(
+            tmp.path().join("cat_port/options.local"),
+            "OPTIONS_FILE_SET+=A
 OPTIONS_FILE_UNSET+=B
-")
-            .unwrap();
+",
+        )
+        .unwrap();
         let files = OptionsFiles::new(tmp.path());
-        let saved = files.saved("cat_port").expect("options.local alone is read");
+        let saved = files
+            .saved("cat_port")
+            .expect("options.local alone is read");
         let v: Vec<_> = ["A", "B", "C"].iter().map(|o| saved.value(o)).collect();
         assert_eq!(v, [Some(true), Some(false), None]);
         assert!(saved.complete.is_empty());
@@ -363,7 +403,10 @@ OPTIONS_FILE_UNSET+=B
     fn path_is_the_ports_framework_layout() {
         let files = OptionsFiles::new(Path::new("/opt/db"));
         assert_eq!(files.dir(), Path::new("/opt/db"));
-        assert_eq!(files.path("www_nginx"), Path::new("/opt/db/www_nginx/options"));
+        assert_eq!(
+            files.path("www_nginx"),
+            Path::new("/opt/db/www_nginx/options")
+        );
     }
 
     /// After optique writes or removes an entry, `forget` makes the next
@@ -372,12 +415,19 @@ OPTIONS_FILE_UNSET+=B
     fn forget_clears_the_options_local_reading_too() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
-        fs::write(tmp.path().join("cat_port/options.local"), "OPTIONS_FILE_SET+=A\n").unwrap();
+        fs::write(
+            tmp.path().join("cat_port/options.local"),
+            "OPTIONS_FILE_SET+=A\n",
+        )
+        .unwrap();
         let files = OptionsFiles::new(tmp.path());
         assert!(files.local_bytes("cat_port").is_some());
         fs::remove_file(tmp.path().join("cat_port/options.local")).unwrap();
         files.forget(["cat_port"]);
-        assert!(files.local_bytes("cat_port").is_none(), "read again after forget");
+        assert!(
+            files.local_bytes("cat_port").is_none(),
+            "read again after forget"
+        );
         assert_eq!(files.local_reads(), 2);
     }
 }

@@ -15,7 +15,7 @@ mod common;
 
 use std::fs;
 
-use common::{option, stderr, stdout, Fixture};
+use common::{Fixture, option, stderr, stdout};
 
 /// A SINGLE group named after an option is checked only while that option
 /// is on: misc/cond with AUDIO off is no conflict, and under -m a file that
@@ -31,7 +31,10 @@ fn a_conditional_group_whose_option_is_off_is_no_conflict() {
     f.run("sync", &["misc/cond"]);
     assert!(f.file("misc_cond").exists(), "sync writes the defaults");
     f.run("sync", &["-m", "misc/cond"]);
-    assert!(!f.file("misc_cond").exists(), "-m removes a file repeating the defaults");
+    assert!(
+        !f.file("misc_cond").exists(),
+        "-m removes a file repeating the defaults"
+    );
 }
 
 /// An OPTIONS_SLAVE option is on with or without a file: misc/slavey@icu
@@ -48,9 +51,15 @@ fn an_options_slave_flavor_needs_no_file_under_minimal() {
     f.run("sync", &["misc/slavey"]);
     assert!(f.file("misc_slavey").exists());
     f.run("sync", &["-m", "misc/slavey@icu"]);
-    assert!(f.file("misc_slavey").exists(), "@icu alone keeps the default flavor's ICU line");
+    assert!(
+        f.file("misc_slavey").exists(),
+        "@icu alone keeps the default flavor's ICU line"
+    );
     f.run("sync", &["-m", "misc/slavey", "misc/slavey@icu"]);
-    assert!(!f.file("misc_slavey").exists(), "the file repeats both flavors' defaults");
+    assert!(
+        !f.file("misc_slavey").exists(),
+        "the file repeats both flavors' defaults"
+    );
 }
 
 /// A non-default flavor alone, or two of them, never lose the default
@@ -64,17 +73,27 @@ fn non_default_flavors_keep_the_default_flavors_choices() {
     let plan = f.decide(&["misc/flav"], r#"{"misc/flav": {"X11": false}}"#);
     assert_eq!(plan["applied"], true, "{plan}");
     let with_x11_off = fs::read_to_string(f.file("misc_flav")).unwrap();
-    assert!(with_x11_off.contains("OPTIONS_FILE_UNSET+=X11"), "{with_x11_off}");
+    assert!(
+        with_x11_off.contains("OPTIONS_FILE_UNSET+=X11"),
+        "{with_x11_off}"
+    );
 
     // @nox alone: nothing it sees changed, nothing written, nothing removed.
     for args in [&["misc/flav@nox"][..], &["-m", "misc/flav@nox"][..]] {
         f.run("sync", args);
-        assert_eq!(fs::read_to_string(f.file("misc_flav")).unwrap(), with_x11_off, "sync {args:?}");
+        assert_eq!(
+            fs::read_to_string(f.file("misc_flav")).unwrap(),
+            with_x11_off,
+            "sync {args:?}"
+        );
     }
 
     // @nox and @pgtk: Y, which only @pgtk has, turned off and written; X11,
     // which neither has, kept as the default flavor left it.
-    let plan = f.decide(&["misc/flav@nox", "misc/flav@pgtk"], r#"{"misc/flav@pgtk": {"Y": false}}"#);
+    let plan = f.decide(
+        &["misc/flav@nox", "misc/flav@pgtk"],
+        r#"{"misc/flav@pgtk": {"Y": false}}"#,
+    );
     assert_eq!(plan["applied"], true, "{plan}");
     let text = fs::read_to_string(f.file("misc_flav")).unwrap();
     assert!(text.contains("OPTIONS_FILE_UNSET+=Y"), "{text}");
@@ -124,7 +143,11 @@ fn a_latin1_make_conf_is_read() {
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn a_dependency_on_a_moved_origin_is_an_error() {
     let f = Fixture::new();
-    fs::write(f.tree.join("MOVED"), "misc/oldname|misc/cond|2026-01-01|Renamed\n").unwrap();
+    fs::write(
+        f.tree.join("MOVED"),
+        "misc/oldname|misc/cond|2026-01-01|Renamed\n",
+    )
+    .unwrap();
     let dir = f.tree.join("misc/brokendep");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -146,7 +169,14 @@ fn a_dependency_on_a_moved_origin_is_an_error() {
         "depends on nonexistent origin misc/oldname (moved to misc/cond)",
         "{report}"
     );
-    assert!(!report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+    assert!(
+        !report["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["port"] == "misc/cond"),
+        "{report}"
+    );
 }
 
 /// A port of the fixture's shape at `origin`, `extra` added to its
@@ -183,14 +213,20 @@ fn a_listed_subpackage_is_not_moved_by_check_moved() {
          misc/oldflav2|misc/flav|2026-01-01|Renamed too\n",
     )
     .unwrap();
-    let no_moves = |report: &serde_json::Value| report["moved"].as_array().is_none_or(Vec::is_empty);
+    let no_moves =
+        |report: &serde_json::Value| report["moved"].as_array().is_none_or(Vec::is_empty);
 
     for listed in ["misc/oldname~sub", "misc/oldflav@nox~sub"] {
         let out = f.run("scan", &["--json", "--follow-moved", listed]);
         let report = common::json(&out);
         assert!(no_moves(&report), "{listed}: {report}");
         assert_eq!(report["summary"]["errors"], 1, "{listed}: {report}");
-        assert!(!ports_of(&report).iter().any(|p| p.starts_with("misc/cond") || p.starts_with("misc/flav")), "{report}");
+        assert!(
+            !ports_of(&report)
+                .iter()
+                .any(|p| p.starts_with("misc/cond") || p.starts_with("misc/flav")),
+            "{report}"
+        );
     }
 
     let out = f.run("scan", &["--json", "misc/oldflav2@nox~sub"]);
@@ -200,14 +236,24 @@ fn a_listed_subpackage_is_not_moved_by_check_moved() {
         serde_json::json!([{"listed": "misc/oldflav2@nox", "to": "misc/flav@nox", "reason": "Renamed too", "followed": false}]),
         "{report}"
     );
-    let out = f.run("scan", &["--json", "--follow-moved", "misc/oldflav2@nox~sub"]);
-    assert!(ports_of(&common::json(&out)).contains(&"misc/flav@nox".to_string()), "{}", stderr(&out));
+    let out = f.run(
+        "scan",
+        &["--json", "--follow-moved", "misc/oldflav2@nox~sub"],
+    );
+    assert!(
+        ports_of(&common::json(&out)).contains(&"misc/flav@nox".to_string()),
+        "{}",
+        stderr(&out)
+    );
 
     add_port(&f, "misc/subdep", "RUN_DEPENDS=\tcond>0:misc/oldname~sub\n");
     let out = f.run("scan", &["--json", "misc/subdep"]);
     let report = common::json(&out);
     assert_eq!(report["errors"][0]["subject"], "misc/subdep", "{report}");
-    assert_eq!(report["errors"][0]["message"], "depends on nonexistent origin misc/oldname", "{report}");
+    assert_eq!(
+        report["errors"][0]["message"], "depends on nonexistent origin misc/oldname",
+        "{report}"
+    );
 }
 
 /// A followed move is no alias for the dependency graph: misc/mid's
@@ -217,9 +263,21 @@ fn a_listed_subpackage_is_not_moved_by_check_moved() {
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn a_followed_move_does_not_close_a_loop_through_a_nonexistent_dependency() {
     let f = Fixture::new();
-    fs::write(f.tree.join("MOVED"), "misc/old|misc/new|2026-01-01|Renamed\n").unwrap();
-    add_port(&f, "misc/new", "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\tmid>0:misc/mid\n");
-    add_port(&f, "misc/mid", "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\told>0:misc/old\n");
+    fs::write(
+        f.tree.join("MOVED"),
+        "misc/old|misc/new|2026-01-01|Renamed\n",
+    )
+    .unwrap();
+    add_port(
+        &f,
+        "misc/new",
+        "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\tmid>0:misc/mid\n",
+    );
+    add_port(
+        &f,
+        "misc/mid",
+        "OPTIONS_DEFINE=\tX\nRUN_DEPENDS=\told>0:misc/old\n",
+    );
 
     let out = f.run("scan", &["--json", "--follow-moved", "misc/old"]);
     let report = common::json(&out);
@@ -233,17 +291,28 @@ fn a_followed_move_does_not_close_a_loop_through_a_nonexistent_dependency() {
         "{report}"
     );
     let ports = ports_of(&report);
-    assert!(ports.contains(&"misc/new".to_string()) && ports.contains(&"misc/mid".to_string()), "{ports:?}");
+    assert!(
+        ports.contains(&"misc/new".to_string()) && ports.contains(&"misc/mid".to_string()),
+        "{ports:?}"
+    );
 
     // A plan naming the old origin still reaches the port it moved to.
-    let plan = f.decide(&["--follow-moved", "misc/old"], r#"{"misc/old": {"X": true}}"#);
+    let plan = f.decide(
+        &["--follow-moved", "misc/old"],
+        r#"{"misc/old": {"X": true}}"#,
+    );
     assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
     let text = fs::read_to_string(f.file("misc_new")).unwrap_or_else(|e| panic!("{e}: {plan}"));
     assert!(text.contains("OPTIONS_FILE_SET+=X"), "{text}");
 }
 
 fn ports_of(report: &serde_json::Value) -> Vec<String> {
-    report["ports"].as_array().unwrap().iter().map(|p| p["port"].as_str().unwrap().to_string()).collect()
+    report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["port"].as_str().unwrap().to_string())
+        .collect()
 }
 
 /// A listed origin MOVED moves is flagged and not followed: misc/oldname
@@ -275,9 +344,14 @@ fn a_listed_moved_origin_is_flagged_unless_followed() {
     assert_eq!(report["errors"], serde_json::json!([]), "{report}");
     let ports = ports_of(&report);
     assert!(!ports.contains(&"misc/cond".to_string()), "{ports:?}");
-    assert!(ports.contains(&"misc/forced".to_string()), "a local build keeps misc/forced: {ports:?}");
     assert!(
-        stderr(&out).contains("listed misc/oldname moved to misc/cond (Renamed): fix the list, or --follow-moved"),
+        ports.contains(&"misc/forced".to_string()),
+        "a local build keeps misc/forced: {ports:?}"
+    );
+    assert!(
+        stderr(&out).contains(
+            "listed misc/oldname moved to misc/cond (Renamed): fix the list, or --follow-moved"
+        ),
         "{}",
         stderr(&out)
     );
@@ -291,19 +365,40 @@ fn a_listed_moved_origin_is_flagged_unless_followed() {
     assert_eq!(report["summary"]["moved"], 0, "{report}");
     assert_eq!(report["summary"]["pending"], 0, "{report}");
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
-    assert!(ports_of(&report).contains(&"misc/cond".to_string()), "{report}");
-    assert!(stderr(&out).contains("followed, but the list still names misc/oldname"), "{}", stderr(&out));
+    assert!(
+        ports_of(&report).contains(&"misc/cond".to_string()),
+        "{report}"
+    );
+    assert!(
+        stderr(&out).contains("followed, but the list still names misc/oldname"),
+        "{}",
+        stderr(&out)
+    );
 
     // clean --unused refuses to prune while the list names a moved origin.
-    let out = f.optique("clean").args(["--unused", "misc/oldname"]).output().unwrap();
+    let out = f
+        .optique("clean")
+        .args(["--unused", "misc/oldname"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(3), "{}", stderr(&out));
-    assert!(stderr(&out).contains("refusing to prune"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("refusing to prune"),
+        "{}",
+        stderr(&out)
+    );
     assert!(f.file("misc_cond").exists());
 
     // synth reads no MOVED: flagged all the same, --follow-moved ignored.
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_optique"))
         .env("XDG_CACHE_HOME", &f.cache)
-        .args(["scan", "--synth=optique-fixture-no-such-profile", "--follow-moved", "--json", "-P"])
+        .args([
+            "scan",
+            "--synth=optique-fixture-no-such-profile",
+            "--follow-moved",
+            "--json",
+            "-P",
+        ])
         .arg(&f.tree)
         .arg("-o")
         .arg(&f.options)
@@ -312,8 +407,14 @@ fn a_listed_moved_origin_is_flagged_unless_followed() {
         .unwrap();
     let report = common::json(&out);
     let err = stderr(&out);
-    assert!(err.contains("--follow-moved has no effect under -s"), "{err}");
-    assert!(err.contains("listed misc/oldname moved to misc/cond (Renamed): fix the list\n"), "{err}");
+    assert!(
+        err.contains("--follow-moved has no effect under -s"),
+        "{err}"
+    );
+    assert!(
+        err.contains("listed misc/oldname moved to misc/cond (Renamed): fix the list\n"),
+        "{err}"
+    );
     assert_eq!(out.status.code(), Some(1), "{err}");
     assert_eq!(
         report["moved"],
@@ -322,7 +423,10 @@ fn a_listed_moved_origin_is_flagged_unless_followed() {
     );
     assert_eq!(report["summary"]["moved"], 1, "{report}");
     assert_eq!(report["errors"], serde_json::json!([]), "{report}");
-    assert!(!ports_of(&report).contains(&"misc/cond".to_string()), "{report}");
+    assert!(
+        !ports_of(&report).contains(&"misc/cond".to_string()),
+        "{report}"
+    );
 }
 
 /// A make.conf `PORT_DBDIR` sends the build to another directory, which
@@ -343,9 +447,20 @@ fn a_make_conf_port_dbdir_elsewhere_is_an_error() {
     assert!(err.contains(&format!("error: {want}")), "{err}");
     assert_eq!(out.status.code(), Some(1), "{err}");
     let report = common::json(&out);
-    assert_eq!(report["errors"], serde_json::json!([{"subject": "make.conf", "message": want}]), "{report}");
+    assert_eq!(
+        report["errors"],
+        serde_json::json!([{"subject": "make.conf", "message": want}]),
+        "{report}"
+    );
     assert_eq!(report["summary"]["errors"], 1, "{report}");
-    assert!(report["ports"].as_array().unwrap().iter().any(|p| p["port"] == "misc/cond"), "{report}");
+    assert!(
+        report["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["port"] == "misc/cond"),
+        "{report}"
+    );
 
     // sync says so too, and writes all the same.
     let out = f.run("sync", &["misc/cond"]);
@@ -353,9 +468,18 @@ fn a_make_conf_port_dbdir_elsewhere_is_an_error() {
     assert!(f.file("misc_cond").exists());
 
     // The same directory, spelled as the options dir: nothing to report.
-    fs::write(&f.make_conf, format!("PORT_DBDIR={}/\n", f.options.display())).unwrap();
+    fs::write(
+        &f.make_conf,
+        format!("PORT_DBDIR={}/\n", f.options.display()),
+    )
+    .unwrap();
     let out = f.run("scan", &["--json", "misc/cond"]);
-    assert_eq!(common::json(&out)["errors"], serde_json::json!([]), "{}", stderr(&out));
+    assert_eq!(
+        common::json(&out)["errors"],
+        serde_json::json!([]),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
 }
 
@@ -369,11 +493,21 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
     let f = Fixture::new();
     let conf = "OPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options\n";
     fs::write(&f.make_conf, conf).unwrap();
-    let nox = f.options.join("misc_flav-nox/options").display().to_string();
+    let nox = f
+        .options
+        .join("misc_flav-nox/options")
+        .display()
+        .to_string();
     let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "OPTIONS_FILE"]);
     assert_eq!(stdout(&out).trim(), nox);
-    f.write_file("misc_flav-nox", "_OPTIONS_READ=flav-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_UNSET+=A\n");
-    f.write_file("misc_gone", "_OPTIONS_READ=gone-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n");
+    f.write_file(
+        "misc_flav-nox",
+        "_OPTIONS_READ=flav-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_UNSET+=A\n",
+    );
+    f.write_file(
+        "misc_gone",
+        "_OPTIONS_READ=gone-1.0\n_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    );
     let warning = "warning: make.conf sets OPTIONS_FILE (${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options): \
                    optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused";
 
@@ -382,8 +516,14 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
         let err = stderr(&out);
         assert_eq!(out.status.code(), Some(0), "clean {args:?}: {err}");
         assert!(err.contains(warning), "clean {args:?}: {err}");
-        assert!(f.file("misc_flav-nox").exists(), "clean {args:?} removed the file make reads");
-        assert!(f.file("misc_gone").exists(), "clean {args:?} removed a vanished entry");
+        assert!(
+            f.file("misc_flav-nox").exists(),
+            "clean {args:?} removed the file make reads"
+        );
+        assert!(
+            f.file("misc_gone").exists(),
+            "clean {args:?} removed a vanished entry"
+        );
     }
 
     // Moved for this port only, where no probe outside a port sees it:
@@ -408,15 +548,34 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn a_moved_options_file_edit_is_not_served_from_cache() {
     let f = Fixture::new();
-    fs::write(&f.make_conf, "OPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/alt\n").unwrap();
+    fs::write(
+        &f.make_conf,
+        "OPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/alt\n",
+    )
+    .unwrap();
     let report = common::json(&f.run("scan", &["--json", "--options", "misc/cond"]));
-    assert!(!ports_of(&report).contains(&"misc/condep".to_string()), "{report}");
+    assert!(
+        !ports_of(&report).contains(&"misc/condep".to_string()),
+        "{report}"
+    );
 
     fs::create_dir_all(f.options.join("misc_cond")).unwrap();
-    fs::write(f.options.join("misc_cond/alt"), "OPTIONS_FILE_UNSET+=DOCS\nOPTIONS_FILE_SET+=SOX\n").unwrap();
+    fs::write(
+        f.options.join("misc_cond/alt"),
+        "OPTIONS_FILE_UNSET+=DOCS\nOPTIONS_FILE_SET+=SOX\n",
+    )
+    .unwrap();
     let report = common::json(&f.run("scan", &["--json", "--options", "misc/cond"]));
-    assert!(ports_of(&report).contains(&"misc/condep".to_string()), "{report}");
-    let port = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == "misc/cond").unwrap();
+    assert!(
+        ports_of(&report).contains(&"misc/condep".to_string()),
+        "{report}"
+    );
+    let port = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "misc/cond")
+        .unwrap();
     assert_eq!(option(port, "DOCS")["staged"], false, "{port}");
 }
 
@@ -431,16 +590,27 @@ fn a_moved_options_file_edit_is_not_served_from_cache() {
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
     let f = Fixture::new();
-    fs::write(&f.make_conf, ".if ${FLAVOR:U} == nox\nOPTIONS_FILE=/nonexistent/nox/options\n.endif\n").unwrap();
+    fs::write(
+        &f.make_conf,
+        ".if ${FLAVOR:U} == nox\nOPTIONS_FILE=/nonexistent/nox/options\n.endif\n",
+    )
+    .unwrap();
     let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "OPTIONS_FILE"]);
     assert_eq!(stdout(&out).trim(), "/nonexistent/nox/options");
-    for order in [["misc/flav", "misc/flav@nox"], ["misc/flav@nox", "misc/flav"]] {
+    for order in [
+        ["misc/flav", "misc/flav@nox"],
+        ["misc/flav@nox", "misc/flav"],
+    ] {
         let full = f.scan_port(&order, "misc/flav@full");
         assert_eq!(full["status"], "unconfigured", "{order:?}: {full}");
         assert_eq!(option(&full, "A")["locked"], false, "{order:?}: {full}");
         let nox = f.scan_port(&order, "misc/flav@nox");
         assert_eq!(nox["status"], "ok", "{order:?}: {nox}");
-        assert_eq!(option(&nox, "A")["locked_by"], "make.conf OPTIONS_FILE", "{order:?}: {nox}");
+        assert_eq!(
+            option(&nox, "A")["locked_by"],
+            "make.conf OPTIONS_FILE",
+            "{order:?}: {nox}"
+        );
 
         let out = f.run("sync", &order);
         let err = stderr(&out);
@@ -451,18 +621,36 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
             ),
             "{order:?}: {err}"
         );
-        assert!(!err.contains("make does not read misc_flav/options"), "{order:?}: {err}");
-        assert!(f.file("misc_flav").exists(), "{order:?}: sync writes @full's file: {err}");
+        assert!(
+            !err.contains("make does not read misc_flav/options"),
+            "{order:?}: {err}"
+        );
+        assert!(
+            f.file("misc_flav").exists(),
+            "{order:?}: sync writes @full's file: {err}"
+        );
         fs::remove_file(f.file("misc_flav")).unwrap();
 
         let plan = f.decide(&order, r#"{"misc/flav": {"A": false}}"#);
         assert_eq!(plan["applied"], true, "{order:?}: {plan}");
-        assert_eq!(f.make_v("misc/flav", "PORT_OPTIONS"), ["X11", "Y"], "{order:?}");
+        assert_eq!(
+            f.make_v("misc/flav", "PORT_OPTIONS"),
+            ["X11", "Y"],
+            "{order:?}"
+        );
         let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "PORT_OPTIONS"]);
-        assert_eq!(stdout(&out).trim(), "A", "{order:?}: @nox reads its own file");
+        assert_eq!(
+            stdout(&out).trim(),
+            "A",
+            "{order:?}: @nox reads its own file"
+        );
         let plan = f.decide(&order, r#"{"misc/flav@nox": {"A": false}}"#);
         let rejected = &plan["rejected"];
-        assert_eq!(rejected.as_array().map(Vec::len), Some(1), "{order:?}: {plan}");
+        assert_eq!(
+            rejected.as_array().map(Vec::len),
+            Some(1),
+            "{order:?}: {plan}"
+        );
         assert_eq!(
             rejected[0]["reason"],
             "make.conf sets OPTIONS_FILE to /nonexistent/nox/options, not the options file optique manages; \
@@ -491,14 +679,25 @@ fn an_options_local_ifunset_leaves_the_file_unmanaged() {
     let file = "_FILE_COMPLETE_OPTIONS_LIST=A A2 B C\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=A2\n\
                 OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=C\n";
     f.write_file("misc_model-globs", file);
-    fs::write(f.options.join("misc_model-globs/options.local"), "OPTIONS_FILE_UNSET?=C\n").unwrap();
+    fs::write(
+        f.options.join("misc_model-globs/options.local"),
+        "OPTIONS_FILE_UNSET?=C\n",
+    )
+    .unwrap();
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, ["A", "A2", "B"]);
 
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["status"], "ok", "{port}");
     let c = option(&port, "C");
-    assert_eq!((&c["staged"], &c["locked_by"]), (&serde_json::json!(false), &serde_json::json!("options.local")), "{c}");
+    assert_eq!(
+        (&c["staged"], &c["locked_by"]),
+        (
+            &serde_json::json!(false),
+            &serde_json::json!("options.local")
+        ),
+        "{c}"
+    );
 
     let out = f.run("sync", &[origin]);
     let err = stderr(&out);
@@ -508,7 +707,10 @@ fn an_options_local_ifunset_leaves_the_file_unmanaged() {
     );
     let plan = f.decide(&[origin], r#"{"misc/model-globs": {"C": true}}"#);
     assert_eq!(plan["rejected"].as_array().map(Vec::len), Some(1), "{plan}");
-    assert_eq!(fs::read_to_string(f.file("misc_model-globs")).unwrap(), file);
+    assert_eq!(
+        fs::read_to_string(f.file("misc_model-globs")).unwrap(),
+        file
+    );
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
 }
 
@@ -534,10 +736,19 @@ fn a_newcomer_with_an_unmanaged_file_shows_makes_outcome_with_it() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(script.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(script.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     let screen = stdout(&out);
-    assert!(screen.contains("condep-1.0") && screen.contains("UNMANAGED: "), "{screen}\n{}", stderr(&out));
+    assert!(
+        screen.contains("condep-1.0") && screen.contains("UNMANAGED: "),
+        "{screen}\n{}",
+        stderr(&out)
+    );
     assert!(screen.contains("[x] X"), "{screen}");
 }
 
@@ -550,13 +761,25 @@ fn an_options_local_set_glob_leaves_a_written_file_up_to_date() {
     let f = Fixture::new();
     let origin = "misc/model-globs";
     fs::create_dir_all(f.options.join("misc_model-globs")).unwrap();
-    fs::write(f.options.join("misc_model-globs/options.local"), "OPTIONS_FILE_SET+=C*\n").unwrap();
+    fs::write(
+        f.options.join("misc_model-globs/options.local"),
+        "OPTIONS_FILE_SET+=C*\n",
+    )
+    .unwrap();
     let out = f.run("sync", &[origin]);
     assert!(stdout(&out).contains("new file"), "{}", stdout(&out));
     let written = fs::read_to_string(f.file("misc_model-globs")).unwrap();
     for _ in 0..2 {
         let out = f.run("sync", &[origin]);
-        assert!(stderr(&out).contains("nothing to write"), "{}\n{}", stdout(&out), stderr(&out));
-        assert_eq!(fs::read_to_string(f.file("misc_model-globs")).unwrap(), written);
+        assert!(
+            stderr(&out).contains("nothing to write"),
+            "{}\n{}",
+            stdout(&out),
+            stderr(&out)
+        );
+        assert_eq!(
+            fs::read_to_string(f.file("misc_model-globs")).unwrap(),
+            written
+        );
     }
 }

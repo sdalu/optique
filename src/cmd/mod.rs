@@ -21,10 +21,10 @@ mod sync;
 mod tui;
 mod write;
 
-pub(crate) use scan::cmd_scan;
 pub(crate) use clean::cmd_clean;
-pub(crate) use sync::cmd_sync;
 pub(crate) use decide::cmd_decide;
+pub(crate) use scan::cmd_scan;
+pub(crate) use sync::cmd_sync;
 pub(crate) use tui::cmd_tui;
 
 /// What the make queries need from the settings; `port_dbdir` is where they
@@ -54,7 +54,11 @@ pub(crate) struct RootSet {
 /// syntax: entries synth's stricter one refuses are synth's input to fix,
 /// not optique's to report.
 pub(super) fn listed_roots(origins: &[String], files: &[std::path::PathBuf]) -> Result<RootSet> {
-    Ok(RootSet { roots: cli::collect_roots(origins, files)?, notes: Vec::new(), installed: false })
+    Ok(RootSet {
+        roots: cli::collect_roots(origins, files)?,
+        notes: Vec::new(),
+        installed: false,
+    })
 }
 
 /// Roots for a subcommand: the given list, or — in synth mode only — the
@@ -63,7 +67,10 @@ pub(super) fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSe
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
         let roots = synth::installed_roots(&cli.repo)?;
         let note = if cli.repo.is_empty() {
-            format!("no ports given; using {} installed package(s) as the list", roots.len())
+            format!(
+                "no ports given; using {} installed package(s) as the list",
+                roots.len()
+            )
         } else {
             format!(
                 "no ports given; using {} installed package(s) from {}",
@@ -72,7 +79,11 @@ pub(super) fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSe
             )
         };
         let roots = roots.into_iter().map(roots::Listed::port).collect();
-        return Ok(RootSet { roots, notes: vec![note], installed: true });
+        return Ok(RootSet {
+            roots,
+            notes: vec![note],
+            installed: true,
+        });
     }
     listed_roots(origins, &cli.files)
 }
@@ -113,7 +124,10 @@ impl Scanned {
 /// Parallel `make` jobs: -J, else min(16, ncpu).
 fn default_jobs(cli: &Cli) -> usize {
     cli.jobs.unwrap_or_else(|| {
-        std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4).min(16)
+        std::thread::available_parallelism()
+            .map(std::num::NonZero::get)
+            .unwrap_or(4)
+            .min(16)
     })
 }
 
@@ -131,8 +145,9 @@ fn new_cache(cli: &Cli, settings: &config::Settings) -> cache::Cache {
 /// MOVED of the main tree and every overlay, its warnings said once.
 fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     let overlays = settings.overlay_paths();
-    let trees: Vec<&Path> =
-        std::iter::once(settings.portsdir.as_path()).chain(overlays.iter().map(std::path::PathBuf::as_path)).collect();
+    let trees: Vec<&Path> = std::iter::once(settings.portsdir.as_path())
+        .chain(overlays.iter().map(std::path::PathBuf::as_path))
+        .collect();
     let (moved, warnings) = Moved::load_all(&trees);
     let paint = stderr_color(cli);
     for w in warnings {
@@ -185,7 +200,10 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         let installed: Vec<_> = given.iter().map(|l| l.key.clone()).collect();
         let (kept, skipped) = synth::installed_in_index(&installed, &ctx, &files, jobs, &mut cache);
         if !skipped.is_empty() && !cli.quiet {
-            let list: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} ({why})")).collect();
+            let list: Vec<String> = skipped
+                .iter()
+                .map(|(k, why)| format!("{k} ({why})"))
+                .collect();
             eprintln!(
                 "  {}        synth skips {} installed package(s) its flavor index does not match: {}",
                 tint(paint, ansi::YELLOW, "note:"),
@@ -206,13 +224,31 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             tint(paint, ansi::YELLOW, "note:")
         );
     }
-    let roots =
-        roots::resolve(&listing.roots, settings.flavor_default_all, &ctx, &files, jobs, &mut cache);
-    let mut result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &settings.blacklist, move |p| {
-        let line = format!("scanning… {}/{} ports ({} cached)", p.done, p.discovered, p.from_cache);
-        eprint!("\r{}", tint(paint, ansi::GRAY, &line));
-        let _ = std::io::stderr().flush();
-    });
+    let roots = roots::resolve(
+        &listing.roots,
+        settings.flavor_default_all,
+        &ctx,
+        &files,
+        jobs,
+        &mut cache,
+    );
+    let mut result = scanner::scan(
+        &roots,
+        &ctx,
+        &files,
+        jobs,
+        &mut cache,
+        &moved,
+        &settings.blacklist,
+        move |p| {
+            let line = format!(
+                "scanning… {}/{} ports ({} cached)",
+                p.done, p.discovered, p.from_cache
+            );
+            eprint!("\r{}", tint(paint, ansi::GRAY, &line));
+            let _ = std::io::stderr().flush();
+        },
+    );
     eprintln!();
 
     result.errors.splice(0..0, listing.errors);
@@ -267,7 +303,11 @@ fn print_banner(
         settings.portsdir.display(),
         jobs
     );
-    let notes = rs.notes.iter().chain(settings.notes.iter()).map(String::as_str);
+    let notes = rs
+        .notes
+        .iter()
+        .chain(settings.notes.iter())
+        .map(String::as_str);
     for note in notes.chain(cache.note()) {
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
@@ -287,7 +327,11 @@ fn print_banner(
         tint(
             paint,
             ansi::YELLOW,
-            if !settings.options_dir.is_dir() { " (new, created on apply)" } else { "" }
+            if !settings.options_dir.is_dir() {
+                " (new, created on apply)"
+            } else {
+                ""
+            }
         )
     );
     if settings.make_conf_sources.is_empty() {
@@ -325,7 +369,11 @@ fn say_overridden(paint: bool, result: &ScanResult) {
             "{} make.conf OPTIONS_OVERRIDE decides {} ({} options file not read)",
             tint(paint, ansi::YELLOW, "note:"),
             overridden.join(", "),
-            if overridden.len() == 1 { "its" } else { "their" }
+            if overridden.len() == 1 {
+                "its"
+            } else {
+                "their"
+            }
         );
     }
 }
@@ -338,12 +386,17 @@ fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeS
     // flavor moved elsewhere leaves the shared file to those still reading
     // it (`session::moved`).
     let with_options = || result.ports.values().filter(|i| i.options.has_options());
-    let read: std::collections::BTreeSet<&str> =
-        with_options().filter(|i| i.options.moved_file.is_none()).map(|i| i.options_name.as_str()).collect();
+    let read: std::collections::BTreeSet<&str> = with_options()
+        .filter(|i| i.options.moved_file.is_none())
+        .map(|i| i.options_name.as_str())
+        .collect();
     let mut moved_files: std::collections::BTreeMap<&str, Vec<(String, &str)>> = Default::default();
     for info in with_options() {
         if let Some(path) = &info.options.moved_file {
-            moved_files.entry(info.options_name.as_str()).or_default().push((info.canonical.to_string(), path));
+            moved_files
+                .entry(info.options_name.as_str())
+                .or_default()
+                .push((info.canonical.to_string(), path));
         }
     }
     for (name, moved) in &moved_files {
@@ -410,13 +463,19 @@ fn say_options_files(
         // An options.local assigning a list afresh drops the file's lines:
         // optique leaves the file alone (apply::plan_writes), said once.
         if let Some((_, why)) = both.unmanaged() {
-            eprintln!("{} {name}/options: {why}", tint(paint, ansi::YELLOW, "warning:"));
+            eprintln!(
+                "{} {name}/options: {why}",
+                tint(paint, ansi::YELLOW, "warning:")
+            );
             continue;
         }
         let mut adds = Vec::new();
         for (verb, list) in [("sets", &both.local_set), ("unsets", &both.local_unset)] {
             if !list.is_empty() {
-                adds.push(format!("{verb} {}", list.iter().cloned().collect::<Vec<_>>().join(" ")));
+                adds.push(format!(
+                    "{verb} {}",
+                    list.iter().cloned().collect::<Vec<_>>().join(" ")
+                ));
             }
         }
         if !adds.is_empty() {
@@ -426,7 +485,9 @@ fn say_options_files(
                 adds.join(" and ")
             );
         }
-        let Some(saved) = files.saved(name) else { continue };
+        let Some(saved) = files.saved(name) else {
+            continue;
+        };
         let unlined = saved.unlined();
         if !unlined.is_empty() {
             eprintln!(

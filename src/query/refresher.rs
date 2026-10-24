@@ -10,10 +10,16 @@ use crate::query::scanner::{self, ScanResult};
 
 /// Events streamed back to the UI while a background refresh runs.
 pub enum RefreshEvent {
-    Progress { done: usize, discovered: usize },
+    Progress {
+        done: usize,
+        discovered: usize,
+    },
     /// One scan finished; `batches` says how many submitted request batches
     /// it covered (queued requests are coalesced into a single scan).
-    Done { result: Box<ScanResult>, batches: usize },
+    Done {
+        result: Box<ScanResult>,
+        batches: usize,
+    },
 }
 
 /// Handle to the background refresh thread. Send a batch of roots to
@@ -23,7 +29,13 @@ pub struct Refresher {
     pub rx: Receiver<RefreshEvent>,
 }
 
-pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved, blacklist: Blacklist) -> Refresher {
+pub fn spawn(
+    ctx: QueryCtx,
+    jobs: usize,
+    mut cache: Cache,
+    moved: Moved,
+    blacklist: Blacklist,
+) -> Refresher {
     let (req_tx, req_rx) = crossbeam_channel::unbounded::<Vec<PortKey>>();
     let (ev_tx, ev_rx) = crossbeam_channel::unbounded::<RefreshEvent>();
     std::thread::spawn(move || {
@@ -39,14 +51,34 @@ pub fn spawn(ctx: QueryCtx, jobs: usize, mut cache: Cache, moved: Moved, blackli
             // A store per scan: the staging dir changes between scans as the
             // user edits, and within one it spares flavors re-reading a file.
             let files = OptionsFiles::new(&ctx.port_dbdir);
-            let result = scanner::scan(&roots, &ctx, &files, jobs, &mut cache, &moved, &blacklist, move |p| {
-                let _ = ev_progress
-                    .send(RefreshEvent::Progress { done: p.done, discovered: p.discovered });
-            });
-            if ev_tx.send(RefreshEvent::Done { result: Box::new(result), batches }).is_err() {
+            let result = scanner::scan(
+                &roots,
+                &ctx,
+                &files,
+                jobs,
+                &mut cache,
+                &moved,
+                &blacklist,
+                move |p| {
+                    let _ = ev_progress.send(RefreshEvent::Progress {
+                        done: p.done,
+                        discovered: p.discovered,
+                    });
+                },
+            );
+            if ev_tx
+                .send(RefreshEvent::Done {
+                    result: Box::new(result),
+                    batches,
+                })
+                .is_err()
+            {
                 return;
             }
         }
     });
-    Refresher { tx: req_tx, rx: ev_rx }
+    Refresher {
+        tx: req_tx,
+        rx: ev_rx,
+    }
 }

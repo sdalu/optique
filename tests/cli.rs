@@ -12,10 +12,22 @@ fn help_mentions_every_command_and_global_flag() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for needle in [
-        "tui", "scan", "sync", "clean", "decide", "--dry-run", "--verbose", "--file",
-        "--no-cache", "--quiet", "--color",
+        "tui",
+        "scan",
+        "sync",
+        "clean",
+        "decide",
+        "--dry-run",
+        "--verbose",
+        "--file",
+        "--no-cache",
+        "--quiet",
+        "--color",
     ] {
-        assert!(text.contains(needle), "--help must mention {needle}\n{text}");
+        assert!(
+            text.contains(needle),
+            "--help must mention {needle}\n{text}"
+        );
     }
 }
 
@@ -35,7 +47,10 @@ fn tui_help_documents_the_drive_flag() {
     let out = optique().args(["tui", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("--drive"), "tui --help must mention --drive\n{text}");
+    assert!(
+        text.contains("--drive"),
+        "tui --help must mention --drive\n{text}"
+    );
 }
 
 /// `decide` parses its plan before touching a ports tree, so every bad-plan
@@ -58,11 +73,19 @@ fn decide_rejects_a_bad_plan_before_scanning() {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.as_mut().unwrap().write_all(plan.as_bytes()).unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(plan.as_bytes())
+            .unwrap();
         let out = child.wait_with_output().unwrap();
         assert!(!out.status.success(), "{plan:?} must be refused");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains(needle), "{plan:?} -> {err:?} must mention {needle:?}");
+        assert!(
+            err.contains(needle),
+            "{plan:?} -> {err:?} must mention {needle:?}"
+        );
     }
 }
 
@@ -72,7 +95,10 @@ fn decide_help_describes_the_plan() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for needle in ["stdin", "JSON"] {
-        assert!(text.contains(needle), "decide --help must mention {needle}\n{text}");
+        assert!(
+            text.contains(needle),
+            "decide --help must mention {needle}\n{text}"
+        );
     }
 }
 
@@ -80,7 +106,10 @@ fn decide_help_describes_the_plan() {
 /// usage error rather than a silent no-op.
 #[test]
 fn scan_options_requires_json() {
-    let out = optique().args(["scan", "--options", "www/nginx"]).output().unwrap();
+    let out = optique()
+        .args(["scan", "--options", "www/nginx"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--json"), "{err}");
@@ -91,7 +120,10 @@ fn sync_and_clean_advertise_json() {
     for cmd in ["sync", "clean"] {
         let out = optique().args([cmd, "--help"]).output().unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        assert!(text.contains("--json"), "{cmd} --help must mention --json\n{text}");
+        assert!(
+            text.contains("--json"),
+            "{cmd} --help must mention --json\n{text}"
+        );
     }
 }
 
@@ -100,7 +132,11 @@ fn clean_unused_requires_a_list() {
     // No origins, no -f: there is nothing to compute a closure from, and the
     // check must fire before any ports tree is touched.
     let out = optique().args(["clean", "--unused"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "a usage error, not a run-time failure");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a usage error, not a run-time failure"
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("package list"), "{err}");
 }
@@ -109,8 +145,15 @@ fn clean_unused_requires_a_list() {
 fn clean_origins_require_unused() {
     // Plain clean walks the whole options dir; a list would be silently
     // ignored, so it is an error instead.
-    let out = optique().args(["clean", "ports-mgmt/pkg"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "a usage error, not a run-time failure");
+    let out = optique()
+        .args(["clean", "ports-mgmt/pkg"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a usage error, not a run-time failure"
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--unused"), "{err}");
 }
@@ -120,9 +163,15 @@ fn scan_help_advertises_json() {
     let out = optique().args(["scan", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("--json"), "scan --help must mention --json\n{text}");
+    assert!(
+        text.contains("--json"),
+        "scan --help must mention --json\n{text}"
+    );
     // The marker column is the one thing --color affects today.
-    assert!(text.contains("--color"), "scan --help must mention --color\n{text}");
+    assert!(
+        text.contains("--color"),
+        "scan --help must mention --color\n{text}"
+    );
 }
 
 /// -s selects the synth(1) layout, -z/-j the poudriere one: asking for both is
@@ -151,14 +200,26 @@ fn synth_conflicts_with_poudriere_flags() {
 fn local_and_portsdir_conflicts() {
     for (args, flag) in [
         (vec!["scan", "-l", "-z", "ws", "foo/bar"], "--local"),
-        (vec!["scan", "--local", "-j", "141amd64", "foo/bar"], "--local"),
-        (vec!["scan", "-p", "default", "--local", "foo/bar"], "--local"),
+        (
+            vec!["scan", "--local", "-j", "141amd64", "foo/bar"],
+            "--local",
+        ),
+        (
+            vec!["scan", "-p", "default", "--local", "foo/bar"],
+            "--local",
+        ),
         (vec!["scan", "-l", "-s", "foo/bar"], "--local"),
-        (vec!["scan", "-p", "default", "-P", "/usr/ports", "foo/bar"], "--portsdir"),
+        (
+            vec!["scan", "-p", "default", "-P", "/usr/ports", "foo/bar"],
+            "--portsdir",
+        ),
         (vec!["scan", "-v", "-q", "foo/bar"], "--quiet"),
         (vec!["scan", "-l", "-O", "ov", "foo/bar"], "--overlay"),
         (vec!["scan", "-s", "-O", "ov", "foo/bar"], "--overlay"),
-        (vec!["scan", "-s", "--overlay-dir", "/tmp", "foo/bar"], "--overlay-dir"),
+        (
+            vec!["scan", "-s", "--overlay-dir", "/tmp", "foo/bar"],
+            "--overlay-dir",
+        ),
         // No action: the TUI's options, checked the same way.
         (vec!["-l", "-z", "ws", "foo/bar"], "--local"),
     ] {
@@ -175,18 +236,33 @@ fn local_and_portsdir_conflicts() {
 #[test]
 fn options_before_the_action_are_refused() {
     for (args, fixed) in [
-        (vec!["-z", "ws", "scan", "-f", "list"], "optique scan -z ws -f list"),
-        (vec!["-l", "scan", "-s", "foo/bar"], "optique scan -l -s foo/bar"),
+        (
+            vec!["-z", "ws", "scan", "-f", "list"],
+            "optique scan -z ws -f list",
+        ),
+        (
+            vec!["-l", "scan", "-s", "foo/bar"],
+            "optique scan -l -s foo/bar",
+        ),
         (vec!["-s", "sync"], "optique sync -s"),
-        (vec!["-v", "scan", "-q", "foo/bar"], "optique scan -v -q foo/bar"),
+        (
+            vec!["-v", "scan", "-q", "foo/bar"],
+            "optique scan -v -q foo/bar",
+        ),
     ] {
         let out = optique().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?} is a usage error");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains(&format!("options go after the action: {fixed}")), "{args:?}: {err}");
+        assert!(
+            err.contains(&format!("options go after the action: {fixed}")),
+            "{args:?}: {err}"
+        );
     }
     // -o's value is a directory, whatever it is called.
-    let out = optique().args(["-o", "scan", "-l", "-P", "/nonexistent"]).output().unwrap();
+    let out = optique()
+        .args(["-o", "scan", "-l", "-P", "/nonexistent"])
+        .output()
+        .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!err.contains("options go after"), "{err}");
 }
@@ -195,9 +271,18 @@ fn options_before_the_action_are_refused() {
 #[test]
 fn an_overlay_twice_or_the_tree_itself_is_refused() {
     for (args, msg) in [
-        (vec!["scan", "-O", "a", "-O", "a", "foo/bar"], "overlay 'a' given twice"),
-        (vec!["scan", "-O", "default", "foo/bar"], "overlay 'default' is the ports tree itself"),
-        (vec!["scan", "-p", "t", "-O", "t", "foo/bar"], "overlay 't' is the ports tree itself"),
+        (
+            vec!["scan", "-O", "a", "-O", "a", "foo/bar"],
+            "overlay 'a' given twice",
+        ),
+        (
+            vec!["scan", "-O", "default", "foo/bar"],
+            "overlay 'default' is the ports tree itself",
+        ),
+        (
+            vec!["scan", "-p", "t", "-O", "t", "foo/bar"],
+            "overlay 't' is the ports tree itself",
+        ),
     ] {
         let out = optique().args(&args).output().unwrap();
         assert_eq!(out.status.code(), Some(2), "{args:?}");
@@ -217,9 +302,15 @@ fn repo_requires_synth() {
     ] {
         let out = optique().args(&args).output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("only used when no ports are given"), "{args:?}: {err}");
+        assert!(
+            err.contains("only used when no ports are given"),
+            "{args:?}: {err}"
+        );
     }
-    let out = optique().args(["scan", "--repo", "Synth", "foo/bar"]).output().unwrap();
+    let out = optique()
+        .args(["scan", "--repo", "Synth", "foo/bar"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("'--repo' requires '--synth'"), "{err}");
@@ -265,7 +356,10 @@ fn repo_with_explicit_ports_is_refused_everywhere() {
         // exit 2, not the run-time 3 a scan/sync/decide/clean failure gets.
         assert_eq!(out.status.code(), Some(2), "{sub:?}");
         let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains("only used when no ports are given"), "{sub:?}: {err}");
+        assert!(
+            err.contains("only used when no ports are given"),
+            "{sub:?}: {err}"
+        );
     }
 }
 
@@ -273,7 +367,10 @@ fn repo_with_explicit_ports_is_refused_everywhere() {
 /// reach `scan` and fail on the origin, not open the TUI.
 #[test]
 fn synth_without_a_profile_keeps_the_subcommand() {
-    let out = optique().args(["-s", "scan", "not-an-origin"]).output().unwrap();
+    let out = optique()
+        .args(["-s", "scan", "not-an-origin"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("not-an-origin"), "{err}");
@@ -284,12 +381,18 @@ fn synth_is_a_global_flag() {
     let out = optique().args(["scan", "--help"]).output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("--synth"), "scan --help must mention --synth\n{text}");
+    assert!(
+        text.contains("--synth"),
+        "scan --help must mention --synth\n{text}"
+    );
 }
 
 #[test]
 fn color_is_rejected_unless_it_names_a_mode() {
-    let out = optique().args(["--color", "sometimes", "scan", "www/nginx"]).output().unwrap();
+    let out = optique()
+        .args(["--color", "sometimes", "scan", "www/nginx"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("sometimes"), "{err}");
@@ -299,7 +402,10 @@ fn color_is_rejected_unless_it_names_a_mode() {
 fn quiet_is_a_global_flag() {
     // -Q must be accepted before the subcommand and must not swallow errors:
     // the malformed origin is still reported on stderr.
-    let out = optique().args(["-q", "scan", "not-an-origin"]).output().unwrap();
+    let out = optique()
+        .args(["-q", "scan", "not-an-origin"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("not-an-origin"), "{err}");
@@ -317,9 +423,19 @@ fn clear_cache_alone_clears_and_exits() {
         .arg("--clear-cache")
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!cache.join("v3-x-y.jsonl").exists(), "generation file must be removed");
-    assert!(cache.join("drafts/keep.json").exists(), "drafts must survive");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !cache.join("v3-x-y.jsonl").exists(),
+        "generation file must be removed"
+    );
+    assert!(
+        cache.join("drafts/keep.json").exists(),
+        "drafts must survive"
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("cache cleared"), "{err}");
 }
@@ -390,7 +506,10 @@ fn no_arguments_is_a_helpful_error() {
 
 #[test]
 fn missing_list_file_is_reported_with_its_path() {
-    let out = optique().args(["scan", "-f", "/nonexistent/pkglist"]).output().unwrap();
+    let out = optique()
+        .args(["scan", "-f", "/nonexistent/pkglist"])
+        .output()
+        .unwrap();
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("/nonexistent/pkglist"), "{err}");
@@ -402,17 +521,29 @@ fn man_page_is_valid_mdoc() {
     // manual not found" for poudriere(8) on hosts without it installed), so the
     // assertion is on the absence of ERROR/UNSUPP diagnostics, not on the exit
     // status. Skipped where mandoc is not available.
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("man")
+        .join("optique.8");
     assert!(man.is_file(), "{} must exist", man.display());
 
-    let out = match Command::new("mandoc").args(["-T", "lint"]).arg(&man).output() {
+    let out = match Command::new("mandoc")
+        .args(["-T", "lint"])
+        .arg(&man)
+        .output()
+    {
         Ok(out) => out,
         Err(_) => return, // no mandoc on this host
     };
-    let text =
-        format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     for bad in ["ERROR:", "UNSUPP:", "SYSERR:"] {
-        assert!(!text.contains(bad), "mandoc reported {bad} on man/optique.8:\n{text}");
+        assert!(
+            !text.contains(bad),
+            "mandoc reported {bad} on man/optique.8:\n{text}"
+        );
     }
 }
 
@@ -425,13 +556,17 @@ fn man_page_tag_lists_leave_room_for_their_text() {
     // An 80-column page indents the body by width + 5, so anything past this
     // leaves less than half the line for prose.
     const MAX: usize = 24;
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("man")
+        .join("optique.8");
     let text = std::fs::read_to_string(&man).unwrap();
     for (n, line) in text.lines().enumerate() {
         if !line.starts_with(".Bl ") {
             continue;
         }
-        let Some(rest) = line.split_once("-width ").map(|(_, r)| r) else { continue };
+        let Some(rest) = line.split_once("-width ").map(|(_, r)| r) else {
+            continue;
+        };
         // Either a quoted sample string, or a scaling unit like Ds / 16n.
         let width = match rest.strip_prefix('"') {
             Some(quoted) => quoted.split('"').next().unwrap_or("").chars().count(),
@@ -455,17 +590,45 @@ fn man_page_tag_lists_leave_room_for_their_text() {
 #[test]
 fn man_page_documents_every_subcommand_and_flag() {
     // Cheap guard against the man page drifting from the CLI surface.
-    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("man").join("optique.8");
+    let man = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("man")
+        .join("optique.8");
     let text = std::fs::read_to_string(&man).unwrap();
     for needle in [
-        "tui", "scan", "sync", "clean", "-json", "-redundant", "-unused", "-no-cache",
-        "-dry-run", "-options-dir", "-color", "NO_COLOR", "EXIT STATUS",
-        "POUDRIERE INTEGRATION", "-synth", "SYNTH", "Dependency loops",
-        "-local", "LOCAL BUILDS", "-portsdir", "PORTSDIR", "PORT_DBDIR",
-        "-overlay", "-overlay-dir", "OVERLAYS",
-        "loops_blocking", "decide", "-options", "MACHINE INTERFACE",
+        "tui",
+        "scan",
+        "sync",
+        "clean",
+        "-json",
+        "-redundant",
+        "-unused",
+        "-no-cache",
+        "-dry-run",
+        "-options-dir",
+        "-color",
+        "NO_COLOR",
+        "EXIT STATUS",
+        "POUDRIERE INTEGRATION",
+        "-synth",
+        "SYNTH",
+        "Dependency loops",
+        "-local",
+        "LOCAL BUILDS",
+        "-portsdir",
+        "PORTSDIR",
+        "PORT_DBDIR",
+        "-overlay",
+        "-overlay-dir",
+        "OVERLAYS",
+        "loops_blocking",
+        "decide",
+        "-options",
+        "MACHINE INTERFACE",
     ] {
-        assert!(text.contains(needle), "man/optique.8 must document {needle}");
+        assert!(
+            text.contains(needle),
+            "man/optique.8 must document {needle}"
+        );
     }
 }
 
@@ -493,9 +656,17 @@ fn errors_exit_3_not_the_gates_1() {
             .args(["-f", "/nonexistent/optique-list"])
             .output()
             .unwrap();
-        assert_eq!(out.status.code(), Some(3), "{sub}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "{sub}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(stderr.starts_with("Error: cannot read list file"), "{stderr}");
+        assert!(
+            stderr.starts_with("Error: cannot read list file"),
+            "{stderr}"
+        );
     }
     let out = optique().args(["scan", "--no-such-flag"]).output().unwrap();
     assert_eq!(out.status.code(), Some(2));
@@ -511,13 +682,23 @@ fn errors_exit_3_not_the_gates_1() {
 fn malformed_cmdline_origins_exit_2_file_contents_exit_3() {
     // A bare unknown word, read as an origin by the no-subcommand path.
     let out = optique().args(["scna"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("malformed port origin"), "{err}");
 
     // A flag given after the origins, where clap no longer parses flags.
     let out = optique().args(["www/nginx", "-q"]).output().unwrap();
-    assert_eq!(out.status.code(), Some(2), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("unexpected flag -q"), "{err}");
 
@@ -525,8 +706,17 @@ fn malformed_cmdline_origins_exit_2_file_contents_exit_3() {
     let mut f = tempfile::NamedTempFile::new().unwrap();
     use std::io::Write as _;
     writeln!(f, "not-an-origin").unwrap();
-    let out = optique().args(["scan", "-f"]).arg(f.path()).output().unwrap();
-    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    let out = optique()
+        .args(["scan", "-f"])
+        .arg(f.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("not-an-origin"), "{err}");
 }
@@ -558,10 +748,17 @@ fn closed_stdout_exits_documented_status() {
         if json {
             cmd.arg("--json");
         }
-        let out = cmd.stdout(writer).stderr(std::process::Stdio::piped()).output().unwrap();
+        let out = cmd
+            .stdout(writer)
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(3), "json={json}: {err}");
         assert!(!err.contains("panicked"), "json={json}: {err}");
-        assert!(!err.contains("Error:"), "a closed stdout is not worth a message: {err}");
+        assert!(
+            !err.contains("Error:"),
+            "a closed stdout is not worth a message: {err}"
+        );
     }
 }

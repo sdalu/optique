@@ -7,7 +7,7 @@ use crate::draft;
 use crate::session::Session;
 
 use super::apply_modal::commit_apply;
-use super::{ui, App, Focus};
+use super::{App, Focus, ui};
 
 /// What the caller of `dispatch_key` still has to do about a key.
 pub(crate) enum KeyOutcome {
@@ -241,7 +241,10 @@ fn handle_command_key(app: &mut App, code: KeyCode) -> KeyOutcome {
         KeyCode::Char('u') => app.undo_last(),
         KeyCode::Char('U') => app.reset_selected(Session::revert, "reverted to saved state"),
         // A port whose file takes no edit keeps its state; say why.
-        KeyCode::Char('d') => match app.selected_key().and_then(|k| app.session.edit_refusal(&k)) {
+        KeyCode::Char('d') => match app
+            .selected_key()
+            .and_then(|k| app.session.edit_refusal(&k))
+        {
             Some(why) => app.flash(&why, true),
             None => app.reset_selected(Session::reset_to_defaults, "reset to port defaults"),
         },
@@ -394,9 +397,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
         KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
         KeyCode::Char('g') | KeyCode::Home => app.select_index(0),
-        KeyCode::Char('G') | KeyCode::End => {
-            app.select_index(app.visible.len().saturating_sub(1))
-        }
+        KeyCode::Char('G') | KeyCode::End => app.select_index(app.visible.len().saturating_sub(1)),
         KeyCode::PageDown => app.move_selection(page_step(app.page.list) as isize),
         KeyCode::PageUp => app.move_selection(-(page_step(app.page.list) as isize)),
         KeyCode::Char('n') => {
@@ -411,9 +412,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('h') => app.open_port_help(),
         KeyCode::Char('v') => app.open_port_about(),
         // 'i' is the highlighted option's, and the list highlights none.
-        KeyCode::Char('i') => {
-            app.flash("i: option details, in the option pane (Enter) — v: port description", false)
-        }
+        KeyCode::Char('i') => app.flash(
+            "i: option details, in the option pane (Enter) — v: port description",
+            false,
+        ),
         // Space toggles an option, and the list highlights none.
         KeyCode::Char(' ') => app.flash("Enter: edit the options", false),
         // Esc lets go of a filter left on the list.

@@ -72,7 +72,10 @@ impl DepLoop {
     /// larger than any single cycle through it.
     pub fn extra_members(&self) -> Vec<&PortKey> {
         let walked: std::collections::HashSet<&PortKey> = self.cycle.iter().collect();
-        self.members.iter().filter(|m| !walked.contains(m)).collect()
+        self.members
+            .iter()
+            .filter(|m| !walked.contains(m))
+            .collect()
     }
 
     /// Those extra ports as one line, or None when the walk covers the whole
@@ -83,8 +86,11 @@ impl DepLoop {
         if extra.is_empty() {
             return None;
         }
-        let shown: Vec<String> =
-            extra.iter().take(EXTRA_SHOWN).map(ToString::to_string).collect();
+        let shown: Vec<String> = extra
+            .iter()
+            .take(EXTRA_SHOWN)
+            .map(ToString::to_string)
+            .collect();
         let mut line = shown.join(" ");
         if extra.len() > EXTRA_SHOWN {
             let rest = extra.len() - EXTRA_SHOWN;
@@ -195,14 +201,28 @@ impl Graph {
             if index[root] != UNVISITED {
                 continue;
             }
-            visit(root, &mut next, &mut index, &mut low, &mut stack, &mut on_stack);
+            visit(
+                root,
+                &mut next,
+                &mut index,
+                &mut low,
+                &mut stack,
+                &mut on_stack,
+            );
             // (node, how many of its neighbors have been walked)
             let mut call: Vec<(usize, usize)> = vec![(root, 0)];
             while let Some(&(v, cursor)) = call.last() {
                 if let Some(&w) = self.adj[v].get(cursor) {
                     call.last_mut().expect("just observed").1 = cursor + 1;
                     if index[w] == UNVISITED {
-                        visit(w, &mut next, &mut index, &mut low, &mut stack, &mut on_stack);
+                        visit(
+                            w,
+                            &mut next,
+                            &mut index,
+                            &mut low,
+                            &mut stack,
+                            &mut on_stack,
+                        );
                         call.push((w, 0));
                     } else if on_stack[w] {
                         low[v] = low[v].min(index[w]);
@@ -323,24 +343,28 @@ mod tests {
 
     #[test]
     fn an_acyclic_closure_has_no_loops() {
-        assert!(loops(&[
-            ("cat/root", &["cat/mid", "cat/leaf"]),
-            ("cat/mid", &["cat/leaf"]),
-            ("cat/leaf", &[]),
-        ])
-        .is_empty());
+        assert!(
+            loops(&[
+                ("cat/root", &["cat/mid", "cat/leaf"]),
+                ("cat/mid", &["cat/leaf"]),
+                ("cat/leaf", &[]),
+            ])
+            .is_empty()
+        );
     }
 
     /// A diamond revisits ports without ever closing a walk.
     #[test]
     fn shared_dependencies_are_not_loops() {
-        assert!(loops(&[
-            ("cat/root", &["cat/left", "cat/right"]),
-            ("cat/left", &["cat/leaf"]),
-            ("cat/right", &["cat/leaf"]),
-            ("cat/leaf", &[]),
-        ])
-        .is_empty());
+        assert!(
+            loops(&[
+                ("cat/root", &["cat/left", "cat/right"]),
+                ("cat/left", &["cat/leaf"]),
+                ("cat/right", &["cat/leaf"]),
+                ("cat/leaf", &[]),
+            ])
+            .is_empty()
+        );
     }
 
     #[test]
@@ -353,7 +377,10 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].members,
-            vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()]
+            vec![
+                PortKey::parse("cat/a").unwrap(),
+                PortKey::parse("cat/b").unwrap()
+            ]
         );
         assert_eq!(found[0].render(), "cat/a → cat/b → cat/a");
         assert!(found[0].extra_members().is_empty());
@@ -403,7 +430,10 @@ mod tests {
         // c and d are tangled too, even though the shortest walk skips them.
         assert_eq!(
             found[0].extra_members(),
-            vec![&PortKey::parse("cat/c").unwrap(), &PortKey::parse("cat/d").unwrap()]
+            vec![
+                &PortKey::parse("cat/c").unwrap(),
+                &PortKey::parse("cat/d").unwrap()
+            ]
         );
     }
 
@@ -432,7 +462,10 @@ mod tests {
         };
         ports.insert(flavored.canonical.clone(), flavored);
         let mut aliases = HashMap::new();
-        aliases.insert(PortKey::parse("cat/b").unwrap(), PortKey::parse("cat/b@py312").unwrap());
+        aliases.insert(
+            PortKey::parse("cat/b").unwrap(),
+            PortKey::parse("cat/b@py312").unwrap(),
+        );
 
         let found = detect(&ports, &aliases);
         assert_eq!(found.len(), 1, "the alias closes the loop");
@@ -459,7 +492,10 @@ mod tests {
         aliases.insert(key("cat/self"), key("cat/self"));
         aliases.insert(key("cat/dangling"), key("cat/nowhere"));
 
-        assert_eq!(resolve(&ports, &aliases, &key("cat/old")), Some(key("cat/new@py312")));
+        assert_eq!(
+            resolve(&ports, &aliases, &key("cat/old")),
+            Some(key("cat/new@py312"))
+        );
         assert_eq!(resolve(&ports, &aliases, &key("cat/a")), Some(key("cat/a")));
         for k in ["cat/x", "cat/self", "cat/dangling", "cat/none"] {
             assert_eq!(resolve(&ports, &aliases, &key(k)), None, "{k}");
@@ -482,8 +518,15 @@ mod tests {
         let found = detect(&ports, &HashMap::new());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].members.len(), n + 1);
-        let line = found[0].extra_line().expect("the walk cannot cover them all");
-        assert_eq!(line.split_whitespace().filter(|w| w.starts_with("cat/")).count(), EXTRA_SHOWN);
+        let line = found[0]
+            .extra_line()
+            .expect("the walk cannot cover them all");
+        assert_eq!(
+            line.split_whitespace()
+                .filter(|w| w.starts_with("cat/"))
+                .count(),
+            EXTRA_SHOWN
+        );
         assert!(line.ends_with("+ 4 more"), "{line}");
 
         // Exactly as many extras as are shown: nothing left to count.
@@ -510,7 +553,10 @@ mod tests {
     fn test_only_edges_do_not_close_a_loop() {
         assert!(loops(&[("cat/a", &["cat/b"]), ("cat/b", &["test:cat/a"])]).is_empty());
         // The same pair with a real edge back is a loop again.
-        assert_eq!(loops(&[("cat/a", &["cat/b"]), ("cat/b", &["cat/a"])]).len(), 1);
+        assert_eq!(
+            loops(&[("cat/a", &["cat/b"]), ("cat/b", &["cat/a"])]).len(),
+            1
+        );
         // A port that only tests against itself is not a loop either.
         assert!(loops(&[("cat/a", &["test:cat/a"])]).is_empty());
     }

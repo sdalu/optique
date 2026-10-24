@@ -2,8 +2,6 @@
 
 use std::collections::BTreeSet;
 
-
-
 use crate::draft;
 use crate::model::origin::PortKey;
 
@@ -15,7 +13,10 @@ pub(super) const UNDO_MAX: usize = 100;
 
 /// Push onto the undo stack, dropping the oldest entry once it is full (a
 /// Vec shift at 100 entries costs nothing and keeps the newest undo on top).
-pub(super) fn push_capped(stack: &mut Vec<(String, BTreeSet<String>)>, entry: (String, BTreeSet<String>)) {
+pub(super) fn push_capped(
+    stack: &mut Vec<(String, BTreeSet<String>)>,
+    entry: (String, BTreeSet<String>),
+) {
     if stack.len() >= UNDO_MAX {
         stack.remove(0);
     }
@@ -43,7 +44,13 @@ impl App {
         let restored = self.session.restore_draft(&draft);
         for (name, staged) in before {
             // Only the states the restore actually moved.
-            if self.session.states.get(&name).map(|s| s.staged != staged).unwrap_or(false) {
+            if self
+                .session
+                .states
+                .get(&name)
+                .map(|s| s.staged != staged)
+                .unwrap_or(false)
+            {
                 self.push_undo_entry(name, staged);
             }
         }
@@ -53,8 +60,11 @@ impl App {
             draft::discard(&self.options_dir);
             return None;
         }
-        let owners: Vec<PortKey> =
-            draft.staged.keys().filter_map(|name| self.session.owners.get(name).cloned()).collect();
+        let owners: Vec<PortKey> = draft
+            .staged
+            .keys()
+            .filter_map(|name| self.session.owners.get(name).cloned())
+            .collect();
         for key in owners {
             self.mark_pending(&key);
         }

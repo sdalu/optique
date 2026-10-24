@@ -38,7 +38,10 @@ struct CleanCtx {
 /// itself; a package list is only consulted for --unused.
 pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     if cli.minimal && !args.redundant {
-        eprintln!("{} --minimal does not affect clean; its counterpart here is --redundant", tint(stderr_color(cli), ansi::YELLOW, "note:"));
+        eprintln!(
+            "{} --minimal does not affect clean; its counterpart here is --redundant",
+            tint(stderr_color(cli), ansi::YELLOW, "note:")
+        );
     }
     let has_list = !args.origins.is_empty() || !cli.files.is_empty();
     // In synth mode the installed packages are the implicit list.
@@ -102,7 +105,12 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
             scanned.flagged_moves()
         );
     }
-    let used = scanned.result.ports.values().map(|i| i.options_name.clone()).collect();
+    let used = scanned
+        .result
+        .ports
+        .values()
+        .map(|i| i.options_name.clone())
+        .collect();
     // Sorted by port, so the port each note names is the same every run.
     let mut infos: Vec<&PortInfo> = scanned.result.ports.values().collect();
     infos.sort_by(|a, b| a.key.cmp(&b.key));
@@ -120,9 +128,21 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
 }
 
 fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<()> {
-    let CleanCtx { settings, moved, jobs, cache: open_cache, used, mut read, _staging } = ctx;
+    let CleanCtx {
+        settings,
+        moved,
+        jobs,
+        cache: open_cache,
+        used,
+        mut read,
+        _staging,
+    } = ctx;
     let paint = stderr_color(cli);
-    eprintln!("{} options dir {}", tint(paint, ansi::BOLD, "optique clean:"), settings.options_dir.display());
+    eprintln!(
+        "{} options dir {}",
+        tint(paint, ansi::BOLD, "optique clean:"),
+        settings.options_dir.display()
+    );
     for note in &settings.notes {
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
@@ -133,13 +153,12 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
     }
 
-    let (vanished, live, mut warnings) =
-        clean::classify_entries(
-            &settings.options_dir,
-            &settings.portsdir,
-            &settings.overlay_paths(),
-            &moved,
-        );
+    let (vanished, live, mut warnings) = clean::classify_entries(
+        &settings.options_dir,
+        &settings.portsdir,
+        &settings.overlay_paths(),
+        &moved,
+    );
     let total_entries = vanished.len() + live.len();
     // Only --verbose fills this in; JSON reports it as `kept`.
     let mut kept_entries: Vec<(String, String)> = Vec::new();
@@ -252,7 +271,10 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             settings.options_dir.display()
         );
     } else {
-        eprintln!("{removed} entry(ies) removed from {}", settings.options_dir.display());
+        eprintln!(
+            "{removed} entry(ies) removed from {}",
+            settings.options_dir.display()
+        );
     }
     Ok(())
 }
@@ -334,7 +356,14 @@ fn find_redundant(
             }
             Err(_) => break,
         }
-        eprint!("\r{}", tint(paint, ansi::GRAY, &format!("checking… {done}/{total} ports")));
+        eprint!(
+            "\r{}",
+            tint(
+                paint,
+                ansi::GRAY,
+                &format!("checking… {done}/{total} ports")
+            )
+        );
         let _ = std::io::stderr().flush();
     }
     if done > 0 {
@@ -402,7 +431,9 @@ impl<'a> RedundancyPass<'a> {
     /// The answer of an entry's default flavor: a verdict, or the other
     /// flavors reading the file, to ask before there can be one.
     fn default_answer(&mut self, key: PortKey, result: Answer) -> Vec<PortKey> {
-        let Some(&entry) = self.by_key.get(&key) else { return Vec::new() };
+        let Some(&entry) = self.by_key.get(&key) else {
+            return Vec::new();
+        };
         let info = match result {
             Ok(info) => info,
             Err((_, msg)) => {
@@ -427,17 +458,25 @@ impl<'a> RedundancyPass<'a> {
             .filter(|f| info.canonical.flavor.as_ref() != Some(*f))
             .map(|f| PortKey::new(key.origin.clone(), Some(f.clone())))
             .collect();
-        let f = Flavors { entry, infos: vec![info], waiting: others.len(), failed: None };
+        let f = Flavors {
+            entry,
+            infos: vec![info],
+            waiting: others.len(),
+            failed: None,
+        };
         // A deviating default flavor settles it: no need to ask the
         // others. Not one reading a file of its own (`session::moved`).
-        let local = self.files.under_local(&entry.options_name, Default::default());
+        let local = self
+            .files
+            .under_local(&entry.options_name, Default::default());
         let deviates = session::moved(&f.infos[0]).is_none()
             && shared_file_deviation(&f.infos, &local).is_some();
         if others.is_empty() || deviates {
             self.settle(f);
             return Vec::new();
         }
-        self.pending.insert(PortKey::new(key.origin.clone(), None), f);
+        self.pending
+            .insert(PortKey::new(key.origin.clone(), None), f);
         others
     }
 
@@ -445,7 +484,9 @@ impl<'a> RedundancyPass<'a> {
     /// last one is in.
     fn flavor_answer(&mut self, key: &PortKey, result: Answer) {
         let plain = PortKey::new(key.origin.clone(), None);
-        let Some(f) = self.pending.get_mut(&plain) else { return };
+        let Some(f) = self.pending.get_mut(&plain) else {
+            return;
+        };
         f.waiting -= 1;
         match result {
             // A flavor with an options name of its own, or with no
@@ -456,12 +497,18 @@ impl<'a> RedundancyPass<'a> {
             Ok(_) => {}
             Err((_, msg)) => {
                 f.failed.get_or_insert_with(|| {
-                    format!("{}: {key}: query failed, left alone ({msg})", f.entry.options_name)
+                    format!(
+                        "{}: {key}: query failed, left alone ({msg})",
+                        f.entry.options_name
+                    )
                 });
             }
         }
         if f.waiting == 0 {
-            let f = self.pending.remove(&plain).expect("pending entry just seen");
+            let f = self
+                .pending
+                .remove(&plain)
+                .expect("pending entry just seen");
             self.settle(f);
         }
     }
@@ -477,8 +524,10 @@ impl<'a> RedundancyPass<'a> {
         // A flavor make.conf moves OPTIONS_FILE for reads none of the file
         // (`session::moved`); the file is judged for the others alone, and
         // kept when none is left.
-        let (moved, readers): (Vec<PortInfo>, Vec<PortInfo>) =
-            f.infos.into_iter().partition(|i| session::moved(i).is_some());
+        let (moved, readers): (Vec<PortInfo>, Vec<PortInfo>) = f
+            .infos
+            .into_iter()
+            .partition(|i| session::moved(i).is_some());
         if readers.is_empty() {
             if let (true, Some(u)) = (self.verbose, moved.first().and_then(session::moved)) {
                 self.found.kept.push((f.entry.options_name.clone(), u.why));
@@ -492,7 +541,9 @@ impl<'a> RedundancyPass<'a> {
             }
             return;
         }
-        let local = self.files.under_local(&f.entry.options_name, Default::default());
+        let local = self
+            .files
+            .under_local(&f.entry.options_name, Default::default());
         match shared_file_deviation(&readers, &local) {
             None => self.found.removals.push(clean::Removal {
                 options_name: f.entry.options_name.clone(),
@@ -509,20 +560,33 @@ impl<'a> RedundancyPass<'a> {
 /// reads it (`infos`, default flavor first, each queried with the file in
 /// place): the first flavor it moves away from defaults + make.conf. None
 /// when the file changes nothing for any of them.
-fn shared_file_deviation(infos: &[PortInfo], local: &optionsfile::SavedOptionsFile) -> Option<String> {
+fn shared_file_deviation(
+    infos: &[PortInfo],
+    local: &optionsfile::SavedOptionsFile,
+) -> Option<String> {
     // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
     // the file; it is kept, not judged redundant, whatever it says.
     if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {
-        return Some(format!("{}: make.conf OPTIONS_OVERRIDE decides it, left alone", info.key));
+        return Some(format!(
+            "{}: make.conf OPTIONS_OVERRIDE decides it, left alone",
+            info.key
+        ));
     }
     infos.iter().find_map(|info| {
         let diff = clean::redundancy_diff(info, local);
         if diff.is_empty() {
             None
         } else if info.is_default_flavor() {
-            Some(format!("deviates from defaults + make.conf: {}", diff.join(" ")))
+            Some(format!(
+                "deviates from defaults + make.conf: {}",
+                diff.join(" ")
+            ))
         } else {
-            Some(format!("deviates from defaults + make.conf for {}: {}", info.key, diff.join(" ")))
+            Some(format!(
+                "deviates from defaults + make.conf for {}: {}",
+                info.key,
+                diff.join(" ")
+            ))
         }
     })
 }
@@ -544,9 +608,16 @@ mod tests {
             info
         };
         let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
-        assert_eq!(super::shared_file_deviation(std::slice::from_ref(&mysql), &Default::default()), None);
-        let why = super::shared_file_deviation(&[mysql, pgsql], &Default::default()).expect("@pgsql reads MYSQL from the file");
-        assert!(why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"), "{why}");
+        assert_eq!(
+            super::shared_file_deviation(std::slice::from_ref(&mysql), &Default::default()),
+            None
+        );
+        let why = super::shared_file_deviation(&[mysql, pgsql], &Default::default())
+            .expect("@pgsql reads MYSQL from the file");
+        assert!(
+            why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"),
+            "{why}"
+        );
     }
 
     /// bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never

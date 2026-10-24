@@ -25,7 +25,11 @@ pub(crate) fn stderr_color(cli: &Cli) -> bool {
 
 /// Whether to paint a stream, given whether it is a terminal.
 pub(crate) fn color_for(cli: &Cli, is_terminal: bool) -> bool {
-    cli::use_color(cli.color, is_terminal, std::env::var("NO_COLOR").ok().as_deref())
+    cli::use_color(
+        cli.color,
+        is_terminal,
+        std::env::var("NO_COLOR").ok().as_deref(),
+    )
 }
 
 /// Wrap `text` in a color when painting is enabled.
@@ -40,10 +44,10 @@ pub(crate) fn tint(on: bool, color: &str, text: &str) -> String {
 /// Color for a scan status marker; None for the unmarked ok rows.
 pub(crate) fn marker_color(marker: &str) -> Option<&'static str> {
     match marker {
-        "?" => Some(ansi::YELLOW),      // unconfigured
-        "!" => Some(ansi::LIGHT_RED),   // stale
-        "✗" => Some(ansi::RED),         // conflict
-        "⊘" => Some(ansi::GRAY),       // blacklisted
+        "?" => Some(ansi::YELLOW),    // unconfigured
+        "!" => Some(ansi::LIGHT_RED), // stale
+        "✗" => Some(ansi::RED),       // conflict
+        "⊘" => Some(ansi::GRAY),      // blacklisted
         _ => None,
     }
 }

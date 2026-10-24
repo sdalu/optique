@@ -6,8 +6,8 @@ use crate::cli::Cli;
 use crate::color::{ansi, stderr_color, tint};
 use crate::{apply, cli, report, session};
 
-use super::write::{commit_writes, print_write_summary, WritePass};
-use super::{run_scan, RootSet};
+use super::write::{WritePass, commit_writes, print_write_summary};
+use super::{RootSet, run_scan};
 
 pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<()> {
     let (dry_run, json) = (cli.dry_run, args.json);
@@ -47,7 +47,10 @@ pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<
         for w in &pass.writes {
             outln!("{}  {}", w.key, w.describe())?;
             if cli.verbose {
-                outln!("     final: {}", session::signed_options(&w.complete, &w.enabled))?;
+                outln!(
+                    "     final: {}",
+                    session::signed_options(&w.complete, &w.enabled)
+                )?;
             }
         }
     }
@@ -58,7 +61,12 @@ pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<
         report::print(&report)?;
     }
     for e in &report.errors {
-        eprintln!("{} {}: {}", tint(paint, ansi::RED, "error:"), e.subject, e.message);
+        eprintln!(
+            "{} {}: {}",
+            tint(paint, ansi::RED, "error:"),
+            e.subject,
+            e.message
+        );
     }
     print_write_summary(&pass, &report, &settings.options_dir, dry_run);
     Ok(())

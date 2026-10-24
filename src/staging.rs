@@ -89,14 +89,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let real = tmp.path().join("real");
         let odd: &[u8] = b"# hand-edited\n_FILE_COMPLETE_OPTIONS_LIST= A  B\n\xff\n";
-        for (name, content) in [("cat_odd", odd), ("cat_plain", &b"OPTIONS_FILE_SET+=A\n"[..])] {
+        for (name, content) in [
+            ("cat_odd", odd),
+            ("cat_plain", &b"OPTIONS_FILE_SET+=A\n"[..]),
+        ] {
             fs::create_dir_all(real.join(name)).unwrap();
             fs::write(real.join(name).join("options"), content).unwrap();
         }
         // An options.local beside a file, and one with no options file.
         fs::write(real.join("cat_odd/options.local"), "OPTIONS_FILE_SET+=B\n").unwrap();
         fs::create_dir_all(real.join("cat_local")).unwrap();
-        fs::write(real.join("cat_local/options.local"), "OPTIONS_FILE_SET+=C\n").unwrap();
+        fs::write(
+            real.join("cat_local/options.local"),
+            "OPTIONS_FILE_SET+=C\n",
+        )
+        .unwrap();
         let files = OptionsFiles::new(&real);
         let names: Vec<String> = ["cat_odd", "cat_plain", "cat_absent", "cat_local"]
             .iter()
@@ -111,7 +118,11 @@ mod tests {
         fs::write(real.join("cat_plain/options"), "edited later\n").unwrap();
 
         let db = StagingDb::create(tmp.path(), &files, names.iter()).unwrap();
-        assert_eq!((files.disk_reads(), files.local_reads()), reads, "seeding read nothing");
+        assert_eq!(
+            (files.disk_reads(), files.local_reads()),
+            reads,
+            "seeding read nothing"
+        );
         assert_eq!(fs::read(db.path().join("cat_odd/options")).unwrap(), odd);
         assert_eq!(
             fs::read(db.path().join("cat_plain/options")).unwrap(),

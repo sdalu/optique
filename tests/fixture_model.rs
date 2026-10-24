@@ -88,7 +88,11 @@ fn options_local_is_read_after_the_file() {
         "{}",
         common::stderr(&out)
     );
-    assert!(common::stderr(&out).contains("up to date"), "{}", common::stderr(&out));
+    assert!(
+        common::stderr(&out).contains("up to date"),
+        "{}",
+        common::stderr(&out)
+    );
     assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
 }
@@ -104,11 +108,20 @@ fn minimal_sync_keeps_a_file_options_local_needs() {
     let origin = "misc/cond";
     f.run("sync", &[origin]);
     let file = std::fs::read_to_string(f.file("misc_cond")).expect("sync writes the defaults");
-    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_SET+=AUDIO NAS\n").unwrap();
+    std::fs::write(
+        f.options.join("misc_cond/options.local"),
+        "OPTIONS_FILE_SET+=AUDIO NAS\n",
+    )
+    .unwrap();
     let before = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(before, ["DOCS"]);
     let out = f.run("sync", &["-m", origin]);
-    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).ok().as_deref(), Some(&*file), "{}", common::stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(f.file("misc_cond")).ok().as_deref(),
+        Some(&*file),
+        "{}",
+        common::stderr(&out)
+    );
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), before);
 }
 
@@ -124,19 +137,33 @@ fn decide_refuses_what_options_local_decides() {
     f.run("sync", &[origin]);
     let file = std::fs::read_to_string(f.file("misc_cond")).expect("sync writes the defaults");
     assert!(file.contains("OPTIONS_FILE_SET+=DOCS"), "{file}");
-    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET+=DOCS\n").unwrap();
+    std::fs::write(
+        f.options.join("misc_cond/options.local"),
+        "OPTIONS_FILE_UNSET+=DOCS\n",
+    )
+    .unwrap();
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), Vec::<String>::new());
 
     let plan = f.decide(&[origin], r#"{"misc/cond": {"DOCS": true}}"#);
     let rejected = &plan["rejected"];
     assert_eq!(rejected.as_array().map(Vec::len), Some(1), "{plan}");
     assert_eq!(rejected[0]["option"], "DOCS", "{plan}");
-    assert_eq!(rejected[0]["reason"], "options.local decides DOCS; edit it there", "{plan}");
+    assert_eq!(
+        rejected[0]["reason"], "options.local decides DOCS; edit it there",
+        "{plan}"
+    );
     assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file);
 
     let port = f.scan_port(&[origin], origin);
     let docs = common::option(&port, "DOCS");
-    assert_eq!((&docs["locked"], &docs["locked_by"]), (&serde_json::json!(true), &serde_json::json!("options.local")), "{docs}");
+    assert_eq!(
+        (&docs["locked"], &docs["locked_by"]),
+        (
+            &serde_json::json!(true),
+            &serde_json::json!("options.local")
+        ),
+        "{docs}"
+    );
 }
 
 /// bsd.options.mk:321: an UNSET entry is a make pattern. make.conf's
@@ -155,7 +182,11 @@ fn make_conf_unset_entries_are_patterns() {
     assert_eq!(port["undecided"], serde_json::json!(new), "{port}");
     for opt in ["A", "A2"] {
         let o = common::option(&port, opt);
-        assert_eq!(o["makeconf"], serde_json::json!({"value": false, "scope": "global"}), "{o}");
+        assert_eq!(
+            o["makeconf"],
+            serde_json::json!({"value": false, "scope": "global"}),
+            "{o}"
+        );
     }
 }
 
@@ -171,10 +202,18 @@ fn an_options_slave_options_prevents_are_checked() {
     let origin = "misc/model-slave-prevents";
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["X", "Y"]);
     let check = f.make(origin, &["check-config"]);
-    assert!(!check.status.success(), "check-config passes: {}", common::stdout(&check));
+    assert!(
+        !check.status.success(),
+        "check-config passes: {}",
+        common::stdout(&check)
+    );
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["status"], "conflict", "{port}");
-    assert_eq!(port["violations"], serde_json::json!(["X conflicts with Y: mutually exclusive"]), "{port}");
+    assert_eq!(
+        port["violations"],
+        serde_json::json!(["X conflicts with Y: mutually exclusive"]),
+        "{port}"
+    );
     assert_eq!(flagged(&port, "staged"), ["Y"], "{port}");
 }
 
@@ -191,15 +230,30 @@ fn an_implied_excluded_options_prevents_is_checked() {
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["B1", "C", "FOO"]);
     assert_eq!(f.make_v(origin, "COMPLETE_OPTIONS_LIST"), ["B1", "C"]);
     let check = f.make(origin, &["check-config"]);
-    assert!(!check.status.success(), "check-config passes: {}", common::stdout(&check));
+    assert!(
+        !check.status.success(),
+        "check-config passes: {}",
+        common::stdout(&check)
+    );
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["status"], "conflict", "{port}");
-    assert_eq!(port["violations"], serde_json::json!(["FOO conflicts with B1: mutually exclusive"]), "{port}");
+    assert_eq!(
+        port["violations"],
+        serde_json::json!(["FOO conflicts with B1: mutually exclusive"]),
+        "{port}"
+    );
 
-    let plan = f.decide(&[origin], r#"{"misc/model-implied-prevents": {"B1": false}}"#);
+    let plan = f.decide(
+        &[origin],
+        r#"{"misc/model-implied-prevents": {"B1": false}}"#,
+    );
     assert_eq!(plan["applied"], true, "{plan}");
     let check = f.make(origin, &["check-config"]);
-    assert!(check.status.success(), "check-config fails: {}", common::stdout(&check));
+    assert!(
+        check.status.success(),
+        "check-config fails: {}",
+        common::stdout(&check)
+    );
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["violations"], serde_json::json!([]), "{port}");
 }
@@ -229,7 +283,11 @@ fn options_override_decides_the_port_and_the_file_is_untouched() {
     for opt in ["DOCS", "AUDIO", "NAS", "SOX"] {
         let o = common::option(&port, opt);
         let on = opt == "DOCS";
-        assert_eq!(o["makeconf"], serde_json::json!({"value": on, "scope": "override"}), "{o}");
+        assert_eq!(
+            o["makeconf"],
+            serde_json::json!({"value": on, "scope": "override"}),
+            "{o}"
+        );
         assert_eq!(o["locked"], true, "{o}");
         assert_eq!(o["locked_by"], "make.conf OPTIONS_OVERRIDE", "{o}");
     }
@@ -240,7 +298,11 @@ fn options_override_decides_the_port_and_the_file_is_untouched() {
         "{}",
         common::stderr(&out)
     );
-    assert_eq!(std::fs::read_to_string(f.file("misc_cond")).unwrap(), file, "sync must not touch it");
+    assert_eq!(
+        std::fs::read_to_string(f.file("misc_cond")).unwrap(),
+        file,
+        "sync must not touch it"
+    );
 }
 
 /// bsd.options.mk:300-304: an OPTIONS_OVERRIDE defined empty is still
@@ -260,7 +322,11 @@ fn an_empty_options_override_turns_everything_off() {
     assert_eq!(port["status"], "ok", "{port}");
 
     let out = f.run("sync", &[origin]);
-    assert!(!f.file("misc_cond").exists(), "no file existed, none must appear: {}", common::stderr(&out));
+    assert!(
+        !f.file("misc_cond").exists(),
+        "no file existed, none must appear: {}",
+        common::stderr(&out)
+    );
 }
 
 /// bsd.options.mk:399-409: make.conf's WITH and WITHOUT apply after FORCE
@@ -280,7 +346,11 @@ fn with_and_without_pin_like_force() {
     assert_eq!(port["undecided"], serde_json::json!(new), "{port}");
     for (opt, on) in [("C", true), ("A2", false)] {
         let o = common::option(&port, opt);
-        assert_eq!(o["makeconf"], serde_json::json!({"value": on, "scope": "with"}), "{o}");
+        assert_eq!(
+            o["makeconf"],
+            serde_json::json!({"value": on, "scope": "with"}),
+            "{o}"
+        );
         assert_eq!(o["locked_by"], "make.conf WITH/WITHOUT", "{o}");
     }
 }
@@ -310,11 +380,19 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
     assert_eq!(flagged(&port, "staged"), make, "{port}");
     assert_eq!(flagged(&port, "new"), new, "{port}");
 
-    std::fs::write(f.options.join("misc_cond/options.local"), "OPTIONS_FILE_UNSET ?= NAS\n").unwrap();
+    std::fs::write(
+        f.options.join("misc_cond/options.local"),
+        "OPTIONS_FILE_UNSET ?= NAS\n",
+    )
+    .unwrap();
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
     let port = f.scan_port(&[origin], origin);
     assert_eq!(flagged(&port, "staged"), make, "{port}");
-    assert_eq!(common::option(&port, "NAS")["locked_by"], "options.local", "{port}");
+    assert_eq!(
+        common::option(&port, "NAS")["locked_by"],
+        "options.local",
+        "{port}"
+    );
 }
 
 /// bsd.options.mk:343 `.sinclude`s options.local whether or not the
@@ -342,7 +420,10 @@ fn options_local_without_an_options_file_is_read() {
     assert_eq!(flagged(&port, "new"), Vec::<String>::new(), "{port}");
 
     f.run("sync", &[origin]);
-    assert!(f.file("misc_cond").exists(), "a port with no options file gets one");
+    assert!(
+        f.file("misc_cond").exists(),
+        "a port with no options file gets one"
+    );
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
 }
@@ -355,7 +436,10 @@ fn options_local_without_an_options_file_is_read() {
 fn a_continued_line_is_read_as_make_reads_it() {
     let f = Fixture::new();
     let origin = "misc/cond";
-    f.write_file("misc_cond", "OPTIONS_FILE_SET+=AUDIO \\\n\tNAS\nOPTIONS_FILE_UNSET+=DOCS SOX\n");
+    f.write_file(
+        "misc_cond",
+        "OPTIONS_FILE_SET+=AUDIO \\\n\tNAS\nOPTIONS_FILE_UNSET+=DOCS SOX\n",
+    );
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, ["AUDIO", "NAS"]);
     assert_eq!(f.make_v(origin, "NEW_OPTIONS"), Vec::<String>::new());
@@ -378,7 +462,11 @@ fn a_group_named_after_a_defined_member_is_conditional() {
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, Vec::<String>::new());
     let check = f.make(origin, &["check-config"]);
-    assert!(check.status.success(), "check-config fails: {}", common::stdout(&check));
+    assert!(
+        check.status.success(),
+        "check-config fails: {}",
+        common::stdout(&check)
+    );
     let port = f.scan_port(&[origin], origin);
     assert_eq!(port["violations"], serde_json::json!([]), "{port}");
     assert_ne!(port["status"], "conflict", "{port}");
@@ -398,7 +486,10 @@ fn an_implies_chain_ends_as_make_ends_it() {
     let port = f.scan_port(&[origin], origin);
     assert_eq!(flagged(&port, "staged"), make, "no file: {port}");
 
-    f.write_file("misc_model-implies", "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C D\n");
+    f.write_file(
+        "misc_model-implies",
+        "OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C D\n",
+    );
     let make = f.make_v(origin, "PORT_OPTIONS");
     assert_eq!(make, ["A", "B", "C"]);
     let port = f.scan_port(&[origin], origin);
@@ -419,7 +510,12 @@ fn an_overfull_radio_group_conflicts_as_check_config_fails() {
             &format!("OPTIONS_FILE_SET+={set}\nOPTIONS_FILE_UNSET+={unset}\n"),
         );
         let check = f.make(origin, &["check-config"]);
-        assert_eq!(!check.status.success(), overfull, "check-config with {set}: {}", common::stdout(&check));
+        assert_eq!(
+            !check.status.success(),
+            overfull,
+            "check-config with {set}: {}",
+            common::stdout(&check)
+        );
         let port = f.scan_port(&[origin], origin);
         assert_eq!(port["status"] == "conflict", overfull, "{set}: {port}");
         if overfull {
@@ -442,11 +538,19 @@ fn an_options_local_set_is_a_default_the_file_overrides() {
     let f = Fixture::new();
     let origin = "misc/model-implies";
     f.run("sync", &[origin]);
-    std::fs::write(f.options.join("misc_model-implies/options.local"), "OPTIONS_FILE_SET+=D\n").unwrap();
+    std::fs::write(
+        f.options.join("misc_model-implies/options.local"),
+        "OPTIONS_FILE_SET+=D\n",
+    )
+    .unwrap();
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), Vec::<String>::new());
     let port = f.scan_port(&[origin], origin);
     let d = common::option(&port, "D");
-    assert_eq!((&d["staged"], &d["locked"]), (&serde_json::json!(false), &serde_json::json!(false)), "{d}");
+    assert_eq!(
+        (&d["staged"], &d["locked"]),
+        (&serde_json::json!(false), &serde_json::json!(false)),
+        "{d}"
+    );
 
     let plan = f.decide(&[origin], r#"{"misc/model-implies": {"D": true}}"#);
     assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
@@ -472,7 +576,11 @@ fn an_options_file_optique_cannot_model_is_left_to_make() {
     assert_eq!(make, ["A", "A2", "B"]);
     let port = f.scan_port(&[origin], origin);
     assert_eq!(flagged(&port, "staged"), make, "{port}");
-    assert_eq!((&port["status"], &port["undecided"]), (&serde_json::json!("ok"), &serde_json::json!([])), "{port}");
+    assert_eq!(
+        (&port["status"], &port["undecided"]),
+        (&serde_json::json!("ok"), &serde_json::json!([])),
+        "{port}"
+    );
     for o in port["options"].as_array().unwrap() {
         assert!(o.get("makeconf").is_none(), "{o}");
         assert_eq!(o["locked_by"], "options file", "{o}");
@@ -483,10 +591,21 @@ fn an_options_file_optique_cannot_model_is_left_to_make() {
         "misc_model-globs/options line {line} assigns OPTIONS_SET, which optique does not model: \
          optique leaves misc_model-globs/options alone"
     );
-    assert!(common::stderr(&out).contains(&warning), "{}", common::stderr(&out));
-    assert_eq!(std::fs::read_to_string(f.file("misc_model-globs")).unwrap(), file);
+    assert!(
+        common::stderr(&out).contains(&warning),
+        "{}",
+        common::stderr(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.file("misc_model-globs")).unwrap(),
+        file
+    );
     f.run("clean", &["--redundant"]);
-    assert_eq!(std::fs::read_to_string(f.file("misc_model-globs")).unwrap(), file, "clean --redundant kept it");
+    assert_eq!(
+        std::fs::read_to_string(f.file("misc_model-globs")).unwrap(),
+        file,
+        "clean --redundant kept it"
+    );
 
     std::fs::write(f.options.join("misc_model-globs/options.local"), "WITH=C\n").unwrap();
     let make = f.make_v(origin, "PORT_OPTIONS");
@@ -504,18 +623,40 @@ fn an_options_file_optique_cannot_model_is_left_to_make() {
 fn a_moved_options_file_leaves_the_port_alone() {
     let f = Fixture::new();
     let origin = "misc/cond";
-    std::fs::write(&f.make_conf, "PORT_DBDIR=/nonexistent\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/moved\n").unwrap();
+    std::fs::write(
+        &f.make_conf,
+        "PORT_DBDIR=/nonexistent\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/moved\n",
+    )
+    .unwrap();
     let moved = f.options.join("misc_cond/moved").display().to_string();
-    assert_eq!(f.make_v(origin, "OPTIONS_FILE"), std::slice::from_ref(&moved));
+    assert_eq!(
+        f.make_v(origin, "OPTIONS_FILE"),
+        std::slice::from_ref(&moved)
+    );
     let out = f.run("scan", &["--json", "--options", origin]);
     let stderr = common::stderr(&out);
-    assert!(stderr.contains(&format!("make.conf sets OPTIONS_FILE to {moved}")), "{stderr}");
+    assert!(
+        stderr.contains(&format!("make.conf sets OPTIONS_FILE to {moved}")),
+        "{stderr}"
+    );
     let report = common::json(&out);
-    let port = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == origin).unwrap();
+    let port = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == origin)
+        .unwrap();
     assert_eq!(port["status"], "ok", "{port}");
-    assert_eq!(common::option(port, "DOCS")["locked_by"], "make.conf OPTIONS_FILE", "{port}");
+    assert_eq!(
+        common::option(port, "DOCS")["locked_by"],
+        "make.conf OPTIONS_FILE",
+        "{port}"
+    );
     f.run("sync", &[origin]);
-    assert!(!f.file("misc_cond").exists(), "sync wrote the file make does not read");
+    assert!(
+        !f.file("misc_cond").exists(),
+        "sync wrote the file make does not read"
+    );
 }
 
 /// bsd.options.mk:312-409: a make.conf set word is a pattern for the test
@@ -534,7 +675,11 @@ fn make_conf_set_globs_turn_nothing_on_and_decide_nothing() {
     assert_eq!(make, ["A", "A*", "A2", "B", "C*"]);
     assert_eq!(f.make_v(origin, "NEW_OPTIONS"), ["B"]);
     let port = f.scan_port(&[origin], origin);
-    assert_eq!(port["undecided"], serde_json::json!(["A", "A2", "B", "C"]), "{port}");
+    assert_eq!(
+        port["undecided"],
+        serde_json::json!(["A", "A2", "B", "C"]),
+        "{port}"
+    );
     assert_eq!(flagged(&port, "staged"), ["A", "A2", "B"], "{port}");
     assert_eq!(flagged(&port, "locked"), Vec::<String>::new(), "{port}");
 }
@@ -554,23 +699,46 @@ fn prevents_patterns_and_unlisted_implies_conflict_as_check_config_fails() {
     let complete = f.make_v(origin, "COMPLETE_OPTIONS_LIST");
     assert_eq!(complete, ["A", "B1", "B2", "C", "D"]);
     let port = f.scan_port(&[origin], origin);
-    let mut listed: Vec<String> =
-        port["options"].as_array().unwrap().iter().map(|o| o["name"].as_str().unwrap().to_string()).collect();
+    let mut listed: Vec<String> = port["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["name"].as_str().unwrap().to_string())
+        .collect();
     listed.sort();
     assert_eq!(listed, complete);
     for (set, unset, violation) in [
-        ("A B1", "B2 C D", Some("A conflicts with B*: mutually exclusive")),
+        (
+            "A B1",
+            "B2 C D",
+            Some("A conflicts with B*: mutually exclusive"),
+        ),
         ("A", "B1 B2 C D", None),
-        ("C D", "A B1 B2", Some("D conflicts with FOO: mutually exclusive")),
+        (
+            "C D",
+            "A B1 B2",
+            Some("D conflicts with FOO: mutually exclusive"),
+        ),
     ] {
-        f.write_file("misc_model-patterns", &format!("OPTIONS_FILE_SET+={set}\nOPTIONS_FILE_UNSET+={unset}\n"));
+        f.write_file(
+            "misc_model-patterns",
+            &format!("OPTIONS_FILE_SET+={set}\nOPTIONS_FILE_UNSET+={unset}\n"),
+        );
         let check = f.make(origin, &["check-config"]);
-        assert_eq!(!check.status.success(), violation.is_some(), "{set}: {}", common::stdout(&check));
+        assert_eq!(
+            !check.status.success(),
+            violation.is_some(),
+            "{set}: {}",
+            common::stdout(&check)
+        );
         let port = f.scan_port(&[origin], origin);
         let want: Vec<&str> = violation.into_iter().collect();
         assert_eq!(port["violations"], serde_json::json!(want), "{set}: {port}");
     }
-    assert!(f.make_v(origin, "PORT_OPTIONS").contains(&"FOO".to_string()));
+    assert!(
+        f.make_v(origin, "PORT_OPTIONS")
+            .contains(&"FOO".to_string())
+    );
 }
 
 /// bsd.port.mk drops the members of a conditional SINGLE group whose
@@ -585,10 +753,23 @@ fn a_pruned_group_members_dependencies_stay() {
     let origin = "misc/cond";
     std::fs::write(&f.make_conf, "WITH=SOX\n").unwrap();
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), ["DOCS"]);
-    assert!(f.make_v(origin, "RUN_DEPENDS").contains(&"true:misc/condep".to_string()));
+    assert!(
+        f.make_v(origin, "RUN_DEPENDS")
+            .contains(&"true:misc/condep".to_string())
+    );
     let report = common::json(&f.run("scan", &["--json", "--options", origin]));
-    let ports: Vec<&str> = report["ports"].as_array().unwrap().iter().map(|p| p["port"].as_str().unwrap()).collect();
+    let ports: Vec<&str> = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["port"].as_str().unwrap())
+        .collect();
     assert!(ports.contains(&"misc/condep"), "{ports:?}");
-    let cond = report["ports"].as_array().unwrap().iter().find(|p| p["port"] == origin).unwrap();
+    let cond = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == origin)
+        .unwrap();
     assert_eq!(flagged(cond, "staged"), ["DOCS"], "{cond}");
 }

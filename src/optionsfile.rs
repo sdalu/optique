@@ -79,9 +79,17 @@ fn logical_lines(text: &str) -> Vec<(usize, String)> {
     let mut out: Vec<(usize, String)> = Vec::new();
     let mut open = false;
     for (n, line) in text.lines().enumerate() {
-        let line = if open { line.trim_start_matches([' ', '\t']) } else { line };
+        let line = if open {
+            line.trim_start_matches([' ', '\t'])
+        } else {
+            line
+        };
         let trailing = line.len() - line.trim_end_matches('\\').len();
-        let (body, more) = if trailing % 2 == 1 { (&line[..line.len() - 1], true) } else { (line, false) };
+        let (body, more) = if trailing % 2 == 1 {
+            (&line[..line.len() - 1], true)
+        } else {
+            (line, false)
+        };
         match out.last_mut() {
             Some((_, joined)) if open => {
                 joined.push(' ');
@@ -126,7 +134,11 @@ impl SavedOptionsFile {
     /// model is recorded in `unmodeled` (`unmodeled_line`); the SET and
     /// UNSET lines around it are read all the same.
     fn read(&mut self, text: &str, lists_only: bool) {
-        let file = if lists_only { "options.local" } else { "options" };
+        let file = if lists_only {
+            "options.local"
+        } else {
+            "options"
+        };
         for (n, line) in logical_lines(text) {
             // A `#` starts a comment, at the head of a line or after a value;
             // `\#` is a literal `#`, as make reads it.
@@ -137,9 +149,15 @@ impl SavedOptionsFile {
             }
             let parsed = assignment(line).filter(|(name, _, _)| plain_name(name));
             if let Some(what) = unmodeled_line(line, parsed) {
-                self.unmodeled.push(Unmodeled { file, line: n, what });
+                self.unmodeled.push(Unmodeled {
+                    file,
+                    line: n,
+                    what,
+                });
             }
-            let Some((name, op, value)) = parsed else { continue };
+            let Some((name, op, value)) = parsed else {
+                continue;
+            };
             // A `?=` to a list in options.local assigns or not by what the
             // options file holds: inert while the file assigns the list,
             // it resets it once a write leaves the list out (`render`
@@ -191,9 +209,16 @@ impl SavedOptionsFile {
                     let set = name == "OPTIONS_FILE_SET";
                     let mut lists = vec![if set { &mut self.set } else { &mut self.unset }];
                     if lists_only {
-                        lists.push(if set { &mut self.local_set } else { &mut self.local_unset });
+                        lists.push(if set {
+                            &mut self.local_set
+                        } else {
+                            &mut self.local_unset
+                        });
                         // A `?=` is recorded as unmodeled above, line and all.
-                        if !append && op != Op::IfUnset && !self.local_resets.iter().any(|r| r == name) {
+                        if !append
+                            && op != Op::IfUnset
+                            && !self.local_resets.iter().any(|r| r == name)
+                        {
                             self.local_resets.push(name.to_string());
                         }
                     }
@@ -256,7 +281,13 @@ impl SavedOptionsFile {
             ));
         }
         self.unmodeled.first().map(|u| {
-            (u.file, format!("{} line {} {}: optique leaves the options file alone; edit it by hand", u.file, u.line, u.what))
+            (
+                u.file,
+                format!(
+                    "{} line {} {}: optique leaves the options file alone; edit it by hand",
+                    u.file, u.line, u.what
+                ),
+            )
         })
     }
 
@@ -270,7 +301,11 @@ impl SavedOptionsFile {
     /// `make config-conditional` asks about them again. `make config` never
     /// writes such a file; a hand edit or a write cut short does.
     pub fn unlined(&self) -> Vec<&str> {
-        self.complete.iter().map(String::as_str).filter(|o| !self.decides(o)).collect()
+        self.complete
+            .iter()
+            .map(String::as_str)
+            .filter(|o| !self.decides(o))
+            .collect()
     }
 
     /// Whether the file settles the option: it has a SET or UNSET line for
@@ -296,7 +331,10 @@ impl SavedOptionsFile {
 /// Whether `name` is a variable name as written: nothing make would expand,
 /// nor anything that makes the line a directive or a dependency line.
 fn plain_name(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 
 /// What a line does that optique cannot model, None for a line it reads
@@ -317,7 +355,11 @@ fn plain_name(name: &str) -> bool {
 fn unmodeled_line(line: &str, parsed: Option<(&str, Op, &str)>) -> Option<String> {
     let Some((name, op, value)) = parsed else {
         return Some(if let Some(rest) = line.strip_prefix('.') {
-            let word: String = rest.trim_start().chars().take_while(char::is_ascii_alphanumeric).collect();
+            let word: String = rest
+                .trim_start()
+                .chars()
+                .take_while(char::is_ascii_alphanumeric)
+                .collect();
             format!("is a make directive (.{word})")
         } else if line.contains('$') {
             "expands a variable ($)".to_string()
@@ -329,8 +371,10 @@ fn unmodeled_line(line: &str, parsed: Option<(&str, Op, &str)>) -> Option<String
         Some("assigns with != (a shell command)".to_string())
     } else if value.contains('$') {
         Some("expands a variable ($)".to_string())
-    } else if matches!(name, "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" | "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST")
-    {
+    } else if matches!(
+        name,
+        "OPTIONS_FILE_SET" | "OPTIONS_FILE_UNSET" | "_OPTIONS_READ" | "_FILE_COMPLETE_OPTIONS_LIST"
+    ) {
         None
     } else {
         Some(format!("assigns {name}, which optique does not model"))
@@ -350,7 +394,10 @@ pub fn render(pkgname: &str, complete: &[String], enabled: &BTreeSet<String>) ->
     let mut out = String::new();
     out.push_str("# This file is auto-generated by 'make config'.\n");
     out.push_str(&format!("# Options for {pkgname}, by optique\n"));
-    out.push_str(&format!("_FILE_COMPLETE_OPTIONS_LIST={}\n", complete.join(" ")));
+    out.push_str(&format!(
+        "_FILE_COMPLETE_OPTIONS_LIST={}\n",
+        complete.join(" ")
+    ));
     for opt in complete {
         if enabled.contains(opt) {
             out.push_str(&format!("OPTIONS_FILE_SET+={opt}\n"));
@@ -392,7 +439,10 @@ mod tests {
              OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=A\n\
              OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=C\n",
         );
-        let v: Vec<_> = ["A", "B", "C", "D", "E"].iter().map(|o| f.value(o)).collect();
+        let v: Vec<_> = ["A", "B", "C", "D", "E"]
+            .iter()
+            .map(|o| f.value(o))
+            .collect();
         assert_eq!(v, [Some(false), Some(true), Some(false), None, None]);
     }
 
@@ -454,7 +504,9 @@ OPTIONS_FILE_UNSET+=FLITE
     /// make reads `J+=k\#l m # note` as `k#l m`.
     #[test]
     fn an_escaped_hash_is_part_of_the_value() {
-        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\\#B C # note D\nOPTIONS_FILE_UNSET+=E#F\n");
+        let f = SavedOptionsFile::parse(
+            "OPTIONS_FILE_SET+=A\\#B C # note D\nOPTIONS_FILE_UNSET+=E#F\n",
+        );
         let set: Vec<&str> = f.set.iter().map(String::as_str).collect();
         let unset: Vec<&str> = f.unset.iter().map(String::as_str).collect();
         assert_eq!((set, unset), (vec!["A#B", "C"], vec!["E"]));
@@ -468,16 +520,28 @@ OPTIONS_FILE_UNSET+=FLITE
              _FILE_COMPLETE_OPTIONS_LIST!=echo G\n",
         );
         let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
-        assert_eq!(f.set, words(&["B", "C"]), "`:=` resets, `?=` after it assigns nothing");
-        assert_eq!(f.unset, words(&["E"]), "the first `?=` assigns, the second not");
+        assert_eq!(
+            f.set,
+            words(&["B", "C"]),
+            "`:=` resets, `?=` after it assigns nothing"
+        );
+        assert_eq!(
+            f.unset,
+            words(&["E"]),
+            "the first `?=` assigns, the second not"
+        );
         assert!(f.complete.is_empty());
         assert_eq!(places(&f), [("options", 6)]);
         // options.local carries on: its `?=` meets a variable the file
         // assigned, and is recorded, as whether it does depends on the file.
-        let l = f.with_local("OPTIONS_FILE_SET?=H\nOPTIONS_FILE_UNSET:=I\nOPTIONS_FILE_SET != echo J\n");
+        let l = f
+            .with_local("OPTIONS_FILE_SET?=H\nOPTIONS_FILE_UNSET:=I\nOPTIONS_FILE_SET != echo J\n");
         assert_eq!(l.set, words(&["B", "C"]));
         assert_eq!(l.unset, words(&["I"]));
-        assert_eq!(places(&l), [("options", 6), ("options.local", 1), ("options.local", 3)]);
+        assert_eq!(
+            places(&l),
+            [("options", 6), ("options.local", 1), ("options.local", 3)]
+        );
         // With no options file, options.local's `?=` assigns.
         let l = SavedOptionsFile::default().with_local("OPTIONS_FILE_SET?=H\n");
         assert_eq!(l.set, words(&["H"]));
@@ -498,7 +562,8 @@ OPTIONS_FILE_UNSET+=FLITE
         assert_eq!(v, [Some(false), Some(false), Some(false)]);
         assert_eq!(f.complete, ["A", "B", "C"], "the file's own list");
         // An assignment in options.local resets what the file added.
-        let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A B\n").with_local("OPTIONS_FILE_SET=C\n");
+        let f =
+            SavedOptionsFile::parse("OPTIONS_FILE_SET+=A B\n").with_local("OPTIONS_FILE_SET=C\n");
         let v: Vec<_> = ["A", "B", "C"].iter().map(|o| f.value(o)).collect();
         assert_eq!(v, [None, None, Some(true)]);
         assert_eq!(f.local_set, ["C".to_string()].into());
@@ -514,9 +579,15 @@ OPTIONS_FILE_UNSET+=FLITE
     fn options_local_resets_are_recorded() {
         let file = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\n");
         let resets = |local: &str| file.clone().with_local(local).local_resets;
-        assert_eq!(resets("OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=A\n"), Vec::<String>::new());
+        assert_eq!(
+            resets("OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET+=A\n"),
+            Vec::<String>::new()
+        );
         assert_eq!(resets("OPTIONS_FILE_SET=B\n"), ["OPTIONS_FILE_SET"]);
-        assert_eq!(resets("OPTIONS_FILE_UNSET:=B\nOPTIONS_FILE_UNSET=C\n"), ["OPTIONS_FILE_UNSET"]);
+        assert_eq!(
+            resets("OPTIONS_FILE_UNSET:=B\nOPTIONS_FILE_UNSET=C\n"),
+            ["OPTIONS_FILE_UNSET"]
+        );
         let f = file.with_local("OPTIONS_FILE_UNSET=C\nOPTIONS_FILE_SET=B\n");
         assert_eq!(
             f.unmanaged().map(|(_, why)| why).as_deref(),
@@ -525,7 +596,11 @@ OPTIONS_FILE_UNSET+=FLITE
                  the options file's lines are not read; edit options.local"
             )
         );
-        assert_eq!(SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").unmanaged(), None, "the file's own `=`");
+        assert_eq!(
+            SavedOptionsFile::parse("OPTIONS_FILE_SET=A\n").unmanaged(),
+            None,
+            "the file's own `=`"
+        );
     }
 
     /// A `?=` to a list in options.local assigns only while the options
@@ -539,7 +614,8 @@ OPTIONS_FILE_UNSET+=FLITE
         let why = "options.local line 2 assigns OPTIONS_FILE_UNSET with ?=, which a write of the \
                    options file can turn on or off: optique leaves the options file alone; edit it by hand";
         let local = "OPTIONS_FILE_SET+=B\nOPTIONS_FILE_UNSET?=C\n";
-        let inert = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=C\n").with_local(local);
+        let inert = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=C\n")
+            .with_local(local);
         let all_on = SavedOptionsFile::parse(&render(
             "port-1.0",
             &["A".into(), "C".into()],
@@ -553,7 +629,12 @@ OPTIONS_FILE_UNSET+=FLITE
         }
         assert_eq!(all_on.local_unset, ["C".to_string()].into(), "it assigned");
         assert!(inert.local_unset.is_empty(), "it did not");
-        assert!(SavedOptionsFile::parse("OPTIONS_FILE_SET?=A\n").unmanaged().is_none(), "the file's own `?=`");
+        assert!(
+            SavedOptionsFile::parse("OPTIONS_FILE_SET?=A\n")
+                .unmanaged()
+                .is_none(),
+            "the file's own `?=`"
+        );
     }
 
     /// Where each unmodeled line is.
@@ -574,12 +655,19 @@ OPTIONS_FILE_UNSET+=FLITE
              OPTIONS_FILE_SET+=${X}\nFOO!=echo 1\n${OPTIONS_NAME}_SET=A\ninclude /x\n",
         )
         .with_local(".sinclude \"/y\"\nWITH=A\nOPTIONS_FILE_UNSET+=B\n_OPTIONS_READ=x\n");
-        let got: Vec<(&str, usize, &str)> =
-            f.unmodeled.iter().map(|u| (u.file, u.line, u.what.as_str())).collect();
+        let got: Vec<(&str, usize, &str)> = f
+            .unmodeled
+            .iter()
+            .map(|u| (u.file, u.line, u.what.as_str()))
+            .collect();
         assert_eq!(
             got,
             [
-                ("options", 6, "assigns OPTIONS_SET, which optique does not model"),
+                (
+                    "options",
+                    6,
+                    "assigns OPTIONS_SET, which optique does not model"
+                ),
                 ("options", 7, "is a make directive (.if)"),
                 ("options", 9, "is a make directive (.endif)"),
                 ("options", 10, "expands a variable ($)"),
@@ -587,7 +675,11 @@ OPTIONS_FILE_UNSET+=FLITE
                 ("options", 12, "expands a variable ($)"),
                 ("options", 13, "is not a variable assignment"),
                 ("options.local", 1, "is a make directive (.sinclude)"),
-                ("options.local", 2, "assigns WITH, which optique does not model"),
+                (
+                    "options.local",
+                    2,
+                    "assigns WITH, which optique does not model"
+                ),
             ]
         );
         // The SET and UNSET lines around them are still read.
@@ -616,9 +708,16 @@ OPTIONS_FILE_UNSET+=FLITE
     fn options_local_decides_only_what_it_unsets() {
         let f = SavedOptionsFile::parse("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B C\n")
             .with_local("OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=B C*\n");
-        let decided: Vec<bool> = ["A", "A2", "B", "C"].iter().map(|o| f.local_decides(o)).collect();
+        let decided: Vec<bool> = ["A", "A2", "B", "C"]
+            .iter()
+            .map(|o| f.local_decides(o))
+            .collect();
         assert_eq!(decided, [true, true, false, false]);
-        assert_eq!(f.value("B"), Some(false), "the file's UNSET beats options.local's SET");
+        assert_eq!(
+            f.value("B"),
+            Some(false),
+            "the file's UNSET beats options.local's SET"
+        );
     }
 
     /// bsd.options.mk:354-363: an UNSET entry takes out every option it
@@ -627,7 +726,10 @@ OPTIONS_FILE_UNSET+=FLITE
     #[test]
     fn file_entries_are_make_patterns() {
         let f = SavedOptionsFile::parse("OPTIONS_FILE_UNSET+=A*\nOPTIONS_FILE_SET+=[BC] D\n");
-        let v: Vec<_> = ["A", "A2", "B", "D", "E"].iter().map(|o| f.value(o)).collect();
+        let v: Vec<_> = ["A", "A2", "B", "D", "E"]
+            .iter()
+            .map(|o| f.value(o))
+            .collect();
         assert_eq!(v, [Some(false), Some(false), None, Some(true), None]);
         let settled: Vec<_> = ["A2", "B", "C", "E"].iter().map(|o| f.decides(o)).collect();
         assert_eq!(settled, [true, false, false, false]);
@@ -689,13 +791,23 @@ OPTIONS_FILE_UNSET+=FLITE
     #[test]
     fn nothing_written_trips_synths_line_probe() {
         let one: BTreeSet<String> = ["X".to_string()].into();
-        for (pkgname, complete) in [("wmx-8", vec!["ALT_L", "XTERM", "DOCS"]), ("a", vec![]), ("b-1", vec!["X", "Y"])] {
+        for (pkgname, complete) in [
+            ("wmx-8", vec!["ALT_L", "XTERM", "DOCS"]),
+            ("a", vec![]),
+            ("b-1", vec!["X", "Y"]),
+        ] {
             let complete: Vec<String> = complete.into_iter().map(String::from).collect();
             let text = render(pkgname, &complete, &one);
-            assert!(text.ends_with('\n') && !text.contains("\n\n"), "no blank line: {text:?}");
+            assert!(
+                text.ends_with('\n') && !text.contains("\n\n"),
+                "no blank line: {text:?}"
+            );
             for line in text.lines() {
                 let b = line.as_bytes();
-                assert!(b.len() >= 20 || b.get(16..18) == Some(b"+="), "{pkgname}: {line:?}");
+                assert!(
+                    b.len() >= 20 || b.get(16..18) == Some(b"+="),
+                    "{pkgname}: {line:?}"
+                );
             }
         }
     }

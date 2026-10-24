@@ -8,7 +8,7 @@ use crate::model::origin::PortKey;
 use crate::session::UiStatus;
 
 use super::refresh::trim_reason;
-use super::{ui, App};
+use super::{App, ui};
 
 pub struct ApplyModal {
     pub writes: Vec<PendingWrite>,
@@ -31,7 +31,9 @@ impl ApplyModal {
     /// same content, the same files removed, the same ports in conflict?
     fn shows(&self, planned: &apply::PlannedWrites, conflicted: &[PortKey]) -> bool {
         let writes = |ws: &[PendingWrite]| -> Vec<(String, String)> {
-            ws.iter().map(|w| (w.options_name.clone(), w.content.clone())).collect()
+            ws.iter()
+                .map(|w| (w.options_name.clone(), w.content.clone()))
+                .collect()
         };
         let removals = |rs: &[crate::clean::Removal]| -> Vec<String> {
             rs.iter().map(|r| r.options_name.clone()).collect()
@@ -69,11 +71,21 @@ impl ApplyDone {
         }
         let mut lines = vec![format!("{} file(s) written to {dir}", self.written)];
         if self.skipped > 0 {
-            lines.push(format!("{} port(s) skipped: conflicting options", self.skipped));
+            lines.push(format!(
+                "{} port(s) skipped: conflicting options",
+                self.skipped
+            ));
         }
-        lines.extend(self.rm_failed.iter().map(|(name, e)| format!("FAILED rm {name}: {e}")));
+        lines.extend(
+            self.rm_failed
+                .iter()
+                .map(|(name, e)| format!("FAILED rm {name}: {e}")),
+        );
         if self.removed > 0 {
-            lines.push(format!("{} redundant file(s) removed (--minimal)", self.removed));
+            lines.push(format!(
+                "{} redundant file(s) removed (--minimal)",
+                self.removed
+            ));
         }
         lines.extend(self.notes.iter().map(|note| format!("note: {note}")));
         lines
@@ -106,13 +118,23 @@ impl ApplyDone {
 pub(super) fn commit_apply(app: &mut App, skip_conflicting: bool) {
     let mut planned = app.compute_writes();
     let (conflicted, files) = app.conflicting(&planned);
-    if app.modal.as_ref().is_some_and(|m| !m.shows(&planned, &conflicted)) {
+    if app
+        .modal
+        .as_ref()
+        .is_some_and(|m| !m.shows(&planned, &conflicted))
+    {
         app.modal = None;
         app.open_apply_modal();
         if app.modal.is_some() {
-            app.flash("the plan changed since the preview (a re-query): check it and answer again", true);
+            app.flash(
+                "the plan changed since the preview (a re-query): check it and answer again",
+                true,
+            );
         } else {
-            app.flash("the plan changed since the preview (a re-query): nothing to write now", true);
+            app.flash(
+                "the plan changed since the preview (a re-query): nothing to write now",
+                true,
+            );
         }
         return;
     }
@@ -139,7 +161,8 @@ pub(super) fn commit_apply(app: &mut App, skip_conflicting: bool) {
         // scan read them, and a skipped port keeps its edits staged.
         let touched: Vec<&str> = planned.touched().collect();
         app.options_files.forget(touched.iter().copied());
-        app.session.reload_saved(&app.options_files, touched.iter().copied());
+        app.session
+            .reload_saved(&app.options_files, touched.iter().copied());
         // The files on disk changed: attributions built on the pre-apply
         // staged history would now point at the wrong changes.
         app.blame.clear();
@@ -172,7 +195,10 @@ impl App {
     /// those files. Every port counts, not just the listed ones: apply
     /// writes them all, and a conflict the filter or a view hides is written
     /// all the same. A port whose file the pass leaves alone does not count.
-    pub(super) fn conflicting(&self, planned: &apply::PlannedWrites) -> (Vec<PortKey>, BTreeSet<String>) {
+    pub(super) fn conflicting(
+        &self,
+        planned: &apply::PlannedWrites,
+    ) -> (Vec<PortKey>, BTreeSet<String>) {
         let touched: BTreeSet<&str> = planned.touched().collect();
         let mut files = BTreeSet::new();
         let ports = self

@@ -63,7 +63,11 @@ pub fn scan(
     let mut done = 0usize;
     let exists = |o: &str| ctx.locate(o).is_some();
 
-    let mut pending: Vec<PortKey> = roots.iter().filter(|k| seen.insert((*k).clone())).cloned().collect();
+    let mut pending: Vec<PortKey> = roots
+        .iter()
+        .filter(|k| seen.insert((*k).clone()))
+        .cloned()
+        .collect();
     loop {
         while let Some(key) = pending.pop() {
             if let Some(info) = cache.lookup(&key, files) {
@@ -205,15 +209,37 @@ mod tests {
         ];
         let files = OptionsFiles::new(tmp.path());
         let mut last = None;
-        let result =
-            scan(&roots, &ctx, &files, 2, &mut cache, &moved, &Blacklist::default(), |p| last = Some((p.done, p.discovered)));
+        let result = scan(
+            &roots,
+            &ctx,
+            &files,
+            2,
+            &mut cache,
+            &moved,
+            &Blacklist::default(),
+            |p| last = Some((p.done, p.discovered)),
+        );
         assert!(result.ports.is_empty());
         let (done, discovered) = last.unwrap();
         assert_eq!(done, discovered, "progress ends at {done}/{discovered}");
-        let errors: Vec<String> = result.errors.iter().map(|(k, m)| format!("{k}: {m}")).collect();
+        let errors: Vec<String> = result
+            .errors
+            .iter()
+            .map(|(k, m)| format!("{k}: {m}"))
+            .collect();
         assert_eq!(errors.len(), 2, "{errors:?}");
-        assert!(errors.iter().any(|e| e.starts_with("cat/absent: no such port")), "{errors:?}");
-        assert!(errors.iter().any(|e| e.starts_with("cat/old: no such port")), "{errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.starts_with("cat/absent: no such port")),
+            "{errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.starts_with("cat/old: no such port")),
+            "{errors:?}"
+        );
     }
 
     /// A root present in the tree is scanned as that port, whatever MOVED
@@ -222,7 +248,10 @@ mod tests {
     #[test]
     fn the_scan_takes_its_roots_as_given() {
         let _lock = crate::query::makerunner::make_test_lock();
-        let tmp = fake_tree(&[("cat/old", "PKGNAME=old-2.0\n"), ("cat/new", "PKGNAME=new-1.0\n")]);
+        let tmp = fake_tree(&[
+            ("cat/old", "PKGNAME=old-2.0\n"),
+            ("cat/new", "PKGNAME=new-1.0\n"),
+        ]);
         let ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
@@ -234,7 +263,16 @@ mod tests {
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let roots = vec![PortKey::parse("cat/old").unwrap()];
-        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
+        let result = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
         let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/old"]);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -282,8 +320,16 @@ mod tests {
         };
         let a = PortKey::parse("cat/a").unwrap();
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let pkg = |ctx: &QueryCtx| crate::query::makerunner::run_query(ctx, &a).unwrap().pkgname;
-        assert_eq!(pkg(&ctx), "a-first", "the first overlay shadows the next and the tree");
+        let pkg = |ctx: &QueryCtx| {
+            crate::query::makerunner::run_query(ctx, &a)
+                .unwrap()
+                .pkgname
+        };
+        assert_eq!(
+            pkg(&ctx),
+            "a-first",
+            "the first overlay shadows the next and the tree"
+        );
 
         ctx.overlays.remove(0);
         assert_eq!(pkg(&ctx), "a-second");
@@ -292,7 +338,16 @@ mod tests {
         // MOVED leaves an origin an overlay holds where it is.
         let moved = Moved::parse("cat/only|cat/gone|2026-01-01|moved away\n");
         let root = PortKey::parse("cat/root").unwrap();
-        let result = scan(&[root], &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
+        let result = scan(
+            &[root],
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
         let got: Vec<String> = result.ports.values().map(|i| i.pkgname.clone()).collect();
         assert_eq!(got, ["only-1.0", "root-1.0"], "{:?}", result.errors);
 
@@ -313,7 +368,10 @@ mod tests {
         let _lock = crate::query::makerunner::make_test_lock();
         let dep = "_UNIFIED_DEPENDS=x:cat/dep\nRUN_DEPENDS_ALL=x:cat/dep\n";
         let tmp = fake_tree(&[
-            ("cat/root", &format!("PKGNAME=root-1.0\nIGNORE=not for this platform\n{dep}")),
+            (
+                "cat/root",
+                &format!("PKGNAME=root-1.0\nIGNORE=not for this platform\n{dep}"),
+            ),
             ("cat/dep", "PKGNAME=dep-1.0\n"),
         ]);
         let ctx = QueryCtx {
@@ -340,7 +398,9 @@ mod tests {
         let root = &result.ports[&PortKey::parse("cat/root").unwrap()];
         assert_eq!(root.ignore.as_deref(), Some("not for this platform"));
         assert!(
-            result.ports.contains_key(&PortKey::parse("cat/dep").unwrap()),
+            result
+                .ports
+                .contains_key(&PortKey::parse("cat/dep").unwrap()),
             "cat/dep must still be queried: {:?}",
             result.ports.keys().collect::<Vec<_>>()
         );
@@ -372,13 +432,34 @@ mod tests {
             std::fs::write(pd.join("blacklist"), listed).unwrap();
             let bl = Blacklist::load(&pd, None, "default", None);
             let roots = [PortKey::parse("cat/root").unwrap()];
-            let r = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &Moved::parse(""), &bl, |_| {});
+            let r = scan(
+                &roots,
+                &ctx,
+                &files,
+                1,
+                &mut Cache::disabled(),
+                &Moved::parse(""),
+                &bl,
+                |_| {},
+            );
             assert!(r.errors.is_empty(), "{:?}", r.errors);
-            (r.queried, r.ports.keys().map(ToString::to_string).collect::<Vec<_>>())
+            (
+                r.queried,
+                r.ports.keys().map(ToString::to_string).collect::<Vec<_>>(),
+            )
         };
-        assert_eq!(walk(""), (3, vec!["cat/leaf".into(), "cat/mid".into(), "cat/root".into()]));
+        assert_eq!(
+            walk(""),
+            (
+                3,
+                vec!["cat/leaf".into(), "cat/mid".into(), "cat/root".into()]
+            )
+        );
         assert_eq!(walk("cat/root\n"), (1, vec!["cat/root".to_string()]));
-        assert_eq!(walk("cat/mid\n"), (2, vec!["cat/mid".into(), "cat/root".into()]));
+        assert_eq!(
+            walk("cat/mid\n"),
+            (2, vec!["cat/mid".into(), "cat/root".into()])
+        );
     }
 
     /// The counts the summary line reports: queried cold, cached warm.
@@ -394,20 +475,39 @@ mod tests {
             identity: crate::query::makerunner::Identity::Invoker,
             framework: Vec::new(),
         };
-        let roots = vec![PortKey::parse("cat/a").unwrap(), PortKey::parse("cat/b").unwrap()];
+        let roots = vec![
+            PortKey::parse("cat/a").unwrap(),
+            PortKey::parse("cat/b").unwrap(),
+        ];
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
         let moved = Moved::parse("");
         let mut last = None;
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let cold = scan(&roots, &ctx, &files, 2, &mut cache, &moved, &Blacklist::default(), |p| {
-            last = Some((p.done, p.discovered, p.from_cache))
-        });
+        let cold = scan(
+            &roots,
+            &ctx,
+            &files,
+            2,
+            &mut cache,
+            &moved,
+            &Blacklist::default(),
+            |p| last = Some((p.done, p.discovered, p.from_cache)),
+        );
         assert!(cold.errors.is_empty(), "{:?}", cold.errors);
         assert_eq!((cold.queried, cold.from_cache, cold.ports.len()), (2, 0, 2));
         assert_eq!(last, Some((2, 2, 0)), "progress ends at every port done");
 
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let warm = scan(&roots, &ctx, &files, 2, &mut cache, &moved, &Blacklist::default(), |_| {});
+        let warm = scan(
+            &roots,
+            &ctx,
+            &files,
+            2,
+            &mut cache,
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
         assert_eq!((warm.queried, warm.from_cache, warm.ports.len()), (0, 2, 2));
     }
 
@@ -421,10 +521,19 @@ mod tests {
         let _lock = crate::query::makerunner::make_test_lock();
         let dep = |o: &[&str]| {
             let list: Vec<String> = o.iter().map(|o| format!("x:{o}")).collect();
-            format!("_UNIFIED_DEPENDS={0}\nRUN_DEPENDS_ALL={0}\n", list.join(" "))
+            format!(
+                "_UNIFIED_DEPENDS={0}\nRUN_DEPENDS_ALL={0}\n",
+                list.join(" ")
+            )
         };
         let tmp = fake_tree(&[
-            ("cat/a", &format!("PKGNAME=a-1.0\n{}", dep(&["cat/old", "cat/expired", "cat/never", "cat/b"]))),
+            (
+                "cat/a",
+                &format!(
+                    "PKGNAME=a-1.0\n{}",
+                    dep(&["cat/old", "cat/expired", "cat/never", "cat/b"])
+                ),
+            ),
             ("cat/b", "PKGNAME=b-1.0\n"),
             ("cat/new", &format!("PKGNAME=new-1.0\n{}", dep(&["cat/a"]))),
         ]);
@@ -442,8 +551,21 @@ mod tests {
         );
         let files = OptionsFiles::new(&ctx.port_dbdir);
         let roots = vec![PortKey::parse("cat/a").unwrap()];
-        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
-        let errors: Vec<String> = result.errors.iter().map(|(k, m)| format!("{k}: {m}")).collect();
+        let result = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
+        let errors: Vec<String> = result
+            .errors
+            .iter()
+            .map(|(k, m)| format!("{k}: {m}"))
+            .collect();
         assert_eq!(
             errors,
             [
@@ -453,14 +575,30 @@ mod tests {
             ]
         );
         let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
-        assert_eq!(got, ["cat/a", "cat/b"], "cat/new is not queried through cat/old");
+        assert_eq!(
+            got,
+            ["cat/a", "cat/b"],
+            "cat/new is not queried through cat/old"
+        );
         let old = PortKey::parse("cat/old").unwrap();
-        assert_eq!(crate::deps::resolve(&result.ports, &result.aliases, &old), None);
+        assert_eq!(
+            crate::deps::resolve(&result.ports, &result.aliases, &old),
+            None
+        );
         assert!(crate::deps::detect(&result.ports, &result.aliases).is_empty());
 
         let mut session =
             crate::session::Session::new(result.ports, result.aliases, &roots, &files, false);
-        let refresh = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
+        let refresh = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
         assert_eq!(refresh.errors.len(), 3, "{:?}", refresh.errors);
         let (_, removed) = session.merge(refresh, &files);
         assert!(removed.is_empty(), "the GC dropped {removed:?}");
@@ -480,8 +618,14 @@ mod tests {
                 "PKGNAME=ignored-1.0\nIGNORE=not here\n\
                  _UNIFIED_DEPENDS=x:cat/gone x:cat/dep\nRUN_DEPENDS_ALL=x:cat/gone x:cat/dep\n",
             ),
-            ("cat/listed", "PKGNAME=listed-1.0\n_UNIFIED_DEPENDS=x:cat/gone\nRUN_DEPENDS_ALL=x:cat/gone\n"),
-            ("cat/tested", "PKGNAME=tested-1.0\n_UNIFIED_DEPENDS=x:cat/gone\n"),
+            (
+                "cat/listed",
+                "PKGNAME=listed-1.0\n_UNIFIED_DEPENDS=x:cat/gone\nRUN_DEPENDS_ALL=x:cat/gone\n",
+            ),
+            (
+                "cat/tested",
+                "PKGNAME=tested-1.0\n_UNIFIED_DEPENDS=x:cat/gone\n",
+            ),
             ("cat/dep", "PKGNAME=dep-1.0\n"),
         ]);
         let ctx = QueryCtx {
@@ -497,10 +641,21 @@ mod tests {
         std::fs::create_dir_all(&pd).unwrap();
         std::fs::write(pd.join("blacklist"), "cat/listed\n").unwrap();
         let bl = Blacklist::load(&pd, None, "default", None);
-        let roots: Vec<PortKey> =
-            ["cat/ignored", "cat/listed", "cat/tested"].iter().map(|o| PortKey::parse(o).unwrap()).collect();
+        let roots: Vec<PortKey> = ["cat/ignored", "cat/listed", "cat/tested"]
+            .iter()
+            .map(|o| PortKey::parse(o).unwrap())
+            .collect();
         let moved = Moved::parse("cat/gone|cat/dep|2026-01-01|renamed\n");
-        let result = scan(&roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &bl, |_| {});
+        let result = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &bl,
+            |_| {},
+        );
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         let got: Vec<String> = result.ports.keys().map(ToString::to_string).collect();
         assert_eq!(got, ["cat/dep", "cat/ignored", "cat/listed", "cat/tested"]);
@@ -532,13 +687,34 @@ mod tests {
         };
         let moved = Moved::parse("cat/old|cat/new|2026-01-01|renamed\n");
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let listed: Vec<crate::roots::Listed> =
-            ["cat/old", "cat/a"].iter().map(|o| crate::roots::Listed::parse(o).unwrap()).collect();
+        let listed: Vec<crate::roots::Listed> = ["cat/old", "cat/a"]
+            .iter()
+            .map(|o| crate::roots::Listed::parse(o).unwrap())
+            .collect();
         let exists = |o: &str| ctx.locate(o).is_some();
-        let roots = crate::roots::apply_moved(&listed, crate::roots::MovedPolicy::Poudriere, true, &moved, exists);
+        let roots = crate::roots::apply_moved(
+            &listed,
+            crate::roots::MovedPolicy::Poudriere,
+            true,
+            &moved,
+            exists,
+        );
         assert_eq!(roots.moves.len(), 1);
-        let result = scan(&roots.roots, &ctx, &files, 1, &mut Cache::disabled(), &moved, &Blacklist::default(), |_| {});
-        let errors: Vec<String> = result.errors.iter().map(|(k, m)| format!("{k}: {m}")).collect();
+        let result = scan(
+            &roots.roots,
+            &ctx,
+            &files,
+            1,
+            &mut Cache::disabled(),
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
+        let errors: Vec<String> = result
+            .errors
+            .iter()
+            .map(|(k, m)| format!("{k}: {m}"))
+            .collect();
         assert_eq!(
             errors,
             [
@@ -574,7 +750,16 @@ mod tests {
         let local = ctx.port_dbdir.join("cat_a/options.local");
         let pkgname = |cache: &mut Cache| {
             let files = OptionsFiles::new(&ctx.port_dbdir);
-            let r = scan(&roots, &ctx, &files, 1, cache, &moved, &Blacklist::default(), |_| {});
+            let r = scan(
+                &roots,
+                &ctx,
+                &files,
+                1,
+                cache,
+                &moved,
+                &Blacklist::default(),
+                |_| {},
+            );
             assert!(r.errors.is_empty(), "{:?}", r.errors);
             (r.queried, r.ports.values().next().unwrap().pkgname.clone())
         };
@@ -617,8 +802,22 @@ mod tests {
         let mut cache = Cache::open(&tmp.path().join("cache"), "tree", "conf");
         let moved = Moved::parse("");
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let first = scan(&roots, &ctx, &files, 1, &mut cache, &moved, &Blacklist::default(), |_| {});
-        assert_eq!((first.queried, first.ports.len()), (1, 1), "{:?}", first.errors);
+        let first = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut cache,
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
+        assert_eq!(
+            (first.queried, first.ports.len()),
+            (1, 1),
+            "{:?}",
+            first.errors
+        );
 
         let file = ctx.port_dbdir.join("cat_a/options");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -628,13 +827,31 @@ mod tests {
             return; // root reads it anyway: the case only exists for others
         }
         let files = OptionsFiles::new(&ctx.port_dbdir);
-        let second = scan(&roots, &ctx, &files, 1, &mut cache, &moved, &Blacklist::default(), |_| {});
+        let second = scan(
+            &roots,
+            &ctx,
+            &files,
+            1,
+            &mut cache,
+            &moved,
+            &Blacklist::default(),
+            |_| {},
+        );
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert_eq!(second.from_cache, 0, "the entry made while it was missing is not reused");
+        assert_eq!(
+            second.from_cache, 0,
+            "the entry made while it was missing is not reused"
+        );
         assert!(second.ports.is_empty());
         let (key, msg) = &second.errors[0];
         assert_eq!(key.to_string(), "cat/a");
-        assert_eq!(msg, &format!("cannot read options file {}: Permission denied (os error 13)", file.display()));
+        assert_eq!(
+            msg,
+            &format!(
+                "cannot read options file {}: Permission denied (os error 13)",
+                file.display()
+            )
+        );
     }
 
     /// A Makefile make cannot read is that port's error, with make's own last
@@ -667,12 +884,18 @@ mod tests {
             "cat/half",
             "PKGNAME=a-1.0\nCOMPLETE_OPTIONS_LIST=X\n.include \"/nonexistent/common.mk\"\n",
         )]);
-        let ctx = QueryCtx { portsdir: tmp.path().join("ports"), ..ctx };
+        let ctx = QueryCtx {
+            portsdir: tmp.path().join("ports"),
+            ..ctx
+        };
         let half = crate::query::makerunner::run_query(&ctx, &PortKey::parse("cat/half").unwrap())
             .unwrap_err()
             .to_string();
         assert!(half.starts_with("make failed"), "{half}");
-        assert!(half.contains("Cannot open /nonexistent/common.mk"), "{half}");
+        assert!(
+            half.contains("Cannot open /nonexistent/common.mk"),
+            "{half}"
+        );
     }
 
     /// Startup on a real closure reads each options file once, cold or warm:
@@ -688,7 +911,11 @@ mod tests {
         let options_dir = tmp.path().join("options");
         // One configured port, the rest unconfigured: both kinds are read.
         std::fs::create_dir_all(options_dir.join("audio_lame")).unwrap();
-        std::fs::write(options_dir.join("audio_lame/options"), "OPTIONS_FILE_UNSET+=DOCS\n").unwrap();
+        std::fs::write(
+            options_dir.join("audio_lame/options"),
+            "OPTIONS_FILE_UNSET+=DOCS\n",
+        )
+        .unwrap();
         let ctx = QueryCtx {
             portsdir: "/usr/ports".into(),
             make_conf: None,
@@ -703,14 +930,30 @@ mod tests {
 
         for run in ["cold", "warm"] {
             let files = OptionsFiles::new(&options_dir);
-            let result = scan(&roots, &ctx, &files, 4, &mut cache, &moved, &Blacklist::default(), |_| {});
+            let result = scan(
+                &roots,
+                &ctx,
+                &files,
+                4,
+                &mut cache,
+                &moved,
+                &Blacklist::default(),
+                |_| {},
+            );
             assert!(result.errors.is_empty(), "{run}: {:?}", result.errors);
             if run == "warm" {
                 assert_eq!(result.queried, 0, "warm: everything from the cache");
             }
-            let names: BTreeSet<&str> =
-                result.ports.values().map(|i| i.options_name.as_str()).collect();
-            assert_eq!(files.disk_reads(), names.len(), "{run}: one read per file in the scan");
+            let names: BTreeSet<&str> = result
+                .ports
+                .values()
+                .map(|i| i.options_name.as_str())
+                .collect();
+            assert_eq!(
+                files.disk_reads(),
+                names.len(),
+                "{run}: one read per file in the scan"
+            );
 
             let session = crate::session::Session::new(
                 result.ports.clone(),
@@ -720,9 +963,13 @@ mod tests {
                 false,
             );
             let stage = tempfile::tempdir().unwrap();
-            let db =
-                crate::staging::StagingDb::create(stage.path(), &files, session.states.keys()).unwrap();
-            assert_eq!(files.disk_reads(), names.len(), "{run}: session and staging read nothing");
+            let db = crate::staging::StagingDb::create(stage.path(), &files, session.states.keys())
+                .unwrap();
+            assert_eq!(
+                files.disk_reads(),
+                names.len(),
+                "{run}: session and staging read nothing"
+            );
             assert_eq!(
                 std::fs::read(db.path().join("audio_lame/options")).unwrap(),
                 b"OPTIONS_FILE_UNSET+=DOCS\n"

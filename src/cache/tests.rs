@@ -64,9 +64,21 @@ fn persists_across_reopen_same_generation_only() {
     drop(c);
 
     let c2 = Cache::open(&cache_dir, "treeA", "confA");
-    assert!(c2.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_some());
+    assert!(
+        c2.lookup(
+            &PortKey::parse("cat/port").unwrap(),
+            &OptionsFiles::new(&dbdir)
+        )
+        .is_some()
+    );
     let c3 = Cache::open(&cache_dir, "treeB", "confA");
-    assert!(c3.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_none());
+    assert!(
+        c3.lookup(
+            &PortKey::parse("cat/port").unwrap(),
+            &OptionsFiles::new(&dbdir)
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -74,7 +86,13 @@ fn disabled_never_stores() {
     let tmp = tempfile::tempdir().unwrap();
     let mut c = Cache::disabled();
     c.insert(&info("cat/port"), &OptionsFiles::new(tmp.path()));
-    assert!(c.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(tmp.path())).is_none());
+    assert!(
+        c.lookup(
+            &PortKey::parse("cat/port").unwrap(),
+            &OptionsFiles::new(tmp.path())
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -91,7 +109,10 @@ fn prune_keeps_at_most_two_generations() {
     }
     let _c = Cache::open(&cache_dir, "current", "gen");
     let count = fs::read_dir(&cache_dir).unwrap().count();
-    assert!(count <= 2, "expected current + 1 old generation, got {count}");
+    assert!(
+        count <= 2,
+        "expected current + 1 old generation, got {count}"
+    );
 }
 
 #[test]
@@ -113,7 +134,13 @@ fn prune_reaps_other_schema_generations() {
         .collect();
     let mut names = names;
     names.sort();
-    assert_eq!(names, vec!["draft.json".to_string(), format!("v{SCHEMA}-current-gen.jsonl")]);
+    assert_eq!(
+        names,
+        vec![
+            "draft.json".to_string(),
+            format!("v{SCHEMA}-current-gen.jsonl")
+        ]
+    );
 }
 
 /// An entry made while the options file was missing is not reused once
@@ -192,23 +219,44 @@ fn trees_key_follows_every_overlay() {
     let before = trees_key(&main, std::slice::from_ref(&over));
     assert_ne!(before, trees_key(&main, &[]));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
-    File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
-    assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "an edited port is a new generation");
+    File::options()
+        .write(true)
+        .open(&makefile)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert_ne!(
+        trees_key(&main, std::slice::from_ref(&over)),
+        before,
+        "an edited port is a new generation"
+    );
 }
 
 /// An overlay that is a git checkout of its own is still edited in
 /// place before any commit: its key follows the files, not the HEAD.
 #[test]
 fn trees_key_follows_an_uncommitted_edit_in_a_git_overlay() {
-    let (_tmp, over) = fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("refs/heads/main", &format!("{ID}\n"))]);
+    let (_tmp, over) = fake_tree(&[
+        ("HEAD", "ref: refs/heads/main\n"),
+        ("refs/heads/main", &format!("{ID}\n")),
+    ]);
     let (_tmp2, main) = fake_tree(&[]);
     fs::create_dir_all(over.join("cat/port")).unwrap();
     let makefile = over.join("cat/port/Makefile");
     fs::write(&makefile, "PORTVERSION=1\n").unwrap();
     let before = trees_key(&main, std::slice::from_ref(&over));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
-    File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
-    assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "same HEAD, edited port");
+    File::options()
+        .write(true)
+        .open(&makefile)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert_ne!(
+        trees_key(&main, std::slice::from_ref(&over)),
+        before,
+        "same HEAD, edited port"
+    );
 }
 
 /// An overlay assembled from symlinked ports: the port is looked up
@@ -216,7 +264,11 @@ fn trees_key_follows_an_uncommitted_edit_in_a_git_overlay() {
 #[test]
 fn trees_key_follows_an_edit_behind_a_symlinked_port() {
     let tmp = tempfile::tempdir().unwrap();
-    let (main, over, real) = (tmp.path().join("main"), tmp.path().join("over"), tmp.path().join("real"));
+    let (main, over, real) = (
+        tmp.path().join("main"),
+        tmp.path().join("over"),
+        tmp.path().join("real"),
+    );
     fs::create_dir_all(&main).unwrap();
     fs::create_dir_all(over.join("cat")).unwrap();
     fs::create_dir_all(&real).unwrap();
@@ -225,8 +277,17 @@ fn trees_key_follows_an_edit_behind_a_symlinked_port() {
     std::os::unix::fs::symlink(&real, over.join("cat/port")).unwrap();
     let before = trees_key(&main, std::slice::from_ref(&over));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
-    File::options().write(true).open(&makefile).unwrap().set_modified(later).unwrap();
-    assert_ne!(trees_key(&main, std::slice::from_ref(&over)), before, "edited behind the link");
+    File::options()
+        .write(true)
+        .open(&makefile)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert_ne!(
+        trees_key(&main, std::slice::from_ref(&over)),
+        before,
+        "edited behind the link"
+    );
 }
 
 #[test]
@@ -249,8 +310,7 @@ fn tree_key_reads_packed_refs_when_the_loose_ref_is_missing() {
          {OTHER} refs/tags/v1\n\
          ^{ID}\n"
     );
-    let (_tmp, ports) =
-        fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("packed-refs", &packed)]);
+    let (_tmp, ports) = fake_tree(&[("HEAD", "ref: refs/heads/main\n"), ("packed-refs", &packed)]);
     assert_eq!(tree_key(&ports), ID);
 }
 
@@ -292,7 +352,10 @@ fn tree_key_falls_back_to_mtime_on_garbage() {
         vec![("HEAD", "not a ref at all\n")],
         vec![("HEAD", "ref: refs/heads/main\n")], // no such ref anywhere
         vec![("HEAD", "ref: ../../etc/passwd\n")],
-        vec![("HEAD", "ref: refs/heads/main\n"), ("refs/heads/main", "zzz\n")],
+        vec![
+            ("HEAD", "ref: refs/heads/main\n"),
+            ("refs/heads/main", "zzz\n"),
+        ],
     ] {
         let (_tmp, ports) = fake_tree(&files);
         let key = tree_key(&ports);
@@ -346,7 +409,14 @@ fn mtime_keys_one_hour_apart_are_distinct_generations() {
     c.insert(&info("cat/port"), &OptionsFiles::new(&dbdir));
     drop(c);
     let later = Cache::open(&cache_dir, "mtime-1792656000", "conf");
-    assert!(later.lookup(&PortKey::parse("cat/port").unwrap(), &OptionsFiles::new(&dbdir)).is_none());
+    assert!(
+        later
+            .lookup(
+                &PortKey::parse("cat/port").unwrap(),
+                &OptionsFiles::new(&dbdir)
+            )
+            .is_none()
+    );
 }
 
 /// Without git, an update that touches MOVED (or UPDATING) but not
@@ -360,7 +430,12 @@ fn a_moved_only_change_is_a_new_tree_key() {
     fs::write(ports.join("MOVED"), "").unwrap();
     let set_mtime = |secs: u64| {
         let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
-        File::options().write(true).open(ports.join("MOVED")).unwrap().set_modified(t).unwrap();
+        File::options()
+            .write(true)
+            .open(ports.join("MOVED"))
+            .unwrap()
+            .set_modified(t)
+            .unwrap();
     };
     set_mtime(1_792_652_400);
     let before = tree_key(ports);
@@ -373,9 +448,16 @@ fn a_moved_only_change_is_a_new_tree_key() {
 #[test]
 fn default_cache_dir_ignores_empty_and_relative_xdg() {
     let home = Some("/home/u");
-    assert_eq!(cache_dir_for(Some("/x/cache"), home), Path::new("/x/cache/optique"));
+    assert_eq!(
+        cache_dir_for(Some("/x/cache"), home),
+        Path::new("/x/cache/optique")
+    );
     for xdg in [None, Some(""), Some("cache"), Some("./cache")] {
-        assert_eq!(cache_dir_for(xdg, home), Path::new("/home/u/.cache/optique"), "{xdg:?}");
+        assert_eq!(
+            cache_dir_for(xdg, home),
+            Path::new("/home/u/.cache/optique"),
+            "{xdg:?}"
+        );
     }
     assert_eq!(cache_dir_for(None, None), Path::new("/tmp/.cache/optique"));
 }
@@ -393,7 +475,10 @@ fn options_hash_absent_vs_present() {
 
 /// A port whose make read `makefiles`.
 fn read(origin: &str, makefiles: &[&str]) -> PortInfo {
-    PortInfo { makefiles: makefiles.iter().map(ToString::to_string).collect(), ..info(origin) }
+    PortInfo {
+        makefiles: makefiles.iter().map(ToString::to_string).collect(),
+        ..info(origin)
+    }
 }
 
 /// Each kind of change against a slave port that also reads another
@@ -443,9 +528,17 @@ fn invalidation_follows_what_make_read_and_what_it_probes() {
     ] {
         assert!(!keeps(status, path), "{status} {path} must take the entry");
     }
-    for (status, path) in [('A', "Mk/bsd.local.mk"), ('A', "Makefile.inc"), ('M', "NEWFILE")] {
+    for (status, path) in [
+        ('A', "Mk/bsd.local.mk"),
+        ('A', "Makefile.inc"),
+        ('M', "NEWFILE"),
+    ] {
         let inv = Invalidation::of(&[(status, path.to_string())]);
-        assert_eq!(inv.all.as_deref(), Some(path), "{status} {path} takes everything");
+        assert_eq!(
+            inv.all.as_deref(),
+            Some(path),
+            "{status} {path} takes everything"
+        );
     }
     // An entry that knows nothing of what make read cannot be judged.
     assert!(!Invalidation::of(&[]).keeps(&read("cat/port", &[])));
@@ -498,13 +591,22 @@ fn two_trees_at_one_commit_share_no_generation() {
     let files = OptionsFiles::new(&dbdir);
     let b = PortKey::parse("cat/b").unwrap();
     let mut c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
-    c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
+    c.insert(
+        &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
+        &files,
+    );
     drop(c);
     let c = Cache::open_trees(&cache_dir, &trees(&clone, &[]), "conf");
-    assert!(c.lookup(&b, &files).is_none(), "the clone does not share the generation");
+    assert!(
+        c.lookup(&b, &files).is_none(),
+        "the clone does not share the generation"
+    );
     drop(c);
     let c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
-    assert!(c.lookup(&b, &files).is_some(), "the first tree keeps its own");
+    assert!(
+        c.lookup(&b, &files).is_some(),
+        "the first tree keeps its own"
+    );
 }
 
 /// The clone's next commit carries nothing over from the first tree's
@@ -520,7 +622,10 @@ fn carry_over_needs_the_same_tree() {
     let files = OptionsFiles::new(&dbdir);
     let b = PortKey::parse("cat/b").unwrap();
     let mut c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
-    c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
+    c.insert(
+        &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
+        &files,
+    );
     drop(c);
 
     fs::write(clone.join("cat/a/pkg-help"), "help\n").unwrap();
@@ -534,7 +639,15 @@ fn carry_over_needs_the_same_tree() {
 /// git, quietly, in `dir`; None when git cannot be run here.
 fn git(dir: &Path, args: &[&str]) -> Option<()> {
     let ok = std::process::Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "-C"])
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+            "-C",
+        ])
         .arg(dir)
         .args(args)
         .stdout(std::process::Stdio::null())
@@ -558,7 +671,9 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     fs::write(ports.join("Mk/bsd.port.mk"), "# v1\n").unwrap();
     fs::write(ports.join("cat/a/Makefile"), "# a1\n").unwrap();
     fs::write(ports.join("cat/b/Makefile"), "# b1\n").unwrap();
-    if git(&ports, &["init", "-q"]).and_then(|()| git(&ports, &["add", "-A"])).is_none()
+    if git(&ports, &["init", "-q"])
+        .and_then(|()| git(&ports, &["add", "-A"]))
+        .is_none()
         || git(&ports, &["commit", "-q", "-m", "one"]).is_none()
     {
         eprintln!("git cannot run here; skipped");
@@ -568,8 +683,14 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     let files = OptionsFiles::new(&dbdir);
     let mut c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "conf");
     assert_eq!(c.note(), None, "nothing to carry over from");
-    c.insert(&read("cat/a", &["Mk/bsd.port.mk", "cat/a/Makefile"]), &files);
-    c.insert(&read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]), &files);
+    c.insert(
+        &read("cat/a", &["Mk/bsd.port.mk", "cat/a/Makefile"]),
+        &files,
+    );
+    c.insert(
+        &read("cat/b", &["Mk/bsd.port.mk", "cat/b/Makefile"]),
+        &files,
+    );
     drop(c);
 
     fs::write(ports.join("cat/a/pkg-help"), "help\n").unwrap();
@@ -579,13 +700,22 @@ fn a_new_commit_carries_over_what_its_changes_leave_alone() {
     let note = c.note().unwrap();
     assert!(note.contains("1 entries carried over"), "{note}");
     assert!(note.contains("1 dropped by 1 changed paths"), "{note}");
-    assert!(c.lookup(&PortKey::parse("cat/a").unwrap(), &files).is_none());
-    assert!(c.lookup(&PortKey::parse("cat/b").unwrap(), &files).is_some());
+    assert!(
+        c.lookup(&PortKey::parse("cat/a").unwrap(), &files)
+            .is_none()
+    );
+    assert!(
+        c.lookup(&PortKey::parse("cat/b").unwrap(), &files)
+            .is_some()
+    );
     drop(c);
 
     let c = Cache::open_trees(&cache_dir, &trees(&ports, &[]), "other conf");
     assert_eq!(c.note(), None);
-    assert!(c.lookup(&PortKey::parse("cat/b").unwrap(), &files).is_none());
+    assert!(
+        c.lookup(&PortKey::parse("cat/b").unwrap(), &files)
+            .is_none()
+    );
 }
 
 /// A script a parse-time command runs, directly, through a variable,
@@ -618,7 +748,10 @@ fn a_script_run_while_parsing_counts_as_its_makefile() {
     assert_eq!(readers("version.sh"), ["Mk/Uses/shy.mk"]);
     assert_eq!(readers("now.sh"), ["Mk/Uses/now.mk"]);
     assert!(readers("qa.sh").is_empty(), "a recipe line");
-    assert!(readers("do-fetch.sh").is_empty(), "assigned, run only by a recipe");
+    assert!(
+        readers("do-fetch.sh").is_empty(),
+        "assigned, run only by a recipe"
+    );
     // A makefile change alone reads nothing.
     assert!(parse_time_readers(tmp.path(), &[('M', "Mk/Uses/rusty.mk".into())]).is_empty());
 }
@@ -632,11 +765,21 @@ fn the_trees_parse_time_scripts_are_cargos() {
     let ports = Path::new("/usr/ports");
     let readers =
         |script: &str| parse_time_readers(ports, &[('M', format!("Mk/Scripts/{script}"))]);
-    let cargo = ["cargo-crates-git-fetch.awk", "cargo-crates-git-common.awk", "split-url.awk"];
+    let cargo = [
+        "cargo-crates-git-fetch.awk",
+        "cargo-crates-git-common.awk",
+        "split-url.awk",
+    ];
     for script in cargo {
         assert_eq!(readers(script), ["Mk/Uses/cargo.mk"], "{script}");
     }
-    for script in ["qa.sh", "do-fetch.sh", "do-depends.sh", "checksum.sh", "makesum.sh"] {
+    for script in [
+        "qa.sh",
+        "do-fetch.sh",
+        "do-depends.sh",
+        "checksum.sh",
+        "makesum.sh",
+    ] {
         assert!(readers(script).is_empty(), "{script}");
     }
 }

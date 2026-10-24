@@ -71,7 +71,11 @@ pub struct ListedMove {
 impl ListedMove {
     /// What is said of it on standard error.
     pub fn message(&self) -> String {
-        let reason = if self.reason.is_empty() { String::new() } else { format!(" ({})", self.reason) };
+        let reason = if self.reason.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.reason)
+        };
         let (listed, to) = (&self.listed, &self.to);
         let defect = if self.in_tree {
             format!(
@@ -83,9 +87,14 @@ impl ListedMove {
             String::new()
         };
         if self.followed {
-            format!("listed {listed} moved to {to}{reason}{defect}: followed, but the list still names {listed}")
+            format!(
+                "listed {listed} moved to {to}{reason}{defect}: followed, but the list still names {listed}"
+            )
         } else {
-            format!("listed {listed} moved to {to}{reason}{defect}: fix the list{}", self.or_follow(" to follow it"))
+            format!(
+                "listed {listed} moved to {to}{reason}{defect}: fix the list{}",
+                self.or_follow(" to follow it")
+            )
         }
     }
 
@@ -104,7 +113,9 @@ impl ListedMove {
 /// MOVED is not checked, a malformed target only leads nowhere.
 fn spec(text: &str) -> PortKey {
     match text.split_once('@') {
-        Some((origin, flavor)) if !flavor.is_empty() => PortKey::new(origin, Some(flavor.to_string())),
+        Some((origin, flavor)) if !flavor.is_empty() => {
+            PortKey::new(origin, Some(flavor.to_string()))
+        }
         Some((origin, _)) => PortKey::new(origin, None),
         None => PortKey::new(text, None),
     }
@@ -175,7 +186,8 @@ impl Moved {
             let target = (!new.is_empty()).then(|| new.to_string());
             let led_here = self.backrefs.remove(old).unwrap_or_default();
             for earlier in &led_here {
-                self.map.insert(earlier.clone(), (target.clone(), reason.clone()));
+                self.map
+                    .insert(earlier.clone(), (target.clone(), reason.clone()));
             }
             self.map.insert(old.to_string(), (target.clone(), reason));
             if let Some(target) = target {
@@ -241,11 +253,20 @@ impl Moved {
     /// without a flavor there is no move; with one, only the bare origin's
     /// entry applies, never `origin@flavor`'s. Its target names no
     /// subpackage, and the chase goes on from it as from any other.
-    pub fn resolve_spec(&self, key: &PortKey, subpackage: bool, exists: impl Fn(&str) -> bool) -> MovedResult {
+    pub fn resolve_spec(
+        &self,
+        key: &PortKey,
+        subpackage: bool,
+        exists: impl Fn(&str) -> bool,
+    ) -> MovedResult {
         let (start, mut sub) = match key.flavor.as_deref().and_then(|f| f.split_once('~')) {
-            Some((flavor, _)) => {
-                (PortKey::new(key.origin.clone(), (!flavor.is_empty()).then(|| flavor.to_string())), true)
-            }
+            Some((flavor, _)) => (
+                PortKey::new(
+                    key.origin.clone(),
+                    (!flavor.is_empty()).then(|| flavor.to_string()),
+                ),
+                true,
+            ),
             None => (key.clone(), subpackage),
         };
         let mut current = start.clone();
@@ -253,7 +274,11 @@ impl Moved {
         let mut passed = HashSet::new();
         let mut found = false;
         loop {
-            let step = if sub { self.bare_step(&current) } else { self.step(&current) };
+            let step = if sub {
+                self.bare_step(&current)
+            } else {
+                self.step(&current)
+            };
             let Some(step) = step else { break };
             let (next, why) = match step {
                 Ok(s) => s,
@@ -276,7 +301,10 @@ impl Moved {
         if !found || current == start {
             MovedResult::Unchanged
         } else {
-            MovedResult::MovedTo { key: current, reason }
+            MovedResult::MovedTo {
+                key: current,
+                reason,
+            }
         }
     }
 }
@@ -290,7 +318,10 @@ mod tests {
     }
 
     fn to(k: &str, reason: &str) -> MovedResult {
-        MovedResult::MovedTo { key: key(k), reason: reason.into() }
+        MovedResult::MovedTo {
+            key: key(k),
+            reason: reason.into(),
+        }
     }
 
     #[test]
@@ -302,9 +333,20 @@ mod tests {
              d/gone||2024-03-01|abandoned\n",
         );
         let c_only = |o: &str| o == "c/three";
-        assert_eq!(m.resolve(&key("x/untouched"), c_only), MovedResult::Unchanged);
-        assert_eq!(m.resolve(&key("a/one"), c_only), to("c/three", "renamed again"));
-        assert_eq!(m.resolve(&key("d/gone"), c_only), MovedResult::Removed { reason: "abandoned".into() });
+        assert_eq!(
+            m.resolve(&key("x/untouched"), c_only),
+            MovedResult::Unchanged
+        );
+        assert_eq!(
+            m.resolve(&key("a/one"), c_only),
+            to("c/three", "renamed again")
+        );
+        assert_eq!(
+            m.resolve(&key("d/gone"), c_only),
+            MovedResult::Removed {
+                reason: "abandoned".into()
+            }
+        );
     }
 
     /// `check_moved` never tests the originspec it starts from: math/mumps,
@@ -318,8 +360,14 @@ mod tests {
              math/mumps4|math/mumps|2026-10-07|Repomove to math/mumps\n",
         );
         let exists = |o: &str| o == "math/mumps" || o == "math/mumps-edf";
-        assert_eq!(m.resolve(&key("math/mumps"), exists), to("math/mumps-edf", "Repomove to math/mumps-edf"));
-        assert_eq!(m.resolve(&key("math/mumps4"), exists), to("math/mumps", "Repomove to math/mumps"));
+        assert_eq!(
+            m.resolve(&key("math/mumps"), exists),
+            to("math/mumps-edf", "Repomove to math/mumps-edf")
+        );
+        assert_eq!(
+            m.resolve(&key("math/mumps4"), exists),
+            to("math/mumps", "Repomove to math/mumps")
+        );
     }
 
     /// A chain ending at an origin in no tree, with no entry of its own, is
@@ -348,21 +396,69 @@ mod tests {
              cat/old|cat/new|2026-01-01|renamed\n\
              cat/gone||2026-01-01|Has expired\n",
         );
-        let tree = ["editors/mg", "audio/kid3", "editors/ghostwriter", "math/mumps", "math/mumps-edf", "cat/new"];
+        let tree = [
+            "editors/mg",
+            "audio/kid3",
+            "editors/ghostwriter",
+            "math/mumps",
+            "math/mumps-edf",
+            "cat/new",
+        ];
         let exists = |o: &str| tree.contains(&o);
         let r = |s: &str| m.resolve(&key(s), exists);
-        assert_eq!(r("audio/kid3@qt5"), to("audio/kid3@qt6", "The legacy qt5 flavor has been replaced by the qt6 flavor"));
-        assert_eq!(r("audio/kid3"), MovedResult::Unchanged, "only @qt5 has an entry");
+        assert_eq!(
+            r("audio/kid3@qt5"),
+            to(
+                "audio/kid3@qt6",
+                "The legacy qt5 flavor has been replaced by the qt6 flavor"
+            )
+        );
+        assert_eq!(
+            r("audio/kid3"),
+            MovedResult::Unchanged,
+            "only @qt5 has an entry"
+        );
         assert_eq!(r("audio/kid3@kf6"), MovedResult::Unchanged);
-        assert_eq!(r("editors/ghostwriter@qt5"), to("editors/ghostwriter", "Flavors removed, now supports only qt6"));
+        assert_eq!(
+            r("editors/ghostwriter@qt5"),
+            to(
+                "editors/ghostwriter",
+                "Flavors removed, now supports only qt6"
+            )
+        );
         assert_eq!(r("editors/mg-static"), to("editors/mg@static", "Flavored"));
-        assert_eq!(r("editors/mg-static@static"), to("editors/mg@static", "Flavored"));
-        assert_eq!(r("editors/mg-static@dynamic"), MovedResult::FlavorClash { to: "editors/mg@static".into() });
-        assert!(r("editors/mg-static@all").gone_reason().unwrap().contains("editors/mg@static, another flavor"));
-        assert_eq!(r("math/mumps"), to("math/mumps-edf", "Repomove to math/mumps-edf"));
-        assert_eq!(r("cat/old@py311"), to("cat/new@py311", "renamed"), "the flavor re-attached");
+        assert_eq!(
+            r("editors/mg-static@static"),
+            to("editors/mg@static", "Flavored")
+        );
+        assert_eq!(
+            r("editors/mg-static@dynamic"),
+            MovedResult::FlavorClash {
+                to: "editors/mg@static".into()
+            }
+        );
+        assert!(
+            r("editors/mg-static@all")
+                .gone_reason()
+                .unwrap()
+                .contains("editors/mg@static, another flavor")
+        );
+        assert_eq!(
+            r("math/mumps"),
+            to("math/mumps-edf", "Repomove to math/mumps-edf")
+        );
+        assert_eq!(
+            r("cat/old@py311"),
+            to("cat/new@py311", "renamed"),
+            "the flavor re-attached"
+        );
         assert_eq!(r("cat/old@all"), to("cat/new@all", "renamed"));
-        assert_eq!(r("cat/gone@x"), MovedResult::Removed { reason: "Has expired".into() });
+        assert_eq!(
+            r("cat/gone@x"),
+            MovedResult::Removed {
+                reason: "Has expired".into()
+            }
+        );
     }
 
     /// An originspec naming a subpackage goes to `_check_moved` whole, and
@@ -380,10 +476,21 @@ mod tests {
         let exists = |o: &str| o == "audio/kid3" || o == "cat/newer";
         let sub = |s: &str| m.resolve_spec(&key(s), true, exists);
         assert_eq!(sub("cat/old"), MovedResult::Unchanged);
-        assert_eq!(sub("cat/old@fl"), to("cat/newer@fl", "again"), "the chase goes on from the target");
-        assert_eq!(sub("audio/kid3@qt5"), MovedResult::Unchanged, "no flavor-level entry for a ~sub");
+        assert_eq!(
+            sub("cat/old@fl"),
+            to("cat/newer@fl", "again"),
+            "the chase goes on from the target"
+        );
+        assert_eq!(
+            sub("audio/kid3@qt5"),
+            MovedResult::Unchanged,
+            "no flavor-level entry for a ~sub"
+        );
         assert_eq!(m.resolve(&key("cat/old"), exists), to("cat/newer", "again"));
-        assert_eq!(m.resolve(&key("audio/kid3@qt5"), exists), to("audio/kid3@qt6", "qt6 now"));
+        assert_eq!(
+            m.resolve(&key("audio/kid3@qt5"), exists),
+            to("audio/kid3@qt6", "qt6 now")
+        );
         // A dependency's `@fl~sub` keeps the subpackage in its flavor.
         let dep = |s: &str| m.resolve(&PortKey::parse_dependency(s).unwrap(), exists);
         assert_eq!(dep("cat/old@fl~lib"), to("cat/newer@fl", "again"));
@@ -399,14 +506,25 @@ mod tests {
         let (main, over) = (tmp.path().join("main"), tmp.path().join("over"));
         std::fs::create_dir_all(&main).unwrap();
         std::fs::create_dir_all(&over).unwrap();
-        std::fs::write(main.join("MOVED"), "a/a|b/b|2026-01-01|main\nx/x|y/y|2026-01-01|main\n").unwrap();
-        std::fs::write(over.join("MOVED"), "b/b|c/c|2026-02-01|over\nx/x|z/z|2026-02-01|over\n").unwrap();
+        std::fs::write(
+            main.join("MOVED"),
+            "a/a|b/b|2026-01-01|main\nx/x|y/y|2026-01-01|main\n",
+        )
+        .unwrap();
+        std::fs::write(
+            over.join("MOVED"),
+            "b/b|c/c|2026-02-01|over\nx/x|z/z|2026-02-01|over\n",
+        )
+        .unwrap();
         let (m, warnings) = Moved::load_all(&[&main, &over]);
         let exists = |o: &str| o == "c/c" || o == "y/y" || o == "z/z";
         assert_eq!(m.resolve(&key("a/a"), exists), to("c/c", "over"));
         assert_eq!(m.resolve(&key("x/x"), exists), to("y/y", "main"));
         assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].starts_with("MOVED: x/x has duplicate entries"), "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("MOVED: x/x has duplicate entries"),
+            "{warnings:?}"
+        );
     }
 
     /// `a|b`, `b|c`, `x|b`: the awk repoints `a` to `c` and leaves `x`
@@ -415,7 +533,9 @@ mod tests {
     /// `b` itself, in the tree or not, has its entry and moves to `c`.
     #[test]
     fn chains_collapse_in_file_order() {
-        let m = Moved::parse("a/a|b/b|2026-01-01|one\nb/b|c/c|2026-02-01|two\nx/x|b/b|2026-03-01|three\n");
+        let m = Moved::parse(
+            "a/a|b/b|2026-01-01|one\nb/b|c/c|2026-02-01|two\nx/x|b/b|2026-03-01|three\n",
+        );
         let b_back = |o: &str| o == "b/b" || o == "c/c";
         let c_only = |o: &str| o == "c/c";
         assert_eq!(m.resolve(&key("a/a"), b_back), to("c/c", "two"));
@@ -429,7 +549,9 @@ mod tests {
     #[test]
     fn a_later_removal_ends_the_earlier_chain() {
         let m = Moved::parse("a/a|b/b|2026-01-01|renamed\nb/b||2026-02-01|expired\n");
-        let removed = MovedResult::Removed { reason: "expired".into() };
+        let removed = MovedResult::Removed {
+            reason: "expired".into(),
+        };
         assert_eq!(m.resolve(&key("a/a"), |o| o == "b/b"), removed);
         assert_eq!(m.resolve(&key("b/b"), |_| false), removed);
     }
@@ -471,6 +593,9 @@ mod tests {
         assert_eq!(target("editors/ghostwriter@qt5"), "editors/ghostwriter");
         assert_eq!(target("editors/mg-static"), "editors/mg@static");
         assert_eq!(target("math/mumps"), "math/mumps-edf");
-        assert!(matches!(m.resolve(&key("editors/mg-static@dynamic"), exists), MovedResult::FlavorClash { .. }));
+        assert!(matches!(
+            m.resolve(&key("editors/mg-static@dynamic"), exists),
+            MovedResult::FlavorClash { .. }
+        ));
     }
 }

@@ -67,8 +67,17 @@ const VALUE_SHORTS: [char; 8] = ['z', 'j', 'p', 'P', 'O', 'o', 'f', 'J'];
 /// Long options that take a value, given as the next word unless attached
 /// with `=`.
 const VALUE_LONGS: [&str; 11] = [
-    "--set", "--jail", "--ports-tree", "--portsdir", "--overlay", "--overlay-dir",
-    "--options-dir", "--file", "--jobs", "--repo", "--color",
+    "--set",
+    "--jail",
+    "--ports-tree",
+    "--portsdir",
+    "--overlay",
+    "--overlay-dir",
+    "--options-dir",
+    "--file",
+    "--jobs",
+    "--repo",
+    "--color",
 ];
 
 /// The action comes first: `optique scan -z ws -f list`. With no action the
@@ -79,7 +88,11 @@ const VALUE_LONGS: [&str; 11] = [
 /// left alone (or a cluster ending in it) is followed by its profile.
 pub fn check_action_first(args: &[OsString]) -> Result<(), String> {
     let word = |a: &OsString| a.to_string_lossy().into_owned();
-    if args.iter().skip(1).any(|a| ["-h", "--help", "-V", "--version"].contains(&a.to_str().unwrap_or(""))) {
+    if args
+        .iter()
+        .skip(1)
+        .any(|a| ["-h", "--help", "-V", "--version"].contains(&a.to_str().unwrap_or("")))
+    {
         return Ok(());
     }
     let mut i = 1;
@@ -90,7 +103,9 @@ pub fn check_action_first(args: &[OsString]) -> Result<(), String> {
             return Ok(());
         }
         if SUBCOMMANDS.contains(&a.as_str()) {
-            let Some(first) = options_at else { return Ok(()) };
+            let Some(first) = options_at else {
+                return Ok(());
+            };
             // The bare -s disambiguate_synth rewrote reads as typed.
             let typed = |a: &OsString| match word(a) {
                 w if w == format!("--synth={SYNTH_DEFAULT_PROFILE}") => "-s".to_string(),
@@ -137,7 +152,10 @@ pub fn parse(args: Vec<OsString>) -> Cli {
         .filter(|sub| sub.try_contains_id("overlay").is_ok())
         .unwrap_or(&matches);
     let indices = |id: &str| -> Vec<usize> {
-        level.indices_of(id).map(Iterator::collect).unwrap_or_default()
+        level
+            .indices_of(id)
+            .map(Iterator::collect)
+            .unwrap_or_default()
     };
     let mut specs: Vec<(usize, crate::config::OverlaySpec)> = Vec::new();
     specs.extend(
@@ -287,7 +305,12 @@ pub struct Cli {
     /// Tints the scan status markers on stdout and the informational stderr
     /// output (banner labels, notes, warnings, errors, progress); stdout and
     /// stderr are judged for tty-ness separately. The TUI is unaffected.
-    #[arg(long = "color", global = true, value_name = "WHEN", default_value = "auto")]
+    #[arg(
+        long = "color",
+        global = true,
+        value_name = "WHEN",
+        default_value = "auto"
+    )]
     pub color: ColorChoice,
 
     #[command(subcommand)]
@@ -495,7 +518,6 @@ pub struct RootsArgs {
     pub origins: Vec<String>,
 }
 
-
 /// Merge positional origins and pkglist files into parsed root keys,
 /// dropping duplicates while preserving first-seen order.
 pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<Listed>> {
@@ -546,7 +568,9 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
                     anyhow::bail!(msg);
                 }
                 use clap::CommandFactory as _;
-                Cli::command().error(clap::error::ErrorKind::ValueValidation, msg).exit()
+                Cli::command()
+                    .error(clap::error::ErrorKind::ValueValidation, msg)
+                    .exit()
             }
         }
     };
@@ -586,7 +610,10 @@ mod tests {
         args.retain(|a| a.get_id() != "synth" && !a.is_positional());
         let takes = |a: &clap::Arg| a.get_action().takes_values();
         let shorts = |value: bool| -> std::collections::BTreeSet<char> {
-            args.iter().filter(|a| takes(a) == value).filter_map(clap::Arg::get_short).collect()
+            args.iter()
+                .filter(|a| takes(a) == value)
+                .filter_map(clap::Arg::get_short)
+                .collect()
         };
         assert_eq!(shorts(true), VALUE_SHORTS.into_iter().collect());
         assert_eq!(shorts(false), BOOLEAN_SHORTS.into_iter().collect());
@@ -595,11 +622,18 @@ mod tests {
             .filter(|a| takes(a))
             .flat_map(|a| {
                 let aliases = a.get_all_aliases().unwrap_or_default();
-                a.get_long().into_iter().chain(aliases).map(|l| format!("--{l}")).collect::<Vec<_>>()
+                a.get_long()
+                    .into_iter()
+                    .chain(aliases)
+                    .map(|l| format!("--{l}"))
+                    .collect::<Vec<_>>()
             })
             .collect();
         assert_eq!(longs, VALUE_LONGS.iter().map(ToString::to_string).collect());
-        let mut subs: Vec<&str> = root.get_subcommands().map(clap::Command::get_name).collect();
+        let mut subs: Vec<&str> = root
+            .get_subcommands()
+            .map(clap::Command::get_name)
+            .collect();
         subs.push("help");
         subs.sort_unstable();
         let mut table = SUBCOMMANDS.to_vec();
@@ -643,12 +677,18 @@ mod tests {
         // whitespace-separated word (a trailing description, say) is not
         // part of the origin.
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        writeln!(f, "sysutils/tmux/\nsysutils/screen  terminal multiplexer\n/mail/dovecot")
-            .unwrap();
+        writeln!(
+            f,
+            "sysutils/tmux/\nsysutils/screen  terminal multiplexer\n/mail/dovecot"
+        )
+        .unwrap();
 
         let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
         let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
-        assert_eq!(names, vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]);
+        assert_eq!(
+            names,
+            vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]
+        );
     }
 
     /// poudriere skips a pkglist line whole only when its first word starts
@@ -670,9 +710,11 @@ mod tests {
     /// as a malformed origin.
     #[test]
     fn leading_or_trailing_slash_is_stripped_on_the_command_line_too() {
-        let roots =
-            collect_roots(&["/sysutils/tmux".to_string(), "sysutils/tmux/".to_string()], &[])
-                .unwrap();
+        let roots = collect_roots(
+            &["/sysutils/tmux".to_string(), "sysutils/tmux/".to_string()],
+            &[],
+        )
+        .unwrap();
         let names: Vec<String> = roots.iter().map(|l| l.key.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
@@ -682,10 +724,17 @@ mod tests {
     /// MOVED reads `cat/port~sub` and `cat/port` apart, so both are kept.
     #[test]
     fn a_listed_subpackage_roots_its_port() {
-        let specs = ["cat/port~sub", "cat/other@fl~sub", "cat/port~lib", "cat/port"];
+        let specs = [
+            "cat/port~sub",
+            "cat/other@fl~sub",
+            "cat/port~lib",
+            "cat/port",
+        ];
         let roots = collect_roots(&specs.map(String::from), &[]).unwrap();
-        let names: Vec<String> =
-            roots.iter().map(|l| format!("{}{}", l.key, if l.subpackage { "~" } else { "" })).collect();
+        let names: Vec<String> = roots
+            .iter()
+            .map(|l| format!("{}{}", l.key, if l.subpackage { "~" } else { "" }))
+            .collect();
         assert_eq!(names, ["cat/port~", "cat/other@fl~", "cat/port"]);
     }
 
@@ -693,7 +742,9 @@ mod tests {
     fn malformed_line_names_the_file() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "not-an-origin").unwrap();
-        let err = collect_roots(&[], &[f.path().to_path_buf()]).unwrap_err().to_string();
+        let err = collect_roots(&[], &[f.path().to_path_buf()])
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("not-an-origin"));
         assert!(err.contains(&f.path().display().to_string()));
     }
@@ -708,8 +759,32 @@ mod tests {
         use crate::config::OverlaySpec::{Dir, Name};
         let parse = |args: &[&str]| parse(args.iter().map(OsString::from).collect()).overlays;
         let want = vec![Name("a".into()), Dir("/d".into()), Name("b".into())];
-        assert_eq!(parse(&["optique", "scan", "-O", "a", "--overlay-dir", "/d", "-O", "b", "x/y"]), want);
-        assert_eq!(parse(&["optique", "-O", "a", "--overlay-dir=/d", "--overlay", "b", "x/y"]), want);
+        assert_eq!(
+            parse(&[
+                "optique",
+                "scan",
+                "-O",
+                "a",
+                "--overlay-dir",
+                "/d",
+                "-O",
+                "b",
+                "x/y"
+            ]),
+            want
+        );
+        assert_eq!(
+            parse(&[
+                "optique",
+                "-O",
+                "a",
+                "--overlay-dir=/d",
+                "--overlay",
+                "b",
+                "x/y"
+            ]),
+            want
+        );
         assert!(parse(&["optique", "scan", "x/y"]).is_empty());
     }
 
@@ -735,14 +810,27 @@ mod tests {
         }
         // Refused, with the command as it should read.
         for (bad, fixed) in [
-            (&["optique", "-z", "ws", "scan", "-f", "l"][..], "optique scan -z ws -f l"),
+            (
+                &["optique", "-z", "ws", "scan", "-f", "l"][..],
+                "optique scan -z ws -f l",
+            ),
             (&["optique", "-l", "sync"], "optique sync -l"),
             (&["optique", "-s", "scan"], "optique scan -s"),
-            (&["optique", "-s", "Release", "scan"], "optique scan -s Release"),
-            (&["optique", "--set=ws", "-n", "clean", "-r"], "optique clean --set=ws -n -r"),
+            (
+                &["optique", "-s", "Release", "scan"],
+                "optique scan -s Release",
+            ),
+            (
+                &["optique", "--set=ws", "-n", "clean", "-r"],
+                "optique clean --set=ws -n -r",
+            ),
             (&["optique", "-nzws", "decide"], "optique decide -nzws"),
         ] {
-            assert_eq!(check(bad), Err(format!("options go after the action: {fixed}")), "{bad:?}");
+            assert_eq!(
+                check(bad),
+                Err(format!("options go after the action: {fixed}")),
+                "{bad:?}"
+            );
         }
     }
 
@@ -756,30 +844,78 @@ mod tests {
         };
         let dflt = format!("--synth={SYNTH_DEFAULT_PROFILE}");
         // A subcommand, an option or nothing at all: -s stands alone.
-        assert_eq!(fix(&["optique", "-s", "scan", "-f", "l"]), ["optique", &dflt, "scan", "-f", "l"]);
-        assert_eq!(fix(&["optique", "--synth", "clean"]), ["optique", &dflt, "clean"]);
-        assert_eq!(fix(&["optique", "scan", "-s", "-o", "/d"]), ["optique", "scan", &dflt, "-o", "/d"]);
-        assert_eq!(fix(&["optique", "scan", "x/y", "-s"]), ["optique", "scan", "x/y", &dflt]);
+        assert_eq!(
+            fix(&["optique", "-s", "scan", "-f", "l"]),
+            ["optique", &dflt, "scan", "-f", "l"]
+        );
+        assert_eq!(
+            fix(&["optique", "--synth", "clean"]),
+            ["optique", &dflt, "clean"]
+        );
+        assert_eq!(
+            fix(&["optique", "scan", "-s", "-o", "/d"]),
+            ["optique", "scan", &dflt, "-o", "/d"]
+        );
+        assert_eq!(
+            fix(&["optique", "scan", "x/y", "-s"]),
+            ["optique", "scan", "x/y", &dflt]
+        );
         // A port origin (or any path) is never mistaken for a profile.
-        assert_eq!(fix(&["optique", "scan", "-s", "www/nginx"]), ["optique", "scan", &dflt, "www/nginx"]);
+        assert_eq!(
+            fix(&["optique", "scan", "-s", "www/nginx"]),
+            ["optique", "scan", &dflt, "www/nginx"]
+        );
         // A plain word is one, and the attached forms are left alone.
-        assert_eq!(fix(&["optique", "-s", "Release", "scan"]), ["optique", "-s", "Release", "scan"]);
-        assert_eq!(fix(&["optique", "--synth=scan", "scan"]), ["optique", "--synth=scan", "scan"]);
-        assert_eq!(fix(&["optique", "-sRelease", "scan"]), ["optique", "-sRelease", "scan"]);
+        assert_eq!(
+            fix(&["optique", "-s", "Release", "scan"]),
+            ["optique", "-s", "Release", "scan"]
+        );
+        assert_eq!(
+            fix(&["optique", "--synth=scan", "scan"]),
+            ["optique", "--synth=scan", "scan"]
+        );
+        assert_eq!(
+            fix(&["optique", "-sRelease", "scan"]),
+            ["optique", "-sRelease", "scan"]
+        );
         // Nothing is rewritten past a literal --.
-        assert_eq!(fix(&["optique", "--", "-s", "scan"]), ["optique", "--", "-s", "scan"]);
+        assert_eq!(
+            fix(&["optique", "--", "-s", "scan"]),
+            ["optique", "--", "-s", "scan"]
+        );
         // Untouched when -s is absent.
-        assert_eq!(fix(&["optique", "-z", "ws", "scan"]), ["optique", "-z", "ws", "scan"]);
+        assert_eq!(
+            fix(&["optique", "-z", "ws", "scan"]),
+            ["optique", "-z", "ws", "scan"]
+        );
         // A cluster of boolean flags ending in s follows the same rule.
-        assert_eq!(fix(&["optique", "-ns", "scan"]), ["optique", "-n", &dflt, "scan"]);
-        assert_eq!(fix(&["optique", "-vs", "scan"]), ["optique", "-v", &dflt, "scan"]);
-        assert_eq!(fix(&["optique", "-qs", "scan"]), ["optique", "-q", &dflt, "scan"]);
+        assert_eq!(
+            fix(&["optique", "-ns", "scan"]),
+            ["optique", "-n", &dflt, "scan"]
+        );
+        assert_eq!(
+            fix(&["optique", "-vs", "scan"]),
+            ["optique", "-v", &dflt, "scan"]
+        );
+        assert_eq!(
+            fix(&["optique", "-qs", "scan"]),
+            ["optique", "-q", &dflt, "scan"]
+        );
         assert_eq!(fix(&["optique", "-nms"]), ["optique", "-nm", &dflt]);
-        assert_eq!(fix(&["optique", "-ns", "Release", "scan"]), ["optique", "-ns", "Release", "scan"]);
+        assert_eq!(
+            fix(&["optique", "-ns", "Release", "scan"]),
+            ["optique", "-ns", "Release", "scan"]
+        );
         // After a flag that takes a value, the s is that value, not -s.
         assert_eq!(fix(&["optique", "-zs", "scan"]), ["optique", "-zs", "scan"]);
-        assert_eq!(fix(&["optique", "-nzs", "scan"]), ["optique", "-nzs", "scan"]);
-        assert_eq!(fix(&["optique", "--", "-ns", "scan"]), ["optique", "--", "-ns", "scan"]);
+        assert_eq!(
+            fix(&["optique", "-nzs", "scan"]),
+            ["optique", "-nzs", "scan"]
+        );
+        assert_eq!(
+            fix(&["optique", "--", "-ns", "scan"]),
+            ["optique", "--", "-ns", "scan"]
+        );
     }
 
     #[test]
@@ -789,7 +925,10 @@ mod tests {
         assert!(use_color(Auto, true, None));
         assert!(!use_color(Auto, false, None));
         assert!(!use_color(Auto, true, Some("1")));
-        assert!(!use_color(Auto, true, Some("")), "NO_COLOR= still means no color");
+        assert!(
+            !use_color(Auto, true, Some("")),
+            "NO_COLOR= still means no color"
+        );
         assert!(!use_color(Auto, false, Some("1")));
         // never always loses, always always wins (explicit beats the env).
         assert!(!use_color(Never, true, None));

@@ -169,7 +169,10 @@ mod tests {
     /// records starts: the line before the first `DESC` record.
     fn records_loop() -> (usize, Vec<&'static str>) {
         let lines: Vec<&str> = WRAPPER.lines().collect();
-        let desc = lines.iter().position(|l| l.starts_with(".info OPTIQUE|DESC|")).unwrap();
+        let desc = lines
+            .iter()
+            .position(|l| l.starts_with(".info OPTIQUE|DESC|"))
+            .unwrap();
         (desc - 1, lines)
     }
 
@@ -180,7 +183,10 @@ mod tests {
     fn options_slave_options_get_their_records() {
         let (i, lines) = records_loop();
         let for_line = lines[i];
-        assert!(for_line.contains("${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} "), "{for_line}");
+        assert!(
+            for_line.contains("${COMPLETE_OPTIONS_LIST:U} ${OPTIONS_SLAVE:U} "),
+            "{for_line}"
+        );
     }
 
     /// bsd.options.mk:410-440 puts what a listed option implies in
@@ -189,7 +195,11 @@ mod tests {
     #[test]
     fn implied_options_get_their_records() {
         let (i, lines) = records_loop();
-        assert!(lines[i].contains(" ${_OPTIQUE_IMPLIED:O:u} "), "{}", lines[i]);
+        assert!(
+            lines[i].contains(" ${_OPTIQUE_IMPLIED:O:u} "),
+            "{}",
+            lines[i]
+        );
         assert_eq!(
             lines[i - 4..i],
             [
@@ -207,9 +217,17 @@ mod tests {
     /// differently.
     #[test]
     fn override_is_dumped_only_when_defined() {
-        let i = WRAPPER.lines().position(|l| l.contains("OPTIQUE|OVERRIDE|")).unwrap();
+        let i = WRAPPER
+            .lines()
+            .position(|l| l.contains("OPTIQUE|OVERRIDE|"))
+            .unwrap();
         let lines: Vec<&str> = WRAPPER.lines().collect();
-        assert_eq!(lines[i - 1], ".if defined(OPTIONS_OVERRIDE)", "{}", lines[i - 1]);
+        assert_eq!(
+            lines[i - 1],
+            ".if defined(OPTIONS_OVERRIDE)",
+            "{}",
+            lines[i - 1]
+        );
         assert_eq!(lines[i], ".info OPTIQUE|OVERRIDE|${OPTIONS_OVERRIDE}");
         assert_eq!(lines[i + 1], ".endif");
     }
@@ -219,9 +237,15 @@ mod tests {
     /// file.
     #[test]
     fn options_file_is_dumped_only_when_moved() {
-        let i = WRAPPER.lines().position(|l| l.contains("OPTIQUE|OPTIONS_FILE|")).unwrap();
+        let i = WRAPPER
+            .lines()
+            .position(|l| l.contains("OPTIQUE|OPTIONS_FILE|"))
+            .unwrap();
         let lines: Vec<&str> = WRAPPER.lines().collect();
-        assert_eq!(lines[i - 1], ".if \"${OPTIONS_FILE:U}\" != \"${PORT_DBDIR}/${OPTIONS_NAME:U}/options\"");
+        assert_eq!(
+            lines[i - 1],
+            ".if \"${OPTIONS_FILE:U}\" != \"${PORT_DBDIR}/${OPTIONS_NAME:U}/options\""
+        );
         assert_eq!(lines[i + 1], ".endif");
     }
 }

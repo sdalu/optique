@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 
 use crate::cache::Cache;
 use crate::model::origin::PortKey;
@@ -46,14 +46,21 @@ fn pkg_query(format: &str) -> Result<String> {
         .output()
         .map_err(|e| anyhow!("cannot run pkg query: {e}"))?;
     if !out.status.success() {
-        bail!("pkg query failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "pkg query failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// "repository 'a'" or "repositories 'a', 'b'".
 pub fn repos_phrase(repos: &[String]) -> String {
-    let noun = if repos.len() == 1 { "repository" } else { "repositories" };
+    let noun = if repos.len() == 1 {
+        "repository"
+    } else {
+        "repositories"
+    };
     format!("{noun} '{}'", repos.join("', '"))
 }
 
@@ -63,11 +70,7 @@ pub fn repos_phrase(repos: &[String]) -> String {
 /// several flavors of one origin can be installed at once (polkit-qt-1 for
 /// qt5 and qt6), each its own root. Unparsable origins are skipped,
 /// duplicates collapse, the result is sorted.
-fn parse_installed(
-    origins: &str,
-    annots: &str,
-    repos: &[String],
-) -> Vec<PortKey> {
+fn parse_installed(origins: &str, annots: &str, repos: &[String]) -> Vec<PortKey> {
     let mut flavor: HashMap<&str, &str> = Default::default();
     for line in annots.lines() {
         let mut f = line.split('\t');
@@ -117,7 +120,11 @@ pub fn installed_in_index(
 ) -> (Vec<PortKey>, Vec<(PortKey, &'static str)>) {
     let index = flavor_index(&ctx.portsdir, &ctx.overlays);
     let exists = |o: &str| index.contains(o);
-    let origins = installed.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
+    let origins = installed
+        .iter()
+        .map(|k| k.origin.clone())
+        .filter(|o| exists(o))
+        .collect();
     let flavors = roots::query_flavors(&origins, ctx, files, jobs, cache);
     match_installed(installed, exists, &flavors)
 }
@@ -177,7 +184,11 @@ pub fn match_installed(
 /// synth, whatever is on disk at its path.
 pub fn flavor_index(portsdir: &Path, overlays: &[PathBuf]) -> HashSet<String> {
     let mut out = HashSet::new();
-    for tree in overlays.iter().map(PathBuf::as_path).chain(std::iter::once(portsdir)) {
+    for tree in overlays
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(std::iter::once(portsdir))
+    {
         for category in categories(tree) {
             let Ok(text) = fs::read_to_string(tree.join(&category).join("Makefile")) else {
                 continue;
@@ -220,8 +231,14 @@ fn categories(portsdir: &Path) -> Vec<String> {
 /// characters — a second name on the same line is never read.
 fn subdir_entry(line: &str) -> Option<&str> {
     let is_blank = |c: char| c == ' ' || c == '\t';
-    let rest = line.trim().strip_prefix("SUBDIR")?.trim_start_matches(is_blank);
-    let rest = rest.strip_prefix(['+', ':'])?.strip_prefix('=')?.trim_start_matches(is_blank);
+    let rest = line
+        .trim()
+        .strip_prefix("SUBDIR")?
+        .trim_start_matches(is_blank);
+    let rest = rest
+        .strip_prefix(['+', ':'])?
+        .strip_prefix('=')?
+        .trim_start_matches(is_blank);
     let name = rest.split_whitespace().next().unwrap_or("");
     (!name.is_empty()).then_some(name)
 }
@@ -251,8 +268,12 @@ pub fn refuses(text: &[u8], options: &[String]) -> Option<String> {
             return Some(format!("saved {name} is no option of the port"));
         }
     }
-    (count != options.len())
-        .then(|| format!("{count} saved entries for the port's {} options", options.len()))
+    (count != options.len()).then(|| {
+        format!(
+            "{count} saved entries for the port's {} options",
+            options.len()
+        )
+    })
 }
 
 /// The file synth checks for `info` under `files`' options dir, and what it
@@ -292,10 +313,16 @@ mod tests {
 
         let index = flavor_index(&portsdir, &[]);
         let exists = |o: &str| index.contains(o);
-        let (kept, skipped) =
-            match_installed(&keys(&["misc/local", "misc/other"]), exists, &HashMap::new());
+        let (kept, skipped) = match_installed(
+            &keys(&["misc/local", "misc/other"]),
+            exists,
+            &HashMap::new(),
+        );
         assert_eq!(kept, keys(&["misc/other"]));
-        let skipped: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} {why}")).collect();
+        let skipped: Vec<String> = skipped
+            .iter()
+            .map(|(k, why)| format!("{k} {why}"))
+            .collect();
         assert_eq!(skipped, ["misc/local missing from ports"]);
     }
 
@@ -324,8 +351,14 @@ mod tests {
             exists,
             &flavors,
         );
-        assert_eq!(kept, keys(&["misc/flav@nox", "misc/plain", "misc/broken@x"]));
-        let skipped: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} {why}")).collect();
+        assert_eq!(
+            kept,
+            keys(&["misc/flav@nox", "misc/plain", "misc/broken@x"])
+        );
+        let skipped: Vec<String> = skipped
+            .iter()
+            .map(|(k, why)| format!("{k} {why}"))
+            .collect();
         assert_eq!(
             skipped,
             [
@@ -426,15 +459,25 @@ mod tests {
         let names: Vec<String> = all.iter().map(ToString::to_string).collect();
         assert_eq!(
             names,
-            vec!["devel/binutils@native", "graphics/ImageMagick7@nox11", "www/nginx"]
+            vec![
+                "devel/binutils@native",
+                "graphics/ImageMagick7@nox11",
+                "www/nginx"
+            ]
         );
         // Repo filter keeps only Synth-built packages.
         let synth = parse_installed(origins, annots, &["Synth".to_string()]);
         let names: Vec<String> = synth.iter().map(ToString::to_string).collect();
-        assert_eq!(names, vec!["devel/binutils@native", "graphics/ImageMagick7@nox11"]);
+        assert_eq!(
+            names,
+            vec!["devel/binutils@native", "graphics/ImageMagick7@nox11"]
+        );
         // Several repositories: a package from any of them is kept.
-        let both =
-            parse_installed(origins, annots, &["Synth".to_string(), "poudriere".to_string()]);
+        let both = parse_installed(
+            origins,
+            annots,
+            &["Synth".to_string(), "poudriere".to_string()],
+        );
         assert_eq!(both.len(), 3);
         // Unknown repo: empty (caller turns this into an error).
         assert!(parse_installed(origins, annots, &["nope".to_string()]).is_empty());
@@ -453,8 +496,10 @@ mod tests {
                       polkit-qt6-1\tflavor\tqt6\n\
                       gpu-firmware-amd-kmod-aldebaran\tflavor\taldebaran\n\
                       gpu-firmware-amd-kmod-arcturus\tflavor\tarcturus\n";
-        let names: Vec<String> =
-            parse_installed(origins, annots, &[]).iter().map(ToString::to_string).collect();
+        let names: Vec<String> = parse_installed(origins, annots, &[])
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         assert_eq!(
             names,
             vec![

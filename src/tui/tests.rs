@@ -2,8 +2,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::keys::page_step;
 use super::overlays::parse_bulk;
-use super::refresh::{refreshed_message, REFRESH_DEBOUNCE};
-use super::undo::{push_capped, UNDO_MAX};
+use super::refresh::{REFRESH_DEBOUNCE, refreshed_message};
+use super::undo::{UNDO_MAX, push_capped};
 use super::*;
 use crate::deps::EXTRA_SHOWN;
 use crate::draft;
@@ -29,22 +29,20 @@ pub(super) fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
     use crate::model::options::PortOptions;
     use crate::model::port::{DepEdge, PortInfo};
 
-    let port = |origin: &str, deps: &[&str]| {
-        PortInfo {
-            options: PortOptions {
-                complete: vec!["DOCS".to_string()],
-                ..Default::default()
-            },
-            deps: deps
-                .iter()
-                .map(|dep| DepEdge {
-                    target: PortKey::parse(dep).expect("test dep parses"),
-                    spec: format!("dep:{dep}"),
-                    test_only: false,
-                })
-                .collect(),
-            ..PortInfo::stub(origin)
-        }
+    let port = |origin: &str, deps: &[&str]| PortInfo {
+        options: PortOptions {
+            complete: vec!["DOCS".to_string()],
+            ..Default::default()
+        },
+        deps: deps
+            .iter()
+            .map(|dep| DepEdge {
+                target: PortKey::parse(dep).expect("test dep parses"),
+                spec: format!("dep:{dep}"),
+                test_only: false,
+            })
+            .collect(),
+        ..PortInfo::stub(origin)
     };
     let mut ports = std::collections::BTreeMap::new();
     for (origin, deps) in graph {
@@ -54,8 +52,8 @@ pub(super) fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
     let roots: Vec<PortKey> = ports.keys().cloned().collect();
     let files = OptionsFiles::new(&tmp.join("options"));
     let session = Session::new(ports, HashMap::new(), &roots, &files, false);
-    let db = StagingDb::create(tmp, &files, session.states.keys())
-        .expect("staging db under a tempdir");
+    let db =
+        StagingDb::create(tmp, &files, session.states.keys()).expect("staging db under a tempdir");
     let refresher = crate::query::refresher::spawn(
         crate::query::makerunner::QueryCtx {
             portsdir: tmp.to_path_buf(),
@@ -70,7 +68,15 @@ pub(super) fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
         crate::moved::Moved::parse(""),
         Default::default(),
     );
-    build_app(session, files, db, refresher, Default::default(), Vec::new(), false)
+    build_app(
+        session,
+        files,
+        db,
+        refresher,
+        Default::default(),
+        Vec::new(),
+        false,
+    )
 }
 
 /// The port pane says which overlay a port comes from, and nothing for
@@ -82,14 +88,29 @@ fn the_port_pane_names_its_overlay() {
     let ov = tmp.path().join("ov");
     std::fs::create_dir_all(ov.join("cat/beta")).unwrap();
     std::fs::write(ov.join("cat/beta/Makefile"), "").unwrap();
-    app.overlays = vec![crate::config::Overlay { name: Some("mine".into()), path: ov }];
+    app.overlays = vec![crate::config::Overlay {
+        name: Some("mine".into()),
+        path: ov,
+    }];
     let shown = screen(&mut app);
     assert!(!shown.contains("overlay"), "cat/alpha is the tree's");
-    assert!(pane_bottom(&shown).chars().skip(1).all(|c| c == '─' || c == '┘'), "{shown}");
+    assert!(
+        pane_bottom(&shown)
+            .chars()
+            .skip(1)
+            .all(|c| c == '─' || c == '┘'),
+        "{shown}"
+    );
     press(&mut app, 'j');
     let shown = screen(&mut app);
-    assert!(pane_bottom(&shown).starts_with("└ overlay: mine ─"), "{shown}");
-    assert!(shown.lines().next().unwrap().contains("┌ beta-1.0 ─"), "the title is the package:\n{shown}");
+    assert!(
+        pane_bottom(&shown).starts_with("└ overlay: mine ─"),
+        "{shown}"
+    );
+    assert!(
+        shown.lines().next().unwrap().contains("┌ beta-1.0 ─"),
+        "the title is the package:\n{shown}"
+    );
 }
 
 /// The option pane's title is the versioned package, the flavors after
@@ -103,7 +124,10 @@ fn the_pane_title_is_the_package() {
     info.flavors = vec!["py311".into(), "py312".into()];
     let shown = screen(&mut app);
     let top = shown.lines().next().unwrap();
-    assert!(top.contains("┌ alpha-1.0 · flavors: py311*‹ py312 ─"), "{top}");
+    assert!(
+        top.contains("┌ alpha-1.0 · flavors: py311*‹ py312 ─"),
+        "{top}"
+    );
     assert!(!top.contains("cat/alpha"), "{top}");
 
     let info = app.session.ports.get_mut(&key).unwrap();
@@ -114,7 +138,10 @@ fn the_pane_title_is_the_package() {
     assert!(title.ends_with('…'), "{top}");
     let body = title.trim_start().trim_end_matches('…');
     let full = "alpha-with-a-long-package-name-1.0.0_1,1 · flavors: py311*‹ py312";
-    assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+    assert!(
+        full.starts_with(body) && full[body.len()..].starts_with(' '),
+        "{top}"
+    );
 }
 
 /// In the option pane's title, a flavor the closure holds is underlined
@@ -124,10 +151,14 @@ fn the_pane_title_is_the_package() {
 fn the_pane_title_underlines_the_flavors_in_the_closure() {
     use ratatui::style::Modifier;
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha@py311", &[]), ("cat/alpha@py312", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/alpha@py311", &[]), ("cat/alpha@py312", &[])],
+    );
     for f in ["py311", "py312"] {
         let key = PortKey::parse(&format!("cat/alpha@{f}")).unwrap();
-        app.session.ports.get_mut(&key).unwrap().flavors = vec!["py311".into(), "py312".into(), "py313".into()];
+        app.session.ports.get_mut(&key).unwrap().flavors =
+            vec!["py311".into(), "py312".into(), "py313".into()];
     }
     for focused in [true, false] {
         if focused {
@@ -135,19 +166,32 @@ fn the_pane_title_underlines_the_flavors_in_the_closure() {
         } else {
             hit(&mut app, KeyCode::Esc);
         }
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
         terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let top = ui::screen_rows(&buffer)[0].clone();
-        assert!(top.contains("alpha-1.0 · flavors: py311*‹ py312 py313 "), "{top}");
+        assert!(
+            top.contains("alpha-1.0 · flavors: py311*‹ py312 py313 "),
+            "{top}"
+        );
         let underlined = |text: &str| {
             let col = top[..top.find(text).unwrap()].chars().count() as u16;
             buffer[(col, 0)].modifier.contains(Modifier::UNDERLINED)
         };
-        assert!(underlined("py311"), "focused {focused}: in the closure, current");
+        assert!(
+            underlined("py311"),
+            "focused {focused}: in the closure, current"
+        );
         assert!(underlined("py312"), "focused {focused}: in the closure");
-        assert!(!underlined("py313"), "focused {focused}: not in the closure");
-        assert!(!underlined("*‹"), "focused {focused}: the marks are not the name");
+        assert!(
+            !underlined("py313"),
+            "focused {focused}: not in the closure"
+        );
+        assert!(
+            !underlined("*‹"),
+            "focused {focused}: the marks are not the name"
+        );
     }
 }
 
@@ -162,7 +206,10 @@ fn footer_app(tmp: &std::path::Path, overlay: bool) -> App {
         let ov = tmp.join("ov");
         std::fs::create_dir_all(ov.join("cat/alpha")).unwrap();
         std::fs::write(ov.join("cat/alpha/Makefile"), "").unwrap();
-        app.overlays = vec![crate::config::Overlay { name: Some("mine".into()), path: ov }];
+        app.overlays = vec![crate::config::Overlay {
+            name: Some("mine".into()),
+            path: ov,
+        }];
     }
     app.rebuild_editor();
     app
@@ -176,28 +223,52 @@ fn the_pane_bottom_border_says_overlay_changes_and_place() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = footer_app(tmp.path(), false);
     let plain = pane_bottom(&screen(&mut app));
-    assert!(plain.trim_start_matches('└').trim_end_matches('┘').chars().all(|c| c == '─'), "{plain}");
+    assert!(
+        plain
+            .trim_start_matches('└')
+            .trim_end_matches('┘')
+            .chars()
+            .all(|c| c == '─'),
+        "{plain}"
+    );
     hit(&mut app, KeyCode::Enter);
-    assert!(pane_bottom(&screen(&mut app)).ends_with("═ 1/2 ╝"), "place only:\n{}", screen(&mut app));
+    assert!(
+        pane_bottom(&screen(&mut app)).ends_with("═ 1/2 ╝"),
+        "place only:\n{}",
+        screen(&mut app)
+    );
     press(&mut app, 'j');
     press(&mut app, ' ');
-    assert!(pane_bottom(&screen(&mut app)).ends_with("═ +NAME_B · 2/2 ╝"), "{}", screen(&mut app));
+    assert!(
+        pane_bottom(&screen(&mut app)).ends_with("═ +NAME_B · 2/2 ╝"),
+        "{}",
+        screen(&mut app)
+    );
     press(&mut app, 'k');
     press(&mut app, ' ');
     assert!(pane_bottom(&screen(&mut app)).ends_with("═ +NAME_A +NAME_B · 1/2 ╝"));
     hit(&mut app, KeyCode::Esc);
     let shown = screen(&mut app);
-    assert!(pane_bottom(&shown).ends_with("─ +NAME_A +NAME_B ┘"), "changes only:\n{shown}");
+    assert!(
+        pane_bottom(&shown).ends_with("─ +NAME_A +NAME_B ┘"),
+        "changes only:\n{shown}"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let mut app = footer_app(tmp.path(), true);
     let shown = screen(&mut app);
     let bottom = pane_bottom(&shown);
-    assert!(bottom.starts_with("└ overlay: mine ─") && bottom.ends_with("──┘"), "overlay only:\n{shown}");
+    assert!(
+        bottom.starts_with("└ overlay: mine ─") && bottom.ends_with("──┘"),
+        "overlay only:\n{shown}"
+    );
     hit(&mut app, KeyCode::Enter);
     press(&mut app, ' ');
     let bottom = pane_bottom(&screen(&mut app));
-    assert!(bottom.starts_with("╚ overlay: mine ═") && bottom.ends_with("═ +NAME_A · 1/2 ╝"), "{bottom}");
+    assert!(
+        bottom.starts_with("╚ overlay: mine ═") && bottom.ends_with("═ +NAME_A · 1/2 ╝"),
+        "{bottom}"
+    );
 }
 
 /// Changes too long for the border lose their start, the place stays.
@@ -215,7 +286,10 @@ fn long_changes_lose_their_start_and_keep_the_place() {
         press(&mut app, 'j');
     }
     let bottom = pane_bottom(&screen_at(&mut app, 80, 24));
-    assert!(bottom.starts_with("╚ …") && bottom.ends_with(" +OPTION_12 · 12/12 ╝"), "{bottom}");
+    assert!(
+        bottom.starts_with("╚ …") && bottom.ends_with(" +OPTION_12 · 12/12 ╝"),
+        "{bottom}"
+    );
 }
 
 /// An option row keeps every column before its description: on a narrow
@@ -232,13 +306,19 @@ fn a_cut_description_keeps_two_words_or_goes() {
     info.options.complete = vec!["DOCS".into()];
     info.options.defs.insert(
         "DOCS".into(),
-        OptionDef { desc: "Installation documentation and examples".into(), ..Default::default() },
+        OptionDef {
+            desc: "Installation documentation and examples".into(),
+            ..Default::default()
+        },
     );
     app.rebuild_editor();
     let mut two = false;
     for width in 60..=140 {
         let shown = screen_at(&mut app, width, 24);
-        let row = shown.lines().find(|l| l.contains("[ ] DOCS")).unwrap_or_else(|| panic!("{shown}"));
+        let row = shown
+            .lines()
+            .find(|l| l.contains("[ ] DOCS"))
+            .unwrap_or_else(|| panic!("{shown}"));
         assert!(!row.contains("Installation…"), "width {width}: {row}");
         two |= row.contains("Installation documentation…");
     }
@@ -255,7 +335,10 @@ fn a_narrow_row_keeps_its_columns_and_cuts_the_last() {
     info.options.complete = vec!["HTTP".into(), "HTTP_AUTH_REQUEST_MODULE".into()];
     info.options.defs.insert(
         "HTTP".into(),
-        OptionDef { desc: "Enable the HTTP module".into(), ..Default::default() },
+        OptionDef {
+            desc: "Enable the HTTP module".into(),
+            ..Default::default()
+        },
     );
     info.options.defs.insert(
         "HTTP_AUTH_REQUEST_MODULE".into(),
@@ -272,23 +355,35 @@ fn a_narrow_row_keeps_its_columns_and_cuts_the_last() {
     staged.insert("HTTP_AUTH_REQUEST_MODULE".into());
     app.rebuild_editor();
     let shown = screen_at(&mut app, 80, 24);
-    let row = shown.lines().find(|l| l.contains("[x] HTTP ")).unwrap_or_else(|| panic!("{shown}"));
+    let row = shown
+        .lines()
+        .find(|l| l.contains("[x] HTTP "))
+        .unwrap_or_else(|| panic!("{shown}"));
     let pane = row.split('│').nth(1).unwrap().trim_end();
     assert!(pane.contains(" off ") && pane.contains(" impl"), "{pane}");
     assert!(pane.ends_with('…') && !pane.contains("Enable"), "{pane}");
-    assert!(!pane.contains(" …"), "never a `…` after a whole column: {pane}");
+    assert!(
+        !pane.contains(" …"),
+        "never a `…` after a whole column: {pane}"
+    );
     // The implier's badge is its last column, cut in its own text.
     let row = shown.lines().find(|l| l.contains("[x] HTTP_AUTH")).unwrap();
     let pane = row.split('│').nth(1).unwrap().trim_end();
     assert!(pane.ends_with(" off     ⚠ign…"), "{pane}");
     // On a wide screen the description shows whole again.
     let shown = screen_at(&mut app, 180, 24);
-    assert!(shown.contains("implied by HTTP_AUTH_REQUEST_MODULE  Enable the HTTP module"), "{shown}");
+    assert!(
+        shown.contains("implied by HTTP_AUTH_REQUEST_MODULE  Enable the HTTP module"),
+        "{shown}"
+    );
     // Narrower still, the badge itself is cut, the columns kept.
     let shown = screen_at(&mut app, 70, 24);
     for row in shown.lines().filter(|l| l.contains("[x] ")) {
         let pane = row.split('│').nth(1).unwrap().trim_end();
-        assert!(!pane.ends_with("on…") && !pane.ends_with("off…") && !pane.ends_with(" …"), "{pane}");
+        assert!(
+            !pane.ends_with("on…") && !pane.ends_with("off…") && !pane.ends_with(" …"),
+            "{pane}"
+        );
     }
 }
 
@@ -309,14 +404,22 @@ fn description_panel_shows_whatever_the_option_count() {
         app.editor_idx = app.editor_rows.len() - 1;
         let shown = screen(&mut app);
         assert!(shown.contains("The alpha port"), "{n} options:\n{shown}");
-        assert!(shown.contains(&format!("OPT{n:02}")), "the selected row in view:\n{shown}");
+        assert!(
+            shown.contains(&format!("OPT{n:02}")),
+            "the selected row in view:\n{shown}"
+        );
     }
 }
 
 /// The row a rule (├…┤, ╟…╢ while the pane has the focus) of the option
 /// pane sits on, counted from the top.
 fn rule_rows(shown: &str) -> Vec<usize> {
-    shown.lines().enumerate().filter(|(_, l)| l.contains(['├', '╟'])).map(|(i, _)| i).collect()
+    shown
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains(['├', '╟']))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// The detail panel is one height whatever the option, and stays put,
@@ -328,14 +431,22 @@ fn the_detail_panel_never_moves() {
     let key = PortKey::parse("cat/alpha").unwrap();
     let info = app.session.ports.get_mut(&key).unwrap();
     info.options.complete = vec!["LONG".into(), "SHORT".into()];
-    let def = |d: &str| crate::model::options::OptionDef { desc: d.into(), ..Default::default() };
-    info.options.defs.insert("LONG".into(), def(&"a long description ".repeat(12)));
+    let def = |d: &str| crate::model::options::OptionDef {
+        desc: d.into(),
+        ..Default::default()
+    };
+    info.options
+        .defs
+        .insert("LONG".into(), def(&"a long description ".repeat(12)));
     info.options.defs.insert("SHORT".into(), def("short"));
     app.rebuild_editor();
 
     let on_list = screen(&mut app);
     assert!(on_list.contains("Enter: edit the options"), "{on_list}");
-    assert!(!on_list.contains("├ LONG") && !on_list.contains("╟ LONG"), "no option named while none is highlighted");
+    assert!(
+        !on_list.contains("├ LONG") && !on_list.contains("╟ LONG"),
+        "no option named while none is highlighted"
+    );
     hit(&mut app, KeyCode::Enter);
     let long = screen(&mut app);
     assert!(long.contains("╟ LONG"), "{long}");
@@ -361,16 +472,26 @@ fn a_cut_description_points_at_v() {
     let key = PortKey::parse("cat/alpha").unwrap();
     app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
     app.about_text.insert(key.clone(), "word ".repeat(400));
-    assert!(screen(&mut app).contains("The alpha port"), "shown on 35 rows");
+    assert!(
+        screen(&mut app).contains("The alpha port"),
+        "shown on 35 rows"
+    );
     press(&mut app, 'V');
     assert!(!screen(&mut app).contains("The alpha port"), "V hides it");
     press(&mut app, 'V');
     assert!(app.message.is_some());
-    assert!(screen(&mut app).contains("[v] full text ──┤"), "a hint, at the right");
+    assert!(
+        screen(&mut app).contains("[v] full text ──┤"),
+        "a hint, at the right"
+    );
     hit(&mut app, KeyCode::Enter);
     assert!(app.message.is_none(), "cleared by the next key");
     press(&mut app, 'v');
-    assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"), "v from the option pane");
+    assert_eq!(
+        app.port_help.as_ref().map(|h| h.title),
+        Some("about"),
+        "v from the option pane"
+    );
     hit(&mut app, KeyCode::Esc);
 
     // A description that fits says nothing more.
@@ -400,16 +521,29 @@ fn a_popup_that_cannot_hold_its_text_shows_a_scrollbar() {
     let key = PortKey::parse("cat/alpha").unwrap();
     // The rows of the right border holding the thumb, top to bottom.
     let thumb = |shown: &str| -> Vec<usize> {
-        shown.lines().enumerate().filter(|(_, l)| l.contains('█')).map(|(i, _)| i).collect()
+        shown
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains('█'))
+            .map(|(i, _)| i)
+            .collect()
     };
     // Bullets, so each keeps a line of its own.
     let lines = (1..=200).map(|i| format!("- line {i}")).collect();
-    app.port_help = Some(PortHelp { title: "pkg-help", key: key.clone(), lines, scroll: 0 });
+    app.port_help = Some(PortHelp {
+        title: "pkg-help",
+        key: key.clone(),
+        lines,
+        scroll: 0,
+    });
     let top = thumb(&screen(&mut app));
     assert!(!top.is_empty(), "a bar when the text overflows");
     app.port_help.as_mut().unwrap().scroll = u16::MAX;
     let bottom = thumb(&screen(&mut app));
-    assert!(bottom[0] > top[top.len() - 1], "the thumb follows the scroll: {top:?} {bottom:?}");
+    assert!(
+        bottom[0] > top[top.len() - 1],
+        "the thumb follows the scroll: {top:?} {bottom:?}"
+    );
     // One size wherever it is, moving down one step at a time.
     let mut last = top.clone();
     for scroll in 0..=200 {
@@ -421,9 +555,17 @@ fn a_popup_that_cannot_hold_its_text_shows_a_scrollbar() {
     }
     assert_eq!(last, bottom);
     let shown = screen(&mut app);
-    assert!(shown.contains('▲') && shown.contains('▼'), "the ends are marked");
+    assert!(
+        shown.contains('▲') && shown.contains('▼'),
+        "the ends are marked"
+    );
 
-    app.port_help = Some(PortHelp { title: "pkg-help", key, lines: vec!["short".into()], scroll: 0 });
+    app.port_help = Some(PortHelp {
+        title: "pkg-help",
+        key,
+        lines: vec!["short".into()],
+        scroll: 0,
+    });
     assert!(thumb(&screen(&mut app)).is_empty(), "no bar when it fits");
 }
 
@@ -442,7 +584,10 @@ fn description_panel_reads_pkg_descr_once() {
     app.rebuild_editor();
     assert!(screen(&mut app).contains("Alpha does things."));
     std::fs::remove_file(&descr).unwrap();
-    assert!(screen(&mut app).contains("Alpha does things."), "read again at redraw");
+    assert!(
+        screen(&mut app).contains("Alpha does things."),
+        "read again at redraw"
+    );
 }
 
 /// A pkg-descr that cannot be read is said so, not shown as blank for
@@ -458,14 +603,21 @@ fn description_panel_says_when_pkg_descr_is_unreadable() {
     screen(&mut app);
     app.about_text.clear();
     app.rebuild_editor();
-    let msg = app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let msg = app
+        .message
+        .as_ref()
+        .map(|(m, _)| m.clone())
+        .unwrap_or_default();
     assert!(msg.starts_with("cannot read"), "{msg}");
     assert!(screen(&mut app).contains("No description available"));
 
     std::fs::write(&descr, "Alpha does things.\n").unwrap();
     app.move_selection(1);
     app.move_selection(-1);
-    assert!(screen(&mut app).contains("Alpha does things."), "read again once readable");
+    assert!(
+        screen(&mut app).contains("Alpha does things."),
+        "read again once readable"
+    );
 }
 
 /// The staging copy is never rewritten while a re-scan may be reading it:
@@ -499,14 +651,18 @@ fn a_sent_batch_holds_staging_until_its_scan_is_done() {
     let due = Instant::now() - REFRESH_DEBOUNCE * 2;
     let staged = |name: &str| tmp.path().join("db").join(name).join("options");
 
-    app.pending.insert(PortKey::parse("cat/alpha").unwrap(), due);
+    app.pending
+        .insert(PortKey::parse("cat/alpha").unwrap(), due);
     app.flush_due_refreshes();
     assert!(staged("cat_alpha").is_file());
     assert_eq!(app.refreshing, 1, "the sent batch is outstanding");
 
     app.pending.insert(PortKey::parse("cat/beta").unwrap(), due);
     app.flush_due_refreshes();
-    assert!(!staged("cat_beta").exists(), "written under a running re-scan");
+    assert!(
+        !staged("cat_beta").exists(),
+        "written under a running re-scan"
+    );
 
     let deadline = Instant::now() + Duration::from_secs(10);
     while app.refreshing > 0 {
@@ -520,7 +676,11 @@ fn a_sent_batch_holds_staging_until_its_scan_is_done() {
 }
 
 fn press(app: &mut App, c: char) -> KeyOutcome {
-    let mods = if c.is_ascii_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
+    let mods = if c.is_ascii_uppercase() {
+        KeyModifiers::SHIFT
+    } else {
+        KeyModifiers::NONE
+    };
     dispatch_key(app, KeyEvent::new(KeyCode::Char(c), mods))
 }
 
@@ -533,7 +693,9 @@ fn ctrl(app: &mut App, c: char) -> KeyOutcome {
 }
 
 fn selected(app: &App) -> String {
-    app.selected_key().map(|k| k.to_string()).unwrap_or_default()
+    app.selected_key()
+        .map(|k| k.to_string())
+        .unwrap_or_default()
 }
 
 fn visible(app: &App) -> Vec<String> {
@@ -542,7 +704,13 @@ fn visible(app: &App) -> Vec<String> {
 
 fn staged(app: &App, origin: &str) -> Vec<String> {
     let info = &app.session.ports[&PortKey::parse(origin).unwrap()];
-    app.session.state(info).unwrap().staged.iter().cloned().collect()
+    app.session
+        .state(info)
+        .unwrap()
+        .staged
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// Three unconfigured-or-not ports: alpha and gamma owe a decision,
@@ -555,7 +723,10 @@ fn three_ports(tmp: &std::path::Path) -> App {
         "_OPTIONS_READ=beta-1.0\n_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n",
     )
     .unwrap();
-    app_for(tmp, &[("cat/alpha", &[]), ("cat/beta", &[]), ("cat/gamma", &[])])
+    app_for(
+        tmp,
+        &[("cat/alpha", &[]), ("cat/beta", &[]), ("cat/gamma", &[])],
+    )
 }
 
 #[test]
@@ -563,7 +734,10 @@ fn quitting_asks_only_when_there_is_something_to_lose() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     assert!(matches!(ctrl(&mut app, 'l'), KeyOutcome::Repaint));
-    assert!(matches!(press(&mut app, 'q'), KeyOutcome::Quit), "nothing staged");
+    assert!(
+        matches!(press(&mut app, 'q'), KeyOutcome::Quit),
+        "nothing staged"
+    );
     assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit));
 
     hit(&mut app, KeyCode::Enter);
@@ -596,23 +770,35 @@ fn the_quit_prompt_answers_y_n_and_ctrl_c() {
     press(&mut app, 'q');
     let shown = screen(&mut app);
     assert!(shown.contains("Keep staged edits as a draft?"), "{shown}");
-    assert!(shown.contains("y save & quit · n discard & quit · Esc stay"), "{shown}");
+    assert!(
+        shown.contains("y save & quit · n discard & quit · Esc stay"),
+        "{shown}"
+    );
     for stay in ['s', 'S', 'd', 'D', 'x'] {
         app.quit_confirm = true;
-        assert!(matches!(press(&mut app, stay), KeyOutcome::Continue), "{stay}");
+        assert!(
+            matches!(press(&mut app, stay), KeyOutcome::Continue),
+            "{stay}"
+        );
         assert!(!app.quit_confirm, "{stay} stays");
     }
     app.quit_confirm = true;
     hit(&mut app, KeyCode::Esc);
     assert!(!app.quit_confirm, "Esc stays");
     app.quit_confirm = true;
-    assert!(matches!(ctrl(&mut app, 'y'), KeyOutcome::Continue), "Ctrl-Y is not y");
+    assert!(
+        matches!(ctrl(&mut app, 'y'), KeyOutcome::Continue),
+        "Ctrl-Y is not y"
+    );
     assert!(draft::load(&app.options_dir).is_none(), "nothing saved yet");
 
     // A second Ctrl-C keeps the edits.
     press(&mut app, 'q');
     assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit));
-    assert!(draft::load(&app.options_dir).is_some(), "Ctrl-C at the prompt saved a draft");
+    assert!(
+        draft::load(&app.options_dir).is_some(),
+        "Ctrl-C at the prompt saved a draft"
+    );
     app.quit_confirm = false;
     press(&mut app, 'q');
     assert!(matches!(press(&mut app, 'N'), KeyOutcome::Quit));
@@ -635,23 +821,48 @@ fn ctrl_c_quits_from_anywhere() {
     app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
     // Each opens something that takes keys of its own.
     let openers: [&dyn Fn(&mut App); 9] = [
-        &|a| { press(a, '?'); },
-        &|a| { press(a, 'h'); },
-        &|a| { press(a, 'v'); },
-        &|a| { press(a, 'r'); },
-        &|a| { press(a, '/'); },
-        &|a| { press(a, 'B'); },
-        &|a| { hit(a, KeyCode::Enter); },
-        &|a| { hit(a, KeyCode::Enter); press(a, 'i'); },
-        &|a| { press(a, 'a'); },
+        &|a| {
+            press(a, '?');
+        },
+        &|a| {
+            press(a, 'h');
+        },
+        &|a| {
+            press(a, 'v');
+        },
+        &|a| {
+            press(a, 'r');
+        },
+        &|a| {
+            press(a, '/');
+        },
+        &|a| {
+            press(a, 'B');
+        },
+        &|a| {
+            hit(a, KeyCode::Enter);
+        },
+        &|a| {
+            hit(a, KeyCode::Enter);
+            press(a, 'i');
+        },
+        &|a| {
+            press(a, 'a');
+        },
     ];
     for (i, open) in openers.iter().enumerate() {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = three_ports(tmp.path());
         app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
         open(&mut app);
-        assert!(app.top_overlay().is_some() || app.focus != Focus::List, "opener {i}");
-        assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit), "opener {i}: nothing staged");
+        assert!(
+            app.top_overlay().is_some() || app.focus != Focus::List,
+            "opener {i}"
+        );
+        assert!(
+            matches!(ctrl(&mut app, 'c'), KeyOutcome::Quit),
+            "opener {i}: nothing staged"
+        );
     }
     // With edits staged, it asks first, over whatever is open.
     hit(&mut app, KeyCode::Enter);
@@ -660,7 +871,10 @@ fn ctrl_c_quits_from_anywhere() {
     assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Continue));
     assert!(app.quit_confirm && app.help_tab.is_some());
     hit(&mut app, KeyCode::Esc);
-    assert!(!app.quit_confirm && app.help_tab.is_some(), "Esc goes back to the help");
+    assert!(
+        !app.quit_confirm && app.help_tab.is_some(),
+        "Esc goes back to the help"
+    );
 }
 
 #[test]
@@ -698,7 +912,11 @@ fn help_tabs_cycle_scroll_and_close() {
     press(&mut app, 'G');
     assert_eq!(app.help_scroll, u16::MAX, "G: the end, clamped when drawn");
     hit(&mut app, KeyCode::Home);
-    assert_eq!((app.help_tab, app.help_scroll), (Some(1), 0), "Home: the top");
+    assert_eq!(
+        (app.help_tab, app.help_scroll),
+        (Some(1), 0),
+        "Home: the top"
+    );
     // vi's h and l switch no tab: they are other keys, which close.
     press(&mut app, 'l');
     assert_eq!(app.help_tab, None, "l closes");
@@ -724,7 +942,11 @@ fn pkg_help_opens_scrolls_and_closes() {
     let mut app = three_ports(tmp.path());
     press(&mut app, 'h');
     assert!(app.port_help.is_none());
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("no pkg-help")));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("no pkg-help"))
+    );
 
     let help = tmp.path().join("pkg-help");
     std::fs::write(&help, "first line\nsecond line\n").unwrap();
@@ -740,7 +962,11 @@ fn pkg_help_opens_scrolls_and_closes() {
     hit(&mut app, KeyCode::PageDown);
     assert_eq!(app.port_help.as_ref().unwrap().scroll, 1 + page);
     ctrl(&mut app, 'f');
-    assert_eq!(app.port_help.as_ref().unwrap().scroll, 1 + 2 * page, "Ctrl-F pages too");
+    assert_eq!(
+        app.port_help.as_ref().unwrap().scroll,
+        1 + 2 * page,
+        "Ctrl-F pages too"
+    );
     ctrl(&mut app, 'b');
     press(&mut app, 'k');
     hit(&mut app, KeyCode::PageUp);
@@ -770,7 +996,11 @@ fn the_bulk_prompt_edits_and_applies() {
     }
     hit(&mut app, KeyCode::Backspace);
     ctrl(&mut app, 'w');
-    assert_eq!(app.bulk.as_deref(), Some("DOCS=on"), "no control characters");
+    assert_eq!(
+        app.bulk.as_deref(),
+        Some("DOCS=on"),
+        "no control characters"
+    );
     hit(&mut app, KeyCode::Enter);
     assert!(app.bulk.is_none());
     for p in ["cat/alpha", "cat/beta", "cat/gamma"] {
@@ -778,7 +1008,11 @@ fn the_bulk_prompt_edits_and_applies() {
     }
     hit(&mut app, KeyCode::Enter);
     press(&mut app, 'B');
-    assert_eq!(app.bulk.as_deref(), Some("DOCS="), "pre-filled from the option pane");
+    assert_eq!(
+        app.bulk.as_deref(),
+        Some("DOCS="),
+        "pre-filled from the option pane"
+    );
 }
 
 #[test]
@@ -810,11 +1044,18 @@ fn the_filter_narrows_the_list() {
 #[test]
 fn an_arrow_accepts_the_filter_and_moves() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/jam", &[]), ("cat/jar", &[]), ("cat/kit", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/jam", &[]), ("cat/jar", &[]), ("cat/kit", &[])],
+    );
     press(&mut app, '/');
     press(&mut app, 'j');
     press(&mut app, 'a');
-    assert!(app.focus == Focus::Filter && app.filter == "ja", "{:?}", app.filter);
+    assert!(
+        app.focus == Focus::Filter && app.filter == "ja",
+        "{:?}",
+        app.filter
+    );
     let first = app.selected_key();
     hit(&mut app, KeyCode::Down);
     assert!(app.focus == Focus::List, "the filter is accepted");
@@ -831,11 +1072,19 @@ fn a_filter_starts_fresh_and_esc_clears_it() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     press(&mut app, '/');
-    assert!(list_bottom(&screen(&mut app)).ends_with(" filter: ▏ ╝"), "{}", screen(&mut app));
+    assert!(
+        list_bottom(&screen(&mut app)).ends_with(" filter: ▏ ╝"),
+        "{}",
+        screen(&mut app)
+    );
     for c in "gam".chars() {
         press(&mut app, c);
     }
-    assert!(list_bottom(&screen(&mut app)).ends_with(" filter: gam▏ ╝"), "{}", screen(&mut app));
+    assert!(
+        list_bottom(&screen(&mut app)).ends_with(" filter: gam▏ ╝"),
+        "{}",
+        screen(&mut app)
+    );
     hit(&mut app, KeyCode::Enter);
     let shown = screen(&mut app);
     assert!(list_bottom(&shown).ends_with(" filter: gam ╝"), "{shown}");
@@ -843,7 +1092,11 @@ fn a_filter_starts_fresh_and_esc_clears_it() {
     assert_eq!(selected(&app), "cat/gamma");
 
     press(&mut app, '/');
-    assert!(app.focus == Focus::Filter && app.filter.is_empty(), "fresh: {:?}", app.filter);
+    assert!(
+        app.focus == Focus::Filter && app.filter.is_empty(),
+        "fresh: {:?}",
+        app.filter
+    );
     assert_eq!(visible(&app).len(), 3, "the whole list again");
     assert_eq!(selected(&app), "cat/gamma", "on the same port");
     press(&mut app, 'a');
@@ -855,7 +1108,13 @@ fn a_filter_starts_fresh_and_esc_clears_it() {
     assert_eq!(visible(&app).len(), 3);
     assert_eq!(selected(&app), "cat/gamma", "the selection kept");
     assert!(!screen(&mut app).contains("filter:"));
-    assert!(list_bottom(&screen(&mut app)).trim_start_matches('╚').trim_end_matches('╝').chars().all(|c| c == '═'));
+    assert!(
+        list_bottom(&screen(&mut app))
+            .trim_start_matches('╚')
+            .trim_end_matches('╝')
+            .chars()
+            .all(|c| c == '═')
+    );
 }
 
 /// The bottom border of the port list, corners included.
@@ -886,13 +1145,22 @@ fn the_filter_is_on_the_bottom_border() {
     }
     let shown = screen_at(&mut app, 80, 24);
     let top = shown.lines().next().unwrap();
-    assert!(top.starts_with("╔ Ports (0) ═") && !top.contains("filter"), "{top}");
+    assert!(
+        top.starts_with("╔ Ports (0) ═") && !top.contains("filter"),
+        "{top}"
+    );
     let bottom = list_bottom(&shown);
-    assert!(bottom.starts_with("╚ filter: …") && bottom.ends_with("-ginx-module▏ ╝"), "{bottom}");
+    assert!(
+        bottom.starts_with("╚ filter: …") && bottom.ends_with("-ginx-module▏ ╝"),
+        "{bottom}"
+    );
     assert!(!bottom.contains("a-very"), "{bottom}");
     hit(&mut app, KeyCode::Enter);
     let bottom = list_bottom(&screen_at(&mut app, 80, 24));
-    assert!(bottom.ends_with("ginx-module ╝") && bottom.contains(" filter: …"), "{bottom}");
+    assert!(
+        bottom.ends_with("ginx-module ╝") && bottom.contains(" filter: …"),
+        "{bottom}"
+    );
     // A short one is whole.
     press(&mut app, '/');
     press(&mut app, 'x');
@@ -929,12 +1197,19 @@ fn list_keys_move_and_jump_between_problems() {
     let tmp = tempfile::tempdir().unwrap();
     let beta = tmp.path().join("options/cat_beta");
     std::fs::create_dir_all(&beta).unwrap();
-    std::fs::write(beta.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n")
-        .unwrap();
+    std::fs::write(
+        beta.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_UNSET+=DOCS\n",
+    )
+    .unwrap();
     let mut app = app_for(tmp.path(), &[("cat/beta", &[])]);
     press(&mut app, 'n');
     assert_eq!(selected(&app), "cat/beta");
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m == "no ports need attention"));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m == "no ports need attention")
+    );
 }
 
 #[test]
@@ -961,7 +1236,11 @@ fn editor_keys_toggle_undo_reset_and_revert() {
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS", "NLS"]);
     press(&mut app, 'j');
     press(&mut app, ' ');
-    assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "j stops at the last option");
+    assert_eq!(
+        staged(&app, "cat/alpha"),
+        ["DOCS"],
+        "j stops at the last option"
+    );
     press(&mut app, 'k');
     press(&mut app, 'k');
     press(&mut app, ' ');
@@ -971,7 +1250,10 @@ fn editor_keys_toggle_undo_reset_and_revert() {
     press(&mut app, 'd');
     assert_eq!(staged(&app, "cat/alpha"), ["NLS"], "d: the port's defaults");
     press(&mut app, 'U');
-    assert!(staged(&app, "cat/alpha").is_empty(), "U: the saved state (none)");
+    assert!(
+        staged(&app, "cat/alpha").is_empty(),
+        "U: the saved state (none)"
+    );
     press(&mut app, 'i');
     assert!(app.opt_info.is_some());
     press(&mut app, 'x');
@@ -983,7 +1265,11 @@ fn editor_keys_toggle_undo_reset_and_revert() {
     assert!(app.focus == Focus::List);
     while app.undo.pop().is_some() {}
     press(&mut app, 'u');
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m == "nothing to undo"));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m == "nothing to undo")
+    );
 }
 
 /// From the port list too: d resets the selected port to its defaults,
@@ -999,10 +1285,18 @@ fn list_keys_reset_revert_and_undo() {
     assert!(app.focus == Focus::List);
     press(&mut app, 'd');
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "d from the list");
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m == "reset to port defaults"));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m == "reset to port defaults")
+    );
     press(&mut app, 'U');
     assert!(staged(&app, "cat/alpha").is_empty(), "U from the list");
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m == "reverted to saved state"));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m == "reverted to saved state")
+    );
     press(&mut app, 'u');
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "u undoes the revert");
     press(&mut app, 'u');
@@ -1017,7 +1311,11 @@ fn n_and_p_jump_from_the_option_pane() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     for p in ["cat/alpha", "cat/gamma"] {
-        let info = app.session.ports.get_mut(&PortKey::parse(p).unwrap()).unwrap();
+        let info = app
+            .session
+            .ports
+            .get_mut(&PortKey::parse(p).unwrap())
+            .unwrap();
         info.options.complete = vec!["DOCS".into(), "NLS".into()];
     }
     app.rebuild_editor();
@@ -1071,10 +1369,16 @@ fn description_keys_v_and_big_v() {
         Some("port description shown (V: hide · v: full text)")
     );
     press(&mut app, 'i');
-    assert!(app.port_help.is_none() && app.opt_info.is_none(), "i on the list opens nothing");
+    assert!(
+        app.port_help.is_none() && app.opt_info.is_none(),
+        "i on the list opens nothing"
+    );
     assert_eq!(
         app.message.clone(),
-        Some(("i: option details, in the option pane (Enter) — v: port description".into(), false))
+        Some((
+            "i: option details, in the option pane (Enter) — v: port description".into(),
+            false
+        ))
     );
     press(&mut app, 'v');
     assert_eq!(app.port_help.as_ref().map(|h| h.title), Some("about"));
@@ -1088,9 +1392,19 @@ fn space_on_the_list_says_enter_edits() {
     app.clear_message();
     press(&mut app, ' ');
     assert!(app.focus == Focus::List);
-    assert!(!app.session.dirty() && app.undo.is_empty(), "Space on the list toggles nothing");
-    assert_eq!(app.message.clone(), Some(("Enter: edit the options".into(), false)));
-    assert!(status_row(&mut app, 80).starts_with(" Enter: edit the options"), "{}", status_row(&mut app, 80));
+    assert!(
+        !app.session.dirty() && app.undo.is_empty(),
+        "Space on the list toggles nothing"
+    );
+    assert_eq!(
+        app.message.clone(),
+        Some(("Enter: edit the options".into(), false))
+    );
+    assert!(
+        status_row(&mut app, 80).starts_with(" Enter: edit the options"),
+        "{}",
+        status_row(&mut app, 80)
+    );
 }
 
 /// vi's l is no key: not into the option pane, not a jump in why.
@@ -1139,12 +1453,19 @@ fn page_keys_move_by_the_visible_height() {
     hit(&mut app, KeyCode::Enter);
     screen(&mut app);
     // At 100 columns the pane is wide enough for a one-line detail.
-    assert_eq!(app.page.options, 32 - 2 - 6, "detail 1 + rule, description 5 + rule");
+    assert_eq!(
+        app.page.options,
+        32 - 2 - 6,
+        "detail 1 + rule, description 5 + rule"
+    );
     let page = page_step(app.page.options);
     ctrl(&mut app, 'f');
     assert_eq!(app.editor_idx, page);
     let shown = screen(&mut app);
-    assert!(shown.contains(&format!("OPT{page:02}")) && shown.contains(&format!("OPT{:02}", page - 1)), "{shown}");
+    assert!(
+        shown.contains(&format!("OPT{page:02}")) && shown.contains(&format!("OPT{:02}", page - 1)),
+        "{shown}"
+    );
     hit(&mut app, KeyCode::PageDown);
     assert_eq!(app.editor_idx, 2 * page);
     hit(&mut app, KeyCode::PageDown);
@@ -1189,7 +1510,11 @@ fn view_keys_filter_and_reorder_the_list() {
     press(&mut app, 't');
     assert_eq!(visible(&app).len(), 3);
     press(&mut app, 's');
-    assert_eq!(visible(&app), ["cat/alpha", "cat/beta", "cat/gamma"], "alphabetical");
+    assert_eq!(
+        visible(&app),
+        ["cat/alpha", "cat/beta", "cat/gamma"],
+        "alphabetical"
+    );
     press(&mut app, 's');
     assert_eq!(visible(&app), ["cat/alpha", "cat/gamma", "cat/beta"]);
     press(&mut app, 'm');
@@ -1204,10 +1529,20 @@ fn view_keys_filter_and_reorder_the_list() {
 #[test]
 fn f_steps_through_the_flavors_of_an_origin() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[]), ("cat/beta", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[
+            ("cat/alpha@a", &[]),
+            ("cat/alpha@b", &[]),
+            ("cat/beta", &[]),
+        ],
+    );
     for k in ["cat/alpha@a", "cat/alpha@b"] {
-        app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap().flavors =
-            vec!["a".into(), "b".into()];
+        app.session
+            .ports
+            .get_mut(&PortKey::parse(k).unwrap())
+            .unwrap()
+            .flavors = vec!["a".into(), "b".into()];
     }
     app.select_index(0);
     assert_eq!(selected(&app), "cat/alpha@a");
@@ -1217,29 +1552,52 @@ fn f_steps_through_the_flavors_of_an_origin() {
     assert_eq!(selected(&app), "cat/alpha@a", "wraps");
     press(&mut app, 'G');
     press(&mut app, 'f');
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("no other flavors")));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("no other flavors"))
+    );
     press(&mut app, '/');
     for c in "@a".chars() {
         press(&mut app, c);
     }
     hit(&mut app, KeyCode::Enter);
     press(&mut app, 'f');
-    assert!(app.message.as_ref().is_some_and(|(m, _)| m.contains("hidden by the current view")));
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("hidden by the current view"))
+    );
 }
 
 /// Replace the app's refresher with channels the test drives: what a
 /// background scan would send arrives exactly when the test says.
-fn fake_refresher(app: &mut App) -> (crossbeam_channel::Sender<RefreshEvent>, crossbeam_channel::Receiver<Vec<PortKey>>) {
+fn fake_refresher(
+    app: &mut App,
+) -> (
+    crossbeam_channel::Sender<RefreshEvent>,
+    crossbeam_channel::Receiver<Vec<PortKey>>,
+) {
     let (req_tx, req_rx) = crossbeam_channel::unbounded();
     let (ev_tx, ev_rx) = crossbeam_channel::unbounded();
-    app.refresher = Refresher { tx: req_tx, rx: ev_rx };
+    app.refresher = Refresher {
+        tx: req_tx,
+        rx: ev_rx,
+    };
     (ev_tx, req_rx)
 }
 
 fn done(ports: Vec<crate::model::port::PortInfo>, errors: Vec<(PortKey, String)>) -> RefreshEvent {
-    let ports = ports.into_iter().map(|i| (i.canonical.clone(), i)).collect();
+    let ports = ports
+        .into_iter()
+        .map(|i| (i.canonical.clone(), i))
+        .collect();
     RefreshEvent::Done {
-        result: Box::new(crate::query::scanner::ScanResult { ports, errors, ..Default::default() }),
+        result: Box::new(crate::query::scanner::ScanResult {
+            ports,
+            errors,
+            ..Default::default()
+        }),
         batches: 1,
     }
 }
@@ -1253,7 +1611,10 @@ fn info_of(app: &App, origin: &str) -> crate::model::port::PortInfo {
 #[test]
 fn a_rescan_adds_and_drops_dependencies() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])],
+    );
     app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
     let (ev, _req) = fake_refresher(&mut app);
     let mut alpha = info_of(&app, "cat/alpha");
@@ -1268,9 +1629,15 @@ fn a_rescan_adds_and_drops_dependencies() {
     app.drain_refresh_events();
     assert_eq!(app.refreshing, 0);
     assert_eq!(visible(&app), ["cat/alpha", "cat/gamma"]);
-    assert!(app.session.state(&info_of(&app, "cat/gamma")).is_some(), "the newcomer got a state");
+    assert!(
+        app.session.state(&info_of(&app, "cat/gamma")).is_some(),
+        "the newcomer got a state"
+    );
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!((msg.as_str(), err), ("dependencies refreshed: +cat/gamma −cat/beta", false));
+    assert_eq!(
+        (msg.as_str(), err),
+        ("dependencies refreshed: +cat/gamma −cat/beta", false)
+    );
 
     // A merge that only drops is reported too; one that changes nothing
     // says nothing.
@@ -1279,7 +1646,10 @@ fn a_rescan_adds_and_drops_dependencies() {
     app.clear_message();
     ev.send(done(vec![alpha.clone()], vec![])).unwrap();
     app.drain_refresh_events();
-    assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: −cat/gamma");
+    assert_eq!(
+        app.message.clone().unwrap().0,
+        "dependencies refreshed: −cat/gamma"
+    );
     // And one that only adds.
     let mut beta = info_of(&app, "cat/alpha");
     beta.key = PortKey::parse("cat/beta").unwrap();
@@ -1294,7 +1664,10 @@ fn a_rescan_adds_and_drops_dependencies() {
     app.clear_message();
     ev.send(done(vec![with_beta, beta], vec![])).unwrap();
     app.drain_refresh_events();
-    assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +cat/beta");
+    assert_eq!(
+        app.message.clone().unwrap().0,
+        "dependencies refreshed: +cat/beta"
+    );
     alpha = info_of(&app, "cat/alpha");
     app.clear_message();
     ev.send(done(vec![alpha], vec![])).unwrap();
@@ -1313,7 +1686,11 @@ fn a_rescan_keeps_the_selected_port_listed_until_the_selection_moves() {
     alpha_mut(&mut app).options.complete = vec!["DOCS".into(), "NEW".into()];
     app.rebuild_visible(None);
     press(&mut app, 't');
-    let at = app.visible.iter().position(|k| k.origin == "cat/alpha").unwrap();
+    let at = app
+        .visible
+        .iter()
+        .position(|k| k.origin == "cat/alpha")
+        .unwrap();
     app.select_index(at);
     hit(&mut app, KeyCode::Enter);
     assert!(app.focus == Focus::Editor);
@@ -1327,13 +1704,23 @@ fn a_rescan_keeps_the_selected_port_listed_until_the_selection_moves() {
     assert!(app.hide_ok, "t still on");
     assert_eq!(selected(&app), "cat/alpha");
     assert!(app.focus == Focus::Editor, "the pane keeps the focus");
-    assert_eq!(app.editor_port.as_ref().map(ToString::to_string).as_deref(), Some("cat/alpha"));
+    assert_eq!(
+        app.editor_port.as_ref().map(ToString::to_string).as_deref(),
+        Some("cat/alpha")
+    );
     hit(&mut app, KeyCode::Char(' '));
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
-    assert!(staged(&app, "cat/beta").is_empty(), "the port the pane did not show");
+    assert!(
+        staged(&app, "cat/beta").is_empty(),
+        "the port the pane did not show"
+    );
     // Moved away, the ok port goes at the next rebuild.
     hit(&mut app, KeyCode::Esc);
-    let at = app.visible.iter().position(|k| k.origin == "cat/beta").unwrap();
+    let at = app
+        .visible
+        .iter()
+        .position(|k| k.origin == "cat/beta")
+        .unwrap();
     app.select_index(at);
     app.refresh_view();
     assert_eq!(visible(&app), ["cat/beta"]);
@@ -1344,9 +1731,16 @@ fn a_rescan_keeps_the_selected_port_listed_until_the_selection_moves() {
 #[test]
 fn a_rescan_that_drops_the_edited_port_returns_to_the_list() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/gamma"]), ("cat/gamma", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/alpha", &["cat/gamma"]), ("cat/gamma", &[])],
+    );
     app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
-    let at = app.visible.iter().position(|k| k.origin == "cat/gamma").unwrap();
+    let at = app
+        .visible
+        .iter()
+        .position(|k| k.origin == "cat/gamma")
+        .unwrap();
     app.select_index(at);
     hit(&mut app, KeyCode::Enter);
     assert!(app.focus == Focus::Editor);
@@ -1396,14 +1790,23 @@ fn a_newcomer_is_queried_again_with_its_real_options_file() {
     ev.send(done(vec![alpha, gamma, delta], vec![])).unwrap();
     app.drain_refresh_events();
     let gamma = PortKey::parse("cat/gamma").unwrap();
-    assert!(app.pending.contains_key(&gamma), "the newcomer is queried again");
     assert!(
-        !app.pending.contains_key(&PortKey::parse("cat/delta").unwrap()),
+        app.pending.contains_key(&gamma),
+        "the newcomer is queried again"
+    );
+    assert!(
+        !app.pending
+            .contains_key(&PortKey::parse("cat/delta").unwrap()),
         "a newcomer with no file was queried as it is"
     );
-    app.pending.insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
+    app.pending
+        .insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
     app.flush_due_refreshes();
-    assert_eq!(std::fs::read(&staged).unwrap(), real, "its real file, byte for byte");
+    assert_eq!(
+        std::fs::read(&staged).unwrap(),
+        real,
+        "its real file, byte for byte"
+    );
     assert_eq!(req.try_recv().unwrap(), vec![gamma]);
 }
 
@@ -1431,11 +1834,19 @@ fn a_newcomer_with_only_an_options_local_is_queried_again_with_it() {
     ev.send(done(vec![alpha, gamma], vec![])).unwrap();
     app.drain_refresh_events();
     let gamma = PortKey::parse("cat/gamma").unwrap();
-    assert!(app.pending.contains_key(&gamma), "the newcomer is queried again");
-    app.pending.insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
+    assert!(
+        app.pending.contains_key(&gamma),
+        "the newcomer is queried again"
+    );
+    app.pending
+        .insert(gamma.clone(), Instant::now() - REFRESH_DEBOUNCE * 2);
     app.flush_due_refreshes();
     let staged = tmp.path().join("db/cat_gamma/options.local");
-    assert_eq!(std::fs::read(&staged).unwrap(), local, "its options.local, byte for byte");
+    assert_eq!(
+        std::fs::read(&staged).unwrap(),
+        local,
+        "its options.local, byte for byte"
+    );
     assert_eq!(req.try_recv().unwrap(), vec![gamma]);
 }
 
@@ -1448,17 +1859,27 @@ fn a_rescan_reports_progress_and_errors() {
     let (ev, _req) = fake_refresher(&mut app);
     app.refreshing = 1;
     app.clear_message();
-    ev.send(RefreshEvent::Progress { done: 3, discovered: 5 }).unwrap();
+    ev.send(RefreshEvent::Progress {
+        done: 3,
+        discovered: 5,
+    })
+    .unwrap();
     app.drain_refresh_events();
     assert_eq!(app.refresh_progress, Some((3, 5)));
     assert!(app.message.is_none(), "nothing merged yet");
     let failed = PortKey::parse("cat/broken").unwrap();
-    ev.send(done(vec![info_of(&app, "cat/alpha")], vec![(failed, "no such port".into())]))
-        .unwrap();
+    ev.send(done(
+        vec![info_of(&app, "cat/alpha")],
+        vec![(failed, "no such port".into())],
+    ))
+    .unwrap();
     app.drain_refresh_events();
     assert_eq!(app.refresh_progress, None);
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!(msg, "refresh: 1 dep error(s), e.g. cat/broken: no such port");
+    assert_eq!(
+        msg,
+        "refresh: 1 dep error(s), e.g. cat/broken: no such port"
+    );
     assert!(err);
 }
 
@@ -1469,20 +1890,32 @@ fn a_port_that_breaks_is_blamed_on_the_last_change() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
     let (ev, _req) = fake_refresher(&mut app);
-    app.refresh_snapshots
-        .insert("cat_alpha".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+    app.refresh_snapshots.insert(
+        "cat_alpha".into(),
+        (["DOCS".to_string()].into(), Some(BTreeSet::new())),
+    );
     let mut alpha = info_of(&app, "cat/alpha");
     alpha.ignore = Some(format!("needs   {}", "x".repeat(100)));
     let mut beta = info_of(&app, "cat/beta");
     beta.broken = Some("fails anyway".into());
-    ev.send(done(vec![beta.clone(), alpha.clone()], vec![])).unwrap();
+    ev.send(done(vec![beta.clone(), alpha.clone()], vec![]))
+        .unwrap();
     app.drain_refresh_events();
     let (msg, err) = app.message.clone().unwrap();
     assert!(err);
     assert!(msg.starts_with("cat/alpha: now IGNORE (needs x"), "{msg}");
-    assert!(msg.ends_with("…) — +DOCS"), "reason cut at 80 characters: {msg}");
-    assert_eq!(app.blame.get("cat_alpha").map(String::as_str), Some("+DOCS"));
-    assert!(!app.blame.contains_key("cat_beta"), "no recent change to blame");
+    assert!(
+        msg.ends_with("…) — +DOCS"),
+        "reason cut at 80 characters: {msg}"
+    );
+    assert_eq!(
+        app.blame.get("cat_alpha").map(String::as_str),
+        Some("+DOCS")
+    );
+    assert!(
+        !app.blame.contains_key("cat_beta"),
+        "no recent change to blame"
+    );
 
     // BROKEN names itself first when both are set.
     alpha.broken = Some("short".into());
@@ -1490,13 +1923,22 @@ fn a_port_that_breaks_is_blamed_on_the_last_change() {
     app.session.ports.get_mut(&alpha.key).unwrap().ignore = None;
     ev.send(done(vec![alpha.clone()], vec![])).unwrap();
     app.drain_refresh_events();
-    assert!(app.message.clone().unwrap().0.starts_with("cat/alpha: now BROKEN (short)"));
+    assert!(
+        app.message
+            .clone()
+            .unwrap()
+            .0
+            .starts_with("cat/alpha: now BROKEN (short)")
+    );
 
     alpha.broken = None;
     alpha.ignore = None;
     ev.send(done(vec![alpha], vec![])).unwrap();
     app.drain_refresh_events();
-    assert!(!app.blame.contains_key("cat_alpha"), "a port that recovers is cleared");
+    assert!(
+        !app.blame.contains_key("cat_alpha"),
+        "a port that recovers is cleared"
+    );
 }
 
 /// A port that just broke outranks the refresh count on the line, even
@@ -1506,8 +1948,10 @@ fn a_rescan_that_breaks_a_port_and_adds_a_dep_keeps_the_blame() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
     let (ev, _req) = fake_refresher(&mut app);
-    app.refresh_snapshots
-        .insert("cat_alpha".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+    app.refresh_snapshots.insert(
+        "cat_alpha".into(),
+        (["DOCS".to_string()].into(), Some(BTreeSet::new())),
+    );
     let mut alpha = info_of(&app, "cat/alpha");
     let mut gamma = alpha.clone();
     gamma.key = PortKey::parse("cat/gamma").unwrap();
@@ -1521,18 +1965,33 @@ fn a_rescan_that_breaks_a_port_and_adds_a_dep_keeps_the_blame() {
     }];
     ev.send(done(vec![alpha, gamma], vec![])).unwrap();
     app.drain_refresh_events();
-    assert!(app.session.ports.contains_key(&PortKey::parse("cat/gamma").unwrap()), "added");
+    assert!(
+        app.session
+            .ports
+            .contains_key(&PortKey::parse("cat/gamma").unwrap()),
+        "added"
+    );
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!((msg.as_str(), err), ("cat/alpha: now IGNORE (needs gamma) — +DOCS", true));
+    assert_eq!(
+        (msg.as_str(), err),
+        ("cat/alpha: now IGNORE (needs gamma) — +DOCS", true)
+    );
 
     // A dep error outranks it too.
     let failed = PortKey::parse("cat/broken").unwrap();
     let mut alpha = info_of(&app, "cat/alpha");
     alpha.deps.clear();
-    ev.send(done(vec![alpha], vec![(failed, "no such port".into())])).unwrap();
+    ev.send(done(vec![alpha], vec![(failed, "no such port".into())]))
+        .unwrap();
     app.drain_refresh_events();
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!((msg.as_str(), err), ("refresh: 1 dep error(s), e.g. cat/broken: no such port", true));
+    assert_eq!(
+        (msg.as_str(), err),
+        (
+            "refresh: 1 dep error(s), e.g. cat/broken: no such port",
+            true
+        )
+    );
 }
 
 /// "dependency loop gone" is news, not an alert: posted by the same
@@ -1540,19 +1999,30 @@ fn a_rescan_that_breaks_a_port_and_adds_a_dep_keeps_the_blame() {
 #[test]
 fn a_loop_gone_in_the_rescan_that_broke_a_port_keeps_the_blame() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])],
+    );
     let (ev, _req) = fake_refresher(&mut app);
     press(&mut app, 'L');
-    app.refresh_snapshots
-        .insert("cat_beta".into(), (["DOCS".to_string()].into(), Some(BTreeSet::new())));
+    app.refresh_snapshots.insert(
+        "cat_beta".into(),
+        (["DOCS".to_string()].into(), Some(BTreeSet::new())),
+    );
     let mut beta = info_of(&app, "cat/beta");
     beta.deps.clear();
     beta.ignore = Some("needs alpha".into());
     ev.send(done(vec![beta], vec![])).unwrap();
     app.drain_refresh_events();
-    assert!(app.loops.is_empty() && !app.only_loops, "the L view is still left");
+    assert!(
+        app.loops.is_empty() && !app.only_loops,
+        "the L view is still left"
+    );
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!((msg.as_str(), err), ("cat/beta: now IGNORE (needs alpha) — +DOCS", true));
+    assert_eq!(
+        (msg.as_str(), err),
+        ("cat/beta: now IGNORE (needs alpha) — +DOCS", true)
+    );
 }
 
 /// The m and w views and the blacklist change what counts as a problem.
@@ -1564,7 +2034,11 @@ fn views_change_what_counts_as_a_problem() {
     std::fs::write(pd.join("blacklist"), "cat/gamma\n").unwrap();
     let mut app = three_ports(tmp.path());
     for p in ["cat/alpha", "cat/beta"] {
-        let info = app.session.ports.get_mut(&PortKey::parse(p).unwrap()).unwrap();
+        let info = app
+            .session
+            .ports
+            .get_mut(&PortKey::parse(p).unwrap())
+            .unwrap();
         info.options.mc_set = ["DOCS".to_string()].into();
     }
     let status = |app: &App, p: &str| app.effective_status(&info_of(app, p));
@@ -1581,7 +2055,11 @@ fn views_change_what_counts_as_a_problem() {
     press(&mut app, 't');
     assert_eq!(visible(&app), ["cat/gamma", "cat/alpha", "cat/beta"]);
     press(&mut app, 'w');
-    assert_eq!(visible(&app), ["cat/gamma"], "without ≠, only gamma owes a decision");
+    assert_eq!(
+        visible(&app),
+        ["cat/gamma"],
+        "without ≠, only gamma owes a decision"
+    );
     // A blacklisted port never needs attention.
     app.blacklist = crate::config::Blacklist::load(&pd, None, "default", None);
     assert_eq!(status(&app, "cat/gamma"), UiStatus::Ok);
@@ -1603,12 +2081,18 @@ fn the_apply_preview_scrolls_and_closes() {
     assert_eq!(app.modal.as_ref().unwrap().scroll, 0);
     hit(&mut app, KeyCode::Esc);
     assert!(app.modal.is_none());
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "closing writes nothing");
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "closing writes nothing"
+    );
     press(&mut app, 't');
     press(&mut app, 'a');
     press(&mut app, 'y');
     assert!(app.modal.as_ref().unwrap().done.is_some());
-    assert!(visible(&app).is_empty(), "rebuilt under the result: nothing needs attention");
+    assert!(
+        visible(&app).is_empty(),
+        "rebuilt under the result: nothing needs attention"
+    );
     press(&mut app, 'x');
     assert!(app.modal.is_none());
 }
@@ -1624,11 +2108,17 @@ fn the_apply_preview_warns_about_a_conflict_hidden_by_the_filter() {
     info.options.complete = vec!["DOCS".into(), "NLS".into()];
     info.options.defs.insert(
         "DOCS".into(),
-        crate::model::options::OptionDef { prevents: vec!["NLS".into()], ..Default::default() },
+        crate::model::options::OptionDef {
+            prevents: vec!["NLS".into()],
+            ..Default::default()
+        },
     );
     app.session.states.get_mut("cat_alpha").unwrap().staged =
         ["DOCS".to_string(), "NLS".to_string()].into();
-    assert_eq!(app.session.status(&info_of(&app, "cat/alpha")), UiStatus::Conflict);
+    assert_eq!(
+        app.session.status(&info_of(&app, "cat/alpha")),
+        UiStatus::Conflict
+    );
     press(&mut app, '/');
     for c in "gam".chars() {
         press(&mut app, c);
@@ -1640,7 +2130,10 @@ fn the_apply_preview_warns_about_a_conflict_hidden_by_the_filter() {
     assert_eq!(modal.conflicted, [key]);
     let shown = screen(&mut app);
     assert!(shown.contains(" apply with 1 conflicting? "), "{shown}");
-    assert!(shown.contains("conflicting (Y writes them, s skips them):"), "{shown}");
+    assert!(
+        shown.contains("conflicting (Y writes them, s skips them):"),
+        "{shown}"
+    );
 }
 
 /// The apply's result as its lines read, the options directory whole;
@@ -1664,8 +2157,12 @@ fn make_conflict(app: &mut App, origin: &str) {
         members: vec!["X11".into(), "WAYLAND".into()],
     }];
     let name = info.options_name.clone();
-    app.session.states.get_mut(&name).unwrap().staged = ["X11".to_string(), "WAYLAND".to_string()].into();
-    assert_eq!(app.session.status(&info_of(app, origin)), UiStatus::Conflict);
+    app.session.states.get_mut(&name).unwrap().staged =
+        ["X11".to_string(), "WAYLAND".to_string()].into();
+    assert_eq!(
+        app.session.status(&info_of(app, origin)),
+        UiStatus::Conflict
+    );
 }
 
 const BETA_FILE: &[u8] =
@@ -1679,7 +2176,10 @@ fn a_clean_apply_is_confirmed_with_y() {
     press(&mut app, 'a');
     let shown = screen(&mut app);
     assert!(shown.contains(" apply? "), "{shown}");
-    assert!(shown.contains(" y: write · n: cancel · j/k scroll "), "{shown}");
+    assert!(
+        shown.contains(" y: write · n: cancel · j/k scroll "),
+        "{shown}"
+    );
     assert!(!shown.contains("conflicting"), "{shown}");
     press(&mut app, 'y');
     let done = done_text(&app);
@@ -1715,15 +2215,25 @@ fn a_plan_changed_under_the_preview_is_shown_again_not_written() {
     ev.send(done(vec![alpha, gamma], vec![])).unwrap();
     app.drain_refresh_events();
     press(&mut app, 'y');
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "nothing written"
+    );
     let modal = app.modal.as_ref().expect("the preview stays open");
     assert!(modal.done.is_none());
     assert_eq!(modal.writes.len(), 2, "it shows the new plan");
     let (msg, err) = app.message.clone().unwrap();
-    assert!(msg.starts_with("the plan changed since the preview"), "{msg}");
+    assert!(
+        msg.starts_with("the plan changed since the preview"),
+        "{msg}"
+    );
     assert!(err);
     press(&mut app, 'y');
-    assert!(done_text(&app).starts_with("2 file(s) written"), "{}", done_text(&app));
+    assert!(
+        done_text(&app).starts_with("2 file(s) written"),
+        "{}",
+        done_text(&app)
+    );
 }
 
 /// A conflict that appears under the preview is not written by the y
@@ -1736,12 +2246,18 @@ fn a_conflict_appearing_under_the_preview_is_asked_about() {
     assert!(app.modal.as_ref().unwrap().conflicted.is_empty());
     make_conflict(&mut app, "cat/alpha");
     press(&mut app, 'y');
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "nothing written"
+    );
     let modal = app.modal.as_ref().expect("the preview stays open");
     assert!(modal.done.is_none());
     assert_eq!(modal.conflicted.len(), 1);
     press(&mut app, 'y');
-    assert!(app.modal.as_ref().unwrap().done.is_none(), "y is no answer to a conflict");
+    assert!(
+        app.modal.as_ref().unwrap().done.is_none(),
+        "y is no answer to a conflict"
+    );
 }
 
 /// With a port in conflict, y is no answer: the preview stays open,
@@ -1754,25 +2270,45 @@ fn a_conflicting_apply_ignores_y() {
     press(&mut app, 'a');
     let shown = screen(&mut app);
     assert!(shown.contains(" apply with 1 conflicting? "), "{shown}");
-    assert!(shown.contains(" Y: write anyway · s: skip conflicting · n: cancel · j/k scroll "), "{shown}");
+    assert!(
+        shown.contains(" Y: write anyway · s: skip conflicting · n: cancel · j/k scroll "),
+        "{shown}"
+    );
     // The conflicting port heads the list, under its own heading.
     let rows: Vec<&str> = shown.lines().collect();
-    let heading = rows.iter().position(|r| r.contains("conflicting (Y writes them, s skips them):"));
+    let heading = rows
+        .iter()
+        .position(|r| r.contains("conflicting (Y writes them, s skips them):"));
     let heading = heading.expect("the conflicting heading");
     assert!(rows[heading + 1].contains("cat/beta"), "{shown}");
-    assert!(!shown.contains('⚠'), "the heading replaces the warning: {shown}");
+    assert!(
+        !shown.contains('⚠'),
+        "the heading replaces the warning: {shown}"
+    );
     press(&mut app, 'y');
     let modal = app.modal.as_ref().expect("y leaves the preview open");
     assert!(modal.done.is_none());
     assert_eq!(
         app.message,
-        Some(("conflicts remain: Y writes anyway · s skips them · n cancels".to_string(), false))
+        Some((
+            "conflicts remain: Y writes anyway · s skips them · n cancels".to_string(),
+            false
+        ))
     );
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "y writes nothing");
-    assert_eq!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "y writes nothing"
+    );
+    assert_eq!(
+        std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(),
+        BETA_FILE
+    );
     press(&mut app, 'n');
     assert!(app.modal.is_none(), "n cancels");
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "n writes nothing");
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "n writes nothing"
+    );
 }
 
 /// Y writes every file, the conflicting one included, and the draft has
@@ -1788,8 +2324,14 @@ fn a_conflicting_apply_writes_all_with_capital_y() {
     let done = done_text(&app);
     assert!(done.starts_with("3 file(s) written"), "{done}");
     assert!(!done.contains("skipped"), "{done}");
-    assert_ne!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
-    assert!(draft::load(&app.options_dir).is_none(), "the draft is discarded");
+    assert_ne!(
+        std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(),
+        BETA_FILE
+    );
+    assert!(
+        draft::load(&app.options_dir).is_none(),
+        "the draft is discarded"
+    );
 }
 
 /// s writes every file but the conflicting port's, which stays as it is
@@ -1804,12 +2346,25 @@ fn a_conflicting_apply_skips_the_conflict_with_s() {
     press(&mut app, 's');
     let done = done_text(&app);
     assert!(done.starts_with("2 file(s) written"), "{done}");
-    assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
+    assert!(
+        done.contains("\n1 port(s) skipped: conflicting options"),
+        "{done}"
+    );
     assert!(tmp.path().join("options/cat_alpha/options").is_file());
     assert!(tmp.path().join("options/cat_gamma/options").is_file());
-    assert_eq!(std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(), BETA_FILE);
-    assert_eq!(app.session.status(&info_of(&app, "cat/beta")), UiStatus::Conflict);
-    assert_eq!(staged(&app, "cat/beta"), ["WAYLAND", "X11"], "the edit stays staged");
+    assert_eq!(
+        std::fs::read(tmp.path().join("options/cat_beta/options")).unwrap(),
+        BETA_FILE
+    );
+    assert_eq!(
+        app.session.status(&info_of(&app, "cat/beta")),
+        UiStatus::Conflict
+    );
+    assert_eq!(
+        staged(&app, "cat/beta"),
+        ["WAYLAND", "X11"],
+        "the edit stays staged"
+    );
     assert!(app.session.dirty());
     assert!(draft::load(&app.options_dir).is_some(), "the draft is kept");
     press(&mut app, 'x');
@@ -1825,15 +2380,29 @@ fn a_conflicting_apply_skips_the_conflict_with_s() {
 #[test]
 fn a_conflicting_flavor_skips_the_shared_file() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[]), ("cat/beta", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[
+            ("cat/alpha@a", &[]),
+            ("cat/alpha@b", &[]),
+            ("cat/beta", &[]),
+        ],
+    );
     for k in ["cat/alpha@a", "cat/alpha@b"] {
-        let info = app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap();
+        let info = app
+            .session
+            .ports
+            .get_mut(&PortKey::parse(k).unwrap())
+            .unwrap();
         info.flavors = vec!["a".into(), "b".into()];
         info.options.complete = vec!["DOCS".into(), "X11".into(), "WAYLAND".into()];
     }
     // Only the non-default flavor has the group the staged set breaks.
     make_conflict(&mut app, "cat/alpha@b");
-    assert_ne!(app.session.status(&info_of(&app, "cat/alpha@a")), UiStatus::Conflict);
+    assert_ne!(
+        app.session.status(&info_of(&app, "cat/alpha@a")),
+        UiStatus::Conflict
+    );
     press(&mut app, 'a');
     let modal = app.modal.as_ref().unwrap();
     assert_eq!(modal.conflicted, [PortKey::parse("cat/alpha@b").unwrap()]);
@@ -1841,8 +2410,14 @@ fn a_conflicting_flavor_skips_the_shared_file() {
     press(&mut app, 's');
     let done = done_text(&app);
     assert!(done.starts_with("1 file(s) written"), "{done}");
-    assert!(done.contains("\n1 port(s) skipped: conflicting options"), "{done}");
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "the shared file is skipped");
+    assert!(
+        done.contains("\n1 port(s) skipped: conflicting options"),
+        "{done}"
+    );
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "the shared file is skipped"
+    );
     assert!(tmp.path().join("options/cat_beta/options").is_file());
 }
 
@@ -1854,7 +2429,11 @@ fn minimal_mode_counts_bare_defaults_as_decided() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     let status = |app: &App, p: &str| app.effective_status(&info_of(app, p));
-    assert_eq!(status(&app, "cat/alpha"), UiStatus::Unconfigured, "without -m");
+    assert_eq!(
+        status(&app, "cat/alpha"),
+        UiStatus::Unconfigured,
+        "without -m"
+    );
     // As -m sets them both.
     app.minimal = true;
     app.session.minimal = true;
@@ -1862,9 +2441,20 @@ fn minimal_mode_counts_bare_defaults_as_decided() {
     assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
     hit(&mut app, KeyCode::Enter);
     press(&mut app, ' ');
-    assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok, "an edit is no state");
-    assert!(app.session.edited(&info_of(&app, "cat/alpha")), "but it shows: ≈*");
-    assert!(screen(&mut app).contains("≈* cat/alpha"), "{}", screen(&mut app));
+    assert_eq!(
+        status(&app, "cat/alpha"),
+        UiStatus::Ok,
+        "an edit is no state"
+    );
+    assert!(
+        app.session.edited(&info_of(&app, "cat/alpha")),
+        "but it shows: ≈*"
+    );
+    assert!(
+        screen(&mut app).contains("≈* cat/alpha"),
+        "{}",
+        screen(&mut app)
+    );
 }
 
 /// In minimal mode apply removes a file that only repeats the defaults
@@ -1877,7 +2467,10 @@ fn minimal_apply_reports_the_files_it_removed() {
     press(&mut app, 'a');
     press(&mut app, 'y');
     let done = done_text(&app);
-    assert!(done.contains("\n1 redundant file(s) removed (--minimal)"), "{done}");
+    assert!(
+        done.contains("\n1 redundant file(s) removed (--minimal)"),
+        "{done}"
+    );
     assert!(!tmp.path().join("options/cat_beta").exists());
 }
 
@@ -1898,7 +2491,10 @@ fn a_failed_apply_removes_nothing() {
     assert!(done.starts_with("nothing written"), "{done}");
     assert!(done.contains("\ncat/alpha: creating "), "{done}");
     assert!(!done.contains("removed"), "{done}");
-    assert!(tmp.path().join("options/cat_beta/options").is_file(), "beta's file kept");
+    assert!(
+        tmp.path().join("options/cat_beta/options").is_file(),
+        "beta's file kept"
+    );
     assert!(app.session.dirty(), "the edit is still staged");
 }
 
@@ -1912,24 +2508,46 @@ fn a_failed_apply_reads_as_failed() {
     std::fs::create_dir_all(tmp.path().join("options/cat_alpha/.options.optique.tmp")).unwrap();
     press(&mut app, 'a');
     press(&mut app, 'y');
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
     assert!(shown.contains(" apply — FAILED "), "{shown}");
     assert!(!shown.contains(" apply — done "), "{shown}");
-    assert_eq!(shown.matches("nothing written to ").count(), 1, "the directory once:\n{shown}");
-    assert!(shown.contains("cat/alpha: creating …/.options.optique.tmp: "), "{shown}");
+    assert_eq!(
+        shown.matches("nothing written to ").count(),
+        1,
+        "the directory once:\n{shown}"
+    );
+    assert!(
+        shown.contains("cat/alpha: creating …/.options.optique.tmp: "),
+        "{shown}"
+    );
     let alpha = tmp.path().join("options/cat_alpha").display().to_string();
-    assert!(!shown.contains(&alpha), "the reason's path is cut short:\n{shown}");
+    assert!(
+        !shown.contains(&alpha),
+        "the reason's path is cut short:\n{shown}"
+    );
     // The border in red: the cell under the title's first corner.
-    let (row, line) = shown.lines().enumerate().find(|(_, l)| l.contains(" apply — FAILED ")).unwrap();
-    let col = line[..line.find(" apply — FAILED ").unwrap()].chars().count() - 1;
-    assert_eq!(terminal.backend().buffer()[(col as u16, row as u16)].fg, ratatui::style::Color::Red);
+    let (row, line) = shown
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(" apply — FAILED "))
+        .unwrap();
+    let col = line[..line.find(" apply — FAILED ").unwrap()]
+        .chars()
+        .count()
+        - 1;
+    assert_eq!(
+        terminal.backend().buffer()[(col as u16, row as u16)].fg,
+        ratatui::style::Color::Red
+    );
 
     press(&mut app, 'x');
     assert!(app.modal.is_none());
-    let (msg, error) = app.message.clone().expect("the failure is left in the status bar");
+    let (msg, error) = app
+        .message
+        .clone()
+        .expect("the failure is left in the status bar");
     assert!(error, "{msg}");
     assert!(
         msg.starts_with("apply failed: nothing written — creating …/.options.optique.tmp: "),
@@ -1937,7 +2555,10 @@ fn a_failed_apply_reads_as_failed() {
     );
     assert!(screen_at(&mut app, 80, 24).contains(" apply failed: nothing written — "));
     press(&mut app, 'j');
-    assert!(app.message.is_none(), "an ordinary message: the next key clears it");
+    assert!(
+        app.message.is_none(),
+        "an ordinary message: the next key clears it"
+    );
 }
 
 /// A successful apply leaves what it wrote, removed and skipped in the
@@ -1959,7 +2580,10 @@ fn a_done_apply_leaves_its_count_in_the_status_bar() {
     press(&mut app, 'a');
     press(&mut app, 'y');
     hit(&mut app, KeyCode::Enter);
-    assert_eq!(app.message, Some(("0 file(s) written, 1 removed".to_string(), false)));
+    assert_eq!(
+        app.message,
+        Some(("0 file(s) written, 1 removed".to_string(), false))
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
@@ -1967,7 +2591,13 @@ fn a_done_apply_leaves_its_count_in_the_status_bar() {
     press(&mut app, 'a');
     press(&mut app, 's');
     hit(&mut app, KeyCode::Esc);
-    assert_eq!(app.message, Some(("2 file(s) written, 1 skipped: conflicting".to_string(), false)));
+    assert_eq!(
+        app.message,
+        Some((
+            "2 file(s) written, 1 skipped: conflicting".to_string(),
+            false
+        ))
+    );
 }
 
 /// The list, its divider and its order are rebuilt as soon as the apply
@@ -1976,13 +2606,29 @@ fn a_done_apply_leaves_its_count_in_the_status_bar() {
 fn the_divider_follows_an_apply_under_its_result() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = five_ports(tmp.path());
-    assert!(screen(&mut app).contains("║── 2 ok "), "{}", screen(&mut app));
+    assert!(
+        screen(&mut app).contains("║── 2 ok "),
+        "{}",
+        screen(&mut app)
+    );
     press(&mut app, 'a');
     press(&mut app, 's');
     let shown = screen(&mut app);
     assert!(shown.contains(" apply — done "), "{shown}");
-    assert!(shown.contains("║── 4 ok "), "rebuilt under the box:\n{shown}");
-    assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/beta", "cat/delta", "cat/gamma"]);
+    assert!(
+        shown.contains("║── 4 ok "),
+        "rebuilt under the box:\n{shown}"
+    );
+    assert_eq!(
+        visible(&app),
+        [
+            "cat/zeta",
+            "cat/alpha",
+            "cat/beta",
+            "cat/delta",
+            "cat/gamma"
+        ]
+    );
 }
 
 /// In the preview only n, N and Esc cancel: Enter, typed by habit, and
@@ -1997,36 +2643,66 @@ fn only_n_and_esc_cancel_the_apply_preview() {
         assert!(app.modal.is_none(), "{cancel:?} cancels");
     }
     press(&mut app, 'a');
-    for other in [KeyCode::Enter, KeyCode::Char('x'), KeyCode::Char('s'), KeyCode::Tab] {
+    for other in [
+        KeyCode::Enter,
+        KeyCode::Char('x'),
+        KeyCode::Char('s'),
+        KeyCode::Tab,
+    ] {
         hit(&mut app, other);
-        assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "{other:?} does not cancel");
-        assert_eq!(app.message, Some(("y writes · n cancels".to_string(), false)), "{other:?}");
+        assert!(
+            app.modal.as_ref().is_some_and(|m| m.done.is_none()),
+            "{other:?} does not cancel"
+        );
+        assert_eq!(
+            app.message,
+            Some(("y writes · n cancels".to_string(), false)),
+            "{other:?}"
+        );
     }
-    assert!(!tmp.path().join("options/cat_alpha").exists(), "nothing written");
+    assert!(
+        !tmp.path().join("options/cat_alpha").exists(),
+        "nothing written"
+    );
     hit(&mut app, KeyCode::Esc);
 
     make_conflict(&mut app, "cat/beta");
     press(&mut app, 'a');
     for other in [KeyCode::Enter, KeyCode::Char('y')] {
         hit(&mut app, other);
-        assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "{other:?} does not cancel");
+        assert!(
+            app.modal.as_ref().is_some_and(|m| m.done.is_none()),
+            "{other:?} does not cancel"
+        );
         assert_eq!(
             app.message,
-            Some(("conflicts remain: Y writes anyway · s skips them · n cancels".to_string(), false)),
+            Some((
+                "conflicts remain: Y writes anyway · s skips them · n cancels".to_string(),
+                false
+            )),
             "{other:?}"
         );
     }
-    assert!(matches!(ctrl(&mut app, 'c'), KeyOutcome::Continue), "Ctrl-C asks to quit");
+    assert!(
+        matches!(ctrl(&mut app, 'c'), KeyOutcome::Continue),
+        "Ctrl-C asks to quit"
+    );
     assert!(app.quit_confirm);
 }
 
 /// The text of the bottom-border hint on the row holding `marker`.
 fn border_hint(shown: &str, marker: &str) -> String {
-    let row = shown.lines().find(|l| l.contains(marker) && l.contains('└'));
+    let row = shown
+        .lines()
+        .find(|l| l.contains(marker) && l.contains('└'));
     let row = row.unwrap_or_else(|| panic!("no border with {marker}:\n{shown}"));
     let after = &row[row.find('└').unwrap() + '└'.len_utf8()..];
     // Up to the border's dashes, or its corner when the hint fills it.
-    after.split(['─', '┘']).next().unwrap_or_default().to_string()
+    after
+        .split(['─', '┘'])
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// `hint` is one of `forms` whole, or the last of them cut after a
@@ -2035,7 +2711,9 @@ fn whole_or_cut_at_a_token(hint: &str, forms: &[&str]) -> bool {
     if forms.contains(&hint) {
         return true;
     }
-    let Some(kept) = hint.strip_suffix(" … ") else { return false };
+    let Some(kept) = hint.strip_suffix(" … ") else {
+        return false;
+    };
     let last = forms.last().unwrap();
     last.starts_with(kept) && last[kept.len()..].starts_with(" · ")
 }
@@ -2044,7 +2722,10 @@ fn whole_or_cut_at_a_token(hint: &str, forms: &[&str]) -> bool {
 /// short one, or the short one cut at a token — never mid-word.
 #[test]
 fn popup_hints_are_never_cut_mid_word() {
-    let apply = [" y: write · n: cancel · j/k scroll ", " y write · n cancel · j/k "];
+    let apply = [
+        " y: write · n: cancel · j/k scroll ",
+        " y write · n cancel · j/k ",
+    ];
     let conflict = [
         " Y: write anyway · s: skip conflicting · n: cancel · j/k scroll ",
         " Y write · s skip · n cancel ",
@@ -2063,7 +2744,10 @@ fn popup_hints_are_never_cut_mid_word() {
         " 1-4/Tab switch · j/k scroll · other closes ",
         " 1-4 · j/k · other closes ",
     ];
-    let help_fits = [" 1-4/Tab/←→ switch · any other key closes ", " 1-4/Tab switch · other closes "];
+    let help_fits = [
+        " 1-4/Tab/←→ switch · any other key closes ",
+        " 1-4/Tab switch · other closes ",
+    ];
     for (width, height) in [(60, 20), (80, 24), (100, 35)] {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = three_ports(tmp.path());
@@ -2096,7 +2780,10 @@ fn popup_hints_are_never_cut_mid_word() {
         make_conflict(&mut app, "cat/beta");
         press(&mut app, 'a');
         let hint = border_hint(&screen_at(&mut app, width, height), "write");
-        assert!(whole_or_cut_at_a_token(&hint, &conflict), "{width}: {hint:?}");
+        assert!(
+            whole_or_cut_at_a_token(&hint, &conflict),
+            "{width}: {hint:?}"
+        );
     }
 }
 
@@ -2112,13 +2799,25 @@ fn the_quit_prompt_shows_its_lines_whole() {
         press(&mut app, 'q');
         let shown = screen_at(&mut app, width, height);
         let rows: Vec<&str> = shown.lines().collect();
-        let top = rows.iter().position(|r| r.contains("┌ quit ")).expect("the prompt");
-        assert!(rows[top + 1].contains("│Keep staged edits as a draft?"), "{width}:\n{shown}");
-        assert!(rows[top + 2].contains("│y save & quit · n discard & quit · Esc stay"), "{width}:\n{shown}");
+        let top = rows
+            .iter()
+            .position(|r| r.contains("┌ quit "))
+            .expect("the prompt");
+        assert!(
+            rows[top + 1].contains("│Keep staged edits as a draft?"),
+            "{width}:\n{shown}"
+        );
+        assert!(
+            rows[top + 2].contains("│y save & quit · n discard & quit · Esc stay"),
+            "{width}:\n{shown}"
+        );
         // Under them, only the count of background makes, when other
         // tests run some.
         let makes = rows[top + 3].contains("background make process");
-        assert!(rows[top + 3].contains('└') || makes, "as high as its lines: {width}:\n{shown}");
+        assert!(
+            rows[top + 3].contains('└') || makes,
+            "as high as its lines: {width}:\n{shown}"
+        );
         let left = rows[top].chars().position(|c| c == '┌').unwrap();
         assert_eq!(left, (width as usize - 52) / 2, "52 wide, centred: {width}");
         assert!(matches!(hit(&mut app, KeyCode::Esc), KeyOutcome::Continue));
@@ -2127,11 +2826,24 @@ fn the_quit_prompt_shows_its_lines_whole() {
     press(&mut app, 'q');
     let shown = screen_at(&mut app, 40, 20);
     let rows: Vec<&str> = shown.lines().collect();
-    let top = rows.iter().position(|r| r.contains("┌ quit ")).expect("the prompt");
-    assert!(rows[top + 2].contains("│y save & quit · n discard & quit"), "{shown}");
+    let top = rows
+        .iter()
+        .position(|r| r.contains("┌ quit "))
+        .expect("the prompt");
+    assert!(
+        rows[top + 2].contains("│y save & quit · n discard & quit"),
+        "{shown}"
+    );
     assert!(rows[top + 3].contains("│Esc stay"), "{shown}");
-    assert_eq!(rows[top].chars().position(|c| c == '┌'), Some(2), "36 wide: {shown}");
-    assert!(matches!(press(&mut app, 'n'), KeyOutcome::Quit), "n still answers");
+    assert_eq!(
+        rows[top].chars().position(|c| c == '┌'),
+        Some(2),
+        "36 wide: {shown}"
+    );
+    assert!(
+        matches!(press(&mut app, 'n'), KeyOutcome::Quit),
+        "n still answers"
+    );
 }
 
 /// The option details name the group as its header does: NAME — LABEL.
@@ -2149,7 +2861,10 @@ fn the_option_details_name_the_group_as_its_header() {
         press(&mut app, 'i');
         let shown = screen(&mut app);
         if shown.contains("group: ") {
-            assert!(shown.contains("group: GUI — single (pick exactly one)"), "{shown}");
+            assert!(
+                shown.contains("group: GUI — single (pick exactly one)"),
+                "{shown}"
+            );
             found = true;
             break;
         }
@@ -2173,7 +2888,10 @@ fn a_wrapped_help_line_hangs_under_its_description() {
         let at = at.unwrap_or_else(|| panic!("{text}:\n{shown}"));
         let chars: Vec<char> = rows[at].chars().collect();
         let text_col = rows[at][..rows[at].find(text).unwrap()].chars().count();
-        let left = chars[..text_col].iter().rposition(|&c| c == '│').expect("the box's left border");
+        let left = chars[..text_col]
+            .iter()
+            .rposition(|&c| c == '│')
+            .expect("the box's left border");
         let next: Vec<char> = rows[at + 1].chars().collect();
         let first = (left + 1..next.len()).find(|&i| !next[i].is_whitespace());
         (text_col, first)
@@ -2182,16 +2900,23 @@ fn a_wrapped_help_line_hangs_under_its_description() {
     press(&mut app, '3');
     let shown = screen_at(&mut app, 60, 20);
     let (text_col, next) = hangs(&shown, "undo the last change");
-    assert_eq!(next, Some(text_col), "a key line hangs under its description:\n{shown}");
+    assert_eq!(
+        next,
+        Some(text_col),
+        "a key line hangs under its description:\n{shown}"
+    );
 
     // A legend's too, under the column after " = ".
     press(&mut app, '2');
     press(&mut app, 'G');
     let shown = screen_at(&mut app, 60, 20);
     let (text_col, next) = hangs(&shown, "the description of the");
-    assert_eq!(next, Some(text_col), "a legend hangs under its description:\n{shown}");
+    assert_eq!(
+        next,
+        Some(text_col),
+        "a legend hangs under its description:\n{shown}"
+    );
 }
-
 
 /// A draft left by a quit is adopted at start, one undo step per port;
 /// a draft that no longer changes anything is dropped.
@@ -2207,20 +2932,32 @@ fn a_saved_draft_is_restored_at_start() {
 
     let mut app = three_ports(tmp.path());
     assert_eq!(staged(&app, "cat/alpha"), ["DOCS"]);
-    assert!(app.pending.contains_key(&PortKey::parse("cat/alpha").unwrap()));
     assert!(
-        app.message.as_ref().is_some_and(|(m, _)| m.starts_with("restored draft (1 port, 0m ago, U per port reverts)")),
+        app.pending
+            .contains_key(&PortKey::parse("cat/alpha").unwrap())
+    );
+    assert!(
+        app.message.as_ref().is_some_and(
+            |(m, _)| m.starts_with("restored draft (1 port, 0m ago, U per port reverts)")
+        ),
         "{:?}",
         app.message
     );
     press(&mut app, 'u');
-    assert!(staged(&app, "cat/alpha").is_empty(), "the restore is undoable");
+    assert!(
+        staged(&app, "cat/alpha").is_empty(),
+        "the restore is undoable"
+    );
     drop(app);
 
     // Applied since: the draft changes nothing any more and is dropped.
     let opts = tmp.path().join("options/cat_alpha");
     std::fs::create_dir_all(&opts).unwrap();
-    std::fs::write(opts.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
+    std::fs::write(
+        opts.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n",
+    )
+    .unwrap();
     let app = three_ports(tmp.path());
     assert!(draft::load(&app.options_dir).is_none());
     assert_eq!(
@@ -2248,12 +2985,22 @@ fn a_reverted_draft_is_not_restored_again() {
         assert_eq!(staged(&app, "cat/alpha"), ["DOCS"], "restored");
         press(&mut app, 'u');
         assert!(!app.session.dirty());
-        let outcome = if quit == 'q' { press(&mut app, 'q') } else { ctrl(&mut app, 'c') };
-        assert!(matches!(outcome, KeyOutcome::Quit), "{quit}: nothing to lose");
+        let outcome = if quit == 'q' {
+            press(&mut app, 'q')
+        } else {
+            ctrl(&mut app, 'c')
+        };
+        assert!(
+            matches!(outcome, KeyOutcome::Quit),
+            "{quit}: nothing to lose"
+        );
         drop(app);
 
         let app = three_ports(tmp.path());
-        assert!(staged(&app, "cat/alpha").is_empty(), "{quit}: the draft came back");
+        assert!(
+            staged(&app, "cat/alpha").is_empty(),
+            "{quit}: the draft came back"
+        );
         assert!(draft::load(&app.options_dir).is_none(), "{quit}");
     }
 }
@@ -2274,22 +3021,47 @@ fn apply_rereads_only_the_files_it_wrote() {
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
     let at_start = app.options_files.disk_reads();
     assert_eq!(at_start, 2, "one read per file to build the session");
-    assert!(tmp.path().join("db/cat_beta/options").is_file(), "staging seeded");
+    assert!(
+        tmp.path().join("db/cat_beta/options").is_file(),
+        "staging seeded"
+    );
     // Edited behind optique's back: apply plans against what the session
     // read, so a port nobody touched in the TUI is not rewritten.
     std::fs::write(beta.join("options"), "OPTIONS_FILE_SET+=DOCS\n").unwrap();
 
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+    );
     assert!(app.modal.is_some(), "the apply preview opened");
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+    );
     let done = done_text(&app);
     assert!(done.starts_with("1 file(s) written"), "{done}");
-    assert!(!done.contains("redundant"), "nothing removed, nothing said: {done}");
+    assert!(
+        !done.contains("redundant"),
+        "nothing removed, nothing said: {done}"
+    );
     assert!(tmp.path().join("options/cat_alpha/options").is_file());
-    assert_eq!(std::fs::read(beta.join("options")).unwrap(), b"OPTIONS_FILE_SET+=DOCS\n");
-    assert_eq!(app.options_files.disk_reads(), at_start + 1, "only cat_alpha re-read");
+    assert_eq!(
+        std::fs::read(beta.join("options")).unwrap(),
+        b"OPTIONS_FILE_SET+=DOCS\n"
+    );
+    assert_eq!(
+        app.options_files.disk_reads(),
+        at_start + 1,
+        "only cat_alpha re-read"
+    );
     let alpha = PortKey::parse("cat/alpha").unwrap();
-    assert!(app.session.state(&app.session.ports[&alpha]).unwrap().saved.is_some());
+    assert!(
+        app.session
+            .state(&app.session.ports[&alpha])
+            .unwrap()
+            .saved
+            .is_some()
+    );
 }
 
 /// The option pane opens with what the port is (on at start, 'V' toggles
@@ -2310,19 +3082,37 @@ fn port_description_panel_and_v_overlay() {
     app.rebuild_editor();
     let shown = screen(&mut app);
     assert!(shown.contains("The alpha port"), "{shown}");
-    assert!(shown.contains("Alpha does things."), "paragraph re-wrapped: {shown}");
-    assert!(!shown.contains("old.example"), "old-style WWW: left to the overlay");
+    assert!(
+        shown.contains("Alpha does things."),
+        "paragraph re-wrapped: {shown}"
+    );
+    assert!(
+        !shown.contains("old.example"),
+        "old-style WWW: left to the overlay"
+    );
 
     // 'V' hides it again and brings it back, from either pane.
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+    );
     assert!(!screen(&mut app).contains("Alpha does things."));
     app.focus = Focus::Editor;
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT),
+    );
     assert!(screen(&mut app).contains("Alpha does things."));
     app.focus = Focus::List;
 
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE));
-    let help = app.port_help.as_ref().expect("'v' on the list opens the overlay");
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+    );
+    let help = app
+        .port_help
+        .as_ref()
+        .expect("'v' on the list opens the overlay");
     assert_eq!(help.title, "about");
     assert_eq!(help.lines[0], "The alpha port");
     assert_eq!(help.lines[1], "WWW: https://alpha.example/");
@@ -2332,7 +3122,10 @@ fn port_description_panel_and_v_overlay() {
 /// The smallest closure with a dependency loop: two ports needing each
 /// other.
 fn looped_app(tmp: &std::path::Path) -> App {
-    app_for(tmp, &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])])
+    app_for(
+        tmp,
+        &[("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])],
+    )
 }
 
 /// Everything the in-memory screen shows, rows joined by newlines.
@@ -2350,7 +3143,12 @@ fn screen_at(app: &mut App, width: u16, height: u16) -> String {
 
 /// The rows holding a popup's scrollbar thumb, top to bottom.
 fn thumb_rows(shown: &str) -> Vec<usize> {
-    shown.lines().enumerate().filter(|(_, l)| l.contains('█')).map(|(i, _)| i).collect()
+    shown
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains('█'))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// The bottom border of the popup whose hint contains `hint`.
@@ -2365,7 +3163,9 @@ fn hint_row<'a>(shown: &'a str, hint: &str) -> &'a str {
 #[test]
 fn the_why_popup_scrolls_without_closing() {
     let tmp = tempfile::tempdir().unwrap();
-    let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS + 5).map(|i| format!("cat/d{i:02}")).collect();
+    let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS + 5)
+        .map(|i| format!("cat/d{i:02}"))
+        .collect();
     let mut graph: Vec<(&str, &[&str])> =
         vec![("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])];
     for name in &names {
@@ -2376,7 +3176,10 @@ fn the_why_popup_scrolls_without_closing() {
     let count = app.why.as_ref().unwrap().entries().len();
     let shown = screen_at(&mut app, 80, 24);
     let hint = hint_row(&shown, "j/k move · other key closes");
-    assert!(hint.contains('└') && hint.contains('┘'), "on the bottom border:\n{shown}");
+    assert!(
+        hint.contains('└') && hint.contains('┘'),
+        "on the bottom border:\n{shown}"
+    );
     assert_eq!(shown.matches("other key closes").count(), 1, "{shown}");
     let top = thumb_rows(&shown);
     assert!(!top.is_empty(), "the text overflows:\n{shown}");
@@ -2384,29 +3187,59 @@ fn the_why_popup_scrolls_without_closing() {
     assert!(page > 1, "the box's height, from the last frame");
 
     hit(&mut app, KeyCode::PageDown);
-    assert_eq!(app.why.as_ref().map(|w| w.selected), Some(page), "PgDn moves, not closes");
+    assert_eq!(
+        app.why.as_ref().map(|w| w.selected),
+        Some(page),
+        "PgDn moves, not closes"
+    );
     let middle = thumb_rows(&screen_at(&mut app, 80, 24));
     assert!(middle[0] > top[0], "the thumb follows: {top:?} {middle:?}");
     ctrl(&mut app, 'f');
     let further = (2 * page).min(count - 1);
-    assert_eq!(app.why.as_ref().map(|w| w.selected), Some(further), "Ctrl-F too");
+    assert_eq!(
+        app.why.as_ref().map(|w| w.selected),
+        Some(further),
+        "Ctrl-F too"
+    );
     ctrl(&mut app, 'b');
     assert_eq!(app.why.as_ref().map(|w| w.selected), Some(further - page));
     press(&mut app, 'G');
-    assert_eq!(app.why.as_ref().map(|w| w.selected), Some(count - 1), "G: the last");
+    assert_eq!(
+        app.why.as_ref().map(|w| w.selected),
+        Some(count - 1),
+        "G: the last"
+    );
     let shown = screen_at(&mut app, 80, 24);
     // beta depends on alpha too: six dependents past the cap.
-    assert!(shown.contains("+ 6 more"), "the end of the text in view:\n{shown}");
+    assert!(
+        shown.contains("+ 6 more"),
+        "the end of the text in view:\n{shown}"
+    );
     let bottom = thumb_rows(&shown);
-    assert!(bottom[0] > middle[0], "the thumb at the bottom: {middle:?} {bottom:?}");
+    assert!(
+        bottom[0] > middle[0],
+        "the thumb at the bottom: {middle:?} {bottom:?}"
+    );
     press(&mut app, 'g');
-    assert_eq!(app.why.as_ref().map(|w| w.selected), Some(0), "g: the first");
+    assert_eq!(
+        app.why.as_ref().map(|w| w.selected),
+        Some(0),
+        "g: the first"
+    );
     hit(&mut app, KeyCode::End);
-    assert_eq!(app.why.as_ref().map(|w| w.selected), Some(count - 1), "End: the last");
+    assert_eq!(
+        app.why.as_ref().map(|w| w.selected),
+        Some(count - 1),
+        "End: the last"
+    );
     hit(&mut app, KeyCode::Home);
     hit(&mut app, KeyCode::PageUp);
     assert_eq!(app.why.as_ref().map(|w| w.selected), Some(0));
-    assert_eq!(thumb_rows(&screen_at(&mut app, 80, 24)), top, "back at the top");
+    assert_eq!(
+        thumb_rows(&screen_at(&mut app, 80, 24)),
+        top,
+        "back at the top"
+    );
     press(&mut app, 'x');
     assert!(app.why.is_none(), "any other key closes");
 }
@@ -2415,11 +3248,23 @@ fn the_why_popup_scrolls_without_closing() {
 fn long_described(tmp: &std::path::Path, words: usize) -> App {
     let mut app = app_for(tmp, &[("cat/alpha", &[])]);
     let key = PortKey::parse("cat/alpha").unwrap();
-    let desc = (0..words).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
-    app.session.ports.get_mut(&key).unwrap().options.defs.insert(
-        "DOCS".into(),
-        crate::model::options::OptionDef { desc, ..Default::default() },
-    );
+    let desc = (0..words)
+        .map(|i| format!("word{i}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    app.session
+        .ports
+        .get_mut(&key)
+        .unwrap()
+        .options
+        .defs
+        .insert(
+            "DOCS".into(),
+            crate::model::options::OptionDef {
+                desc,
+                ..Default::default()
+            },
+        );
     hit(&mut app, KeyCode::Enter);
     press(&mut app, 'i');
     assert!(app.opt_info.is_some());
@@ -2435,7 +3280,10 @@ fn the_option_detail_scrolls_without_closing() {
     let shown = screen_at(&mut app, 80, 24);
     let hint = hint_row(&shown, " j/k scroll · any other key closes ");
     assert!(hint.contains('└'), "on the bottom border:\n{shown}");
-    assert!(shown.contains("│word0 word1 "), "the popup's first row:\n{shown}");
+    assert!(
+        shown.contains("│word0 word1 "),
+        "the popup's first row:\n{shown}"
+    );
     let top = thumb_rows(&shown);
     assert!(!top.is_empty(), "the text overflows:\n{shown}");
     let page = page_step(app.page.opt_info) as u16;
@@ -2445,14 +3293,24 @@ fn the_option_detail_scrolls_without_closing() {
     hit(&mut app, KeyCode::PageDown);
     assert_eq!(scroll(&app), Some(page), "PgDn scrolls, not closes");
     let shown = screen_at(&mut app, 80, 24);
-    assert!(!shown.contains("│word0 word1 "), "scrolled past the first row:\n{shown}");
+    assert!(
+        !shown.contains("│word0 word1 "),
+        "scrolled past the first row:\n{shown}"
+    );
     assert!(thumb_rows(&shown)[0] > top[0], "the thumb follows");
     ctrl(&mut app, 'f');
     assert!(scroll(&app).is_some(), "Ctrl-F too");
     press(&mut app, 'G');
-    assert_eq!(scroll(&app), Some(u16::MAX), "G: to the end, clamped when drawn");
+    assert_eq!(
+        scroll(&app),
+        Some(u16::MAX),
+        "G: to the end, clamped when drawn"
+    );
     let shown = screen_at(&mut app, 80, 24);
-    assert!(shown.contains("source: port default"), "the end in view:\n{shown}");
+    assert!(
+        shown.contains("source: port default"),
+        "the end in view:\n{shown}"
+    );
     let last = scroll(&app).unwrap();
     assert!(last < u16::MAX && last >= page, "clamped: {last}");
     press(&mut app, 'k');
@@ -2469,7 +3327,10 @@ fn the_option_detail_scrolls_without_closing() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = long_described(tmp.path(), 3);
     let shown = screen_at(&mut app, 80, 24);
-    assert!(hint_row(&shown, " any key closes ").contains('└'), "{shown}");
+    assert!(
+        hint_row(&shown, " any key closes ").contains('└'),
+        "{shown}"
+    );
     assert!(thumb_rows(&shown).is_empty(), "{shown}");
 }
 
@@ -2500,7 +3361,10 @@ fn the_apply_preview_scrolls_without_cancelling() {
     assert_eq!(scroll(&app), Some(page));
     press(&mut app, 'G');
     let shown = screen_at(&mut app, 80, 24);
-    assert!(shown.contains("cat/p39"), "the last entry in view:\n{shown}");
+    assert!(
+        shown.contains("cat/p39"),
+        "the last entry in view:\n{shown}"
+    );
     let last = scroll(&app).unwrap();
     assert!(last < names.len(), "clamped to the last page: {last}");
     assert!(thumb_rows(&shown)[0] > middle[0], "the thumb at the bottom");
@@ -2513,7 +3377,10 @@ fn the_apply_preview_scrolls_without_cancelling() {
     press(&mut app, 'g');
     assert_eq!(scroll(&app), Some(0));
     hit(&mut app, KeyCode::PageUp);
-    assert!(app.modal.as_ref().is_some_and(|m| m.done.is_none()), "still the preview");
+    assert!(
+        app.modal.as_ref().is_some_and(|m| m.done.is_none()),
+        "still the preview"
+    );
     press(&mut app, 'y');
     let done = done_text(&app);
     assert!(done.starts_with("40 file(s) written"), "{done}");
@@ -2536,10 +3403,20 @@ fn a_pkg_help_paragraph_is_reflowed() {
     app.session.ports.get_mut(&key).unwrap().pkg_help = Some(help.display().to_string());
     press(&mut app, 'h');
     let shown = screen(&mut app);
-    assert!(shown.contains("This port needs a line wrapped by hand here."), "{shown}");
-    for kept in ["- one item ", "- two items ", "  % run this ", "  % then that "] {
+    assert!(
+        shown.contains("This port needs a line wrapped by hand here."),
+        "{shown}"
+    );
+    for kept in [
+        "- one item ",
+        "- two items ",
+        "  % run this ",
+        "  % then that ",
+    ] {
         assert!(
-            shown.lines().any(|l| l.contains(&format!("│{kept}")) || l.contains(&format!("│ {kept}"))),
+            shown
+                .lines()
+                .any(|l| l.contains(&format!("│{kept}")) || l.contains(&format!("│ {kept}"))),
             "{kept:?} on a line of its own:\n{shown}"
         );
     }
@@ -2556,7 +3433,10 @@ fn looped_ports_are_badged_in_the_list() {
     let text = screen(&mut app);
     assert!(text.contains("cat/alpha \u{221e}"), "{text}");
     assert!(text.contains("cat/beta \u{221e}"), "{text}");
-    assert!(text.contains("2\u{221e} L:loops"), "the status bar counts them:\n{text}");
+    assert!(
+        text.contains("2\u{221e} L:loops"),
+        "the status bar counts them:\n{text}"
+    );
 }
 
 /// `L` narrows the list to the tangle, and says so in the pane title.
@@ -2573,7 +3453,10 @@ fn the_loop_view_lists_only_tangled_ports() {
         ],
     );
     assert_eq!(app.visible.len(), 3);
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
     assert!(app.only_loops);
     assert_eq!(app.visible.len(), 2, "{:?}", app.visible);
     assert!(!app.visible.iter().any(|k| k.origin == "cat/loner"));
@@ -2581,7 +3464,10 @@ fn the_loop_view_lists_only_tangled_ports() {
     assert!(text.contains("in a dependency loop"), "{text}");
 
     // And back.
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
     assert!(!app.only_loops);
     assert_eq!(app.visible.len(), 3);
 }
@@ -2592,7 +3478,10 @@ fn the_loop_view_is_refused_without_a_loop() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(tmp.path(), &[("cat/one", &[]), ("cat/two", &[])]);
     assert!(app.loops.is_empty());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
     assert!(!app.only_loops, "the view must not turn on");
     assert_eq!(app.visible.len(), 2, "the list is untouched");
     assert_eq!(
@@ -2607,7 +3496,10 @@ fn the_loop_view_is_refused_without_a_loop() {
 fn breaking_the_last_loop_leaves_the_loop_view() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = looped_app(tmp.path());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('L'), KeyModifiers::NONE),
+    );
     assert!(app.only_loops && app.visible.len() == 2);
 
     // What a background re-query would merge: cat/beta no longer needs
@@ -2686,9 +3578,15 @@ fn a_rescan_that_breaks_the_last_loop_lists_every_port() {
 fn why_overlay_lists_the_loop() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = looped_app(tmp.path());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     let text = screen(&mut app);
-    assert!(text.contains("caught in a dependency loop (2 ports)"), "{text}");
+    assert!(
+        text.contains("caught in a dependency loop (2 ports)"),
+        "{text}"
+    );
     // The walk starts where the user is standing and closes back on it.
     assert!(text.contains("cat/alpha  (this port)"), "{text}");
     assert!(text.contains("back to cat/alpha"), "{text}");
@@ -2702,7 +3600,10 @@ fn the_loop_walk_starts_at_the_port_asked_about() {
     let mut app = looped_app(tmp.path());
     dispatch_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     assert_eq!(app.selected_key().unwrap().origin, "cat/beta");
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     let text = screen(&mut app);
     assert!(text.contains("cat/beta  (this port)"), "{text}");
     assert!(text.contains("back to cat/beta"), "{text}");
@@ -2714,12 +3615,25 @@ fn the_loop_walk_starts_at_the_port_asked_about() {
 fn enter_on_a_loop_port_jumps_to_it() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = looped_app(tmp.path());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     // cat/alpha is a root, so the entries are: the one-port chain, then
     // the cycle (alpha, beta), then the dependents (beta).
-    let entries: Vec<String> =
-        app.why.as_ref().unwrap().entries().iter().map(ToString::to_string).collect();
-    assert_eq!(entries, ["cat/alpha", "cat/alpha", "cat/beta", "cat/beta"], "{entries:?}");
+    let entries: Vec<String> = app
+        .why
+        .as_ref()
+        .unwrap()
+        .entries()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        entries,
+        ["cat/alpha", "cat/alpha", "cat/beta", "cat/beta"],
+        "{entries:?}"
+    );
 
     // Down twice lands on the cycle's second port.
     for _ in 0..2 {
@@ -2748,7 +3662,13 @@ fn enter_on_a_dependent_outside_the_loop_view_selects_it() {
     assert_eq!(visible(&app), ["cat/alpha", "cat/beta"]);
     assert_eq!(selected(&app), "cat/alpha");
     press(&mut app, 'r');
-    let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.origin == "cat/gamma");
+    let at = app
+        .why
+        .as_ref()
+        .unwrap()
+        .entries()
+        .iter()
+        .position(|k| k.origin == "cat/gamma");
     for _ in 0..at.expect("gamma is a dependent of alpha") {
         hit(&mut app, KeyCode::Down);
     }
@@ -2756,7 +3676,10 @@ fn enter_on_a_dependent_outside_the_loop_view_selects_it() {
     assert_eq!(selected(&app), "cat/gamma");
     assert!(!app.only_loops, "the loop view let go");
     let (msg, err) = app.message.clone().unwrap();
-    assert_eq!((msg.as_str(), err), ("jumped to cat/gamma (loop view left)", false));
+    assert_eq!(
+        (msg.as_str(), err),
+        ("jumped to cat/gamma (loop view left)", false)
+    );
 }
 
 /// Enter in the why overlay on a port without options, which no view
@@ -2767,10 +3690,17 @@ fn a_jump_to_an_optionless_port_leaves_the_view_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(
         tmp.path(),
-        &[("cat/aaa", &[]), ("cat/zeta", &[]), ("cat/beta", &["cat/zeta"])],
+        &[
+            ("cat/aaa", &[]),
+            ("cat/zeta", &[]),
+            ("cat/beta", &["cat/zeta"]),
+        ],
     );
-    app.session.ports.get_mut(&PortKey::parse("cat/beta").unwrap()).unwrap().options =
-        Default::default();
+    app.session
+        .ports
+        .get_mut(&PortKey::parse("cat/beta").unwrap())
+        .unwrap()
+        .options = Default::default();
     app.rebuild_visible(None);
     press(&mut app, '/');
     for c in "zeta".chars() {
@@ -2781,7 +3711,13 @@ fn a_jump_to_an_optionless_port_leaves_the_view_alone() {
     assert_eq!(selected(&app), "cat/zeta");
     assert!(app.focus == Focus::Editor);
     press(&mut app, 'r');
-    let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.origin == "cat/beta");
+    let at = app
+        .why
+        .as_ref()
+        .unwrap()
+        .entries()
+        .iter()
+        .position(|k| k.origin == "cat/beta");
     for _ in 0..at.expect("beta is a dependent of zeta") {
         hit(&mut app, KeyCode::Down);
     }
@@ -2789,15 +3725,24 @@ fn a_jump_to_an_optionless_port_leaves_the_view_alone() {
     assert_eq!(app.filter, "zeta", "the filter stays");
     assert_eq!(visible(&app), ["cat/zeta"]);
     assert_eq!(selected(&app), "cat/zeta");
-    assert_eq!(app.editor_port.as_ref().map(ToString::to_string).as_deref(), Some("cat/zeta"));
+    assert_eq!(
+        app.editor_port.as_ref().map(ToString::to_string).as_deref(),
+        Some("cat/zeta")
+    );
     let (msg, err) = app.message.clone().unwrap();
     assert_eq!(
         (msg.as_str(), err),
-        ("cat/beta has no options and is not listed: not jumped to", true)
+        (
+            "cat/beta has no options and is not listed: not jumped to",
+            true
+        )
     );
     hit(&mut app, KeyCode::Char(' '));
     assert_eq!(staged(&app, "cat/zeta"), ["DOCS"]);
-    assert!(staged(&app, "cat/aaa").is_empty(), "the port the pane did not show");
+    assert!(
+        staged(&app, "cat/aaa").is_empty(),
+        "the port the pane did not show"
+    );
 }
 
 /// Rows built for another port are never drawn, nor edited, under the
@@ -2820,7 +3765,9 @@ fn the_pane_never_draws_another_ports_rows() {
 #[test]
 fn the_why_cursor_stays_in_view_on_a_small_terminal() {
     let tmp = tempfile::tempdir().unwrap();
-    let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS).map(|i| format!("cat/d{i:02}")).collect();
+    let names: Vec<String> = (0..ui::WHY_MAX_DEPENDENTS)
+        .map(|i| format!("cat/d{i:02}"))
+        .collect();
     let mut graph: Vec<(&str, &[&str])> =
         vec![("cat/alpha", &["cat/beta"]), ("cat/beta", &["cat/alpha"])];
     for name in &names {
@@ -2833,10 +3780,16 @@ fn the_why_cursor_stays_in_view_on_a_small_terminal() {
     for _ in 0..entries {
         hit(&mut app, KeyCode::Down);
     }
-    let last = app.why.as_ref().unwrap().entries().last().unwrap().to_string();
+    let last = app
+        .why
+        .as_ref()
+        .unwrap()
+        .entries()
+        .last()
+        .unwrap()
+        .to_string();
 
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let buffer = terminal.backend().buffer();
     let highlighted: Vec<String> = (0..30u16)
@@ -2861,11 +3814,20 @@ fn a_self_dependency_reads_as_one_port() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(tmp.path(), &[("cat/solo", &["cat/solo"])]);
     assert_eq!(app.loops.len(), 1);
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     let text = screen(&mut app);
-    assert!(text.contains("caught in a dependency loop (1 port)"), "{text}");
+    assert!(
+        text.contains("caught in a dependency loop (1 port)"),
+        "{text}"
+    );
     assert!(text.contains("depends on itself"), "{text}");
-    assert!(!text.contains("back to"), "no return arrow for a loop of one:\n{text}");
+    assert!(
+        !text.contains("back to"),
+        "no return arrow for a loop of one:\n{text}"
+    );
 }
 
 /// A component wider than its shortest cycle lists the rest of the tangle
@@ -2889,11 +3851,20 @@ fn the_wider_tangle_is_listed_and_navigable() {
     assert_eq!(app.loops.len(), 1, "one component over every port");
 
     app.jump_to_port(&PortKey::parse("cat/hub").unwrap());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     let text = screen(&mut app);
-    assert!(text.contains(&format!("caught in a dependency loop ({} ports)", n + 1)), "{text}");
+    assert!(
+        text.contains(&format!("caught in a dependency loop ({} ports)", n + 1)),
+        "{text}"
+    );
     assert!(text.contains("also in the tangle:"), "{text}");
-    assert!(text.contains("+ 2 more"), "the cap counts the rest:\n{text}");
+    assert!(
+        text.contains("+ 2 more"),
+        "the cap counts the rest:\n{text}"
+    );
 
     // The shown tangled ports are entries, so Enter reaches them.
     let why = app.why.as_ref().unwrap();
@@ -2913,25 +3884,31 @@ fn the_wider_tangle_is_listed_and_navigable() {
 fn r_on_a_loop_port_reopens_why_there() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = looped_app(tmp.path());
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     for _ in 0..2 {
         dispatch_key(&mut app, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
-    dispatch_key(&mut app, KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+    dispatch_key(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+    );
     let why = app.why.as_ref().expect("the overlay stays open");
     assert_eq!(why.key.origin, "cat/beta");
     assert_eq!(why.selected, 0, "the cursor restarts on the new port");
     // And the new overlay's own walk starts there.
-    assert_eq!(
-        why.dep_loop.as_ref().unwrap().walk[0].origin,
-        "cat/beta"
-    );
+    assert_eq!(why.dep_loop.as_ref().unwrap().walk[0].origin, "cat/beta");
 }
 
 #[test]
 fn bulk_parse_forms_and_errors() {
     assert_eq!(parse_bulk("docs=on").unwrap(), ("DOCS".to_string(), true));
-    assert_eq!(parse_bulk(" X11 = OFF ").unwrap(), ("X11".to_string(), false));
+    assert_eq!(
+        parse_bulk(" X11 = OFF ").unwrap(),
+        ("X11".to_string(), false)
+    );
     assert_eq!(parse_bulk("nls+").unwrap(), ("NLS".to_string(), true));
     assert_eq!(parse_bulk("nls-").unwrap(), ("NLS".to_string(), false));
     assert!(parse_bulk("docs=maybe").is_err());
@@ -2941,7 +3918,11 @@ fn bulk_parse_forms_and_errors() {
 
 /// The status bar's last row on a `width`-column screen.
 fn status_row(app: &mut App, width: u16) -> String {
-    screen_at(app, width, 24).lines().last().unwrap_or_default().to_string()
+    screen_at(app, width, 24)
+        .lines()
+        .last()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// At 80 columns the bar keeps the counts and the keys that always
@@ -2952,7 +3933,10 @@ fn the_status_bar_names_the_focused_panes_keys() {
     let mut app = three_ports(tmp.path());
     press(&mut app, 'j');
     let row = status_row(&mut app, 80);
-    assert!(row.starts_with(" 0✗ 0* 2? 0! 1✓  ?:help a:apply q:quit Enter:edit"), "{row}");
+    assert!(
+        row.starts_with(" 0✗ 0* 2? 0! 1✓  ?:help a:apply q:quit Enter:edit"),
+        "{row}"
+    );
     assert!(!row.contains("optionless"), "{row}");
     assert!(!row.contains("Space:toggle"), "{row}");
     hit(&mut app, KeyCode::Enter);
@@ -2961,7 +3945,10 @@ fn the_status_bar_names_the_focused_panes_keys() {
     assert!(!row.contains("Enter:edit"), "{row}");
     hit(&mut app, KeyCode::Esc);
     let wide = status_row(&mut app, 160);
-    assert!(wide.trim_end().ends_with("/:filter v:description"), "all of it: {wide}");
+    assert!(
+        wide.trim_end().ends_with("/:filter v:description"),
+        "all of it: {wide}"
+    );
     assert!(!wide.contains('…'), "{wide}");
 }
 
@@ -2969,9 +3956,20 @@ fn the_status_bar_names_the_focused_panes_keys() {
 #[test]
 fn the_status_bar_never_shows_half_a_token() {
     let tokens = [
-        "?:help", "a:apply", "q:quit", "Enter:edit", "n/p:next-problem", "t:attention",
-        "/:filter", "v:description", "Space:toggle", "i:info", "d:defaults", "U:revert",
-        "u:undo", "…",
+        "?:help",
+        "a:apply",
+        "q:quit",
+        "Enter:edit",
+        "n/p:next-problem",
+        "t:attention",
+        "/:filter",
+        "v:description",
+        "Space:toggle",
+        "i:info",
+        "d:defaults",
+        "U:revert",
+        "u:undo",
+        "…",
     ];
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
@@ -3015,7 +4013,16 @@ fn five_ports(tmp: &std::path::Path) -> App {
     );
     make_conflict(&mut app, "cat/zeta");
     app.refresh_view();
-    assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/gamma", "cat/beta", "cat/delta"]);
+    assert_eq!(
+        visible(&app),
+        [
+            "cat/zeta",
+            "cat/alpha",
+            "cat/gamma",
+            "cat/beta",
+            "cat/delta"
+        ]
+    );
     app.select_index(0);
     app
 }
@@ -3023,14 +4030,15 @@ fn five_ports(tmp: &std::path::Path) -> App {
 /// The list row drawn highlighted (the selection as the widget shows
 /// it), on the 100x35 screen.
 fn highlighted(app: &mut App) -> String {
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
     let buffer = terminal.backend().buffer();
     let rows = ui::screen_rows(buffer);
     let y = (0..35u16)
         .find(|&y| {
-            buffer.cell((1, y)).is_some_and(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
+            buffer
+                .cell((1, y))
+                .is_some_and(|c| c.modifier.contains(ratatui::style::Modifier::REVERSED))
         })
         .expect("a highlighted row");
     rows[y as usize].clone()
@@ -3045,16 +4053,30 @@ fn list_rows_show_the_state_then_the_edit() {
     let mut app = five_ports(tmp.path());
     for (port, on) in [("cat/alpha", "DOCS"), ("cat/beta", "DOCS")] {
         app.jump_to_port(&PortKey::parse(port).unwrap());
-        app.session.toggle(&PortKey::parse(port).unwrap(), on).unwrap();
+        app.session
+            .toggle(&PortKey::parse(port).unwrap(), on)
+            .unwrap();
     }
     app.refresh_view();
     let shown = screen(&mut app);
-    for row in ["✗* cat/zeta", "?* cat/alpha", "?  cat/gamma", "✓* cat/beta", "✓  cat/delta"] {
+    for row in [
+        "✗* cat/zeta",
+        "?* cat/alpha",
+        "?  cat/gamma",
+        "✓* cat/beta",
+        "✓  cat/delta",
+    ] {
         assert!(shown.contains(&format!("║{row}")), "{row}:\n{shown}");
     }
     assert_eq!(
         visible(&app),
-        ["cat/zeta", "cat/alpha", "cat/gamma", "cat/beta", "cat/delta"],
+        [
+            "cat/zeta",
+            "cat/alpha",
+            "cat/gamma",
+            "cat/beta",
+            "cat/delta"
+        ],
         "the edited ok port sorts with the ok ones"
     );
     app.select_index(0);
@@ -3066,14 +4088,24 @@ fn list_rows_show_the_state_then_the_edit() {
     assert_eq!(selected(&app), "cat/gamma");
     app.clear_message();
     let row = status_row(&mut app, 100);
-    assert!(row.starts_with(" 1✗ 3* 2? 0! 2✓ "), "every port by its state, edits apart: {row}");
+    assert!(
+        row.starts_with(" 1✗ 3* 2? 0! 2✓ "),
+        "every port by its state, edits apart: {row}"
+    );
     press(&mut app, 't');
-    assert_eq!(visible(&app), ["cat/zeta", "cat/alpha", "cat/gamma"], "edits are not attention");
+    assert_eq!(
+        visible(&app),
+        ["cat/zeta", "cat/alpha", "cat/gamma"],
+        "edits are not attention"
+    );
 }
 
 /// The row of the divider and of each port, on the 100x35 screen.
 fn row_of(shown: &str, text: &str) -> usize {
-    shown.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}:\n{shown}"))
+    shown
+        .lines()
+        .position(|l| l.contains(text))
+        .unwrap_or_else(|| panic!("{text}:\n{shown}"))
 }
 
 /// In problems-first order a divider counts the ok ports below the
@@ -3089,9 +4121,15 @@ fn a_divider_parts_the_problems_from_the_ok_ports() {
     let at = row_of(&shown, &divider);
     assert_eq!(row_of(&shown, "cat/gamma") + 1, at);
     assert_eq!(row_of(&shown, "cat/beta"), at + 1);
-    assert!(shown.contains("╔ Ports (5) "), "the title counts ports only:\n{shown}");
+    assert!(
+        shown.contains("╔ Ports (5) "),
+        "the title counts ports only:\n{shown}"
+    );
     press(&mut app, 's');
-    assert!(!screen(&mut app).contains(" ok ─"), "not in alphabetical order");
+    assert!(
+        !screen(&mut app).contains(" ok ─"),
+        "not in alphabetical order"
+    );
     press(&mut app, 's');
     assert!(screen(&mut app).contains(&divider));
     press(&mut app, 't');
@@ -3119,8 +4157,15 @@ fn the_selection_steps_over_the_divider() {
     let mut app = five_ports(tmp.path());
     let port = |app: &mut App| {
         let row = highlighted(app);
-        assert!(!row.contains(" ok ─"), "the divider is never selected: {row}");
-        assert!(row.contains(&selected(app)), "{} not drawn at {row}", selected(app));
+        assert!(
+            !row.contains(" ok ─"),
+            "the divider is never selected: {row}"
+        );
+        assert!(
+            row.contains(&selected(app)),
+            "{} not drawn at {row}",
+            selected(app)
+        );
         selected(app)
     };
     assert_eq!(port(&mut app), "cat/zeta");
@@ -3222,10 +4267,19 @@ fn the_optionless_count_is_in_the_list_title() {
     app.hidden = 151;
     let shown = screen(&mut app);
     assert!(shown.contains("╔ Ports (3 · 151 optionless) "), "{shown}");
-    assert!(!shown.lines().last().unwrap_or_default().contains("optionless"));
+    assert!(
+        !shown
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .contains("optionless")
+    );
     press(&mut app, 't');
     let shown = screen_at(&mut app, 200, 24);
-    assert!(shown.contains("╔ Ports (2/3 · 151 optionless) — needs attention "), "{shown}");
+    assert!(
+        shown.contains("╔ Ports (2/3 · 151 optionless) — needs attention "),
+        "{shown}"
+    );
 }
 
 /// A list row too long for the pane loses its category first, then the
@@ -3238,7 +4292,13 @@ fn a_long_list_row_cuts_its_category_first() {
     let good = "multimedia/gstreamer1-plugins-good@default";
     let mut app = app_for(
         tmp.path(),
-        &[(ffmpeg, &[]), (libav, &[]), (good, &["cat/b"]), ("cat/b", &[good]), ("cat/a", &[])],
+        &[
+            (ffmpeg, &[]),
+            (libav, &[]),
+            (good, &["cat/b"]),
+            ("cat/b", &[good]),
+            ("cat/a", &[]),
+        ],
     );
     for origin in [ffmpeg, libav, good] {
         let key = PortKey::parse(origin).unwrap();
@@ -3250,19 +4310,46 @@ fn a_long_list_row_cuts_its_category_first() {
         screen_at(app, width, 24)
             .lines()
             .skip(1)
-            .map(|l| l.split('║').nth(1).unwrap_or_default().trim_end().to_string())
+            .map(|l| {
+                l.split('║')
+                    .nth(1)
+                    .unwrap_or_default()
+                    .trim_end()
+                    .to_string()
+            })
             .filter(|r| !r.is_empty() && !r.starts_with('═'))
             .collect()
     };
     let at80 = rows(&mut app, 80);
     assert!(at80.iter().any(|r| r.ends_with(" cat/a")), "{at80:?}");
-    assert!(at80.iter().any(|r| r.ends_with(" multimedia/ffmpeg@default ⚠")), "fits, unchanged: {at80:?}");
-    assert!(at80.iter().any(|r| r.ends_with(" m…/gstreamer1-libav@default ⚠")), "{at80:?}");
-    assert!(at80.iter().any(|r| r.ends_with(" …/gstreamer1-plugins-goo… ⚠ ∞")), "{at80:?}");
+    assert!(
+        at80.iter()
+            .any(|r| r.ends_with(" multimedia/ffmpeg@default ⚠")),
+        "fits, unchanged: {at80:?}"
+    );
+    assert!(
+        at80.iter()
+            .any(|r| r.ends_with(" m…/gstreamer1-libav@default ⚠")),
+        "{at80:?}"
+    );
+    assert!(
+        at80.iter()
+            .any(|r| r.ends_with(" …/gstreamer1-plugins-goo… ⚠ ∞")),
+        "{at80:?}"
+    );
     let at60 = rows(&mut app, 60);
-    assert!(at60.iter().any(|r| r.ends_with(" mu…/ffmpeg@default ⚠")), "{at60:?}");
-    assert!(at60.iter().any(|r| r.ends_with(" …/gstreamer1-liba… ⚠")), "{at60:?}");
-    assert!(at60.iter().any(|r| r.ends_with(" …/gstreamer1-pl… ⚠ ∞")), "{at60:?}");
+    assert!(
+        at60.iter().any(|r| r.ends_with(" mu…/ffmpeg@default ⚠")),
+        "{at60:?}"
+    );
+    assert!(
+        at60.iter().any(|r| r.ends_with(" …/gstreamer1-liba… ⚠")),
+        "{at60:?}"
+    );
+    assert!(
+        at60.iter().any(|r| r.ends_with(" …/gstreamer1-pl… ⚠ ∞")),
+        "{at60:?}"
+    );
     // Every row in its pane, its markers in their two columns.
     for r in at60.iter().chain(&at80) {
         assert!(r.chars().nth(2) == Some(' '), "{r}");
@@ -3288,7 +4375,13 @@ fn fit_port_name_cuts_the_category_then_the_end() {
 /// then names its view in short, and only then cuts.
 #[test]
 fn the_list_title_keeps_its_view_before_the_optionless_count() {
-    let top = |app: &mut App, width| screen_at(app, width, 24).lines().next().unwrap().to_string();
+    let top = |app: &mut App, width| {
+        screen_at(app, width, 24)
+            .lines()
+            .next()
+            .unwrap()
+            .to_string()
+    };
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     app.clear_message();
@@ -3296,10 +4389,16 @@ fn the_list_title_keeps_its_view_before_the_optionless_count() {
     press(&mut app, 't');
     app.listable = 142;
     let shown = top(&mut app, 90);
-    assert!(shown.starts_with("╔ Ports (2/142) — needs attention ═"), "{shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2/142) — needs attention ═"),
+        "{shown}"
+    );
     // At 80 columns the pane has 32 for its title: the view in short.
     let shown = top(&mut app, 80);
-    assert!(shown.starts_with("╔ Ports (2/142) — attention ═"), "{shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2/142) — attention ═"),
+        "{shown}"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let mut looped = looped_app(tmp.path());
@@ -3307,18 +4406,30 @@ fn the_list_title_keeps_its_view_before_the_optionless_count() {
     looped.hidden = 151;
     press(&mut looped, 'L');
     let shown = top(&mut looped, 90);
-    assert!(shown.starts_with("╔ Ports (2) — in a dependency loop ═"), "{shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2) — in a dependency loop ═"),
+        "{shown}"
+    );
     let shown = top(&mut looped, 80);
     assert!(shown.starts_with("╔ Ports (2) — in a loop ═"), "{shown}");
     // Wide enough, the count is back.
     let shown = top(&mut looped, 200);
-    assert!(shown.starts_with("╔ Ports (2 · 151 optionless) — in a dependency loop ═"), "{shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2 · 151 optionless) — in a dependency loop ═"),
+        "{shown}"
+    );
     // Both views: in short, cut at a word when even that is too long.
     press(&mut looped, 't');
     let shown = top(&mut looped, 100);
-    assert!(shown.starts_with("╔ Ports (2/2) — in a loop — attention ═"), "{shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2/2) — in a loop — attention ═"),
+        "{shown}"
+    );
     let shown = top(&mut looped, 80);
-    assert!(shown.starts_with("╔ Ports (2/2) — in a loop… ═"), "never a dangling dash: {shown}");
+    assert!(
+        shown.starts_with("╔ Ports (2/2) — in a loop… ═"),
+        "never a dangling dash: {shown}"
+    );
 }
 
 /// News from the background waits for the line: it does not replace a
@@ -3330,14 +4441,26 @@ fn background_news_does_not_hide_an_unread_message() {
     let mut app = three_ports(tmp.path());
     let shown = |app: &App| app.message.clone().unwrap_or_default();
     app.notify("dependency loop gone", false);
-    assert!(shown(&app).0.starts_with("2 never configured"), "the summary holds: {:?}", shown(&app));
+    assert!(
+        shown(&app).0.starts_with("2 never configured"),
+        "the summary holds: {:?}",
+        shown(&app)
+    );
     press(&mut app, 'j');
     app.notify("dependency loop gone", false);
-    assert_eq!(shown(&app), ("dependency loop gone".to_string(), false), "nothing to replace after a key");
+    assert_eq!(
+        shown(&app),
+        ("dependency loop gone".to_string(), false),
+        "nothing to replace after a key"
+    );
     press(&mut app, 'f');
     assert!(shown(&app).0.contains("no other flavors"));
     app.notify("dependency loop: a → b → a", true);
-    assert_eq!(shown(&app), ("dependency loop: a → b → a".to_string(), true), "an error wins");
+    assert_eq!(
+        shown(&app),
+        ("dependency loop: a → b → a".to_string(), true),
+        "an error wins"
+    );
     app.notify("dependency loop gone", false);
     assert!(shown(&app).1, "an error is not replaced by news");
     app.message_unread = false;
@@ -3359,8 +4482,14 @@ fn a_refresh_names_up_to_three_ports() {
         "dependencies refreshed: +audio/opencore-amr −devel/foo"
     );
     let three = [key("cat/a"), key("cat/b"), key("cat/c")];
-    assert_eq!(refreshed_message(&three, &[]), "dependencies refreshed: +cat/a +cat/b +cat/c");
-    assert_eq!(refreshed_message(&three, &removed), "dependencies refreshed: +3 −1 port(s)");
+    assert_eq!(
+        refreshed_message(&three, &[]),
+        "dependencies refreshed: +cat/a +cat/b +cat/c"
+    );
+    assert_eq!(
+        refreshed_message(&three, &removed),
+        "dependencies refreshed: +3 −1 port(s)"
+    );
 }
 
 /// At start the line says what the closure needs, in list order, and
@@ -3370,13 +4499,25 @@ fn the_first_message_sums_up_what_needs_doing() {
     let tmp = tempfile::tempdir().unwrap();
     let stale = tmp.path().join("options/cat_beta");
     std::fs::create_dir_all(&stale).unwrap();
-    std::fs::write(stale.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n")
-        .unwrap();
+    std::fs::write(
+        stale.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n",
+    )
+    .unwrap();
     let ok = tmp.path().join("options/cat_eps");
     std::fs::create_dir_all(&ok).unwrap();
-    std::fs::write(ok.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
-    let ports: [(&str, &[&str]); 5] =
-        [("cat/alpha", &[]), ("cat/beta", &[]), ("cat/gamma", &[]), ("cat/delta", &[]), ("cat/eps", &[])];
+    std::fs::write(
+        ok.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n",
+    )
+    .unwrap();
+    let ports: [(&str, &[&str]); 5] = [
+        ("cat/alpha", &[]),
+        ("cat/beta", &[]),
+        ("cat/gamma", &[]),
+        ("cat/delta", &[]),
+        ("cat/eps", &[]),
+    ];
     let mut app = app_for(tmp.path(), &ports);
     make_conflict(&mut app, "cat/alpha");
     app.rebuild_visible(None);
@@ -3393,18 +4534,31 @@ fn the_first_message_sums_up_what_needs_doing() {
         status_row(&mut app, 80).trim_end(),
         " 1 conflicting · 2 never configured · 1 stale — a: write defaults for all …"
     );
-    assert_eq!(status_row(&mut app, 60).trim_end(), " 1 conflicting · 2 never configured · 1 stale …");
-    assert_eq!(status_row(&mut app, 40).trim_end(), " 1 conflicting · 2 never configured …");
+    assert_eq!(
+        status_row(&mut app, 60).trim_end(),
+        " 1 conflicting · 2 never configured · 1 stale …"
+    );
+    assert_eq!(
+        status_row(&mut app, 40).trim_end(),
+        " 1 conflicting · 2 never configured …"
+    );
 
     // No port never configured: no `a` to offer.
     let tmp = tempfile::tempdir().unwrap();
     let stale = tmp.path().join("options/cat_beta");
     std::fs::create_dir_all(&stale).unwrap();
-    std::fs::write(stale.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n")
-        .unwrap();
+    std::fs::write(
+        stale.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=OLD\nOPTIONS_FILE_SET+=OLD\n",
+    )
+    .unwrap();
     let ok = tmp.path().join("options/cat_alpha");
     std::fs::create_dir_all(&ok).unwrap();
-    std::fs::write(ok.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n").unwrap();
+    std::fs::write(
+        ok.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n",
+    )
+    .unwrap();
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
     make_conflict(&mut app, "cat/alpha");
     app.rebuild_visible(None);
@@ -3412,17 +4566,26 @@ fn the_first_message_sums_up_what_needs_doing() {
     let full = "1 conflicting · 1 stale — n: next problem · ?: help";
     assert_eq!(app.message, Some((full.to_string(), false)));
     assert_eq!(status_row(&mut app, 60).trim_end(), format!(" {full}"));
-    assert_eq!(status_row(&mut app, 40).trim_end(), " 1 conflicting · 1 stale …");
+    assert_eq!(
+        status_row(&mut app, 40).trim_end(),
+        " 1 conflicting · 1 stale …"
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     for name in ["cat_alpha", "cat_beta"] {
         let dir = tmp.path().join("options").join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("options"), "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n")
-            .unwrap();
+        std::fs::write(
+            dir.join("options"),
+            "_FILE_COMPLETE_OPTIONS_LIST=DOCS\nOPTIONS_FILE_SET+=DOCS\n",
+        )
+        .unwrap();
     }
     let app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
-    assert_eq!(app.message, Some(("all 2 ports are configured — ?: help".to_string(), false)));
+    assert_eq!(
+        app.message,
+        Some(("all 2 ports are configured — ?: help".to_string(), false))
+    );
 }
 
 /// A restored draft leads the first message, whole; how to revert it
@@ -3454,12 +4617,28 @@ fn the_first_message_leads_with_a_restored_draft() {
         status_row(&mut app, 84).trim_end(),
         " restored draft (1 port, 0m ago) · 2 never configured — a: write defaults for all …"
     );
-    assert_eq!(status_row(&mut app, 80).trim_end(), " restored draft (1 port, 0m ago) · 2 never configured …");
-    assert_eq!(status_row(&mut app, 60).trim_end(), " restored draft (1 port, 0m ago) · 2 never configured …");
-    assert_eq!(status_row(&mut app, 40).trim_end(), " restored draft (1 port, 0m ago) …");
-    assert_eq!(status_row(&mut app, 20).trim_end(), " restored draft (1 p", "kept whole, cut by the edge");
+    assert_eq!(
+        status_row(&mut app, 80).trim_end(),
+        " restored draft (1 port, 0m ago) · 2 never configured …"
+    );
+    assert_eq!(
+        status_row(&mut app, 60).trim_end(),
+        " restored draft (1 port, 0m ago) · 2 never configured …"
+    );
+    assert_eq!(
+        status_row(&mut app, 40).trim_end(),
+        " restored draft (1 port, 0m ago) …"
+    );
+    assert_eq!(
+        status_row(&mut app, 20).trim_end(),
+        " restored draft (1 p",
+        "kept whole, cut by the edge"
+    );
     let summary = app.summary.as_ref().unwrap();
-    assert_eq!(summary.fit(60), "restored draft (1 port, 0m ago) · 2 never configured …");
+    assert_eq!(
+        summary.fit(60),
+        "restored draft (1 port, 0m ago) · 2 never configured …"
+    );
 }
 
 /// A refresh landing before the first key leaves the first message up;
@@ -3467,11 +4646,17 @@ fn the_first_message_leads_with_a_restored_draft() {
 #[test]
 fn the_first_message_outlives_a_startup_refresh() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])]);
+    let mut app = app_for(
+        tmp.path(),
+        &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[])],
+    );
     app.session.roots = vec![PortKey::parse("cat/alpha").unwrap()];
     let (ev, _req) = fake_refresher(&mut app);
     let first = app.message.clone();
-    assert_eq!(first.as_ref().unwrap().0, "2 never configured — a: write defaults for all · n: next problem · ?: help");
+    assert_eq!(
+        first.as_ref().unwrap().0,
+        "2 never configured — a: write defaults for all · n: next problem · ?: help"
+    );
     let mut alpha = info_of(&app, "cat/alpha");
     alpha.deps.clear();
     app.hidden = 7;
@@ -3494,7 +4679,10 @@ fn the_first_message_outlives_a_startup_refresh() {
     }];
     ev.send(done(vec![alpha, beta], vec![])).unwrap();
     app.drain_refresh_events();
-    assert_eq!(app.message.clone().unwrap().0, "dependencies refreshed: +cat/beta");
+    assert_eq!(
+        app.message.clone().unwrap().0,
+        "dependencies refreshed: +cat/beta"
+    );
 }
 
 /// The description panel's default: hidden on a terminal under 30 rows,
@@ -3505,9 +4693,18 @@ fn the_description_panel_shows_from_30_rows() {
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
     let key = PortKey::parse("cat/alpha").unwrap();
     app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
-    assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"), "hidden on 24 rows");
-    assert!(!screen_at(&mut app, 80, 29).contains("The alpha port"), "hidden on 29 rows");
-    assert!(screen_at(&mut app, 80, 30).contains("The alpha port"), "shown on 30 rows");
+    assert!(
+        !screen_at(&mut app, 80, 24).contains("The alpha port"),
+        "hidden on 24 rows"
+    );
+    assert!(
+        !screen_at(&mut app, 80, 29).contains("The alpha port"),
+        "hidden on 29 rows"
+    );
+    assert!(
+        screen_at(&mut app, 80, 30).contains("The alpha port"),
+        "shown on 30 rows"
+    );
 }
 
 /// V is a choice that holds until quit: no resize undoes it, either way.
@@ -3517,20 +4714,40 @@ fn v_overrides_the_height_both_ways() {
     let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
     let key = PortKey::parse("cat/alpha").unwrap();
     app.session.ports.get_mut(&key).unwrap().about.comment = "The alpha port".into();
-    let msg = |app: &App| app.message.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    let msg = |app: &App| {
+        app.message
+            .as_ref()
+            .map(|(m, _)| m.clone())
+            .unwrap_or_default()
+    };
 
     assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"));
     press(&mut app, 'V');
     assert_eq!(msg(&app), "port description shown (V: hide · v: full text)");
-    assert!(screen_at(&mut app, 80, 24).contains("The alpha port"), "V shows it on 24 rows");
+    assert!(
+        screen_at(&mut app, 80, 24).contains("The alpha port"),
+        "V shows it on 24 rows"
+    );
     assert!(screen_at(&mut app, 80, 40).contains("The alpha port"));
-    assert!(screen_at(&mut app, 80, 24).contains("The alpha port"), "and it stays");
+    assert!(
+        screen_at(&mut app, 80, 24).contains("The alpha port"),
+        "and it stays"
+    );
 
     press(&mut app, 'V');
-    assert_eq!(msg(&app), "port description hidden (V: show · v: full text)");
-    assert!(!screen_at(&mut app, 80, 40).contains("The alpha port"), "V hides it on 40 rows");
+    assert_eq!(
+        msg(&app),
+        "port description hidden (V: show · v: full text)"
+    );
+    assert!(
+        !screen_at(&mut app, 80, 40).contains("The alpha port"),
+        "V hides it on 40 rows"
+    );
     assert!(!screen_at(&mut app, 80, 24).contains("The alpha port"));
-    assert!(!screen_at(&mut app, 80, 40).contains("The alpha port"), "and it stays");
+    assert!(
+        !screen_at(&mut app, 80, 40).contains("The alpha port"),
+        "and it stays"
+    );
 }
 
 /// With no V pressed, a resize across 30 rows shows or hides the panel,
@@ -3545,10 +4762,19 @@ fn a_resize_across_30_rows_turns_the_panel_and_reads_the_description() {
     app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
     app.rebuild_editor();
     assert!(!screen_at(&mut app, 80, 24).contains("Alpha does things."));
-    assert!(!app.about_text.contains_key(&key), "nothing read while hidden");
-    assert!(screen_at(&mut app, 80, 30).contains("Alpha does things."), "read on the resize");
+    assert!(
+        !app.about_text.contains_key(&key),
+        "nothing read while hidden"
+    );
+    assert!(
+        screen_at(&mut app, 80, 30).contains("Alpha does things."),
+        "read on the resize"
+    );
     assert!(app.about_text.contains_key(&key));
-    assert!(!screen_at(&mut app, 80, 24).contains("Alpha does things."), "hidden again");
+    assert!(
+        !screen_at(&mut app, 80, 24).contains("Alpha does things."),
+        "hidden again"
+    );
 }
 
 /// A port with a long option description, group description, banner
@@ -3561,7 +4787,10 @@ fn long_texts_app(tmp: &std::path::Path) -> App {
     info.options.complete = vec!["DOCS".into(), "A".into(), "B".into()];
     info.options.defs.insert(
         "DOCS".into(),
-        OptionDef { desc: "Build and install the documentation of every module".into(), ..Default::default() },
+        OptionDef {
+            desc: "Build and install the documentation of every module".into(),
+            ..Default::default()
+        },
     );
     info.options.defs.insert(
         "A".into(),
@@ -3592,7 +4821,11 @@ fn long_texts_app(tmp: &std::path::Path) -> App {
 
 /// Whether `row` ends in `…` right after a whole word of `text`.
 fn cut_at_a_word(row: &str, text: &str) -> bool {
-    let Some(body) = row.trim_end_matches(['│', '║']).trim_end().strip_suffix('…') else {
+    let Some(body) = row
+        .trim_end_matches(['│', '║'])
+        .trim_end()
+        .strip_suffix('…')
+    else {
         return false;
     };
     // The longest tail of the row that starts the text.
@@ -3610,9 +4843,18 @@ fn cut_rows_end_with_an_ellipsis_at_a_word() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = long_texts_app(tmp.path());
     let shown = screen_at(&mut app, 80, 24);
-    let row = |needle: &str| shown.lines().find(|l| l.contains(needle)).unwrap_or_default().to_string();
+    let row = |needle: &str| {
+        shown
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_default()
+            .to_string()
+    };
     let docs = row("DOCS");
-    assert!(cut_at_a_word(&docs, "Build and install the documentation of every module"), "{docs}\n{shown}");
+    assert!(
+        cut_at_a_word(&docs, "Build and install the documentation of every module"),
+        "{docs}\n{shown}"
+    );
     let header = row("── BACKENDS");
     assert!(
         cut_at_a_word(
@@ -3623,7 +4865,10 @@ fn cut_rows_end_with_an_ellipsis_at_a_word() {
     );
     let broken = row("BROKEN:");
     assert!(
-        cut_at_a_word(&broken, "does not build against the current toolchain release at all"),
+        cut_at_a_word(
+            &broken,
+            "does not build against the current toolchain release at all"
+        ),
         "{broken}\n{shown}"
     );
 }
@@ -3636,17 +4881,32 @@ fn a_long_conflict_wraps_to_two_lines_then_is_cut() {
     let mut app = long_texts_app(tmp.path());
     let shown = screen_at(&mut app, 80, 24);
     let lines: Vec<&str> = shown.lines().collect();
-    let at = lines.iter().position(|l| l.contains("CONFLICT: ")).expect(&shown);
+    let at = lines
+        .iter()
+        .position(|l| l.contains("CONFLICT: "))
+        .expect(&shown);
     // The option pane's text, between its borders.
     let pane = |l: &str| l.split(['│', '║']).nth(3).unwrap_or_default().to_string();
     let first = pane(lines[at]);
     let second = pane(lines[at + 1]);
     let indent = first.find("CONFLICT: ").unwrap() + "CONFLICT: ".len();
-    assert!(second.starts_with(&" ".repeat(indent)), "under its text:\n{shown}");
+    assert!(
+        second.starts_with(&" ".repeat(indent)),
+        "under its text:\n{shown}"
+    );
     assert!(!second[indent..].starts_with(' '), "{second:?}");
-    assert!(second.trim_end().ends_with('…'), "cut after two lines:\n{shown}");
-    assert!(!pane(lines[at + 2]).starts_with(&" ".repeat(indent)), "no third line:\n{shown}");
-    assert!(!first.trim_end().ends_with('…'), "the first line is whole words, unmarked");
+    assert!(
+        second.trim_end().ends_with('…'),
+        "cut after two lines:\n{shown}"
+    );
+    assert!(
+        !pane(lines[at + 2]).starts_with(&" ".repeat(indent)),
+        "no third line:\n{shown}"
+    );
+    assert!(
+        !first.trim_end().ends_with('…'),
+        "the first line is whole words, unmarked"
+    );
 }
 
 /// The list's title ends in `…` at a word when it does not fit.
@@ -3667,7 +4927,10 @@ fn a_long_list_title_ends_with_an_ellipsis_at_a_word() {
     let body = title.trim_start().trim_end_matches('…');
     assert!(!body.ends_with(' '));
     let full = "Ports (0/0) — needs attention";
-    assert!(full.starts_with(body) && full[body.len()..].starts_with(' '), "{top}");
+    assert!(
+        full.starts_with(body) && full[body.len()..].starts_with(' '),
+        "{top}"
+    );
     assert!(!top.contains("filter"), "{top}");
 }
 
@@ -3678,7 +4941,11 @@ fn the_bulk_title_names_its_scope() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     press(&mut app, 'B');
-    assert!(screen(&mut app).contains("┌ bulk over the 3 listed ports ─"), "{}", screen(&mut app));
+    assert!(
+        screen(&mut app).contains("┌ bulk over the 3 listed ports ─"),
+        "{}",
+        screen(&mut app)
+    );
     hit(&mut app, KeyCode::Esc);
 
     press(&mut app, '/');
@@ -3717,8 +4984,15 @@ fn the_bulk_title_names_its_scope() {
     press(&mut looped, 't');
     press(&mut looped, 'B');
     let n = looped.visible.len();
-    let title = format!("┌ bulk over the {n} listed port{} (attention only) (in a loop) ─", if n == 1 { "" } else { "s" });
-    assert!(screen(&mut looped).contains(&title), "{}", screen(&mut looped));
+    let title = format!(
+        "┌ bulk over the {n} listed port{} (attention only) (in a loop) ─",
+        if n == 1 { "" } else { "s" }
+    );
+    assert!(
+        screen(&mut looped).contains(&title),
+        "{}",
+        screen(&mut looped)
+    );
 }
 
 /// The bottom border counts, as it is typed, the listed ports carrying
@@ -3728,11 +5002,17 @@ fn the_bulk_prompt_counts_the_ports_carrying_the_option() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = three_ports(tmp.path());
     press(&mut app, 'B');
-    assert!(screen(&mut app).contains("└ Enter apply · Esc cancel · Ctrl-U clear ─"), "{}", screen(&mut app));
+    assert!(
+        screen(&mut app).contains("└ Enter apply · Esc cancel · Ctrl-U clear ─"),
+        "{}",
+        screen(&mut app)
+    );
     for c in "docs".chars() {
         press(&mut app, c);
     }
-    assert!(screen(&mut app).contains("└ 3 carry DOCS · Enter apply · Esc cancel · Ctrl-U clear ─"));
+    assert!(
+        screen(&mut app).contains("└ 3 carry DOCS · Enter apply · Esc cancel · Ctrl-U clear ─")
+    );
     for c in "=on".chars() {
         press(&mut app, c);
     }
@@ -3741,17 +5021,26 @@ fn the_bulk_prompt_counts_the_ports_carrying_the_option() {
     for c in "X11+".chars() {
         press(&mut app, c);
     }
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
     let warning = "no listed port has X11";
-    assert!(shown.contains(&format!("└ {warning} · Enter apply")), "{shown}");
+    assert!(
+        shown.contains(&format!("└ {warning} · Enter apply")),
+        "{shown}"
+    );
     // In red: the cell under its first letter.
     let buffer = terminal.backend().buffer();
-    let (row, line) = shown.lines().enumerate().find(|(_, l)| l.contains(warning)).unwrap();
+    let (row, line) = shown
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(warning))
+        .unwrap();
     let col = line[..line.find(warning).unwrap()].chars().count();
-    assert_eq!(buffer[(col as u16, row as u16)].fg, ratatui::style::Color::Red);
+    assert_eq!(
+        buffer[(col as u16, row as u16)].fg,
+        ratatui::style::Color::Red
+    );
 }
 
 /// Ctrl-U clears the bulk line, and is no key anywhere else.
@@ -3761,7 +5050,10 @@ fn ctrl_u_clears_the_bulk_line_only() {
     let mut app = three_ports(tmp.path());
     let before = (selected(&app), app.filter.clone(), app.focus == Focus::List);
     ctrl(&mut app, 'u');
-    assert_eq!((selected(&app), app.filter.clone(), app.focus == Focus::List), before);
+    assert_eq!(
+        (selected(&app), app.filter.clone(), app.focus == Focus::List),
+        before
+    );
     assert!(app.message.is_none() && app.undo.is_empty() && !app.session.dirty());
     hit(&mut app, KeyCode::Enter);
     press(&mut app, ' ');
@@ -3774,7 +5066,11 @@ fn ctrl_u_clears_the_bulk_line_only() {
         press(&mut app, c);
     }
     ctrl(&mut app, 'u');
-    assert_eq!(app.bulk.as_deref(), Some(""), "cleared, the prompt still open");
+    assert_eq!(
+        app.bulk.as_deref(),
+        Some(""),
+        "cleared, the prompt still open"
+    );
 }
 
 /// A bulk input that does not parse is quoted whole in the error.
@@ -3789,13 +5085,19 @@ fn a_bulk_error_quotes_the_whole_input() {
     hit(&mut app, KeyCode::Enter);
     assert_eq!(
         app.message,
-        Some(("\"CURL=DOCS=off\": expected OPTION=on|off (or OPTION+ / OPTION-)".to_string(), true))
+        Some((
+            "\"CURL=DOCS=off\": expected OPTION=on|off (or OPTION+ / OPTION-)".to_string(),
+            true
+        ))
     );
     assert_eq!(
         parse_bulk("=on").unwrap_err(),
         "\"=on\": no option name — expected OPTION=on|off (or OPTION+ / OPTION-)"
     );
-    assert_eq!(parse_bulk("docs").unwrap_err(), "\"docs\": expected OPTION=on|off (or OPTION+ / OPTION-)");
+    assert_eq!(
+        parse_bulk("docs").unwrap_err(),
+        "\"docs\": expected OPTION=on|off (or OPTION+ / OPTION-)"
+    );
 }
 
 /// An options file for cat/alpha listing `complete`, `set` on and every
@@ -3803,7 +5105,10 @@ fn a_bulk_error_quotes_the_whole_input() {
 fn alpha_file(tmp: &std::path::Path, complete: &[&str], set: &[&str]) {
     let dir = tmp.join("options/cat_alpha");
     std::fs::create_dir_all(&dir).unwrap();
-    let mut text = format!("_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST={}\n", complete.join(" "));
+    let mut text = format!(
+        "_OPTIONS_READ=alpha-1.0\n_FILE_COMPLETE_OPTIONS_LIST={}\n",
+        complete.join(" ")
+    );
     for o in complete {
         let verb = if set.contains(o) { "SET" } else { "UNSET" };
         text.push_str(&format!("OPTIONS_FILE_{verb}+={o}\n"));
@@ -3822,7 +5127,10 @@ fn alpha_app(tmp: &std::path::Path, complete: &[&str]) -> App {
 }
 
 fn alpha_mut(app: &mut App) -> &mut crate::model::port::PortInfo {
-    app.session.ports.get_mut(&PortKey::parse("cat/alpha").unwrap()).unwrap()
+    app.session
+        .ports
+        .get_mut(&PortKey::parse("cat/alpha").unwrap())
+        .unwrap()
 }
 
 fn stage(app: &mut App, name: &str, on: &[&str]) {
@@ -3840,8 +5148,7 @@ fn cursor(app: &App) -> String {
 /// The make.conf column of `opt`'s row on the 100x35 screen: its text and
 /// its style.
 fn mc_column(app: &mut App, opt: &str) -> (String, ratatui::style::Style) {
-    let mut terminal =
-        ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
     let buffer = terminal.backend().buffer();
     let rows = ui::screen_rows(buffer);
@@ -3871,10 +5178,16 @@ fn an_overridden_port_shows_every_option_locked() {
     for (opt, want) in [("A", "on"), ("B", "off")] {
         let (text, style) = mc_column(&mut app, opt);
         assert_eq!(text, want, "{opt}");
-        assert!(style.fg == Some(Color::Red) && style.add_modifier.contains(Modifier::BOLD), "{opt}: {style:?}");
+        assert!(
+            style.fg == Some(Color::Red) && style.add_modifier.contains(Modifier::BOLD),
+            "{opt}: {style:?}"
+        );
     }
     let info = info_of(&app, "cat/alpha");
-    assert_eq!(info.options.provenance("B", Some(true)), crate::model::options::Provenance::Override);
+    assert_eq!(
+        info.options.provenance("B", Some(true)),
+        crate::model::options::Provenance::Override
+    );
 }
 
 /// An options file holding a line optique cannot model shows no
@@ -3893,7 +5206,12 @@ fn an_unmanageable_file_shows_no_makeconf_verdict() {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let rows = ui::screen_rows(terminal.backend().buffer());
-    assert!(rows.iter().any(|r| r.contains("UNMANAGED: options line 5 assigns OPTIONS_SET")), "{}", rows.join("\n"));
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("UNMANAGED: options line 5 assigns OPTIONS_SET")),
+        "{}",
+        rows.join("\n")
+    );
 }
 
 /// A listed origin MOVED moves: its target's pane says so in a MOVED:
@@ -3911,21 +5229,38 @@ fn a_listed_moved_origin_shows_on_its_target_and_in_the_summary() {
         can_follow: true,
         in_tree: false,
     };
-    app.session.listed_moves = vec![moved("cat/old", "cat/alpha", true), moved("cat/gone", "cat/elsewhere", false)];
+    app.session.listed_moves = vec![
+        moved("cat/old", "cat/alpha", true),
+        moved("cat/gone", "cat/elsewhere", false),
+    ];
     app.show_summary(None);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 35)).unwrap();
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let rows = ui::screen_rows(terminal.backend().buffer());
     let shown = rows.join("\n");
-    assert!(shown.contains("MOVED: listed as cat/old (renamed); fix the list"), "{shown}");
+    assert!(
+        shown.contains("MOVED: listed as cat/old (renamed); fix the list"),
+        "{shown}"
+    );
     assert!(!shown.contains("cat/gone"), "{shown}");
-    assert!(rows.last().unwrap().contains("1 listed moved (fix the list)"), "{shown}");
+    assert!(
+        rows.last()
+            .unwrap()
+            .contains("1 listed moved (fix the list)"),
+        "{shown}"
+    );
 
     app.session.listed_moves = vec![moved("cat/old@all", "cat/alpha@all", false)];
     terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
     let shown = ui::screen_rows(terminal.backend().buffer()).join("\n");
-    assert!(shown.contains("MOVED: listed as cat/old@all (renamed), not followed;"), "{shown}");
-    assert!(shown.contains("fix the list, or --follow-moved"), "wrapped under its text: {shown}");
+    assert!(
+        shown.contains("MOVED: listed as cat/old@all (renamed), not followed;"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("fix the list, or --follow-moved"),
+        "wrapped under its text: {shown}"
+    );
 }
 
 /// The make.conf column says what make.conf says whenever a layer names
@@ -3944,25 +5279,44 @@ fn the_makeconf_column_shows_makeconf_even_where_the_file_decides() {
     o.port_set = ["C".to_string(), "F".to_string()].into();
     o.port_unset = ["B".to_string()].into();
     o.force_unset = ["C".to_string()].into();
-    let green = |c: Color| move |s: ratatui::style::Style| s.fg == Some(c) && !s.add_modifier.contains(Modifier::BOLD);
+    let green = |c: Color| {
+        move |s: ratatui::style::Style| s.fg == Some(c) && !s.add_modifier.contains(Modifier::BOLD)
+    };
     let (text, style) = mc_column(&mut app, "A");
-    assert!(text == "on" && green(Color::Green)(style), "global SET: {text} {style:?}");
+    assert!(
+        text == "on" && green(Color::Green)(style),
+        "global SET: {text} {style:?}"
+    );
     let (text, style) = mc_column(&mut app, "B");
-    assert!(text == "off" && green(Color::LightGreen)(style), "per-port UNSET after the global SET: {text} {style:?}");
+    assert!(
+        text == "off" && green(Color::LightGreen)(style),
+        "per-port UNSET after the global SET: {text} {style:?}"
+    );
     let (text, style) = mc_column(&mut app, "C");
     assert!(
-        text == "off" && style.fg == Some(Color::Red) && style.add_modifier.contains(Modifier::BOLD),
+        text == "off"
+            && style.fg == Some(Color::Red)
+            && style.add_modifier.contains(Modifier::BOLD),
         "FORCE after the per-port SET: {text} {style:?}"
     );
     let (text, _) = mc_column(&mut app, "D");
     assert_eq!(text, "", "no layer names D");
     let (text, style) = mc_column(&mut app, "E");
-    assert!(text == "off" && green(Color::Green)(style), "the file sets E, make.conf still says off: {text}");
+    assert!(
+        text == "off" && green(Color::Green)(style),
+        "the file sets E, make.conf still says off: {text}"
+    );
     let (text, style) = mc_column(&mut app, "F");
-    assert!(text == "on" && green(Color::LightGreen)(style), "per-port SET after the global UNSET: {text}");
+    assert!(
+        text == "on" && green(Color::LightGreen)(style),
+        "per-port SET after the global UNSET: {text}"
+    );
     // Where the value comes from is unchanged: the file decides A.
     let info = info_of(&app, "cat/alpha");
-    assert_eq!(info.options.provenance("A", Some(true)), crate::model::options::Provenance::File);
+    assert_eq!(
+        info.options.provenance("A", Some(true)),
+        crate::model::options::Provenance::File
+    );
 }
 
 /// A stale port says what its file is behind on above the rows, each
@@ -3979,9 +5333,15 @@ fn a_stale_port_has_a_banner_naming_its_new_and_obsolete_options() {
             l[at..].trim_end_matches(['│', '║']).trim_end().to_string()
         })
     };
-    assert_eq!(line(&["A", "OLD"], &["A", "B", "C"]).as_deref(), Some("STALE: new B C · obsolete OLD"));
+    assert_eq!(
+        line(&["A", "OLD"], &["A", "B", "C"]).as_deref(),
+        Some("STALE: new B C · obsolete OLD")
+    );
     assert_eq!(line(&["A"], &["A", "B"]).as_deref(), Some("STALE: new B"));
-    assert_eq!(line(&["A", "OLD"], &["A"]).as_deref(), Some("STALE: obsolete OLD"));
+    assert_eq!(
+        line(&["A", "OLD"], &["A"]).as_deref(),
+        Some("STALE: obsolete OLD")
+    );
     assert_eq!(line(&["A"], &["A"]), None, "not stale");
     // Never configured: nothing to be behind on.
     let tmp = tempfile::tempdir().unwrap();
@@ -3999,8 +5359,11 @@ fn a_settled_stale_port_has_a_dimmed_banner() {
         terminal.draw(|f| ui::draw(f, app)).unwrap();
         let buffer = terminal.backend().buffer();
         let rows = ui::screen_rows(buffer);
-        let (y, row) =
-            rows.iter().enumerate().find(|(_, r)| r.contains("STALE:")).expect("a STALE banner");
+        let (y, row) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.contains("STALE:"))
+            .expect("a STALE banner");
         let at = row.find("STALE:").unwrap();
         let x = row[..at].chars().count() as u16;
         let text = row[at..].trim_end_matches(['│', '║']).trim_end();
@@ -4010,14 +5373,23 @@ fn a_settled_stale_port_has_a_dimmed_banner() {
     let tmp = tempfile::tempdir().unwrap();
     alpha_file(tmp.path(), &["A", "OLD"], &[]);
     let mut app = alpha_app(tmp.path(), &["A"]);
-    assert_eq!(banner(&mut app), ("STALE: obsolete OLD".to_string(), Color::LightRed));
+    assert_eq!(
+        banner(&mut app),
+        ("STALE: obsolete OLD".to_string(), Color::LightRed)
+    );
 
     app.minimal = true;
     app.session.minimal = true;
-    assert_eq!(app.effective_status(&info_of(&app, "cat/alpha")), UiStatus::Ok);
+    assert_eq!(
+        app.effective_status(&info_of(&app, "cat/alpha")),
+        UiStatus::Ok
+    );
     assert_eq!(
         banner(&mut app),
-        ("STALE: obsolete OLD — settled by the defaults (-m)".to_string(), Color::DarkGray)
+        (
+            "STALE: obsolete OLD — settled by the defaults (-m)".to_string(),
+            Color::DarkGray
+        )
     );
 
     app.minimal = false;
@@ -4025,7 +5397,10 @@ fn a_settled_stale_port_has_a_dimmed_banner() {
     app.mc_relax = true;
     assert_eq!(
         banner(&mut app),
-        ("STALE: obsolete OLD — settled by make.conf (m view)".to_string(), Color::DarkGray)
+        (
+            "STALE: obsolete OLD — settled by make.conf (m view)".to_string(),
+            Color::DarkGray
+        )
     );
 }
 
@@ -4040,7 +5415,10 @@ fn the_last_option_brings_the_obsolete_section_into_view() {
     let complete: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut app = alpha_app(tmp.path(), &complete);
     hit(&mut app, KeyCode::Enter);
-    assert!(!screen_at(&mut app, 100, 30).contains("OLD2"), "out of view at the top");
+    assert!(
+        !screen_at(&mut app, 100, 30).contains("OLD2"),
+        "out of view at the top"
+    );
     hit(&mut app, KeyCode::Char('G'));
     assert_eq!(cursor(&app), "OPT39");
     let shown = screen_at(&mut app, 100, 30);
@@ -4054,16 +5432,28 @@ fn the_last_option_brings_the_obsolete_section_into_view() {
 #[test]
 fn a_port_with_new_options_has_a_plus_n_badge() {
     let row = |app: &mut App| {
-        screen(app).lines().find(|l| l.contains("cat/alpha")).unwrap().to_string()
+        screen(app)
+            .lines()
+            .find(|l| l.contains("cat/alpha"))
+            .unwrap()
+            .to_string()
     };
     let tmp = tempfile::tempdir().unwrap();
     alpha_file(tmp.path(), &["A", "OLD"], &["A"]);
     let mut app = alpha_app(tmp.path(), &["A", "B", "C"]);
-    assert!(row(&mut app).contains("!  cat/alpha +2 "), "{}", row(&mut app));
+    assert!(
+        row(&mut app).contains("!  cat/alpha +2 "),
+        "{}",
+        row(&mut app)
+    );
     // -m sets both: the app's view and the session's notion of decided.
     app.minimal = true;
     app.session.minimal = true;
-    assert!(row(&mut app).contains("≈  cat/alpha +2 "), "{}", row(&mut app));
+    assert!(
+        row(&mut app).contains("≈  cat/alpha +2 "),
+        "{}",
+        row(&mut app)
+    );
     // Only obsolete options: nothing new to point at.
     let mut app = alpha_app(tmp.path(), &["A"]);
     assert!(!row(&mut app).contains('+'), "{}", row(&mut app));
@@ -4093,7 +5483,11 @@ fn plus_n_and_the_panes_n_marks_agree() {
     assert!(shown.contains("STALE: new MQTT POP3"), "{shown}");
     let marked: Vec<&str> = ["A", "IMAP", "MQTT", "POP3"]
         .into_iter()
-        .filter(|o| shown.lines().any(|l| l.contains("│N [") && l.contains(&format!("] {o} "))))
+        .filter(|o| {
+            shown
+                .lines()
+                .any(|l| l.contains("│N [") && l.contains(&format!("] {o} ")))
+        })
         .collect();
     assert_eq!(marked, ["MQTT", "POP3"], "{shown}");
 }
@@ -4110,15 +5504,27 @@ fn a_long_stale_banner_wraps_to_two_lines_then_is_cut() {
     let mut app = alpha_app(tmp.path(), &complete);
     let shown = screen_at(&mut app, 80, 24);
     let lines: Vec<&str> = shown.lines().collect();
-    let at = lines.iter().position(|l| l.contains("STALE: ")).expect(&shown);
+    let at = lines
+        .iter()
+        .position(|l| l.contains("STALE: "))
+        .expect(&shown);
     let pane = |l: &str| l.split(['│', '║']).nth(3).unwrap_or_default().to_string();
     let first = pane(lines[at]);
     let second = pane(lines[at + 1]);
     let indent = first.find("STALE: ").unwrap() + "STALE: ".len();
     assert!(first[indent..].starts_with("new NEWOPTION00"), "{shown}");
-    assert!(second.starts_with(&" ".repeat(indent)) && !second[indent..].starts_with(' '), "under its text:\n{shown}");
-    assert!(second.trim_end().ends_with('…'), "cut after two lines:\n{shown}");
-    assert!(!pane(lines[at + 2]).starts_with(&" ".repeat(indent)), "no third line:\n{shown}");
+    assert!(
+        second.starts_with(&" ".repeat(indent)) && !second[indent..].starts_with(' '),
+        "under its text:\n{shown}"
+    );
+    assert!(
+        second.trim_end().ends_with('…'),
+        "cut after two lines:\n{shown}"
+    );
+    assert!(
+        !pane(lines[at + 2]).starts_with(&" ".repeat(indent)),
+        "no third line:\n{shown}"
+    );
 }
 
 /// Entering the pane puts the cursor on what needs attention: a
@@ -4148,7 +5554,11 @@ fn entering_the_pane_lands_on_the_first_option_needing_attention() {
     app.rebuild_editor();
     for key in [KeyCode::Tab, KeyCode::Right] {
         hit(&mut app, key);
-        assert_eq!((cursor(&app), app.editor_idx), ("C".to_string(), 3), "{key:?}");
+        assert_eq!(
+            (cursor(&app), app.editor_idx),
+            ("C".to_string(), 3),
+            "{key:?}"
+        );
         hit(&mut app, KeyCode::Esc);
     }
 
@@ -4174,7 +5584,10 @@ fn a_prevents_conflict_lands_on_its_first_member_in_row_order() {
     let mut app = alpha_app(tmp.path(), &["A", "B", "C", "D"]);
     alpha_mut(&mut app).options.defs.insert(
         "D".into(),
-        crate::model::options::OptionDef { prevents: vec!["B".into()], ..Default::default() },
+        crate::model::options::OptionDef {
+            prevents: vec!["B".into()],
+            ..Default::default()
+        },
     );
     stage(&mut app, "cat_alpha", &["B", "D"]);
     app.rebuild_editor();
@@ -4197,10 +5610,25 @@ fn n_p_and_jumps_from_the_pane_land_on_what_needs_attention() {
         }
         std::fs::write(dir.join("options"), text).unwrap();
     }
-    let mut app = app_for(tmp.path(), &[("cat/alpha", &["cat/beta"]), ("cat/beta", &[]), ("cat/gamma", &[])]);
-    let beta = app.session.ports.get_mut(&PortKey::parse("cat/beta").unwrap()).unwrap();
+    let mut app = app_for(
+        tmp.path(),
+        &[
+            ("cat/alpha", &["cat/beta"]),
+            ("cat/beta", &[]),
+            ("cat/gamma", &[]),
+        ],
+    );
+    let beta = app
+        .session
+        .ports
+        .get_mut(&PortKey::parse("cat/beta").unwrap())
+        .unwrap();
     beta.options.complete = vec!["DOCS".into(), "NEW".into()];
-    let gamma = app.session.ports.get_mut(&PortKey::parse("cat/gamma").unwrap()).unwrap();
+    let gamma = app
+        .session
+        .ports
+        .get_mut(&PortKey::parse("cat/gamma").unwrap())
+        .unwrap();
     gamma.options.complete = vec!["DOCS".into(), "X".into(), "Y".into()];
     gamma.options.groups.push(OptionGroup {
         kind: GroupKind::Single,
@@ -4213,26 +5641,51 @@ fn n_p_and_jumps_from_the_pane_land_on_what_needs_attention() {
     app.rebuild_editor();
     assert_eq!(visible(&app), ["cat/gamma", "cat/alpha", "cat/beta"]);
     hit(&mut app, KeyCode::Enter);
-    assert_eq!((selected(&app), cursor(&app)), ("cat/gamma".into(), "X".into()));
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/gamma".into(), "X".into())
+    );
     press(&mut app, 'j');
     press(&mut app, 'n');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/alpha".into(), "DOCS".into()));
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/alpha".into(), "DOCS".into())
+    );
     press(&mut app, 'n');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/beta".into(), "NEW".into()));
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/beta".into(), "NEW".into())
+    );
     press(&mut app, 'p');
     press(&mut app, 'p');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/gamma".into(), "X".into()), "not where it was left");
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/gamma".into(), "X".into()),
+        "not where it was left"
+    );
     assert!(app.focus == Focus::Editor);
 
     // r on beta lists alpha among its dependents; Enter jumps there and
     // back, landing each time.
     press(&mut app, 'p');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/beta".into(), "NEW".into()));
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/beta".into(), "NEW".into())
+    );
     press(&mut app, 'r');
-    let at = app.why.as_ref().unwrap().entries().iter().position(|k| k.to_string() == "cat/alpha");
+    let at = app
+        .why
+        .as_ref()
+        .unwrap()
+        .entries()
+        .iter()
+        .position(|k| k.to_string() == "cat/alpha");
     app.why.as_mut().unwrap().selected = at.expect("alpha depends on beta");
     hit(&mut app, KeyCode::Enter);
-    assert_eq!((selected(&app), cursor(&app)), ("cat/alpha".into(), "DOCS".into()));
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/alpha".into(), "DOCS".into())
+    );
     assert!(app.focus == Focus::Editor);
 }
 
@@ -4245,14 +5698,26 @@ fn f_from_the_pane_keeps_the_option_or_lands_on_what_needs_attention() {
     let tmp = tempfile::tempdir().unwrap();
     let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[])]);
     for k in ["cat/alpha@a", "cat/alpha@b"] {
-        let info = app.session.ports.get_mut(&PortKey::parse(k).unwrap()).unwrap();
+        let info = app
+            .session
+            .ports
+            .get_mut(&PortKey::parse(k).unwrap())
+            .unwrap();
         info.flavors = vec!["a".into(), "b".into()];
         info.options_name = format!("cat_alpha_{}", &k[10..]);
         info.options.complete = vec!["DOCS".into(), "X".into(), "Y".into()];
     }
-    let a = app.session.ports.get_mut(&PortKey::parse("cat/alpha@a").unwrap()).unwrap();
+    let a = app
+        .session
+        .ports
+        .get_mut(&PortKey::parse("cat/alpha@a").unwrap())
+        .unwrap();
     a.options.complete.push("ONLY_A".into());
-    let b = app.session.ports.get_mut(&PortKey::parse("cat/alpha@b").unwrap()).unwrap();
+    let b = app
+        .session
+        .ports
+        .get_mut(&PortKey::parse("cat/alpha@b").unwrap())
+        .unwrap();
     b.options.groups.push(OptionGroup {
         kind: GroupKind::Radio,
         name: "G".into(),
@@ -4265,23 +5730,45 @@ fn f_from_the_pane_keeps_the_option_or_lands_on_what_needs_attention() {
         staged: staged.iter().map(ToString::to_string).collect(),
     };
     app.session.states.insert("cat_alpha_a".into(), state(&[]));
-    app.session.states.insert("cat_alpha_b".into(), state(&["X", "Y"]));
-    app.session.owners.insert("cat_alpha_a".into(), PortKey::parse("cat/alpha@a").unwrap());
-    app.session.owners.insert("cat_alpha_b".into(), PortKey::parse("cat/alpha@b").unwrap());
+    app.session
+        .states
+        .insert("cat_alpha_b".into(), state(&["X", "Y"]));
+    app.session
+        .owners
+        .insert("cat_alpha_a".into(), PortKey::parse("cat/alpha@a").unwrap());
+    app.session
+        .owners
+        .insert("cat_alpha_b".into(), PortKey::parse("cat/alpha@b").unwrap());
     app.rebuild_visible(None);
-    let a = app.visible.iter().position(|k| k.to_string() == "cat/alpha@a").unwrap();
+    let a = app
+        .visible
+        .iter()
+        .position(|k| k.to_string() == "cat/alpha@a")
+        .unwrap();
     app.select_index(a);
     hit(&mut app, KeyCode::Enter);
     press(&mut app, 'G');
     assert_eq!(cursor(&app), "ONLY_A");
     press(&mut app, 'f');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@b".into(), "X".into()), "b lacks ONLY_A");
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/alpha@b".into(), "X".into()),
+        "b lacks ONLY_A"
+    );
     press(&mut app, 'f');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@a".into(), "X".into()), "back on a, X kept");
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/alpha@a".into(), "X".into()),
+        "back on a, X kept"
+    );
     press(&mut app, 'j');
     assert_eq!(cursor(&app), "Y");
     press(&mut app, 'f');
-    assert_eq!((selected(&app), cursor(&app)), ("cat/alpha@b".into(), "Y".into()), "the same option");
+    assert_eq!(
+        (selected(&app), cursor(&app)),
+        ("cat/alpha@b".into(), "Y".into()),
+        "the same option"
+    );
 }
 
 /// The CONFLICT banner names what make.conf did: the members it turns
@@ -4307,7 +5794,11 @@ fn a_conflict_names_its_makeconf_cause() {
     };
     let causes = |app: &App| -> Vec<(String, Option<String>)> {
         let info = info_of(app, "cat/alpha");
-        app.session.conflicts(&info).into_iter().map(|c| (c.text, c.cause)).collect()
+        app.session
+            .conflicts(&info)
+            .into_iter()
+            .map(|c| (c.text, c.cause))
+            .collect()
     };
     let too_many = "group G needs exactly one member enabled (2 enabled)".to_string();
 
@@ -4319,25 +5810,49 @@ fn a_conflict_names_its_makeconf_cause() {
     stage(&mut app, "cat_alpha", &["A", "B"]);
     assert_eq!(
         causes(&app),
-        [(too_many.clone(), Some("A on by make.conf OPTIONS_SET; B on by make.conf cat_alpha_SET".into()))]
+        [(
+            too_many.clone(),
+            Some("A on by make.conf OPTIONS_SET; B on by make.conf cat_alpha_SET".into())
+        )]
     );
     let shown = screen_at(&mut app, 200, 30);
-    assert!(shown.contains(&format!("CONFLICT: {too_many} — A on by make.conf OPTIONS_SET;")), "{shown}");
+    assert!(
+        shown.contains(&format!(
+            "CONFLICT: {too_many} — A on by make.conf OPTIONS_SET;"
+        )),
+        "{shown}"
+    );
     let info = info_of(&app, "cat/alpha");
-    assert_eq!(app.session.violations(&info), std::slice::from_ref(&too_many), "the violation's own text is unchanged");
+    assert_eq!(
+        app.session.violations(&info),
+        std::slice::from_ref(&too_many),
+        "the violation's own text is unchanged"
+    );
 
     // The file decides A: only B is make.conf's doing.
     let (_tmp, mut app) = setup(true);
     let o = &mut alpha_mut(&mut app).options;
     o.mc_set = ["A".to_string(), "B".to_string()].into();
     stage(&mut app, "cat_alpha", &["A", "B"]);
-    assert_eq!(causes(&app), [(too_many.clone(), Some("B on by make.conf OPTIONS_SET".into()))]);
+    assert_eq!(
+        causes(&app),
+        [(
+            too_many.clone(),
+            Some("B on by make.conf OPTIONS_SET".into())
+        )]
+    );
 
     // A FORCE knob.
     let (_tmp, mut app) = setup(true);
     alpha_mut(&mut app).options.port_force_set = ["C".to_string()].into();
     stage(&mut app, "cat_alpha", &["A", "C"]);
-    assert_eq!(causes(&app), [(too_many.clone(), Some("C forced on by make.conf; fix it there".into()))]);
+    assert_eq!(
+        causes(&app),
+        [(
+            too_many.clone(),
+            Some("C forced on by make.conf; fix it there".into())
+        )]
+    );
 
     // None on: the members to pick from, and those make.conf turns off.
     let none = "group G needs exactly one member enabled (0 enabled)".to_string();
@@ -4346,7 +5861,13 @@ fn a_conflict_names_its_makeconf_cause() {
     o.mc_unset = ["A".to_string()].into();
     o.force_unset = ["C".to_string()].into();
     stage(&mut app, "cat_alpha", &[]);
-    assert_eq!(causes(&app), [(none.clone(), Some("pick one of A B C (A, C off by make.conf)".into()))]);
+    assert_eq!(
+        causes(&app),
+        [(
+            none.clone(),
+            Some("pick one of A B C (A, C off by make.conf)".into())
+        )]
+    );
     let (_tmp, mut app) = setup(false);
     stage(&mut app, "cat_alpha", &[]);
     assert_eq!(causes(&app), [(none, Some("pick one of A B C".into()))]);
@@ -4355,11 +5876,17 @@ fn a_conflict_names_its_makeconf_cause() {
     let (_tmp, mut app) = setup(false);
     alpha_mut(&mut app).options.defs.insert(
         "D".into(),
-        crate::model::options::OptionDef { prevents: vec!["A".into()], ..Default::default() },
+        crate::model::options::OptionDef {
+            prevents: vec!["A".into()],
+            ..Default::default()
+        },
     );
     stage(&mut app, "cat_alpha", &["A", "D"]);
     let prevents = "D conflicts with A: mutually exclusive".to_string();
     assert_eq!(causes(&app), [(prevents.clone(), None)]);
     alpha_mut(&mut app).options.mc_set = ["D".to_string()].into();
-    assert_eq!(causes(&app), [(prevents, Some("D on by make.conf OPTIONS_SET".into()))]);
+    assert_eq!(
+        causes(&app),
+        [(prevents, Some("D on by make.conf OPTIONS_SET".into()))]
+    );
 }

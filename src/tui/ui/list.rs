@@ -1,10 +1,10 @@
 //! The port list pane.
 
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
-use ratatui::Frame;
 
 use crate::model::origin::PortKey;
 use crate::session::UiStatus;
@@ -27,15 +27,21 @@ fn divider_item(ok: usize, width: usize) -> ListItem<'static> {
     let mut text = format!("── {ok} ok ");
     let fill = width.saturating_sub(text.chars().count());
     text.push_str(&"─".repeat(fill));
-    ListItem::new(Line::from(Span::styled(text, Style::default().fg(Color::DarkGray))))
+    ListItem::new(Line::from(Span::styled(
+        text,
+        Style::default().fg(Color::DarkGray),
+    )))
 }
 
 pub(super) fn draw_port_list(f: &mut Frame, app: &mut App, area: Rect) {
     // The columns a row has for its name and badges, after its two markers
     // and the blank after them.
     let name_room = (area.width as usize).saturating_sub(2 + 3);
-    let mut items: Vec<ListItem> =
-        app.visible.iter().map(|key| port_row(app, key, name_room)).collect();
+    let mut items: Vec<ListItem> = app
+        .visible
+        .iter()
+        .map(|key| port_row(app, key, name_room))
+        .collect();
     if let Some(d) = app.divider {
         let width = area.width.saturating_sub(2) as usize;
         items.insert(d, divider_item(app.visible.len() - d, width));
@@ -117,7 +123,9 @@ fn port_row(app: &App, key: &PortKey, name_room: usize) -> ListItem<'static> {
     if let Some((added, _)) = app.session.stale_delta(info).filter(|(a, _)| !a.is_empty()) {
         badges.push(Span::styled(
             format!(" +{}", added.len()),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ));
     }
     let badge_width: usize = badges.iter().map(Span::width).sum();

@@ -5,7 +5,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::query::makerunner::Identity;
 
@@ -52,7 +52,11 @@ impl QueryEnv {
             QueryEnv::Host => None,
             QueryEnv::Jail { package_building } => Some(format!(
                 "poudriere jail (host packages under /usr/local not seen{})",
-                if package_building { "" } else { "; NO_PACKAGE_BUILDING set" }
+                if package_building {
+                    ""
+                } else {
+                    "; NO_PACKAGE_BUILDING set"
+                }
             )),
             QueryEnv::Synth => {
                 Some("synth scan slave (host packages under /usr/local not seen)".to_string())
@@ -126,8 +130,13 @@ pub fn relocated_options(place: Option<&OptionsPlace>) -> Option<String> {
     let tail = "optique cannot tell which options-dir entries make reads, \
                 so none is removed as vanished or unused";
     match place {
-        None => Some(format!("make could not say whether make.conf sets OPTIONS_FILE: {tail}")),
-        Some(OptionsPlace { options_file: Some(file), .. }) if file != DEFAULT_OPTIONS_FILE => {
+        None => Some(format!(
+            "make could not say whether make.conf sets OPTIONS_FILE: {tail}"
+        )),
+        Some(OptionsPlace {
+            options_file: Some(file),
+            ..
+        }) if file != DEFAULT_OPTIONS_FILE => {
             Some(format!("make.conf sets OPTIONS_FILE ({file}): {tail}"))
         }
         Some(_) => None,
@@ -158,7 +167,11 @@ fn port_dbdir_error(env: QueryEnv, options_dir: &Path, set: &str) -> Option<Stri
             && matches!((set_path.canonicalize(), reads.canonicalize()), (Ok(a), Ok(b)) if a == b);
     // A local build's make also takes PORT_DBDIR from the environment,
     // which the probe passes on (`with_options_place`).
-    let source = if env == QueryEnv::Host { "make.conf or the environment" } else { "make.conf" };
+    let source = if env == QueryEnv::Host {
+        "make.conf or the environment"
+    } else {
+        "make.conf"
+    };
     (!same).then(|| {
         format!(
             "{source} sets PORT_DBDIR={set}: the build reads that directory, not {}",
@@ -215,13 +228,17 @@ impl Overlay {
     /// How the banner, the scan table and the TUI name it: its poudriere
     /// tree name, else its path.
     pub fn label(&self) -> String {
-        self.name.clone().unwrap_or_else(|| self.path.display().to_string())
+        self.name
+            .clone()
+            .unwrap_or_else(|| self.path.display().to_string())
     }
 }
 
 /// `Settings::overlay_of` for a bare list of overlays (the TUI keeps one).
 pub fn overlay_of<'a>(overlays: &'a [Overlay], origin: &str) -> Option<&'a Overlay> {
-    overlays.iter().find(|o| o.path.join(origin).join("Makefile").is_file())
+    overlays
+        .iter()
+        .find(|o| o.path.join(origin).join("Makefile").is_file())
 }
 
 /// An overlay as the command line gives it: a registered poudriere tree
@@ -250,9 +267,8 @@ impl Settings {
     /// same path from here: the saved choices of a relative -o were
     /// invisible to make, and `clean --redundant` took them for defaults.
     fn absolute(mut self) -> Result<Self> {
-        let abs = |p: &Path| {
-            std::path::absolute(p).with_context(|| format!("resolving {}", p.display()))
-        };
+        let abs =
+            |p: &Path| std::path::absolute(p).with_context(|| format!("resolving {}", p.display()));
         self.portsdir = abs(&self.portsdir)?;
         self.options_dir = abs(&self.options_dir)?;
         self.make_conf = self.make_conf.as_deref().map(abs).transpose()?;
@@ -296,10 +312,18 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     // pkg(8)'s own default, which the environment may move.
     let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
     if let Some(profile) = req.synth {
-        return finish(synth::resolve(profile, req, staging_dir)?, Vec::new(), &pkg_db);
+        return finish(
+            synth::resolve(profile, req, staging_dir)?,
+            Vec::new(),
+            &pkg_db,
+        );
     }
     // -l reads no poudriere configuration, so POUDRIERE_ETC is not asked.
-    let etc = if req.local { None } else { poudriere::poudriere_etc(std::env::var_os("POUDRIERE_ETC"))? };
+    let etc = if req.local {
+        None
+    } else {
+        poudriere::poudriere_etc(std::env::var_os("POUDRIERE_ETC"))?
+    };
     let (poudriere_conf, poudriere_d) = match &etc {
         Some(etc) => (etc.join("poudriere.conf"), etc.join("poudriere.d")),
         None => (PathBuf::from(POUDRIERE_CONF), PathBuf::from(POUDRIERE_D)),
@@ -308,7 +332,11 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     // Only a local build asks make for its defaults: a poudriere build
     // reads neither the environment's nor /etc/make.conf's.
     let local = req.local || !poudriere_d.is_dir();
-    let (ports, db) = if local { local::make_defaults() } else { (None, None) };
+    let (ports, db) = if local {
+        local::make_defaults()
+    } else {
+        (None, None)
+    };
     // make's own default, which the environment may move as for any make.
     let make_conf = env_path_or("__MAKE_CONF", "/etc/make.conf");
     let (arch, supported_archs) = if !local && req.jail.is_some() {
@@ -331,7 +359,9 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     };
     let mut settings = resolve_host(&host, req, staging_dir)?;
     if let Some(etc) = &etc {
-        settings.notes.insert(0, poudriere::poudriere_etc_note(etc, !local));
+        settings
+            .notes
+            .insert(0, poudriere::poudriere_etc_note(etc, !local));
     }
     Ok(settings)
 }
@@ -414,10 +444,16 @@ fn given_overlays(poudriere_d: &Path, specs: &[OverlaySpec], local: bool) -> Res
                 }
                 let dir = poudriere_d.join("ports").join(name);
                 if !dir.is_dir() {
-                    bail!("no poudriere overlay '{name}' ({} does not exist)", dir.display());
+                    bail!(
+                        "no poudriere overlay '{name}' ({} does not exist)",
+                        dir.display()
+                    );
                 }
                 let Ok(mnt) = fs::read_to_string(dir.join("mnt")) else {
-                    bail!("poudriere overlay '{name}' has no mnt file in {}", dir.display());
+                    bail!(
+                        "poudriere overlay '{name}' has no mnt file in {}",
+                        dir.display()
+                    );
                 };
                 (Some(name.clone()), PathBuf::from(mnt.trim()))
             }
@@ -425,12 +461,19 @@ fn given_overlays(poudriere_d: &Path, specs: &[OverlaySpec], local: bool) -> Res
         };
         let what = name.as_deref().map_or_else(
             || format!("--overlay-dir {}", path.display()),
-            |n| format!("poudriere overlay '{n}' points to {}, which", path.display()),
+            |n| {
+                format!(
+                    "poudriere overlay '{n}' points to {}, which",
+                    path.display()
+                )
+            },
         );
         if !path.is_dir() {
             bail!("{what} is not a directory");
         }
-        let path = path.canonicalize().with_context(|| format!("resolving {}", path.display()))?;
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("resolving {}", path.display()))?;
         out.push(Overlay { name, path });
     }
     Ok(out)
@@ -438,7 +481,10 @@ fn given_overlays(poudriere_d: &Path, specs: &[OverlaySpec], local: bool) -> Res
 
 /// The `OVERLAYS+=` lines the given overlays add to a make.conf, in order.
 fn overlay_lines(overlays: &[Overlay]) -> String {
-    overlays.iter().map(|o| format!("OVERLAYS+={}\n", o.path.display())).collect()
+    overlays
+        .iter()
+        .map(|o| format!("OVERLAYS+={}\n", o.path.display()))
+        .collect()
 }
 
 /// Settle `settings.overlays` on what make reports for the staged make.conf
@@ -461,9 +507,14 @@ fn with_overlays(mut settings: Settings, given: Vec<Overlay>) -> Settings {
                     } else {
                         "does not exist"
                     };
-                    settings.notes.push(format!("overlay {} {what}", path.display()));
+                    settings
+                        .notes
+                        .push(format!("overlay {} {what}", path.display()));
                 }
-                Overlay { name: found.and_then(|o| o.name.clone()), path }
+                Overlay {
+                    name: found.and_then(|o| o.name.clone()),
+                    path,
+                }
             })
             .collect(),
     };
@@ -510,9 +561,16 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
     if settings.env != QueryEnv::Host {
         return settings;
     }
-    let Ok(meta) = fs::metadata(pkg_db) else { return settings };
+    let Ok(meta) = fs::metadata(pkg_db) else {
+        return settings;
+    };
     let mtime = crate::cache::mtime(&meta).as_nanos();
-    let keyed = format!("{}\n{} {} {mtime}\n", settings.conf_hash, pkg_db.display(), meta.len());
+    let keyed = format!(
+        "{}\n{} {} {mtime}\n",
+        settings.conf_hash,
+        pkg_db.display(),
+        meta.len()
+    );
     settings.conf_hash = crate::cache::sha256_hex(keyed.as_bytes());
     settings
 }
@@ -545,7 +603,10 @@ fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Sett
     let settings = with_overlays(settings, given);
     let settings = key_installed_packages(settings, pkg_db);
     let settings = key_invoker(settings, std::env::var("USER").ok().as_deref());
-    Ok(with_options_place(with_framework(settings), std::env::var_os("PORT_DBDIR")))
+    Ok(with_options_place(
+        with_framework(settings),
+        std::env::var_os("PORT_DBDIR"),
+    ))
 }
 
 /// Settle `settings.options_place` on what make.conf says where the
@@ -555,7 +616,10 @@ fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Sett
 /// host with `env_port_dbdir`, the environment's `PORT_DBDIR`, which a
 /// make.conf `?=` defers to there; a builder's environment is not the
 /// user's, and goes unasked. A probe that fails is noted for the banner.
-fn with_options_place(mut settings: Settings, env_port_dbdir: Option<std::ffi::OsString>) -> Settings {
+fn with_options_place(
+    mut settings: Settings,
+    env_port_dbdir: Option<std::ffi::OsString>,
+) -> Settings {
     let env_port_dbdir = env_port_dbdir.filter(|_| settings.env == QueryEnv::Host);
     let probed = crate::query::makerunner::options_place(
         settings.env.identity(),
@@ -613,7 +677,10 @@ fn framework_hash(conf_hash: &str, framework: &[(String, String)]) -> String {
     if framework.is_empty() {
         return conf_hash.to_string();
     }
-    let lines: String = framework.iter().map(|(var, value)| format!("{var}={value}\n")).collect();
+    let lines: String = framework
+        .iter()
+        .map(|(var, value)| format!("{var}={value}\n"))
+        .collect();
     crate::cache::sha256_hex(format!("{conf_hash}\nframework\n{lines}").as_bytes())
 }
 
@@ -625,7 +692,10 @@ fn is_ports_tree(dir: &Path) -> bool {
 /// -P: taken as given, but it has to be a ports tree.
 fn checked_portsdir(dir: &Path) -> Result<PathBuf> {
     if !is_ports_tree(dir) {
-        bail!("-P {} is not a ports tree (no Mk/bsd.port.mk)", dir.display());
+        bail!(
+            "-P {} is not a ports tree (no Mk/bsd.port.mk)",
+            dir.display()
+        );
     }
     Ok(dir.to_path_buf())
 }
@@ -652,7 +722,9 @@ fn stage_make_conf(
         let bytes = match fs::read(path) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e).with_context(|| format!("reading make.conf {}", path.display())),
+            Err(e) => {
+                return Err(e).with_context(|| format!("reading make.conf {}", path.display()));
+            }
         };
         let real = path.canonicalize().unwrap_or_else(|_| path.clone());
         if !seen_real.insert(real) {
@@ -688,7 +760,12 @@ mod testutil {
         fs::write(dir.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
     }
 
-    pub(super) fn host<'a>(tmp: &'a Path, poudriere_d: &'a Path, ports: &'a Path, db: &'a Path) -> HostPaths<'a> {
+    pub(super) fn host<'a>(
+        tmp: &'a Path,
+        poudriere_d: &'a Path,
+        ports: &'a Path,
+        db: &'a Path,
+    ) -> HostPaths<'a> {
         HostPaths {
             poudriere_conf: tmp,
             poudriere_d,
@@ -706,7 +783,12 @@ mod testutil {
 
     /// A poudriere.d whose jail `j` has `arch` and `version`, its mnt holding
     /// a param.h with `osversion` when given.
-    pub(super) fn fake_jail(tmp: &Path, arch: &str, version: &str, osversion: Option<&str>) -> PathBuf {
+    pub(super) fn fake_jail(
+        tmp: &Path,
+        arch: &str,
+        version: &str,
+        osversion: Option<&str>,
+    ) -> PathBuf {
         let pd = tmp.join("poudriere.d");
         let jd = pd.join("jails/j");
         let _ = fs::remove_dir_all(&pd);
@@ -752,7 +834,10 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         let absent = tmp.path().join("no-poudriere.d");
         let pkg_db = tmp.path().join("local.sqlite");
-        let host = HostPaths { pkg_db: &pkg_db, ..host(tmp.path(), &absent, &ports, &db) };
+        let host = HostPaths {
+            pkg_db: &pkg_db,
+            ..host(tmp.path(), &absent, &ports, &db)
+        };
         let none = Request::default();
         let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
 
@@ -767,10 +852,17 @@ mod tests {
 
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();
-        let jail = HostPaths { poudriere_d: &pd, ..host };
+        let jail = HostPaths {
+            poudriere_d: &pd,
+            ..host
+        };
         let before = hash(&jail);
         fs::remove_file(&pkg_db).unwrap();
-        assert_eq!(hash(&jail), before, "a jail does not see the host's packages");
+        assert_eq!(
+            hash(&jail),
+            before,
+            "a jail does not see the host's packages"
+        );
     }
 
     /// Resolution with and without a poudriere.d, against a fake host.
@@ -789,49 +881,119 @@ mod tests {
 
         // No poudriere.d: plain make config on this host.
         let s = resolve_host(&host, &none, &stage).unwrap();
-        assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (ports.as_path(), db.as_path()));
-        assert!(!s.options_dir.is_dir(), "{} does not exist yet", db.display());
+        assert_eq!(
+            (s.portsdir.as_path(), s.options_dir.as_path()),
+            (ports.as_path(), db.as_path())
+        );
+        assert!(
+            !s.options_dir.is_dir(),
+            "{} does not exist yet",
+            db.display()
+        );
         assert!(s.env == QueryEnv::Host && s.make_conf.as_deref() == Some(Path::new("/dev/null")));
-        assert!(s.notes.is_empty(), "built-in defaults earn no note: {:?}", s.notes);
+        assert!(
+            s.notes.is_empty(),
+            "built-in defaults earn no note: {:?}",
+            s.notes
+        );
         fs::create_dir_all(&db).unwrap();
-        assert!(resolve_host(&host, &none, &stage).unwrap().options_dir.is_dir());
+        assert!(
+            resolve_host(&host, &none, &stage)
+                .unwrap()
+                .options_dir
+                .is_dir()
+        );
         // A set, jail or tree means poudriere, which is not there.
         for req in [
-            Request { jail: Some("j"), ..none },
-            Request { set: Some("s"), ..none },
-            Request { tree: Some("t"), ..none },
+            Request {
+                jail: Some("j"),
+                ..none
+            },
+            Request {
+                set: Some("s"),
+                ..none
+            },
+            Request {
+                tree: Some("t"),
+                ..none
+            },
         ] {
             let err = resolve_host(&host, &req, &stage).unwrap_err().to_string();
             assert!(err.starts_with("-j/-z/-p name poudriere's"), "{err}");
         }
         // -o is taken as given either way.
         let mine = tmp.path().join("mine");
-        let s = resolve_host(&host, &Request { options_dir: Some(&mine), ..none }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                options_dir: Some(&mine),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.options_dir, mine);
         assert!(!s.options_dir.is_dir(), "created on apply");
-        let s = resolve_host(&host, &Request { options_dir: Some(&db), ..none }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                options_dir: Some(&db),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert!(s.options_dir.is_dir());
         // No ports tree anywhere: say where it was looked for.
         let bare = tmp.path().join("bare");
-        let nohost = HostPaths { ports: &bare, ..host };
-        let err = resolve_host(&nohost, &none, &stage).unwrap_err().to_string();
+        let nohost = HostPaths {
+            ports: &bare,
+            ..host
+        };
+        let err = resolve_host(&nohost, &none, &stage)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains(&bare.display().to_string()), "{err}");
 
         // A poudriere.d: its options dir naming, a jail's environment.
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();
-        let host = HostPaths { poudriere_d: &pd, ..host };
-        let s = resolve_host(&host, &Request { set: Some("s"), ..none }, &stage).unwrap();
+        let host = HostPaths {
+            poudriere_d: &pd,
+            ..host
+        };
+        let s = resolve_host(
+            &host,
+            &Request {
+                set: Some("s"),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.options_dir, pd.join("s-options"));
         assert!(!s.options_dir.is_dir());
-        assert_eq!(s.env, QueryEnv::Jail { package_building: true });
+        assert_eq!(
+            s.env,
+            QueryEnv::Jail {
+                package_building: true
+            }
+        );
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         assert!(conf.contains("PACKAGE_BUILDING=yes"), "{conf}");
 
         // With poudriere.d present too, -o is still taken verbatim, never
         // one of the options-dir candidates.
-        let s = resolve_host(&host, &Request { options_dir: Some(&mine), set: Some("s"), ..none }, &stage)
-            .unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                options_dir: Some(&mine),
+                set: Some("s"),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.options_dir, mine);
         assert_ne!(s.options_dir, pd.join("s-options"));
     }
@@ -854,10 +1016,20 @@ mod tests {
         };
         let cwd = std::env::current_dir().unwrap();
         let rel = Path::new("relative-options");
-        for req in [Request::default(), Request { options_dir: Some(rel), ..Request::default() }] {
+        for req in [
+            Request::default(),
+            Request {
+                options_dir: Some(rel),
+                ..Request::default()
+            },
+        ] {
             let s = resolve_host(&host, &req, &stage).unwrap();
             assert!(s.options_dir.is_absolute(), "{}", s.options_dir.display());
-            assert!(s.options_dir.starts_with(&cwd), "{}", s.options_dir.display());
+            assert!(
+                s.options_dir.starts_with(&cwd),
+                "{}",
+                s.options_dir.display()
+            );
         }
         // A make.conf found relative to optique is handed to make absolute.
         fs::write(cwd.join(etc), "# test\n").ok();
@@ -885,30 +1057,64 @@ mod tests {
         fs::create_dir_all(pd.join("ports/ov")).unwrap();
         fs::write(pd.join("ports/ov/mnt"), format!("{}\n", named.display())).unwrap();
         let host = host(tmp.path(), &pd, &ports, tmp.path());
-        let specs = [OverlaySpec::Dir(dir.clone()), OverlaySpec::Name("ov".into())];
-        let req = Request { overlays: &specs, ..Request::default() };
+        let specs = [
+            OverlaySpec::Dir(dir.clone()),
+            OverlaySpec::Name("ov".into()),
+        ];
+        let req = Request {
+            overlays: &specs,
+            ..Request::default()
+        };
 
         let s = resolve_host(&host, &req, &stage).unwrap();
         let (dir, named) = (dir.canonicalize().unwrap(), named.canonicalize().unwrap());
         assert_eq!(
             s.overlays,
-            [Overlay { name: None, path: dir.clone() }, Overlay { name: Some("ov".into()), path: named.clone() }]
+            [
+                Overlay {
+                    name: None,
+                    path: dir.clone()
+                },
+                Overlay {
+                    name: Some("ov".into()),
+                    path: named.clone()
+                }
+            ]
         );
         let conf = fs::read_to_string(s.make_conf.as_ref().unwrap()).unwrap();
-        let lines = format!("OVERLAYS+={}\nOVERLAYS+={}\n", dir.display(), named.display());
+        let lines = format!(
+            "OVERLAYS+={}\nOVERLAYS+={}\n",
+            dir.display(),
+            named.display()
+        );
         let at = conf.find(&lines).expect("the OVERLAYS lines are staged");
-        assert!(at > conf.find("BATCH=yes").unwrap() && at < conf.find("PACKAGE_BUILDING").unwrap(), "{conf}");
+        assert!(
+            at > conf.find("BATCH=yes").unwrap() && at < conf.find("PACKAGE_BUILDING").unwrap(),
+            "{conf}"
+        );
         let bare = resolve_host(&host, &Request::default(), &stage).unwrap();
-        assert_ne!(s.conf_hash, bare.conf_hash, "the overlays key their own generation");
+        assert_ne!(
+            s.conf_hash, bare.conf_hash,
+            "the overlays key their own generation"
+        );
         assert!(bare.overlays.is_empty());
 
         // The errors, in poudriere's terms.
         let err = |specs: &[OverlaySpec]| {
-            resolve_host(&host, &Request { overlays: specs, ..Request::default() }, &stage)
-                .unwrap_err()
-                .to_string()
+            resolve_host(
+                &host,
+                &Request {
+                    overlays: specs,
+                    ..Request::default()
+                },
+                &stage,
+            )
+            .unwrap_err()
+            .to_string()
         };
-        assert!(err(&[OverlaySpec::Name("nope".into())]).starts_with("no poudriere overlay 'nope'"));
+        assert!(
+            err(&[OverlaySpec::Name("nope".into())]).starts_with("no poudriere overlay 'nope'")
+        );
         fs::create_dir_all(pd.join("ports/nomnt")).unwrap();
         assert!(err(&[OverlaySpec::Name("nomnt".into())]).contains("has no mnt file"));
         fs::create_dir_all(pd.join("ports/gone")).unwrap();
@@ -917,10 +1123,20 @@ mod tests {
         assert!(err(&[OverlaySpec::Dir("/nonexistent/dir".into())]).starts_with("--overlay-dir"));
 
         // No poudriere.d: a name has nothing to be read from.
-        let local = HostPaths { poudriere_d: Path::new("/nonexistent/poudriere.d"), ..host };
-        let e = resolve_host(&local, &Request { overlays: &[OverlaySpec::Name("ov".into())], ..Request::default() }, &stage)
-            .unwrap_err()
-            .to_string();
+        let local = HostPaths {
+            poudriere_d: Path::new("/nonexistent/poudriere.d"),
+            ..host
+        };
+        let e = resolve_host(
+            &local,
+            &Request {
+                overlays: &[OverlaySpec::Name("ov".into())],
+                ..Request::default()
+            },
+            &stage,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(e.starts_with("-O ov names a poudriere tree"), "{e}");
     }
 
@@ -934,10 +1150,26 @@ mod tests {
             fs::create_dir_all(dir.join(port)).unwrap();
             fs::write(dir.join(port).join("Makefile"), "").unwrap();
         }
-        let overlays =
-            [Overlay { name: Some("first".into()), path: a.clone() }, Overlay { name: None, path: b.clone() }];
-        assert_eq!(overlay_of(&overlays, "cat/x").map(Overlay::label).as_deref(), Some("first"));
-        assert_eq!(overlay_of(&overlays, "cat/y").map(Overlay::label), Some(b.display().to_string()));
+        let overlays = [
+            Overlay {
+                name: Some("first".into()),
+                path: a.clone(),
+            },
+            Overlay {
+                name: None,
+                path: b.clone(),
+            },
+        ];
+        assert_eq!(
+            overlay_of(&overlays, "cat/x")
+                .map(Overlay::label)
+                .as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            overlay_of(&overlays, "cat/y").map(Overlay::label),
+            Some(b.display().to_string())
+        );
         assert!(overlay_of(&overlays, "cat/z").is_none());
     }
 
@@ -946,7 +1178,10 @@ mod tests {
     #[test]
     fn framework_values_key_the_generation() {
         let v = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
-            pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+            pairs
+                .iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect()
         };
         assert_eq!(framework_hash("h", &[]), "h");
         let old = framework_hash("h", &v(&[("OSVERSION", "1500000")]));
@@ -960,14 +1195,24 @@ mod tests {
     #[test]
     fn identity_follows_the_build_and_keys_a_host_build() {
         assert_eq!(QueryEnv::Host.identity(), Identity::Invoker);
-        assert_eq!(QueryEnv::Jail { package_building: true }.identity(), Identity::Root);
+        assert_eq!(
+            QueryEnv::Jail {
+                package_building: true
+            }
+            .identity(),
+            Identity::Root
+        );
         assert_eq!(QueryEnv::Synth.identity(), Identity::Root);
 
         let tree = Path::new("/nonexistent/ports");
         let resolve = || probe_settings(QueryEnv::Synth, tree, tree, Path::new("/dev/null"));
         let hash = |s: Settings| s.conf_hash;
         let builder = hash(resolve());
-        assert_eq!(hash(key_invoker(resolve(), Some("alice"))), builder, "a builder runs as root");
+        assert_eq!(
+            hash(key_invoker(resolve(), Some("alice"))),
+            builder,
+            "a builder runs as root"
+        );
         let host = |user| {
             let mut s = resolve();
             s.env = QueryEnv::Host;
@@ -990,13 +1235,21 @@ mod tests {
         fs::create_dir_all(&db).unwrap();
         std::os::unix::fs::symlink(&db, tmp.path().join("link")).unwrap();
         let other = tmp.path().join("other");
-        let jail = QueryEnv::Jail { package_building: true };
+        let jail = QueryEnv::Jail {
+            package_building: true,
+        };
         let s = |p: &Path| p.display().to_string();
 
         // Local, no -o: the options dir is make's own PORT_DBDIR.
         assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &s(&db)), None);
-        assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &format!("{}/", s(&db))), None);
-        assert_eq!(port_dbdir_error(QueryEnv::Host, &db, &s(&tmp.path().join("link"))), None);
+        assert_eq!(
+            port_dbdir_error(QueryEnv::Host, &db, &format!("{}/", s(&db))),
+            None
+        );
+        assert_eq!(
+            port_dbdir_error(QueryEnv::Host, &db, &s(&tmp.path().join("link"))),
+            None
+        );
         // Local with -o elsewhere.
         assert_eq!(
             port_dbdir_error(QueryEnv::Host, &other, &s(&db)),
@@ -1010,7 +1263,10 @@ mod tests {
         // poudriere mounts the options dir at /var/db/ports, synth at /options.
         assert_eq!(port_dbdir_error(jail, &db, "/var/db/ports"), None);
         assert!(port_dbdir_error(jail, &db, "/var/db/myports").is_some());
-        assert!(port_dbdir_error(jail, &db, &s(&db)).is_some(), "the host path is not the jail's");
+        assert!(
+            port_dbdir_error(jail, &db, &s(&db)).is_some(),
+            "the host path is not the jail's"
+        );
         assert_eq!(port_dbdir_error(QueryEnv::Synth, &db, "/options"), None);
         assert!(port_dbdir_error(QueryEnv::Synth, &db, "/var/db/ports").is_some());
 
@@ -1030,8 +1286,14 @@ mod tests {
             options_place: place,
         };
         assert_eq!(settings(None).port_dbdir_error(), None);
-        assert_eq!(settings(Some(OptionsPlace::default())).port_dbdir_error(), None);
-        let set = OptionsPlace { port_dbdir: Some(s(&other)), options_file: None };
+        assert_eq!(
+            settings(Some(OptionsPlace::default())).port_dbdir_error(),
+            None
+        );
+        let set = OptionsPlace {
+            port_dbdir: Some(s(&other)),
+            options_file: None,
+        };
         assert!(settings(Some(set)).port_dbdir_error().is_some());
     }
 
@@ -1040,10 +1302,15 @@ mod tests {
     /// framework's own default moves nothing.
     #[test]
     fn relocated_options_follow_the_probe() {
-        let file = |f: &str| OptionsPlace { port_dbdir: None, options_file: Some(f.to_string()) };
+        let file = |f: &str| OptionsPlace {
+            port_dbdir: None,
+            options_file: Some(f.to_string()),
+        };
         assert_eq!(relocated_options(Some(&OptionsPlace::default())), None);
         assert_eq!(relocated_options(Some(&file(DEFAULT_OPTIONS_FILE))), None);
-        let moved = relocated_options(Some(&file("${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options")));
+        let moved = relocated_options(Some(&file(
+            "${PORT_DBDIR}/${OPTIONS_NAME}${FLAVOR:D-${FLAVOR}}/options",
+        )));
         assert_eq!(
             moved.as_deref(),
             Some(
@@ -1051,7 +1318,11 @@ mod tests {
                  optique cannot tell which options-dir entries make reads, so none is removed as vanished or unused"
             )
         );
-        assert!(relocated_options(None).unwrap().starts_with("make could not say whether make.conf sets OPTIONS_FILE: "));
+        assert!(
+            relocated_options(None)
+                .unwrap()
+                .starts_with("make could not say whether make.conf sets OPTIONS_FILE: ")
+        );
     }
 
     /// The probe reads make.conf outside any port: PORT_DBDIR expanded,
@@ -1062,13 +1333,21 @@ mod tests {
         let conf = tmp.path().join("make.conf");
         let probe = |text: &str| {
             fs::write(&conf, text).unwrap();
-            crate::query::makerunner::options_place(Identity::Invoker, Some(&conf), Path::new("/"), None)
+            crate::query::makerunner::options_place(
+                Identity::Invoker,
+                Some(&conf),
+                Path::new("/"),
+                None,
+            )
         };
         assert_eq!(probe(""), Some((String::new(), String::new())));
         let moved = "D=/var/db\nPORT_DBDIR=${D}/my\nOPTIONS_FILE=${PORT_DBDIR}/${OPTIONS_NAME}/x\n";
         assert_eq!(
             probe(moved),
-            Some(("/var/db/my".to_string(), "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string()))
+            Some((
+                "/var/db/my".to_string(),
+                "${PORT_DBDIR}/${OPTIONS_NAME}/x".to_string()
+            ))
         );
         assert_eq!(probe(".error broken\n"), None);
     }
@@ -1077,7 +1356,13 @@ mod tests {
     /// make.conf `conf`, the options place not probed yet.
     fn probe_settings(env: QueryEnv, portsdir: &Path, db: &Path, conf: &Path) -> Settings {
         let staged = (Some(conf.to_path_buf()), String::new(), Vec::new());
-        Settings::new(portsdir.to_path_buf(), db.to_path_buf(), staged, env, Vec::new())
+        Settings::new(
+            portsdir.to_path_buf(),
+            db.to_path_buf(),
+            staged,
+            env,
+            Vec::new(),
+        )
     }
 
     /// A make.conf `PORT_DBDIR?=` defers to the environment's PORT_DBDIR in
@@ -1103,7 +1388,10 @@ mod tests {
         // No PORT_DBDIR in the environment: make.conf's own applies.
         assert!(probe(QueryEnv::Host, None).port_dbdir_error().is_some());
         // A builder's queries never see optique's environment.
-        assert_eq!(dbdir(&probe(QueryEnv::Synth, env_value.clone())).as_deref(), Some("/from/make.conf"));
+        assert_eq!(
+            dbdir(&probe(QueryEnv::Synth, env_value.clone())).as_deref(),
+            Some("/from/make.conf")
+        );
 
         fs::write(&conf, "PORT_DBDIR=/from/make.conf\n").unwrap();
         let s = probe(QueryEnv::Host, env_value);
@@ -1117,14 +1405,25 @@ mod tests {
     #[test]
     fn options_place_sees_a_curdir_conditional_port_dbdir() {
         let tmp = tempfile::tempdir().unwrap();
-        let (conf, db, ports) = (tmp.path().join("make.conf"), tmp.path().join("db"), tmp.path().join("ports"));
+        let (conf, db, ports) = (
+            tmp.path().join("make.conf"),
+            tmp.path().join("db"),
+            tmp.path().join("ports"),
+        );
         fs::create_dir_all(&db).unwrap();
         fs::create_dir_all(ports.join("ports-mgmt/pkg")).unwrap();
         fs::write(ports.join("ports-mgmt/pkg/Makefile"), "PORTNAME=pkg\n").unwrap();
-        fs::write(&conf, ".if ${.CURDIR:M*/ports/*}\nPORT_DBDIR=/elsewhere\n.endif\n").unwrap();
+        fs::write(
+            &conf,
+            ".if ${.CURDIR:M*/ports/*}\nPORT_DBDIR=/elsewhere\n.endif\n",
+        )
+        .unwrap();
         assert_eq!(probe_dir(&ports), ports.join("ports-mgmt/pkg"));
         let s = with_options_place(probe_settings(QueryEnv::Host, &ports, &db, &conf), None);
-        assert_eq!(s.options_place.as_ref().unwrap().port_dbdir.as_deref(), Some("/elsewhere"));
+        assert_eq!(
+            s.options_place.as_ref().unwrap().port_dbdir.as_deref(),
+            Some("/elsewhere")
+        );
         assert!(s.port_dbdir_error().is_some());
 
         // A tree without ports-mgmt/pkg is asked from its top, one missing

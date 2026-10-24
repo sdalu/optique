@@ -88,7 +88,10 @@ impl MakeRunner {
                     for key in job_rx.iter() {
                         let ev = match run_query(&ctx, &key) {
                             Ok(info) => ScanEvent::PortDone(Box::new(info)),
-                            Err(e) => ScanEvent::PortError { key: key.clone(), msg: format!("{e:#}") },
+                            Err(e) => ScanEvent::PortError {
+                                key: key.clone(),
+                                msg: format!("{e:#}"),
+                            },
                         };
                         if ev_tx.send(ev).is_err() {
                             break;
@@ -97,7 +100,11 @@ impl MakeRunner {
                 })
             })
             .collect();
-        MakeRunner { job_tx, events: ev_rx, workers }
+        MakeRunner {
+            job_tx,
+            events: ev_rx,
+            workers,
+        }
     }
 
     pub fn submit(&self, key: PortKey) {
@@ -141,7 +148,10 @@ fn make_command(ctx: &QueryCtx, dir: &Path) -> Command {
     // Given rather than left to make, which would take a PORTSDIR from the
     // environment or /etc/make.conf over this tree; resolved as make's own
     // autodetection from the port's directory would (`:tA`).
-    let portsdir = ctx.portsdir.canonicalize().unwrap_or_else(|_| ctx.portsdir.clone());
+    let portsdir = ctx
+        .portsdir
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.portsdir.clone());
     let mut cmd = bare_make(ctx.identity, ctx.make_conf.as_deref());
     cmd.arg("-C")
         .arg(dir)
@@ -204,7 +214,15 @@ pub fn options_place(
     // -dV prints a variable as written; a name holding `$` is expanded
     // all the same.
     cmd.current_dir(dir)
-        .args(["-f", "/dev/null", "-dV", "-V", "${PORT_DBDIR}", "-V", "OPTIONS_FILE"])
+        .args([
+            "-f",
+            "/dev/null",
+            "-dV",
+            "-V",
+            "${PORT_DBDIR}",
+            "-V",
+            "OPTIONS_FILE",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -224,13 +242,17 @@ pub fn options_place(
 pub fn framework_values(ctx: &QueryCtx) -> Vec<(String, String)> {
     let mut cmd = make_command(ctx, &ctx.portsdir);
     cmd.args(["-f", "/dev/stdin", "optique-probe"]);
-    let Ok(mut child) = cmd.spawn() else { return Vec::new() };
+    let Ok(mut child) = cmd.spawn() else {
+        return Vec::new();
+    };
     let fed = child
         .stdin
         .take()
         .expect("stdin piped")
         .write_all(wrapper::FRAMEWORK_PROBE.as_bytes());
-    let Ok(out) = child.wait_with_output() else { return Vec::new() };
+    let Ok(out) = child.wait_with_output() else {
+        return Vec::new();
+    };
     if fed.is_err() || !out.status.success() {
         return Vec::new();
     }
@@ -249,7 +271,11 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     let Some(portdir) = ctx.locate(&key.origin) else {
         let missing = ctx.portsdir.join(&key.origin).join("Makefile");
         match ctx.overlays.len() {
-            0 => anyhow::bail!("no such port: {} ({} missing)", key.origin, missing.display()),
+            0 => anyhow::bail!(
+                "no such port: {} ({} missing)",
+                key.origin,
+                missing.display()
+            ),
             n => anyhow::bail!(
                 "no such port: {} (not in {}, nor in {n} overlay(s))",
                 key.origin,
@@ -261,7 +287,11 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     let mut cmd = make_command(ctx, &portdir);
     cmd.args(["-f", "/dev/stdin", "optique-config"])
         .arg(format!("PORTDIR={}", portdir.display()))
-        .args(ctx.framework.iter().map(|(var, value)| format!("{var}={value}")));
+        .args(
+            ctx.framework
+                .iter()
+                .map(|(var, value)| format!("{var}={value}")),
+        );
     if let Some(flavor) = &key.flavor {
         cmd.arg(format!("FLAVOR={flavor}"));
     }
@@ -294,9 +324,13 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     // file would have set. That file is named first, being the cause; the
     // tail would only show the dump.
     if !out.status.success() {
-        let cause = text.lines().find(|l| l.contains("Could not find") || l.contains("Cannot open"));
-        let why =
-            cause.map_or_else(|| parse::last_lines(&text, 5, " | "), |l| l.trim().to_string());
+        let cause = text
+            .lines()
+            .find(|l| l.contains("Could not find") || l.contains("Cannot open"));
+        let why = cause.map_or_else(
+            || parse::last_lines(&text, 5, " | "),
+            |l| l.trim().to_string(),
+        );
         anyhow::bail!("make failed ({}): {why}", out.status);
     }
     let mut info = parse::parse_dump(key, &text)?;
@@ -324,7 +358,10 @@ fn tree_files(made: &[String], portdir: &Path, portsdir: &Path) -> Vec<String> {
                     other => path.push(other),
                 }
             }
-            let rel = trees.iter().flatten().find_map(|tree| path.strip_prefix(tree).ok())?;
+            let rel = trees
+                .iter()
+                .flatten()
+                .find_map(|tree| path.strip_prefix(tree).ok())?;
             Some(rel.to_str()?.to_string())
         })
         .collect();
@@ -360,7 +397,9 @@ static ACTIVE_MAKES: std::sync::LazyLock<std::sync::Mutex<std::collections::Hash
 /// it poisoned, the quit path must still find every make, and a guard
 /// dropped while unwinding must not panic again and abort.
 fn active_makes() -> std::sync::MutexGuard<'static, std::collections::HashSet<u32>> {
-    ACTIVE_MAKES.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    ACTIVE_MAKES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Registration guard: the pid leaves the registry when the query is done,
@@ -399,7 +438,10 @@ pub fn kill_active_makes() -> usize {
     if pids.is_empty() {
         return 0;
     }
-    let targets: Vec<u32> = descendants(&pids, &process_table()).into_iter().chain(pids.iter().copied()).collect();
+    let targets: Vec<u32> = descendants(&pids, &process_table())
+        .into_iter()
+        .chain(pids.iter().copied())
+        .collect();
     for pid in targets {
         if let Ok(pid) = libc::pid_t::try_from(pid) {
             // SAFETY: kill(2) takes plain integers; a pid gone meanwhile is
@@ -425,7 +467,14 @@ fn process_table() -> Vec<(u32, u32)> {
         let mut len: libc::size_t = 0;
         // SAFETY: a size query, no buffer.
         let sized = unsafe {
-            libc::sysctl(mib.as_ptr(), 3, std::ptr::null_mut(), &mut len, std::ptr::null(), 0)
+            libc::sysctl(
+                mib.as_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut len,
+                std::ptr::null(),
+                0,
+            )
         };
         if sized != 0 {
             return Vec::new();
@@ -434,7 +483,14 @@ fn process_table() -> Vec<(u32, u32)> {
         let mut buf = vec![0u8; len];
         // SAFETY: `buf` holds `len` bytes, and sysctl writes at most that.
         let read = unsafe {
-            libc::sysctl(mib.as_ptr(), 3, buf.as_mut_ptr().cast(), &mut len, std::ptr::null(), 0)
+            libc::sysctl(
+                mib.as_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut len,
+                std::ptr::null(),
+                0,
+            )
         };
         if read != 0 {
             if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOMEM) {
@@ -455,7 +511,9 @@ fn process_table() -> Vec<(u32, u32)> {
         let mut out = Vec::new();
         let mut rest = &buf[..];
         while let Some(size) = field(rest, size_at) {
-            let Ok(size) = usize::try_from(size) else { break };
+            let Ok(size) = usize::try_from(size) else {
+                break;
+            };
             if size == 0 || size > rest.len() {
                 break;
             }
@@ -505,7 +563,8 @@ fn descendants(roots: &[u32], table: &[(u32, u32)]) -> Vec<u32> {
 #[cfg(test)]
 pub(crate) fn make_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -523,7 +582,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("ports/cat/slow");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Makefile"), format!("PKGNAME=slow-1.0\nX!= {command}\n")).unwrap();
+        std::fs::write(
+            dir.join("Makefile"),
+            format!("PKGNAME=slow-1.0\nX!= {command}\n"),
+        )
+        .unwrap();
         let ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
@@ -543,7 +606,10 @@ mod tests {
     #[test]
     fn a_query_sees_no_variable_of_the_environment_but_path_and_its_identity() {
         let _lock = make_test_lock();
-        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some(), "run under cargo test");
+        assert!(
+            std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+            "run under cargo test"
+        );
         assert!(std::env::var_os("PATH").is_some());
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("ports/cat/env");
@@ -575,12 +641,18 @@ mod tests {
         };
         let key = PortKey::parse("cat/env").unwrap();
         std::fs::write(dir.join("Makefile"), makefile("root", "/root")).unwrap();
-        assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "clean-path-same-same-1.0");
+        assert_eq!(
+            run_query(&ctx, &key).unwrap().pkgname,
+            "clean-path-same-same-1.0"
+        );
         // The invoker's own, whatever the test runs as, set or not.
         ctx.identity = Identity::Invoker;
         let env = |var| std::env::var(var).unwrap_or_default();
         std::fs::write(dir.join("Makefile"), makefile(&env("USER"), &env("HOME"))).unwrap();
-        assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "clean-path-same-same-1.0");
+        assert_eq!(
+            run_query(&ctx, &key).unwrap().pkgname,
+            "clean-path-same-same-1.0"
+        );
     }
 
     /// USER and HOME by identity: root's whatever optique runs as, or the
@@ -590,7 +662,10 @@ mod tests {
         let invoker = |var: &str| (var == "USER").then(|| "alice".into());
         let root = identity_env(Identity::Root, invoker);
         assert_eq!(root, [("USER", "root".into()), ("HOME", "/root".into())]);
-        assert_eq!(identity_env(Identity::Invoker, invoker), [("USER", "alice".into())]);
+        assert_eq!(
+            identity_env(Identity::Invoker, invoker),
+            [("USER", "alice".into())]
+        );
         assert!(identity_env(Identity::Invoker, |_| None).is_empty());
     }
 
@@ -615,8 +690,12 @@ mod tests {
         ]
         .into();
         let got = tree_files(&made, &ports.join("cat/slave"), &ports);
-        let want =
-            ["Mk/bsd.port.mk", "cat/master/Makefile", "cat/slave/Makefile", "cat/slave/Makefile.local"];
+        let want = [
+            "Mk/bsd.port.mk",
+            "cat/master/Makefile",
+            "cat/slave/Makefile",
+            "cat/slave/Makefile.local",
+        ];
         assert_eq!(got, want);
     }
 
@@ -648,7 +727,8 @@ mod tests {
              _EXPORTED_VARS+=PAIR ARCH EMPTY DOLLAR UNSET\n",
         );
         let got = framework_values(&ctx);
-        let want = [("ARCH", "amd64"), ("PAIR", "a b")].map(|(v, x)| (v.to_string(), x.to_string()));
+        let want =
+            [("ARCH", "amd64"), ("PAIR", "a b")].map(|(v, x)| (v.to_string(), x.to_string()));
         assert_eq!(got, want);
     }
 
@@ -683,7 +763,10 @@ mod tests {
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
             identity: Identity::Invoker,
-            framework: vec![("OSREL".into(), "15.1".into()), ("PAIR".into(), "a b".into())],
+            framework: vec![
+                ("OSREL".into(), "15.1".into()),
+                ("PAIR".into(), "a b".into()),
+            ],
         };
         let key = PortKey::parse("cat/fw").unwrap();
         assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "15.1-a_b-1.0");
@@ -707,14 +790,21 @@ mod tests {
         let me = std::process::id();
         // SAFETY: getppid(2) cannot fail.
         let parent = u32::try_from(unsafe { libc::getppid() }).unwrap();
-        assert!(table.contains(&(me, parent)), "{me}/{parent} not in {} records", table.len());
+        assert!(
+            table.contains(&(me, parent)),
+            "{me}/{parent} not in {} records",
+            table.len()
+        );
         assert!(table.len() > 10, "a real table: {} records", table.len());
         let child = Command::new("sleep").arg("5").spawn().unwrap();
         let mine = descendants(&[me], &process_table());
         let mut child = child;
         let _ = child.kill();
         let _ = child.wait();
-        assert!(mine.contains(&child.id()), "the child is found as a descendant");
+        assert!(
+            mine.contains(&child.id()),
+            "the child is found as a descendant"
+        );
     }
 
     /// What make runs can run more: a shell with two commands forks the first
@@ -740,11 +830,17 @@ mod tests {
                 .unwrap_or(false)
         };
         while !sleeping() {
-            assert!(std::time::Instant::now() < deadline, "the grandchild never started");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the grandchild never started"
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert_eq!(kill_active_makes(), 1);
-        let ev = runner.events.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
+        let ev = runner
+            .events
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("an event");
         assert!(matches!(ev, ScanEvent::PortError { .. }));
         runner.shutdown();
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -790,9 +886,18 @@ mod tests {
         assert_eq!(active_make_count(), 1);
         let started = std::time::Instant::now();
         assert_eq!(kill_active_makes(), 1);
-        let ev = runner.events.recv_timeout(std::time::Duration::from_secs(10)).expect("an event");
-        assert!(matches!(ev, ScanEvent::PortError { .. }), "a killed query fails");
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "not the 30 s sleep");
+        let ev = runner
+            .events
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("an event");
+        assert!(
+            matches!(ev, ScanEvent::PortError { .. }),
+            "a killed query fails"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "not the 30 s sleep"
+        );
         runner.shutdown();
         assert_eq!(active_make_count(), 0);
     }
@@ -817,18 +922,17 @@ mod tests {
 
         let before = run_query(&ctx, &key).expect("baseline query");
         assert!(!before.options.complete.is_empty());
-        let had_perl =
-            before.deps.iter().any(|d| d.target.origin.starts_with("lang/perl5"));
+        let had_perl = before
+            .deps
+            .iter()
+            .any(|d| d.target.origin.starts_with("lang/perl5"));
         assert!(!had_perl, "HTTP_PERL off by default");
 
         // Stage HTTP_PERL=on the way the TUI does.
         let mut enabled = before.options.effective.clone();
         enabled.insert("HTTP_PERL".to_string());
-        let content = crate::optionsfile::render(
-            &before.pkgname,
-            &before.options.complete,
-            &enabled,
-        );
+        let content =
+            crate::optionsfile::render(&before.pkgname, &before.options.complete, &enabled);
         let db = crate::staging::StagingDb::create(
             staging.path(),
             &crate::optfiles::OptionsFiles::new(staging.path()), // nothing to seed
@@ -837,11 +941,17 @@ mod tests {
         .unwrap();
         db.write(&before.options_name, content.as_bytes()).unwrap();
 
-        let ctx2 = QueryCtx { port_dbdir: db.path().to_path_buf(), ..ctx };
+        let ctx2 = QueryCtx {
+            port_dbdir: db.path().to_path_buf(),
+            ..ctx
+        };
         let after = run_query(&ctx2, &key).expect("staged query");
         assert!(after.options.effective.contains("HTTP_PERL"));
         assert!(
-            after.deps.iter().any(|d| d.target.origin.starts_with("lang/perl5")),
+            after
+                .deps
+                .iter()
+                .any(|d| d.target.origin.starts_with("lang/perl5")),
             "enabling HTTP_PERL must add the perl dependency"
         );
     }
@@ -873,7 +983,11 @@ mod tests {
         if std::env::var("USER").is_ok_and(|u| u != "root") {
             ctx.identity = Identity::Invoker;
             let user = run_query(&ctx, &key).unwrap();
-            assert!(!ccache(&user), "ccache disabled for a user: {:?}", user.deps);
+            assert!(
+                !ccache(&user),
+                "ccache disabled for a user: {:?}",
+                user.deps
+            );
         }
     }
 
@@ -907,7 +1021,10 @@ mod tests {
         // exists; a jail has none.
         let lame = run_query(&ctx, &PortKey::parse("audio/lame").unwrap()).unwrap();
         assert!(
-            !lame.deps.iter().any(|d| d.target.origin == "converters/libiconv"),
+            !lame
+                .deps
+                .iter()
+                .any(|d| d.target.origin == "converters/libiconv"),
             "the host's libiconv leaked into audio/lame: {:?}",
             lame.deps
         );
@@ -918,15 +1035,15 @@ mod tests {
         let before = run_query(&ctx, &key).unwrap();
         let mut enabled = before.options.effective.clone();
         enabled.insert("LDAP".to_string());
-        let content = crate::optionsfile::render(
-            &before.pkgname,
-            &before.options.complete,
-            &enabled,
-        );
+        let content =
+            crate::optionsfile::render(&before.pkgname, &before.options.complete, &enabled);
         db.write(&before.options_name, content.as_bytes()).unwrap();
         let after = run_query(&ctx, &key).unwrap();
         assert!(after.options.effective.contains("LDAP"));
-        assert_eq!(after.ignore, None, "the host's apr-util leaked into www/apache24");
+        assert_eq!(
+            after.ignore, None,
+            "the host's apr-util leaked into www/apache24"
+        );
     }
 
     /// synth reads ports in a chroot with an empty /usr/local, so an
@@ -944,12 +1061,18 @@ mod tests {
         let staging = tempfile::tempdir().unwrap();
         let localbase = staging.path().join("localbase");
         std::fs::create_dir_all(localbase.join("etc")).unwrap();
-        std::fs::write(localbase.join("etc/php.conf"), "PHP_VER=82\nPHP_EXT_DIR=20220829\n")
-            .unwrap();
+        std::fs::write(
+            localbase.join("etc/php.conf"),
+            "PHP_VER=82\nPHP_EXT_DIR=20220829\n",
+        )
+        .unwrap();
         let httpd = localbase.join("sbin/httpd");
         std::fs::create_dir_all(httpd.parent().unwrap()).unwrap();
-        std::fs::write(&httpd, "#!/bin/sh\necho 'Server MPM:     event'\necho '  threaded:     yes'\n")
-            .unwrap();
+        std::fs::write(
+            &httpd,
+            "#!/bin/sh\necho 'Server MPM:     event'\necho '  threaded:     yes'\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&httpd, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
         let profile = staging.path().join("Live-make.conf");
@@ -986,7 +1109,11 @@ mod tests {
         // A PHP application's extensions live in the plain extension
         // directory, not the -zts one a threaded httpd would pick.
         let pma = run_query(&ctx, &PortKey::parse("databases/phpmyadmin5").unwrap()).unwrap();
-        assert!(pma.deps.iter().any(|d| d.spec.contains("/lib/php/")), "{:?}", pma.deps);
+        assert!(
+            pma.deps.iter().any(|d| d.spec.contains("/lib/php/")),
+            "{:?}",
+            pma.deps
+        );
         assert!(
             !pma.deps.iter().any(|d| d.spec.contains("-zts/")),
             "the host's threaded httpd leaked into databases/phpmyadmin5: {:?}",

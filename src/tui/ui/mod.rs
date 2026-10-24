@@ -1,12 +1,12 @@
 //! Drawing the TUI: the two panes, the status bar and the popups over
 //! them, with the fitting helpers they share.
 
+use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{BorderType, Paragraph};
-use ratatui::Frame;
 
 use super::{App, Focus, OverlayKind};
 
@@ -15,10 +15,10 @@ mod help;
 mod list;
 mod popups;
 
+pub(crate) use help::HELP_TABS;
 #[cfg(test)]
 pub(crate) use list::fit_port_name;
-pub(crate) use help::HELP_TABS;
-pub(crate) use popups::{elide_paths, WHY_MAX_DEPENDENTS};
+pub(crate) use popups::{WHY_MAX_DEPENDENTS, elide_paths};
 
 use editor::draw_editor;
 use help::draw_help;
@@ -62,7 +62,13 @@ pub(crate) fn screen_rows(buffer: &Buffer) -> Vec<String> {
     let (w, h) = (buffer.area.width as usize, buffer.area.height as usize);
     let cells = buffer.content();
     (0..h)
-        .map(|y| (0..w).map(|x| cells[y * w + x].symbol()).collect::<String>().trim_end().to_string())
+        .map(|y| {
+            (0..w)
+                .map(|x| cells[y * w + x].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
         .collect()
 }
 
@@ -115,7 +121,9 @@ fn footer_parts(
         return (Some(format!("{head}{cut} ")), full_right);
     }
     let left = format!("{head}{} ", fit_end(label, width(&first) + 1));
-    let shortest = right(changes.map(|_| ""), usize::MAX).as_deref().map_or(0, width);
+    let shortest = right(changes.map(|_| ""), usize::MAX)
+        .as_deref()
+        .map_or(0, width);
     if least + gap + shortest + usize::from(changes.is_some()) <= room {
         return (Some(left), right(changes, room - least - gap));
     }
@@ -124,7 +132,9 @@ fn footer_parts(
 
 /// How a key is advertised on the pane's borders (`[h] notes`, `[v] full text`).
 fn key_hint() -> Style {
-    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Greedy word wrap; continuation lines are indented by `indent`. A word
@@ -135,7 +145,11 @@ fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
     let mut cur = String::new();
     let mut first = true;
     for word in text.split_whitespace() {
-        let lead = if first { text.len() - text.trim_start().len() } else { indent };
+        let lead = if first {
+            text.len() - text.trim_start().len()
+        } else {
+            indent
+        };
         if cur.is_empty() {
             cur = " ".repeat(lead);
             first = false;
@@ -172,9 +186,12 @@ fn mark_if_clipped(lines: &mut Vec<Line<'static>>, cap: usize, width: usize) -> 
         return false;
     }
     lines.truncate(cap);
-    let Some(last) = lines.last_mut() else { return true };
+    let Some(last) = lines.last_mut() else {
+        return true;
+    };
     shorten_for_marker(last, width);
-    last.spans.push(Span::styled("…", Style::default().fg(Color::DarkGray)));
+    last.spans
+        .push(Span::styled("…", Style::default().fg(Color::DarkGray)));
     true
 }
 
@@ -188,7 +205,8 @@ fn ellipsize(line: &mut Line<'static>, width: usize) -> bool {
     }
     shorten_for_marker(line, width);
     let style = line.spans.last().map_or_else(Style::default, |s| s.style);
-    line.spans.push(Span::styled("…", style.remove_modifier(Modifier::REVERSED)));
+    line.spans
+        .push(Span::styled("…", style.remove_modifier(Modifier::REVERSED)));
     true
 }
 
@@ -271,7 +289,9 @@ fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
     // The character the shortening stopped before, if it cut into a span.
     let mut next: Option<char> = None;
     while line.width() + 1 > width {
-        let Some(span) = line.spans.last_mut() else { break };
+        let Some(span) = line.spans.last_mut() else {
+            break;
+        };
         let mut text = span.content.to_string();
         let Some(c) = text.pop() else {
             line.spans.pop();
@@ -283,7 +303,9 @@ fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
     // A word cut in two goes whole, when the line has another before it.
     if next.is_some_and(|c| !c.is_whitespace()) {
         let n = line.spans.len();
-        let before = line.spans[..n.saturating_sub(1)].iter().any(|s| !s.content.trim().is_empty());
+        let before = line.spans[..n.saturating_sub(1)]
+            .iter()
+            .any(|s| !s.content.trim().is_empty());
         if let Some(span) = line.spans.last_mut() {
             let text = span.content.as_ref();
             if !text.ends_with(' ')
@@ -314,16 +336,31 @@ fn shorten_for_marker(line: &mut Line<'static>, width: usize) {
 /// The keys the status bar names, whatever the pane.
 const LEGEND_ALWAYS: [&str; 3] = ["?:help", "a:apply", "q:quit"];
 /// The keys it names after them while the port list has the focus.
-const LEGEND_LIST: [&str; 5] =
-    ["Enter:edit", "n/p:next-problem", "t:attention", "/:filter", "v:description"];
+const LEGEND_LIST: [&str; 5] = [
+    "Enter:edit",
+    "n/p:next-problem",
+    "t:attention",
+    "/:filter",
+    "v:description",
+];
 /// The keys it names after them while the option pane has the focus.
-const LEGEND_OPTIONS: [&str; 6] =
-    ["Space:toggle", "i:info", "d:defaults", "U:revert", "u:undo", "n/p:next-problem"];
+const LEGEND_OPTIONS: [&str; 6] = [
+    "Space:toggle",
+    "i:info",
+    "d:defaults",
+    "U:revert",
+    "u:undo",
+    "n/p:next-problem",
+];
 
 /// The legend for the focused pane in `width` columns, each token after a
 /// space, cut at a whole token with `…` standing for the rest.
 fn key_legend(focus: &Focus, width: usize) -> String {
-    let pane: &[&str] = if *focus == Focus::Editor { &LEGEND_OPTIONS } else { &LEGEND_LIST };
+    let pane: &[&str] = if *focus == Focus::Editor {
+        &LEGEND_OPTIONS
+    } else {
+        &LEGEND_LIST
+    };
     let tokens: Vec<&str> = LEGEND_ALWAYS.iter().chain(pane).copied().collect();
     let mut out = String::new();
     for (i, tok) in tokens.iter().enumerate() {
@@ -362,7 +399,11 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             counts[app.effective_status(info) as usize] += 1;
             edited += usize::from(app.session.edited(info));
         }
-        let mc = if app.warn_mc { format!(" {}≠", counts[3]) } else { String::new() };
+        let mc = if app.warn_mc {
+            format!(" {}≠", counts[3])
+        } else {
+            String::new()
+        };
         let mut spans = vec![Span::styled(
             format!(
                 " {}✗ {edited}* {}? {}!{mc} {}✓ ",
@@ -373,8 +414,11 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         // Only when the closure actually holds one: the count of visible ports
         // caught in it, and the key that narrows the list to them.
         if !app.loops.is_empty() {
-            let tangled =
-                app.visible.iter().filter(|key| app.loop_of(key).is_some()).count();
+            let tangled = app
+                .visible
+                .iter()
+                .filter(|key| app.loop_of(key).is_some())
+                .count();
             spans.push(Span::styled(
                 format!(" {tangled}∞ L:loops "),
                 Style::default().fg(Color::Red),
@@ -448,13 +492,17 @@ fn scroll_indicator(f: &mut Frame, area: Rect, rows: usize, scroll: usize, borde
         return;
     }
     buf[(x, top)].set_symbol("▲").set_style(border);
-    buf[(x, top + view as u16 - 1)].set_symbol("▼").set_style(border);
+    buf[(x, top + view as u16 - 1)]
+        .set_symbol("▼")
+        .set_style(border);
     let (track_top, track) = (top + 1, view - 2);
     let thumb = ((track * view + rows / 2) / rows).clamp(1, track);
     // At the top when scrolled to the top, at the bottom when to the bottom.
     let start = (scroll.min(max) * (track - thumb) + max / 2) / max;
     for y in start..start + thumb {
-        buf[(x, track_top + y as u16)].set_symbol("█").set_style(border);
+        buf[(x, track_top + y as u16)]
+            .set_symbol("█")
+            .set_style(border);
     }
 }
 

@@ -254,7 +254,10 @@ pub struct RemovalEntry {
 
 impl From<&crate::clean::Removal> for RemovalEntry {
     fn from(r: &crate::clean::Removal) -> Self {
-        RemovalEntry { options_name: r.options_name.clone(), reason: r.reason.clone() }
+        RemovalEntry {
+            options_name: r.options_name.clone(),
+            reason: r.reason.clone(),
+        }
     }
 }
 
@@ -330,7 +333,11 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
     // assignments. Its saved values are not known either (`saved` is None).
     // Under an OPTIONS_OVERRIDE make reads no file at all (bsd.options.mk:
     // 300-304), so the override is the reason, as `edit_refusal` has it.
-    let unmanaged = if opts.r#override.is_some() { None } else { sess.unmanaged(owner) };
+    let unmanaged = if opts.r#override.is_some() {
+        None
+    } else {
+        sess.unmanaged(owner)
+    };
     opts.complete
         .iter()
         .map(|name| {
@@ -348,7 +355,10 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                 (None, Some(u.by.to_string()))
             } else if let (Some(over), false) = (&opts.r#override, opts.is_forced(name)) {
                 (
-                    Some(MakeConfVerdict { value: over.contains(name), scope: "override" }),
+                    Some(MakeConfVerdict {
+                        value: over.contains(name),
+                        scope: "override",
+                    }),
                     Some("make.conf OPTIONS_OVERRIDE".to_string()),
                 )
             } else {
@@ -384,10 +394,10 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
             };
             let def = opts.defs.get(name);
             let group = opts.group_of(name).map(|g| GroupReport {
-                    name: g.name.clone(),
-                    kind: group_kind(g.kind),
-                    members: g.members.clone(),
-                });
+                name: g.name.clone(),
+                kind: group_kind(g.kind),
+                members: g.members.clone(),
+            });
             let adds_deps = dep_origins(def);
             OptionReport {
                 name: name.clone(),
@@ -424,8 +434,10 @@ fn group_kind(kind: GroupKind) -> &'static str {
 
 /// The origins the options' dependencies name, sorted, each once.
 fn dep_origins<'a>(defs: impl IntoIterator<Item = &'a OptionDef>) -> Vec<String> {
-    let mut out: Vec<String> =
-        defs.into_iter().flat_map(|d| d.deps.iter().flat_map(|(_, o)| o.iter().cloned())).collect();
+    let mut out: Vec<String> = defs
+        .into_iter()
+        .flat_map(|d| d.deps.iter().flat_map(|(_, o)| o.iter().cloned()))
+        .collect();
     out.sort();
     out.dedup();
     out
@@ -443,7 +455,11 @@ pub fn write_entry(w: &PendingWrite, info: Option<&PortInfo>) -> WriteEntry {
         .chain(c.adopted.iter().filter(|(_, on)| *on).map(|(o, _)| o))
         .collect();
     let new_deps = match info {
-        Some(info) => dep_origins(newly_on.into_iter().filter_map(|o| info.options.defs.get(o))),
+        Some(info) => dep_origins(
+            newly_on
+                .into_iter()
+                .filter_map(|o| info.options.defs.get(o)),
+        ),
         None => Vec::new(),
     };
     let new_file = w.old.is_none();
@@ -460,7 +476,10 @@ pub fn write_entry(w: &PendingWrite, info: Option<&PortInfo>) -> WriteEntry {
         } else {
             c.adopted
                 .iter()
-                .map(|(name, on)| AdoptedOption { name: name.clone(), on: *on })
+                .map(|(name, on)| AdoptedOption {
+                    name: name.clone(),
+                    on: *on,
+                })
                 .collect()
         },
         dropped: c.dropped.clone(),

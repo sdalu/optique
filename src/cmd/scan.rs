@@ -8,8 +8,7 @@ use crate::model::port::PortInfo;
 use crate::session::UiStatus;
 use crate::{cli, config, deps, optfiles, report, session, synth};
 
-use super::{run_scan, RootSet};
-
+use super::{RootSet, run_scan};
 
 /// Does a scan row make `scan` exit 1? A conflict always does (saved
 /// options violate the port's own constraints), and so does a file synth
@@ -120,15 +119,17 @@ impl Row<'_> {
     }
 }
 
-
 /// Scan and report. Returns how many things a human still has to look at —
 /// ports needing a decision (see `Row::needs_attention`), dependency loops
 /// that are not entirely blacklisted, and ports whose query failed — which
 /// main turns into exit code 1.
 pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<usize> {
     let scanned = run_scan(cli, rs)?;
-    let (queried, from_cache, elapsed) =
-        (scanned.result.queried, scanned.result.from_cache, scanned.elapsed);
+    let (queried, from_cache, elapsed) = (
+        scanned.result.queried,
+        scanned.result.from_cache,
+        scanned.elapsed,
+    );
     let flagged_moves = scanned.flagged_moves();
     let settings = scanned.settings;
     let dep_loops = scanned.dep_loops;
@@ -141,11 +142,24 @@ pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<
         &scanned.files,
         cli.minimal,
     );
-    let (rows, hidden) = build_rows(cli, &sess, &settings, &scanned.files, &dep_loops, args.options);
+    let (rows, hidden) = build_rows(
+        cli,
+        &sess,
+        &settings,
+        &scanned.files,
+        &dep_loops,
+        args.options,
+    );
 
-    let unconfigured = rows.iter().filter(|r| r.status == UiStatus::Unconfigured).count();
+    let unconfigured = rows
+        .iter()
+        .filter(|r| r.status == UiStatus::Unconfigured)
+        .count();
     let stale = rows.iter().filter(|r| r.status == UiStatus::Stale).count();
-    let conflict = rows.iter().filter(|r| r.status == UiStatus::Conflict).count();
+    let conflict = rows
+        .iter()
+        .filter(|r| r.status == UiStatus::Conflict)
+        .count();
     let ok = rows.iter().filter(|r| r.status_str() == "ok").count();
     let blacklisted = rows.iter().filter(|r| r.blacklisted).count();
     // A loop every member of which is blacklisted blocks nothing here:
@@ -166,12 +180,21 @@ pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<
     // the report is still valid, but for files the build never reads.
     let errors: Vec<report::ErrorEntry> = settings
         .port_dbdir_error()
-        .map(|message| report::ErrorEntry { subject: "make.conf".to_string(), message })
+        .map(|message| report::ErrorEntry {
+            subject: "make.conf".to_string(),
+            message,
+        })
         .into_iter()
-        .chain(scanned.result.errors.iter().map(|(key, msg)| report::ErrorEntry {
-            subject: key.to_string(),
-            message: msg.clone(),
-        }))
+        .chain(
+            scanned
+                .result
+                .errors
+                .iter()
+                .map(|(key, msg)| report::ErrorEntry {
+                    subject: key.to_string(),
+                    message: msg.clone(),
+                }),
+        )
         .collect();
     // The gate: ports owing a decision, loops a human has to untangle,
     // listed origins MOVED moves that were not followed (the list needs a
@@ -201,7 +224,11 @@ pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<
         let report = report::ScanReport {
             options_dir: settings.options_dir.display().to_string(),
             ports_tree: settings.portsdir.display().to_string(),
-            overlays: settings.overlays.iter().map(|o| o.path.display().to_string()).collect(),
+            overlays: settings
+                .overlays
+                .iter()
+                .map(|o| o.path.display().to_string())
+                .collect(),
             ports: rows.iter().map(port_report).collect(),
             loops: dep_loops
                 .iter()
@@ -264,7 +291,11 @@ fn build_rows<'a>(
             removed,
             undecided,
             state,
-            warnings: if cli.verbose { info.warnings.clone() } else { Vec::new() },
+            warnings: if cli.verbose {
+                info.warnings.clone()
+            } else {
+                Vec::new()
+            },
             blacklisted: settings.blacklist.matches(key, info.is_default_flavor()),
             in_loop: dep_loops.iter().any(|dl| dl.contains(key)),
             options_name: info.options_name.clone(),
@@ -276,9 +307,7 @@ fn build_rows<'a>(
             synth_refuses,
         });
     }
-    rows.sort_by(|a, b| {
-        (a.shown_ok(cli.minimal), &a.key).cmp(&(b.shown_ok(cli.minimal), &b.key))
-    });
+    rows.sort_by(|a, b| (a.shown_ok(cli.minimal), &a.key).cmp(&(b.shown_ok(cli.minimal), &b.key)));
     (rows, hidden)
 }
 
@@ -318,16 +347,19 @@ fn print_table(cli: &Cli, rows: &[Row]) -> Result<()> {
             (UiStatus::Unconfigured, true) => {
                 ("", "ok (no file: defaults + make.conf)".to_string())
             }
-            (UiStatus::Stale, true) => {
-                ("", format!("ok (stale file{}: defaults + make.conf decide)", row.stale_detail()))
-            }
+            (UiStatus::Stale, true) => (
+                "",
+                format!(
+                    "ok (stale file{}: defaults + make.conf decide)",
+                    row.stale_detail()
+                ),
+            ),
             (UiStatus::Unconfigured, false) => ("?", format!("UNCONFIGURED{decision}")),
-            (UiStatus::Stale, false) => {
-                ("!", format!("STALE{}{decision}", row.stale_detail()))
-            }
-            (UiStatus::Conflict, _) => {
-                ("✗", "CONFLICT (saved options violate constraints)".to_string())
-            }
+            (UiStatus::Stale, false) => ("!", format!("STALE{}{decision}", row.stale_detail())),
+            (UiStatus::Conflict, _) => (
+                "✗",
+                "CONFLICT (saved options violate constraints)".to_string(),
+            ),
             _ => ("", "ok".to_string()),
         };
         // Blacklisted ports keep their status but wear the ⊘ marker:
@@ -369,7 +401,12 @@ fn print_table(cli: &Cli, rows: &[Row]) -> Result<()> {
 
 /// The line scan ends with on stderr: the counts, the loops, the moves and
 /// the errors, what was queried and how long it took.
-fn summary_line(s: &report::ScanSummary, queried: usize, from_cache: usize, elapsed: f32) -> String {
+fn summary_line(
+    s: &report::ScanSummary,
+    queried: usize,
+    from_cache: usize,
+    elapsed: f32,
+) -> String {
     // Loops are counted, not re-listed: run_scan already named every one.
     let mut loop_note = match s.loops {
         0 => String::new(),
@@ -380,7 +417,10 @@ fn summary_line(s: &report::ScanSummary, queried: usize, from_cache: usize, elap
     }
     match s.errors {
         0 => {}
-        n => loop_note.push_str(&format!(" · {n} error{} (see above)", if n == 1 { "" } else { "s" })),
+        n => loop_note.push_str(&format!(
+            " · {n} error{} (see above)",
+            if n == 1 { "" } else { "s" }
+        )),
     }
     format!(
         "{} ports with options ({} unconfigured, {} stale, {} conflict; \
@@ -433,7 +473,10 @@ mod tests {
         assert_eq!(order, ["z/conflict", "a/nofile", "b/ok", "m/stale"]);
         // Without -m an unconfigured port is a problem, covered or not.
         assert!(!shown_ok(&UiStatus::Unconfigured, false, true));
-        assert!(!shown_ok(&UiStatus::Unconfigured, true, false), "-m, something open");
+        assert!(
+            !shown_ok(&UiStatus::Unconfigured, true, false),
+            "-m, something open"
+        );
         assert!(!shown_ok(&UiStatus::Conflict, true, true));
     }
 }

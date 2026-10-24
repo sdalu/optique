@@ -1,8 +1,7 @@
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::model::origin::{valid_origin, PortKey};
+use crate::model::origin::{PortKey, valid_origin};
 use crate::model::port::PortInfo;
 use crate::moved::{Moved, MovedResult};
 
@@ -55,7 +54,9 @@ pub fn classify_entries(
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(origin) = origin_from_options_name(&name) else {
-            warnings.push(format!("{name}: cannot map back to a port origin, left alone"));
+            warnings.push(format!(
+                "{name}: cannot map back to a port origin, left alone"
+            ));
             continue;
         };
         if exists(&origin) {
@@ -71,9 +72,15 @@ pub fn classify_entries(
                 format!("port moved to {new} (its options live under another name)")
             }
             MovedResult::Unchanged => "port no longer exists in the tree".to_string(),
-            gone => gone.gone_reason().expect("removed and cycle both have a reason"),
+            gone => gone
+                .gone_reason()
+                .expect("removed and cycle both have a reason"),
         };
-        removals.push(Removal { options_name: name, dir, reason });
+        removals.push(Removal {
+            options_name: name,
+            dir,
+            reason,
+        });
     }
     removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
     live.sort_by(|a, b| a.options_name.cmp(&b.options_name));
@@ -87,8 +94,9 @@ pub fn split_unused(
     live: Vec<LiveEntry>,
     used: &std::collections::HashSet<String>,
 ) -> (Vec<LiveEntry>, Vec<Removal>) {
-    let (mut kept, unused): (Vec<_>, Vec<_>) =
-        live.into_iter().partition(|e| used.contains(&e.options_name));
+    let (mut kept, unused): (Vec<_>, Vec<_>) = live
+        .into_iter()
+        .partition(|e| used.contains(&e.options_name));
     let mut removals: Vec<Removal> = unused
         .into_iter()
         .map(|e| Removal {
@@ -129,19 +137,35 @@ pub fn prune(
     if relocated {
         let mut held: Vec<String> = vanished.into_iter().map(|r| r.options_name).collect();
         if let Some(used) = used {
-            held.extend(live.iter().filter(|e| !used.contains(&e.options_name)).map(|e| e.options_name.clone()));
+            held.extend(
+                live.iter()
+                    .filter(|e| !used.contains(&e.options_name))
+                    .map(|e| e.options_name.clone()),
+            );
         }
         held.sort();
-        return Pruned { removals: Vec::new(), live, held };
+        return Pruned {
+            removals: Vec::new(),
+            live,
+            held,
+        };
     }
     match used {
         Some(used) => {
             let (live, unused) = split_unused(live, used);
             let mut removals = vanished;
             removals.extend(unused);
-            Pruned { removals, live, held: Vec::new() }
+            Pruned {
+                removals,
+                live,
+                held: Vec::new(),
+            }
         }
-        None => Pruned { removals: vanished, live, held: Vec::new() },
+        None => Pruned {
+            removals: vanished,
+            live,
+            held: Vec::new(),
+        },
     }
 }
 
@@ -151,7 +175,9 @@ pub fn prune(
 pub fn entry_of(options_dir: &Path, file: &str) -> Option<String> {
     let rest = Path::new(file).strip_prefix(options_dir).ok()?;
     let mut parts = rest.components();
-    let std::path::Component::Normal(first) = parts.next()? else { return None };
+    let std::path::Component::Normal(first) = parts.next()? else {
+        return None;
+    };
     parts.next()?;
     Some(first.to_string_lossy().into_owned())
 }
@@ -166,7 +192,9 @@ pub fn read_through_moved<'a>(
 ) -> std::collections::BTreeMap<String, String> {
     let mut out = std::collections::BTreeMap::new();
     for info in infos {
-        let Some(file) = &info.options.moved_file else { continue };
+        let Some(file) = &info.options.moved_file else {
+            continue;
+        };
         if let Some(entry) = entry_of(options_dir, file) {
             out.entry(entry).or_insert_with(|| info.key.to_string());
         }
@@ -200,11 +228,16 @@ pub fn keep_read(
 /// (bsd.options.mk:342), so the file is redundant only when it alone
 /// changes nothing. `+OPT` = the file turns it on, `-OPT` = the file turns
 /// it off. Empty means the file is redundant.
-pub fn redundancy_diff(info: &PortInfo, local: &crate::optionsfile::SavedOptionsFile) -> Vec<String> {
+pub fn redundancy_diff(
+    info: &PortInfo,
+    local: &crate::optionsfile::SavedOptionsFile,
+) -> Vec<String> {
     let nofile = crate::session::effective_with(info, Some(local));
     let effective = &info.options.effective;
-    let mut out: Vec<String> =
-        effective.difference(&nofile).map(|o| format!("+{o}")).collect();
+    let mut out: Vec<String> = effective
+        .difference(&nofile)
+        .map(|o| format!("+{o}"))
+        .collect();
     out.extend(nofile.difference(effective).map(|o| format!("-{o}")));
     out
 }
@@ -220,7 +253,10 @@ pub fn remove_entry(removal: &Removal) -> std::io::Result<Option<String>> {
     if let Err(e) = fs::File::open(&file)
         && e.kind() != std::io::ErrorKind::NotFound
     {
-        return Err(std::io::Error::new(e.kind(), format!("cannot read {}, left in place: {e}", file.display())));
+        return Err(std::io::Error::new(
+            e.kind(),
+            format!("cannot read {}, left in place: {e}", file.display()),
+        ));
     }
     fs::remove_file(&file)?;
     if removal.dir.join("options.local").is_file() {
@@ -265,7 +301,10 @@ mod tests {
 
     #[test]
     fn options_name_mapping() {
-        assert_eq!(origin_from_options_name("www_nginx").as_deref(), Some("www/nginx"));
+        assert_eq!(
+            origin_from_options_name("www_nginx").as_deref(),
+            Some("www/nginx")
+        );
         assert_eq!(
             origin_from_options_name("devel_py-Automat").as_deref(),
             Some("devel/py-Automat")
@@ -313,8 +352,14 @@ mod tests {
         let names: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
         assert_eq!(names, vec!["cat_gone", "cat_plain", "cat_renamed"]);
         assert!(removals[0].reason.contains("expired"));
-        assert_eq!(removals[1].reason, "port removed from tree", "no empty reason");
-        assert!(removals[2].reason.contains("cat/alive"), "rename target named");
+        assert_eq!(
+            removals[1].reason, "port removed from tree",
+            "no empty reason"
+        );
+        assert!(
+            removals[2].reason.contains("cat/alive"),
+            "rename target named"
+        );
         // "weird" has no '_' -> unmappable, warned about, untouched.
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("weird"));
@@ -348,8 +393,16 @@ mod tests {
         let kept_names: Vec<&str> = kept.iter().map(|e| e.options_name.as_str()).collect();
         assert_eq!(kept_names, vec!["www_nginx"]);
         let gone: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
-        assert_eq!(gone, vec!["cat_alive", "mail_dovecot"], "removals come back sorted");
-        assert!(removals.iter().all(|r| r.reason == "not needed by the given list"));
+        assert_eq!(
+            gone,
+            vec!["cat_alive", "mail_dovecot"],
+            "removals come back sorted"
+        );
+        assert!(
+            removals
+                .iter()
+                .all(|r| r.reason == "not needed by the given list")
+        );
         assert_eq!(removals[0].dir, PathBuf::from("/opt/cat_alive"));
     }
 
@@ -395,7 +448,8 @@ mod tests {
             effective: ["A".to_string()].into(),
             ..Default::default()
         };
-        let local = crate::optionsfile::SavedOptionsFile::default().with_local("OPTIONS_FILE_SET+=B\n");
+        let local =
+            crate::optionsfile::SavedOptionsFile::default().with_local("OPTIONS_FILE_SET+=B\n");
         assert_eq!(redundancy_diff(&info_with(o), &local), ["-B"]);
     }
 
@@ -411,8 +465,11 @@ mod tests {
         fs::write(&file, "OPTIONS_FILE_SET+=A\n").unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
         let unreadable = fs::read(&file).is_err(); // root reads anyway
-        let removal =
-            Removal { options_name: "cat_port".into(), dir: dir.clone(), reason: "test".into() };
+        let removal = Removal {
+            options_name: "cat_port".into(),
+            dir: dir.clone(),
+            reason: "test".into(),
+        };
         let result = remove_entry(&removal);
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).ok();
         if unreadable {
@@ -429,7 +486,11 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("options"), "x\n").unwrap();
         fs::write(dir.join("options.local"), "y\n").unwrap();
-        let r = Removal { options_name: "cat_port".into(), dir: dir.clone(), reason: String::new() };
+        let r = Removal {
+            options_name: "cat_port".into(),
+            dir: dir.clone(),
+            reason: String::new(),
+        };
         let note = remove_entry(&r).unwrap();
         assert!(note.is_some());
         assert!(!dir.join("options").exists());
@@ -438,13 +499,21 @@ mod tests {
         let dir2 = tmp.path().join("cat_other");
         fs::create_dir_all(&dir2).unwrap();
         fs::write(dir2.join("options"), "x\n").unwrap();
-        let r2 = Removal { options_name: "cat_other".into(), dir: dir2.clone(), reason: String::new() };
+        let r2 = Removal {
+            options_name: "cat_other".into(),
+            dir: dir2.clone(),
+            reason: String::new(),
+        };
         assert!(remove_entry(&r2).unwrap().is_none());
         assert!(!dir2.exists());
     }
 
     fn removal(name: &str) -> Removal {
-        Removal { options_name: name.into(), dir: PathBuf::from("/opt").join(name), reason: "gone".into() }
+        Removal {
+            options_name: name.into(),
+            dir: PathBuf::from("/opt").join(name),
+            reason: "gone".into(),
+        }
     }
 
     fn live_entry(name: &str, origin: &str) -> LiveEntry {
@@ -461,10 +530,16 @@ mod tests {
     #[test]
     fn prune_holds_everything_when_options_files_are_relocated() {
         let used: std::collections::HashSet<String> = ["misc_flav".to_string()].into();
-        let live = || vec![live_entry("misc_flav", "misc/flav"), live_entry("misc_cond", "misc/cond")];
+        let live = || {
+            vec![
+                live_entry("misc_flav", "misc/flav"),
+                live_entry("misc_cond", "misc/cond"),
+            ]
+        };
         let vanished = || vec![removal("misc_flav-nox"), removal("misc_gone")];
         let names = |v: &[Removal]| v.iter().map(|r| r.options_name.clone()).collect::<Vec<_>>();
-        let live_names = |v: &[LiveEntry]| v.iter().map(|e| e.options_name.clone()).collect::<Vec<_>>();
+        let live_names =
+            |v: &[LiveEntry]| v.iter().map(|e| e.options_name.clone()).collect::<Vec<_>>();
 
         let p = prune(vanished(), live(), None, false);
         assert_eq!(names(&p.removals), ["misc_flav-nox", "misc_gone"]);
@@ -472,7 +547,10 @@ mod tests {
         assert!(p.held.is_empty());
 
         let p = prune(vanished(), live(), Some(&used), false);
-        assert_eq!(names(&p.removals), ["misc_flav-nox", "misc_gone", "misc_cond"]);
+        assert_eq!(
+            names(&p.removals),
+            ["misc_flav-nox", "misc_gone", "misc_cond"]
+        );
         assert_eq!(live_names(&p.live), ["misc_flav"]);
 
         let p = prune(vanished(), live(), None, true);
@@ -482,7 +560,11 @@ mod tests {
 
         let p = prune(vanished(), live(), Some(&used), true);
         assert!(p.removals.is_empty());
-        assert_eq!(live_names(&p.live), ["misc_flav", "misc_cond"], "still judged as redundant or not");
+        assert_eq!(
+            live_names(&p.live),
+            ["misc_flav", "misc_cond"],
+            "still judged as redundant or not"
+        );
         assert_eq!(p.held, ["misc_cond", "misc_flav-nox", "misc_gone"]);
     }
 
@@ -491,15 +573,24 @@ mod tests {
     #[test]
     fn entries_read_through_a_moved_options_file_are_kept() {
         let dir = Path::new("/db");
-        assert_eq!(entry_of(dir, "/db/misc_flav-nox/options").as_deref(), Some("misc_flav-nox"));
-        assert_eq!(entry_of(dir, "/db//misc_flav-nox/sub/options").as_deref(), Some("misc_flav-nox"));
+        assert_eq!(
+            entry_of(dir, "/db/misc_flav-nox/options").as_deref(),
+            Some("misc_flav-nox")
+        );
+        assert_eq!(
+            entry_of(dir, "/db//misc_flav-nox/sub/options").as_deref(),
+            Some("misc_flav-nox")
+        );
         assert_eq!(entry_of(dir, "/db/options"), None);
         assert_eq!(entry_of(dir, "/elsewhere/misc_flav/options"), None);
         assert_eq!(entry_of(dir, "/db/../misc_flav/options"), None);
         assert_eq!(entry_of(dir, "/dbx/misc_flav/options"), None);
 
         let moved = |origin: &str, file: Option<&str>| PortInfo {
-            options: PortOptions { moved_file: file.map(str::to_string), ..PortOptions::default() },
+            options: PortOptions {
+                moved_file: file.map(str::to_string),
+                ..PortOptions::default()
+            },
             ..PortInfo::stub(origin)
         };
         let infos = [
@@ -509,15 +600,26 @@ mod tests {
             moved("misc/away", Some("/elsewhere/options")),
         ];
         let read = read_through_moved(dir, &infos);
-        assert_eq!(read.into_iter().collect::<Vec<_>>(), [("misc_flav-nox".to_string(), "misc/flav@nox".to_string())]);
+        assert_eq!(
+            read.into_iter().collect::<Vec<_>>(),
+            [("misc_flav-nox".to_string(), "misc/flav@nox".to_string())]
+        );
 
         let read = read_through_moved(dir, &infos);
         let mut removals = vec![removal("misc_flav-nox"), removal("misc_gone")];
         let notes = keep_read(&mut removals, &read);
-        assert_eq!(removals.iter().map(|r| r.options_name.as_str()).collect::<Vec<_>>(), ["misc_gone"]);
+        assert_eq!(
+            removals
+                .iter()
+                .map(|r| r.options_name.as_str())
+                .collect::<Vec<_>>(),
+            ["misc_gone"]
+        );
         assert_eq!(
             notes,
-            ["misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"]
+            [
+                "misc_flav-nox: make reads misc/flav@nox's options from it (make.conf OPTIONS_FILE); kept"
+            ]
         );
     }
 }

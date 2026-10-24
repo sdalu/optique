@@ -288,14 +288,17 @@ impl PortOptions {
 
     /// The group `opt` belongs to, if any.
     pub fn group_of(&self, opt: &str) -> Option<&OptionGroup> {
-        self.groups.iter().find(|g| g.members.iter().any(|m| m == opt))
+        self.groups
+            .iter()
+            .find(|g| g.members.iter().any(|m| m == opt))
     }
 
     /// The SINGLE or RADIO group `opt` belongs to, if any: the groups where
     /// turning one member on turns the others off.
     pub fn exclusive_group_of(&self, opt: &str) -> Option<&OptionGroup> {
         self.groups.iter().find(|g| {
-            matches!(g.kind, GroupKind::Single | GroupKind::Radio) && g.members.iter().any(|m| m == opt)
+            matches!(g.kind, GroupKind::Single | GroupKind::Radio)
+                && g.members.iter().any(|m| m == opt)
         })
     }
 
@@ -309,9 +312,14 @@ impl PortOptions {
     /// nobody chose. That is a defect optique does not follow: a SET word
     /// settles only the option it names.
     pub fn mc_mentions(&self, opt: &str) -> bool {
-        [(true, &self.mc_set), (false, &self.mc_unset), (true, &self.port_set), (false, &self.port_unset)]
-            .into_iter()
-            .any(|(adds, list)| layer_hits(adds, list, opt))
+        [
+            (true, &self.mc_set),
+            (false, &self.mc_unset),
+            (true, &self.port_set),
+            (false, &self.port_unset),
+        ]
+        .into_iter()
+        .any(|(adds, list)| layer_hits(adds, list, opt))
     }
 
     /// Whether any make.conf layer, FORCE knobs and WITH/WITHOUT included,
@@ -410,7 +418,11 @@ impl PortOptions {
 /// adds itself to PORT_OPTIONS word for word, an UNSET entry takes out
 /// every option it matches.
 fn layer_hits(adds: bool, list: &BTreeSet<String>, opt: &str) -> bool {
-    if adds { list.contains(opt) } else { unsets(list, opt) }
+    if adds {
+        list.contains(opt)
+    } else {
+        unsets(list, opt)
+    }
 }
 
 #[cfg(test)]
@@ -423,7 +435,8 @@ mod tests {
     #[test]
     fn str_match_is_bmakes() {
         let words = [
-            "A", "A2", "B", "C", "b", "x", "xy", "abc", "abcd", "ab*", "abx", "aXbYc", "a-b", "]x", "^", "ac",
+            "A", "A2", "B", "C", "b", "x", "xy", "abc", "abcd", "ab*", "abx", "aXbYc", "a-b", "]x",
+            "^", "ac",
         ];
         let cases: [(&str, &[&str]); 17] = [
             ("A*", &["A", "A2"]),
@@ -445,7 +458,11 @@ mod tests {
             ("A", &["A"]),
         ];
         for (pat, want) in cases {
-            let got: Vec<&str> = words.iter().copied().filter(|w| str_match(w, pat)).collect();
+            let got: Vec<&str> = words
+                .iter()
+                .copied()
+                .filter(|w| str_match(w, pat))
+                .collect();
             assert_eq!(got, want, "{pat}");
         }
         assert!(str_match("", "*") && str_match("", "") && !str_match("a", ""));
@@ -459,14 +476,20 @@ mod tests {
     fn unset_entries_are_patterns() {
         let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         let o = PortOptions {
-            complete: ["A", "A2", "B", "C"].iter().map(ToString::to_string).collect(),
+            complete: ["A", "A2", "B", "C"]
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             mc_unset: words(&["A*"]),
             port_set: words(&["C*"]),
             force_unset: words(&["[B]"]),
             with: words(&["A?"]),
             ..Default::default()
         };
-        let mentioned: Vec<bool> = ["A", "A2", "B", "C"].iter().map(|x| o.mc_mentions(x)).collect();
+        let mentioned: Vec<bool> = ["A", "A2", "B", "C"]
+            .iter()
+            .map(|x| o.mc_mentions(x))
+            .collect();
         assert_eq!(mentioned, [true, true, false, false]);
         assert!(o.mc_decides("B") && !o.mc_decides("C"));
         assert_eq!(o.mc_value("A2"), Some((false, McLayer::Global)));
@@ -481,7 +504,10 @@ mod tests {
     fn with_and_without_pin_after_force() {
         let words = |s: &[&str]| s.iter().map(ToString::to_string).collect::<BTreeSet<_>>();
         let o = PortOptions {
-            complete: ["A", "A2", "B", "C"].iter().map(ToString::to_string).collect(),
+            complete: ["A", "A2", "B", "C"]
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             force_unset: words(&["C"]),
             port_force_set: words(&["A"]),
             with: words(&["C"]),

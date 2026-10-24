@@ -1,9 +1,9 @@
 //! The help popup: its tabs, and the text of each.
 
+use ratatui::Frame;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 
 use super::popups::{fitting, wrapped_height};
 use super::{centered_rect, key_hint, scroll_indicator, wrap_text};
@@ -35,7 +35,10 @@ fn help_tab_bar(tab: usize, width: usize) -> Line<'static> {
     for (i, label) in shown.into_iter().enumerate() {
         spans.push(Span::raw(" "));
         spans.push(if i == tab {
-            Span::styled(label, Style::default().fg(Color::Black).bg(Color::LightBlue))
+            Span::styled(
+                label,
+                Style::default().fg(Color::Black).bg(Color::LightBlue),
+            )
         } else {
             Span::styled(label, Style::default().fg(Color::Gray))
         });
@@ -97,7 +100,9 @@ impl HelpPen {
     fn head(&self, t: &str) -> Vec<Line<'static>> {
         vec![Line::from(Span::styled(
             format!(" {t}"),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ))]
     }
 
@@ -121,28 +126,76 @@ fn help_lines(tab: usize, width: usize) -> Vec<Line<'static>> {
 fn help_markers(p: &HelpPen) -> Vec<Line<'static>> {
     [
         p.head("First column: the port's state"),
-        p.mark("✗", Color::Red, "conflict", "staged options violate PREVENTS or group rules"),
+        p.mark(
+            "✗",
+            Color::Red,
+            "conflict",
+            "staged options violate PREVENTS or group rules",
+        ),
         p.mark("?", Color::Yellow, "unconfigured", "no saved options file"),
-        p.mark("!", Color::LightRed, "stale", "option list changed since the file was written"),
-        p.mark("≠", Color::Magenta, "mc-conflict", "contradicts make.conf policy (w view)"),
-        p.mark("≈", Color::DarkGray, "mc-covered", "decided by make.conf, no attention (m view)"),
+        p.mark(
+            "!",
+            Color::LightRed,
+            "stale",
+            "option list changed since the file was written",
+        ),
+        p.mark(
+            "≠",
+            Color::Magenta,
+            "mc-conflict",
+            "contradicts make.conf policy (w view)",
+        ),
+        p.mark(
+            "≈",
+            Color::DarkGray,
+            "mc-covered",
+            "decided by make.conf, no attention (m view)",
+        ),
         p.mark("✓", Color::DarkGray, "", "ok"),
         p.blank(),
         p.head("Second column"),
-        p.mark("*", Color::Cyan, "edited", "staged changes not yet applied (?*)"),
+        p.mark(
+            "*",
+            Color::Cyan,
+            "edited",
+            "staged changes not yet applied (?*)",
+        ),
         p.blank(),
         p.head("Between the groups"),
         hang(
-            vec![Span::styled("  ── N ok ── ", Style::default().fg(Color::DarkGray))],
+            vec![Span::styled(
+                "  ── N ok ── ",
+                Style::default().fg(Color::DarkGray),
+            )],
             "parts the N ok ports (≈ ✓) from the rest",
             p.width,
         ),
         p.blank(),
         p.head("After the port name"),
-        p.mark("⚠", Color::Red, "", "port is BROKEN/IGNORE with the current options"),
-        p.mark("⊘", Color::DarkGray, "", "blacklisted for this jail/tree/set (never needs attention)"),
-        p.mark("∞", Color::Red, "", "caught in a dependency loop — r lists it, Enter jumps to any port"),
-        p.mark("+N", Color::Yellow, "", "N options added since its file was written (N in the pane), even when settled (≈)"),
+        p.mark(
+            "⚠",
+            Color::Red,
+            "",
+            "port is BROKEN/IGNORE with the current options",
+        ),
+        p.mark(
+            "⊘",
+            Color::DarkGray,
+            "",
+            "blacklisted for this jail/tree/set (never needs attention)",
+        ),
+        p.mark(
+            "∞",
+            Color::Red,
+            "",
+            "caught in a dependency loop — r lists it, Enter jumps to any port",
+        ),
+        p.mark(
+            "+N",
+            Color::Yellow,
+            "",
+            "N options added since its file was written (N in the pane), even when settled (≈)",
+        ),
         p.blank(),
         p.head("Port name color"),
         p.legend(
@@ -150,8 +203,16 @@ fn help_markers(p: &HelpPen) -> Vec<Line<'static>> {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             "will not build (BROKEN/IGNORE)",
         ),
-        p.legend("red name", Style::default().fg(Color::Red), "conflicting staged options"),
-        p.legend("dim name", Style::default().fg(Color::DarkGray), "blacklisted"),
+        p.legend(
+            "red name",
+            Style::default().fg(Color::Red),
+            "conflicting staged options",
+        ),
+        p.legend(
+            "dim name",
+            Style::default().fg(Color::DarkGray),
+            "blacklisted",
+        ),
     ]
     .into_iter()
     .flatten()
@@ -165,7 +226,12 @@ fn help_option_row(p: &HelpPen) -> Vec<Line<'static>> {
     lines.extend(p.head("A row, piece by piece"));
     lines.push(Line::from(vec![
         Span::styled("  ", Style::default()),
-        Span::styled("N", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "N",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" [x] ", Style::default()),
         Span::styled("OPENSSL     ", Style::default().fg(Color::Yellow)),
         Span::styled(" off", Style::default().fg(Color::DarkGray)),
@@ -174,8 +240,16 @@ fn help_option_row(p: &HelpPen) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::default());
     for (label, style, txt) in [
-        ("[x] / [ ]", Style::default(), "checkbox of a plain option (on / off)"),
-        ("(o) / ( )", Style::default(), "single/radio group member (pick one)"),
+        (
+            "[x] / [ ]",
+            Style::default(),
+            "checkbox of a plain option (on / off)",
+        ),
+        (
+            "(o) / ( )",
+            Style::default(),
+            "single/radio group member (pick one)",
+        ),
         (
             "yellow name",
             Style::default().fg(Color::Yellow),
@@ -188,7 +262,9 @@ fn help_option_row(p: &HelpPen) -> Vec<Line<'static>> {
         ),
         (
             "N",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
             "first column: option added since the file was written",
         ),
         (
@@ -230,54 +306,72 @@ fn help_option_row(p: &HelpPen) -> Vec<Line<'static>> {
 /// Option row, continued: the sections, titles and panels around the rows.
 fn help_around_rows(p: &HelpPen) -> Vec<Line<'static>> {
     [
-            p.blank(),
-            p.head("Trailing sections"),
-            p.legend(
-                "struck-through",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::CROSSED_OUT),
-                "obsolete option — dropped on apply",
-            ),
-            p.legend(
-                "not in flavor",
-                Style::default().fg(Color::DarkGray),
-                "managed via the default flavor's view of the shared file",
-            ),
-            p.blank(),
-            p.head("In the pane's title"),
-            p.legend(
-                "flavor*",
-                Style::default(),
-                "the flavor whose view owns the shared options file",
-            ),
-            p.legend("flavor‹", Style::default(), "the flavor shown in the pane"),
-            p.legend(
-                "flavor",
-                Style::default().add_modifier(Modifier::UNDERLINED),
-                "underlined: in the closure, f reaches it; plain: not held",
-            ),
-            p.legend("[h] notes", key_hint(), "the port ships notes (pkg-help) — h reads them"),
-            p.blank(),
-            p.head("On the pane's bottom border"),
-            p.legend("overlay: NAME", Style::default(), "the overlay the port is taken from"),
-            p.legend("+A -B", Style::default().fg(Color::Cyan), "staged changes, not yet applied"),
-            p.legend("3/12", Style::default().fg(Color::Cyan), "the cursor's option, while the pane has the focus"),
-            p.blank(),
-            p.head("Above the rows"),
-            p.legend(
-                "port panel",
-                Style::default().add_modifier(Modifier::BOLD),
-                "the port's comment and pkg-descr, in five lines; shown at start on a \
+        p.blank(),
+        p.head("Trailing sections"),
+        p.legend(
+            "struck-through",
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::CROSSED_OUT),
+            "obsolete option — dropped on apply",
+        ),
+        p.legend(
+            "not in flavor",
+            Style::default().fg(Color::DarkGray),
+            "managed via the default flavor's view of the shared file",
+        ),
+        p.blank(),
+        p.head("In the pane's title"),
+        p.legend(
+            "flavor*",
+            Style::default(),
+            "the flavor whose view owns the shared options file",
+        ),
+        p.legend("flavor‹", Style::default(), "the flavor shown in the pane"),
+        p.legend(
+            "flavor",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+            "underlined: in the closure, f reaches it; plain: not held",
+        ),
+        p.legend(
+            "[h] notes",
+            key_hint(),
+            "the port ships notes (pkg-help) — h reads them",
+        ),
+        p.blank(),
+        p.head("On the pane's bottom border"),
+        p.legend(
+            "overlay: NAME",
+            Style::default(),
+            "the overlay the port is taken from",
+        ),
+        p.legend(
+            "+A -B",
+            Style::default().fg(Color::Cyan),
+            "staged changes, not yet applied",
+        ),
+        p.legend(
+            "3/12",
+            Style::default().fg(Color::Cyan),
+            "the cursor's option, while the pane has the focus",
+        ),
+        p.blank(),
+        p.head("Above the rows"),
+        p.legend(
+            "port panel",
+            Style::default().add_modifier(Modifier::BOLD),
+            "the port's comment and pkg-descr, in five lines; shown at start on a \
                  terminal of 30 rows or more — V shows or hides it until you quit, v \
                  shows it all, from either pane",
-            ),
-            p.blank(),
-            p.head("Below the rows"),
-            p.legend(
-                "option panel",
-                Style::default().fg(Color::Gray),
-                "the description of the option under the cursor, in 1–2 lines — i on \
+        ),
+        p.blank(),
+        p.head("Below the rows"),
+        p.legend(
+            "option panel",
+            Style::default().fg(Color::Gray),
+            "the description of the option under the cursor, in 1–2 lines — i on \
                  it shows it all",
-            ),
+        ),
     ]
     .into_iter()
     .flatten()
@@ -315,8 +409,14 @@ fn help_views(p: &HelpPen) -> Vec<Line<'static>> {
         p.keyline("m", "make.conf-decided ports count as ok (≈)"),
         p.keyline("w", "flag make.conf contradictions (≠)"),
         p.keyline("L", "show only the ports caught in a dependency loop (∞)"),
-        p.keyline("/", "filter the port list · Enter or ↑/↓ keep it · Esc clears it"),
-        p.keyline("a", "apply: preview, then y writes · conflicts: Y anyway, s skips them"),
+        p.keyline(
+            "/",
+            "filter the port list · Enter or ↑/↓ keep it · Esc clears it",
+        ),
+        p.keyline(
+            "a",
+            "apply: preview, then y writes · conflicts: Y anyway, s skips them",
+        ),
         p.keyline("? F1", "this help"),
         p.keyline("Ctrl-L", "force a full screen repaint"),
         p.keyline("q Ctrl-C", "quit — offers keeping staged edits as a draft"),
@@ -341,23 +441,38 @@ pub(super) fn draw_help(f: &mut Frame, tab: usize, scroll: &mut u16) -> u16 {
     // Fitted like every popup's hint: never cut mid-word on a narrow box.
     let room = area.width.saturating_sub(2);
     let hint = if max_scroll > 0 {
-        fitting(room, &[
-            " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes ",
-            " 1-4/Tab switch · j/k scroll · other closes ",
-            " 1-4 · j/k · other closes ",
-        ])
+        fitting(
+            room,
+            &[
+                " 1-4/Tab/←→ switch · ↑/↓ scroll · other key closes ",
+                " 1-4/Tab switch · j/k scroll · other closes ",
+                " 1-4 · j/k · other closes ",
+            ],
+        )
     } else {
-        fitting(room, &[" 1-4/Tab/←→ switch · any other key closes ", " 1-4/Tab switch · other closes "])
+        fitting(
+            room,
+            &[
+                " 1-4/Tab/←→ switch · any other key closes ",
+                " 1-4/Tab switch · other closes ",
+            ],
+        )
     };
     let border = Style::default().fg(Color::LightBlue);
     // The tabs head the box, out of the scrolled text: they stay in view.
-    let p = Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((*scroll, 0)).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(help_tab_bar(tab, area.width.saturating_sub(2) as usize))
-            .title_bottom(Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray))))
-            .border_style(border),
-    );
+    let p = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((*scroll, 0))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(help_tab_bar(tab, area.width.saturating_sub(2) as usize))
+                .title_bottom(Line::from(Span::styled(
+                    hint,
+                    Style::default().fg(Color::DarkGray),
+                )))
+                .border_style(border),
+        );
     f.render_widget(p, area);
     scroll_indicator(f, area, rows, *scroll as usize, border);
     inner_height as u16

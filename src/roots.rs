@@ -43,7 +43,10 @@ pub fn expand(
             vec![bare()]
         } else if wants_all(key, default_all) {
             match flavors.get(&key.origin).filter(|f| !f.is_empty()) {
-                Some(fl) => fl.iter().map(|f| PortKey::new(key.origin.clone(), Some(f.clone()))).collect(),
+                Some(fl) => fl
+                    .iter()
+                    .map(|f| PortKey::new(key.origin.clone(), Some(f.clone())))
+                    .collect(),
                 None => vec![bare()],
             }
         } else {
@@ -113,12 +116,18 @@ pub struct Listed {
 impl Listed {
     /// A root naming the port itself.
     pub fn port(key: PortKey) -> Self {
-        Listed { key, subpackage: false }
+        Listed {
+            key,
+            subpackage: false,
+        }
     }
 
     /// A listed `origin[@flavor][~subpkg]` ([`PortKey::parse_listed`]).
     pub fn parse(spec: &str) -> Option<Self> {
-        Some(Listed { key: PortKey::parse_listed(spec)?, subpackage: spec.contains('~') })
+        Some(Listed {
+            key: PortKey::parse_listed(spec)?,
+            subpackage: spec.contains('~'),
+        })
     }
 }
 
@@ -205,12 +214,26 @@ pub fn apply_moved(
                 // named flavor is not known to be in the port's FLAVORS
                 // here (audio/kid3@qt5, retired): no defect is claimed.
                 let in_tree = exists(&key.origin)
-                    && matches!(key.flavor.as_deref(), None | Some(FLAVOR_ALL) | Some(FLAVOR_DEFAULT));
-                out.moves.push(ListedMove { listed: key.clone(), to, reason, followed, can_follow, in_tree });
+                    && matches!(
+                        key.flavor.as_deref(),
+                        None | Some(FLAVOR_ALL) | Some(FLAVOR_DEFAULT)
+                    );
+                out.moves.push(ListedMove {
+                    listed: key.clone(),
+                    to,
+                    reason,
+                    followed,
+                    can_follow,
+                    in_tree,
+                });
             }
-            MovedResult::FlavorClash { .. } if policy == MovedPolicy::Synth => out.roots.push(key.clone()),
+            MovedResult::FlavorClash { .. } if policy == MovedPolicy::Synth => {
+                out.roots.push(key.clone())
+            }
             gone => {
-                let reason = gone.gone_reason().expect("removed, cycle and clash all have a reason");
+                let reason = gone
+                    .gone_reason()
+                    .expect("removed, cycle and clash all have a reason");
                 out.errors.push((key.clone(), reason));
             }
         }
@@ -229,8 +252,11 @@ pub fn resolve(
     jobs: usize,
     cache: &mut Cache,
 ) -> Vec<PortKey> {
-    let origins: BTreeSet<String> =
-        roots.iter().filter(|k| wants_all(k, default_all)).map(|k| k.origin.clone()).collect();
+    let origins: BTreeSet<String> = roots
+        .iter()
+        .filter(|k| wants_all(k, default_all))
+        .map(|k| k.origin.clone())
+        .collect();
     let flavors = if origins.is_empty() {
         HashMap::new()
     } else {
@@ -254,20 +280,39 @@ mod tests {
     #[test]
     fn all_expands_to_every_flavor_in_order() {
         let flavors: HashMap<String, Vec<String>> = [
-            ("misc/flav".to_string(), vec!["full".into(), "nox".into(), "pgtk".into()]),
+            (
+                "misc/flav".to_string(),
+                vec!["full".into(), "nox".into(), "pgtk".into()],
+            ),
             ("misc/plain".to_string(), Vec::new()),
         ]
         .into();
         let got = expand(
-            &keys(&["misc/flav@all", "misc/flav@nox", "misc/plain@all", "misc/gone@all", "misc/x"]),
+            &keys(&[
+                "misc/flav@all",
+                "misc/flav@nox",
+                "misc/plain@all",
+                "misc/gone@all",
+                "misc/x",
+            ]),
             &flavors,
             false,
         );
         assert_eq!(
             got,
-            keys(&["misc/flav@full", "misc/flav@nox", "misc/flav@pgtk", "misc/plain", "misc/gone", "misc/x"])
+            keys(&[
+                "misc/flav@full",
+                "misc/flav@nox",
+                "misc/flav@pgtk",
+                "misc/plain",
+                "misc/gone",
+                "misc/x"
+            ])
         );
-        assert_eq!(expand(&keys(&["misc/flav@-", "misc/flav"]), &flavors, false), keys(&["misc/flav"]));
+        assert_eq!(
+            expand(&keys(&["misc/flav@-", "misc/flav"]), &flavors, false),
+            keys(&["misc/flav"])
+        );
     }
 
     /// Under FLAVOR_DEFAULT_ALL a bare origin listed is every flavor of its
@@ -275,16 +320,31 @@ mod tests {
     #[test]
     fn flavor_default_all_expands_bare_origins_only() {
         let flavors: HashMap<String, Vec<String>> = [
-            ("misc/flav".to_string(), vec!["full".into(), "nox".into(), "pgtk".into()]),
+            (
+                "misc/flav".to_string(),
+                vec!["full".into(), "nox".into(), "pgtk".into()],
+            ),
             ("misc/plain".to_string(), Vec::new()),
         ]
         .into();
         let every = keys(&["misc/flav@full", "misc/flav@nox", "misc/flav@pgtk"]);
         assert_eq!(expand(&keys(&["misc/flav"]), &flavors, true), every);
-        assert_eq!(expand(&keys(&["misc/flav"]), &flavors, false), keys(&["misc/flav"]));
-        assert_eq!(expand(&keys(&["misc/flav@-"]), &flavors, true), keys(&["misc/flav"]));
-        assert_eq!(expand(&keys(&["misc/flav@nox"]), &flavors, true), keys(&["misc/flav@nox"]));
-        assert_eq!(expand(&keys(&["misc/plain"]), &flavors, true), keys(&["misc/plain"]));
+        assert_eq!(
+            expand(&keys(&["misc/flav"]), &flavors, false),
+            keys(&["misc/flav"])
+        );
+        assert_eq!(
+            expand(&keys(&["misc/flav@-"]), &flavors, true),
+            keys(&["misc/flav"])
+        );
+        assert_eq!(
+            expand(&keys(&["misc/flav@nox"]), &flavors, true),
+            keys(&["misc/flav@nox"])
+        );
+        assert_eq!(
+            expand(&keys(&["misc/plain"]), &flavors, true),
+            keys(&["misc/plain"])
+        );
         // Only the bare origin has its FLAVORS queried.
         let queried: Vec<String> = keys(&["misc/flav", "misc/flav@-", "misc/x@nox"])
             .iter()
@@ -325,11 +385,27 @@ mod tests {
 
         let flagged = apply_moved(&roots, MovedPolicy::Poudriere, false, &moved, exists);
         assert!(flagged.roots.is_empty(), "{:?}", flagged.roots);
-        let moves: Vec<String> = flagged.moves.iter().map(|m| format!("{} {} {}", m.listed, m.to, m.followed)).collect();
-        assert_eq!(moves, ["cat/old@all cat/new@all false", "cat/old cat/new false"]);
+        let moves: Vec<String> = flagged
+            .moves
+            .iter()
+            .map(|m| format!("{} {} {}", m.listed, m.to, m.followed))
+            .collect();
+        assert_eq!(
+            moves,
+            ["cat/old@all cat/new@all false", "cat/old cat/new false"]
+        );
 
-        let default = apply_moved(&listing(&["cat/old@-"]), MovedPolicy::Poudriere, true, &moved, exists);
-        assert_eq!(resolve(&default.roots, false, &ctx, &files, 1, &mut cache), keys(&["cat/new"]));
+        let default = apply_moved(
+            &listing(&["cat/old@-"]),
+            MovedPolicy::Poudriere,
+            true,
+            &moved,
+            exists,
+        );
+        assert_eq!(
+            resolve(&default.roots, false, &ctx, &files, 1, &mut cache),
+            keys(&["cat/new"])
+        );
     }
 
     /// The listed origins through MOVED, build by build: poudriere moves
@@ -348,12 +424,22 @@ mod tests {
         );
         let tree = ["math/mumps", "math/mumps-edf", "cat/new", "editors/mg"];
         let exists = |o: &str| tree.contains(&o);
-        let listed = listing(&["math/mumps", "cat/old", "cat/gone", "cat/a", "editors/mg-static@dynamic", "x/y"]);
+        let listed = listing(&[
+            "math/mumps",
+            "cat/old",
+            "cat/gone",
+            "cat/a",
+            "editors/mg-static@dynamic",
+            "x/y",
+        ]);
         let run = |policy, follow| {
             let r = apply_moved(&listed, policy, follow, &moved, exists);
             let roots: Vec<String> = r.roots.iter().map(ToString::to_string).collect();
-            let moves: Vec<String> =
-                r.moves.iter().map(|m| format!("{}>{}{}", m.listed, m.to, if m.followed { "" } else { "?" })).collect();
+            let moves: Vec<String> = r
+                .moves
+                .iter()
+                .map(|m| format!("{}>{}{}", m.listed, m.to, if m.followed { "" } else { "?" }))
+                .collect();
             let errors: Vec<String> = r.errors.iter().map(|(k, _)| k.to_string()).collect();
             (roots, moves, errors)
         };
@@ -374,7 +460,11 @@ mod tests {
              the tree too, but poudriere's check_moved moves it all the same (an upstream defect): \
              fix the list, or --follow-moved to follow it"
         );
-        assert!(!r.moves[1].message().contains("defect"), "{}", r.moves[1].message());
+        assert!(
+            !r.moves[1].message().contains("defect"),
+            "{}",
+            r.moves[1].message()
+        );
 
         let (roots, moves, errs) = run(MovedPolicy::Local, false);
         assert_eq!(roots, ["math/mumps", "x/y"]);
@@ -393,7 +483,10 @@ mod tests {
             let only = &r.moves[..];
             assert_eq!(only.len(), 1, "{only:?}");
             assert!(!only[0].followed && !only[0].can_follow, "{only:?}");
-            assert_eq!(only[0].message(), "listed cat/old moved to cat/new (renamed): fix the list");
+            assert_eq!(
+                only[0].message(),
+                "listed cat/old moved to cat/new (renamed): fix the list"
+            );
         }
     }
 
@@ -409,7 +502,12 @@ mod tests {
         );
         let tree = ["audio/kid3", "math/mumps", "math/mumps-edf"];
         let exists = |o: &str| tree.contains(&o);
-        let listed = listing(&["audio/kid3@qt5", "math/mumps", "math/mumps@all", "math/mumps@-"]);
+        let listed = listing(&[
+            "audio/kid3@qt5",
+            "math/mumps",
+            "math/mumps@all",
+            "math/mumps@-",
+        ]);
         let r = apply_moved(&listed, MovedPolicy::Poudriere, false, &moved, exists);
         let defects: Vec<bool> = r.moves.iter().map(|m| m.in_tree).collect();
         assert_eq!(defects, [false, true, true, true]);
@@ -433,13 +531,30 @@ mod tests {
              cat/flav@fl|cat/other@fl|2026-01-01|flavor moved\n",
         );
         let exists = |o: &str| o == "cat/new" || o == "cat/other";
-        let listed = listing(&["cat/old~sub", "cat/old@fl~sub", "cat/flav@fl~sub", "cat/old"]);
+        let listed = listing(&[
+            "cat/old~sub",
+            "cat/old@fl~sub",
+            "cat/flav@fl~sub",
+            "cat/old",
+        ]);
         for policy in [MovedPolicy::Poudriere, MovedPolicy::Local] {
             let r = apply_moved(&listed, policy, true, &moved, exists);
             let roots: Vec<String> = r.roots.iter().map(ToString::to_string).collect();
-            assert_eq!(roots, ["cat/old", "cat/new@fl", "cat/flav@fl", "cat/new"], "{policy:?}");
-            let moves: Vec<String> = r.moves.iter().map(|m| format!("{}>{}", m.listed, m.to)).collect();
-            assert_eq!(moves, ["cat/old@fl>cat/new@fl", "cat/old>cat/new"], "{policy:?}");
+            assert_eq!(
+                roots,
+                ["cat/old", "cat/new@fl", "cat/flav@fl", "cat/new"],
+                "{policy:?}"
+            );
+            let moves: Vec<String> = r
+                .moves
+                .iter()
+                .map(|m| format!("{}>{}", m.listed, m.to))
+                .collect();
+            assert_eq!(
+                moves,
+                ["cat/old@fl>cat/new@fl", "cat/old>cat/new"],
+                "{policy:?}"
+            );
             assert!(r.errors.is_empty(), "{:?}", r.errors);
         }
     }

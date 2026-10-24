@@ -78,7 +78,12 @@ struct CacheEntry {
 impl Cache {
     /// A cache that never hits and never stores (--no-cache).
     pub fn disabled() -> Self {
-        Cache { map: HashMap::new(), file: None, enabled: false, note: None }
+        Cache {
+            map: HashMap::new(),
+            file: None,
+            enabled: false,
+            note: None,
+        }
     }
 
     /// The generation for a tree known by its key alone, which nothing is
@@ -108,12 +113,12 @@ impl Cache {
         };
         let mut note = None;
         let fresh = fs::metadata(&path).map_or(true, |m| m.len() == 0);
-        if fresh
-            && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path)
-        {
-            let mut text = serde_json::to_string(&Header { generation: here.clone() })
-                .map(|h| h + "\n")
-                .unwrap_or_default();
+        if fresh && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+            let mut text = serde_json::to_string(&Header {
+                generation: here.clone(),
+            })
+            .map(|h| h + "\n")
+            .unwrap_or_default();
             if let Some(carried) = carry_over(cache_dir, &generation, &here, &trees.portsdir) {
                 for line in &carried.lines {
                     text.push_str(line);
@@ -133,8 +138,17 @@ impl Cache {
                 }
             }
         }
-        let file = OpenOptions::new().create(true).append(true).open(&path).ok();
-        Cache { map, file, enabled: true, note }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
+        Cache {
+            map,
+            file,
+            enabled: true,
+            note,
+        }
     }
 
     /// What was carried over from an earlier generation, if anything was
@@ -186,8 +200,15 @@ impl Cache {
 /// pair: the path as make expanded it, so one under PORT_DBDIR names the
 /// directory the query saw. None when OPTIONS_FILE was not moved.
 fn moved_hashes(info: &PortInfo) -> Option<(String, String)> {
-    let file = info.options.moved_file.as_deref().filter(|f| !f.is_empty())?;
-    Some((file_hash(Path::new(file)), file_hash(Path::new(&format!("{file}.local")))))
+    let file = info
+        .options
+        .moved_file
+        .as_deref()
+        .filter(|f| !f.is_empty())?;
+    Some((
+        file_hash(Path::new(file)),
+        file_hash(Path::new(&format!("{file}.local"))),
+    ))
 }
 
 /// A file's hash as [`OptionsFiles::hash`] records one: its SHA-256,
@@ -227,7 +248,9 @@ pub fn tree_key(portsdir: &Path) -> String {
     let mtimes: Vec<String> = ["Mk/bsd.port.mk", "MOVED", "UPDATING"]
         .iter()
         .map(|file| {
-            fs::metadata(portsdir.join(file)).map_or(0, |m| mtime(&m).as_secs()).to_string()
+            fs::metadata(portsdir.join(file))
+                .map_or(0, |m| mtime(&m).as_secs())
+                .to_string()
         })
         .collect();
     format!("mtime-{}", mtimes.join("-"))
@@ -247,10 +270,17 @@ pub fn trees_key(portsdir: &Path, overlays: &[PathBuf]) -> String {
 pub fn trees(portsdir: &Path, overlays: &[PathBuf]) -> Trees {
     let main = tree_key(portsdir);
     let portsdir = fs::canonicalize(portsdir).unwrap_or_else(|_| portsdir.to_path_buf());
-    let overlays: String =
-        overlays.iter().map(|o| format!("\n{} {}", o.display(), overlay_key(o))).collect();
+    let overlays: String = overlays
+        .iter()
+        .map(|o| format!("\n{} {}", o.display(), overlay_key(o)))
+        .collect();
     let key = sha256_hex(format!("{main}\n{portsdir:?}{overlays}").as_bytes());
-    Trees { key, portsdir, commit: object_id(&main), overlays }
+    Trees {
+        key,
+        portsdir,
+        commit: object_id(&main),
+        overlays,
+    }
 }
 
 /// What [`carry_over`] found for a new generation.
@@ -282,13 +312,18 @@ fn carry_over(cache_dir: &Path, name: &str, here: &Generation, portsdir: &Path) 
         let text = fs::read_to_string(path).ok()?;
         let header: Header = serde_json::from_str(text.lines().next()?).ok()?;
         let g = header.generation;
-        let same = g.portsdir == here.portsdir && g.conf == here.conf && g.overlays == here.overlays;
+        let same =
+            g.portsdir == here.portsdir && g.conf == here.conf && g.overlays == here.overlays;
         let old = g.commit.filter(|old| same && old != new)?;
         Some((text, old))
     })?;
     let mut changes = git_changes(portsdir, &old, new)?;
     let changed = changes.len();
-    changes.extend(parse_time_readers(portsdir, &changes).into_iter().map(|mk| ('M', mk)));
+    changes.extend(
+        parse_time_readers(portsdir, &changes)
+            .into_iter()
+            .map(|mk| ('M', mk)),
+    );
     let invalidation = Invalidation::of(&changes);
     let from = short(&old);
     if let Some(path) = &invalidation.all {
@@ -323,7 +358,15 @@ fn git_changes(portsdir: &Path, old: &str, new: &str) -> Option<Vec<(char, Strin
     let out = std::process::Command::new("git")
         .args(["--no-pager", "-c", "safe.directory=*", "-C"])
         .arg(portsdir)
-        .args(["diff-tree", "-r", "-z", "--no-renames", "--name-status", old, new])
+        .args([
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-status",
+            old,
+            new,
+        ])
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_CONFIG_PARAMETERS")
@@ -395,7 +438,9 @@ fn parse_time_readers(portsdir: &Path, changes: &[(char, String)]) -> Vec<String
 /// Every `*.mk` under `dir`, relative to it, with its text.
 fn mk_files(dir: &Path) -> Vec<(String, String)> {
     fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -457,7 +502,10 @@ fn parse_commands(line: &str) -> Vec<String> {
     let mut rest = line;
     while let Some(at) = rest.find(":!") {
         let tail = &rest[at + 2..];
-        let end = tail.find("!}").or_else(|| tail.find("!:")).unwrap_or(tail.len());
+        let end = tail
+            .find("!}")
+            .or_else(|| tail.find("!:"))
+            .unwrap_or(tail.len());
         out.push(tail[..end].to_string());
         rest = &tail[end..];
     }
@@ -574,7 +622,9 @@ impl Invalidation {
             if self.files.contains(file) {
                 return false;
             }
-            let owned = file.strip_suffix("/Makefile").filter(|d| d.matches('/').count() == 1);
+            let owned = file
+                .strip_suffix("/Makefile")
+                .filter(|d| d.matches('/').count() == 1);
             let Some(dir) = owned else { return true };
             let category = dir.split('/').next().unwrap_or_default();
             !self.dirs.contains(dir) && !self.categories.contains(category)
@@ -590,7 +640,9 @@ impl Invalidation {
 /// touches the files too.
 fn overlay_key(overlay: &Path) -> String {
     fn walk(dir: &Path, depth: usize, count: &mut u64, newest: &mut u128) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             if entry.file_name() == ".git" {
                 continue;
@@ -598,7 +650,9 @@ fn overlay_key(overlay: &Path) -> String {
             // Through a symlink, as the lookup goes: a symlinked port is
             // queried from its target, so its target's files are its key.
             // The depth limit stops a symlink loop.
-            let Ok(meta) = fs::metadata(entry.path()) else { continue };
+            let Ok(meta) = fs::metadata(entry.path()) else {
+                continue;
+            };
             *count += 1;
             *newest = (*newest).max(mtime(&meta).as_nanos());
             if meta.is_dir() && depth > 1 {
@@ -635,7 +689,9 @@ fn git_head(portsdir: &Path) -> Option<String> {
         .ok()
         .map(|c| resolve_relative(&gitdir, c.trim()));
     for dir in [Some(&gitdir), common.as_ref()].into_iter().flatten() {
-        if let Some(id) = fs::read_to_string(dir.join(refname)).ok().and_then(|t| object_id(t.trim()))
+        if let Some(id) = fs::read_to_string(dir.join(refname))
+            .ok()
+            .and_then(|t| object_id(t.trim()))
         {
             return Some(id);
         }
@@ -655,7 +711,10 @@ fn resolve_gitdir(portsdir: &Path) -> Option<PathBuf> {
         return Some(dot);
     }
     let text = fs::read_to_string(&dot).ok()?;
-    let path = text.lines().find_map(|l| l.trim().strip_prefix("gitdir:"))?.trim();
+    let path = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("gitdir:"))?
+        .trim();
     (!path.is_empty()).then(|| resolve_relative(portsdir, path))
 }
 
@@ -677,7 +736,9 @@ fn packed_ref(gitdir: &Path, refname: &str) -> Option<String> {
         if line.starts_with('#') || line.starts_with('^') {
             continue;
         }
-        let Some((id, name)) = line.split_once(' ') else { continue };
+        let Some((id, name)) = line.split_once(' ') else {
+            continue;
+        };
         if name.trim() == refname {
             return object_id(id);
         }
@@ -747,7 +808,9 @@ const SCHEMA: u32 = 18;
 
 /// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
     let prefix = format!("v{SCHEMA}-");
     let mut others: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for e in entries.flatten() {

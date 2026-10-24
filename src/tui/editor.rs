@@ -44,8 +44,11 @@ impl App {
             }
         }
         for (gi, g) in opts.groups.iter().enumerate() {
-            let members: Vec<&String> =
-                g.members.iter().filter(|m| opts.complete.contains(*m)).collect();
+            let members: Vec<&String> = g
+                .members
+                .iter()
+                .filter(|m| opts.complete.contains(*m))
+                .collect();
             if members.is_empty() {
                 continue;
             }
@@ -101,7 +104,8 @@ impl App {
     /// its first option. Never on a header.
     pub(super) fn editor_select_first(&mut self) {
         let row_of = |rows: &[EditorRow], pick: &dyn Fn(&str) -> bool| {
-            rows.iter().position(|r| matches!(r, EditorRow::Option(o) if pick(o)))
+            rows.iter()
+                .position(|r| matches!(r, EditorRow::Option(o) if pick(o)))
         };
         let first = row_of(&self.editor_rows, &|_| true);
         let attention = self.selected_key().and_then(|key| {
@@ -117,7 +121,9 @@ impl App {
                     .stale_delta(info)
                     .is_some_and(|(added, removed)| !added.is_empty() || !removed.is_empty());
                 let saved = self.session.state(info)?.saved.as_ref()?;
-                stale.then(|| row_of(&self.editor_rows, &|o| !saved.decides(o))).flatten()
+                stale
+                    .then(|| row_of(&self.editor_rows, &|o| !saved.decides(o)))
+                    .flatten()
             })
         });
         self.editor_idx = attention.or(first).unwrap_or(0);
@@ -170,7 +176,9 @@ impl App {
     }
 
     pub(super) fn toggle_current(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         let Some(EditorRow::Option(opt)) = self.editor_rows.get(self.editor_idx) else {
             return;
         };
@@ -178,7 +186,10 @@ impl App {
         // Warn when enabling an option flagged broken/ignored.
         let warn = {
             let info = &self.session.ports[&key];
-            let turning_on = self.session.state(info).is_some_and(|s| !s.staged.contains(&opt));
+            let turning_on = self
+                .session
+                .state(info)
+                .is_some_and(|s| !s.staged.contains(&opt));
             let def = info.options.defs.get(&opt).filter(|_| turning_on);
             def.and_then(|d| match (&d.broken, &d.ignore) {
                 (Some(m), _) => Some(format!("warning: {opt} marks this port BROKEN: {m}")),
@@ -207,7 +218,9 @@ impl App {
     /// Move the selection to the next flavor of the selected port's origin
     /// present in the closure, wrapping around in sorted order.
     pub(super) fn jump_flavor(&mut self) {
-        let Some(key) = self.selected_key() else { return };
+        let Some(key) = self.selected_key() else {
+            return;
+        };
         let siblings = self.session.siblings(&key);
         if siblings.len() < 2 {
             let msg = format!("no other flavors of {} in the closure", key.origin);
@@ -227,7 +240,9 @@ impl App {
                 // Same option on the other flavor when it has it; else the
                 // pane lands as on entering it.
                 let same = option.and_then(|o| {
-                    self.editor_rows.iter().position(|r| matches!(r, EditorRow::Option(n) if *n == o))
+                    self.editor_rows
+                        .iter()
+                        .position(|r| matches!(r, EditorRow::Option(n) if *n == o))
                 });
                 if let Some(i) = same {
                     self.editor_idx = i;

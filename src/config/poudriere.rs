@@ -5,13 +5,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::model::origin::PortKey;
 
 use super::{
-    checked_portsdir, is_ports_tree, overlay_lines, stage_make_conf, HostPaths, Overlay, QueryEnv, Request,
-    Settings, StagedConf,
+    HostPaths, Overlay, QueryEnv, Request, Settings, StagedConf, checked_portsdir, is_ports_tree,
+    overlay_lines, stage_make_conf,
 };
 
 /// What poudriere(8) writes at the top of every jail's make.conf, ahead of
@@ -67,7 +67,12 @@ impl Blacklist {
     /// production call site now knows whether -j's jail is emulated, so
     /// this convenience is a test-only shorthand for the common case.
     #[cfg(test)]
-    pub(crate) fn load(poudriere_d: &Path, jail: Option<&str>, tree: &str, set: Option<&str>) -> Self {
+    pub(crate) fn load(
+        poudriere_d: &Path,
+        jail: Option<&str>,
+        tree: &str,
+        set: Option<&str>,
+    ) -> Self {
         Self::load_emulating(poudriere_d, jail, tree, set, false)
     }
 
@@ -86,13 +91,16 @@ impl Blacklist {
         let mut bl = Blacklist::default();
         for name in blacklist_layers(jail, tree, set, emulating) {
             let path = poudriere_d.join(&name);
-            let Ok(text) = fs::read_to_string(&path) else { continue };
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
             for line in text.lines() {
                 let entry = match line.split_once('#') {
                     Some((before, _)) => before,
                     None => line,
                 };
-                bl.patterns.extend(entry.split_whitespace().map(str::to_string));
+                bl.patterns
+                    .extend(entry.split_whitespace().map(str::to_string));
             }
             bl.sources.push(path);
         }
@@ -129,7 +137,11 @@ impl Blacklist {
 /// named it; `blacklist_layers` and `make_conf_layers` always have one, so
 /// they pass `Some`.
 fn layer_stems(jail: Option<&str>, tree: Option<&str>, set: Option<&str>) -> Vec<String> {
-    let mut v: Vec<String> = [set, tree, jail].into_iter().flatten().map(str::to_string).collect();
+    let mut v: Vec<String> = [set, tree, jail]
+        .into_iter()
+        .flatten()
+        .map(str::to_string)
+        .collect();
     if let (Some(t), Some(s)) = (tree, set) {
         v.push(format!("{t}-{s}"));
     }
@@ -151,9 +163,18 @@ fn layer_stems(jail: Option<&str>, tree: Option<&str>, set: Option<&str>) -> Vec
 ///   blacklist, <set>-blacklist, <tree>-blacklist, <jail>-blacklist,
 ///   <tree>-<set>-blacklist, <jail>-<tree>-blacklist, <jail>-<set>-blacklist,
 ///   <jail>-<tree>-<set>-blacklist, [qemu-blacklist, only when `emulating`]
-fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>, emulating: bool) -> Vec<String> {
+fn blacklist_layers(
+    jail: Option<&str>,
+    tree: &str,
+    set: Option<&str>,
+    emulating: bool,
+) -> Vec<String> {
     let mut v = vec!["blacklist".to_string()];
-    v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-blacklist")));
+    v.extend(
+        layer_stems(jail, Some(tree), set)
+            .into_iter()
+            .map(|s| format!("{s}-blacklist")),
+    );
     if emulating {
         v.push("qemu-blacklist".to_string());
     }
@@ -167,7 +188,9 @@ fn blacklist_layers(jail: Option<&str>, tree: &str, set: Option<&str>, emulating
 /// asking for a directory; optique asks it of both, rather than read a
 /// poudriere.d that cannot be there as a missing one.
 pub(super) fn poudriere_etc(value: Option<std::ffi::OsString>) -> Result<Option<PathBuf>> {
-    let Some(value) = value.filter(|v| !v.is_empty()) else { return Ok(None) };
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return Ok(None);
+    };
     let etc = std::path::absolute(&value)
         .with_context(|| format!("resolving POUDRIERE_ETC {}", Path::new(&value).display()))?;
     if !etc.is_dir() {
@@ -186,7 +209,10 @@ pub(super) fn poudriere_etc_note(etc: &Path, poudriere: bool) -> String {
             etc.display()
         )
     } else {
-        format!("POUDRIERE_ETC {} has no poudriere.d: a local build", etc.display())
+        format!(
+            "POUDRIERE_ETC {} has no poudriere.d: a local build",
+            etc.display()
+        )
     }
 }
 
@@ -215,7 +241,11 @@ pub(super) fn host_arch() -> String {
 /// DragonFly.
 pub(super) fn supported_archs() -> String {
     let s = run_capture("sysctl", &["-n", "kern.supported_archs"]);
-    if s.is_empty() { run_capture("uname", &["-m"]) } else { s }
+    if s.is_empty() {
+        run_capture("uname", &["-m"])
+    } else {
+        s
+    }
 }
 
 pub(super) fn resolve(
@@ -238,9 +268,13 @@ pub(super) fn resolve(
     };
 
     let off = no_package_building(host.poudriere_conf, poudriere_d, jail, tree, set);
-    let env = QueryEnv::Jail { package_building: !off };
+    let env = QueryEnv::Jail {
+        package_building: !off,
+    };
     let mut notes = Vec::new();
-    let jail_lines = jail.map_or_else(String::new, |j| jail_system(poudriere_d, j, host, &mut notes));
+    let jail_lines = jail.map_or_else(String::new, |j| {
+        jail_system(poudriere_d, j, host, &mut notes)
+    });
     let ccache = ccache_dir(host.poudriere_conf, poudriere_d, jail, tree, set)
         .is_some_and(|dir| Path::new(&dir).is_dir());
     let staged = layer_make_conf(
@@ -260,7 +294,9 @@ pub(super) fn resolve(
 
     let default_all = flavor_default_all(host.poudriere_conf, poudriere_d, jail, tree, set);
     if default_all {
-        notes.push("FLAVOR_DEFAULT_ALL=yes: a bare origin listed stands for every flavor".to_string());
+        notes.push(
+            "FLAVOR_DEFAULT_ALL=yes: a bare origin listed stands for every flavor".to_string(),
+        );
     }
 
     Ok(Settings {
@@ -283,9 +319,18 @@ pub(super) fn resolve(
 /// OSVERSION is derived from the version when the jail's param.h cannot be
 /// read. A jail whose arch or version poudriere.d does not hold changes
 /// nothing: `notes` says why, for the banner.
-fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec<String>) -> String {
+fn jail_system(
+    poudriere_d: &Path,
+    name: &str,
+    host: &HostPaths,
+    notes: &mut Vec<String>,
+) -> String {
     let dir = poudriere_d.join("jails").join(name);
-    let read = |file: &str| fs::read_to_string(dir.join(file)).ok().map(|s| s.trim().to_string());
+    let read = |file: &str| {
+        fs::read_to_string(dir.join(file))
+            .ok()
+            .map(|s| s.trim().to_string())
+    };
     let (Some(arch), Some(version)) = (read("arch"), read("version")) else {
         notes.push(format!(
             "jail {name}: no arch or version in {}; queries see this host's system",
@@ -294,7 +339,9 @@ fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec
         return String::new();
     };
     // `${version% *}`: a version may carry its osversion after a space.
-    let release = version.rsplit_once(' ').map_or(version.as_str(), |(r, _)| r);
+    let release = version
+        .rsplit_once(' ')
+        .map_or(version.as_str(), |(r, _)| r);
     // bsd.port.mk's `${_OSRELEASE:C/-.*//}`.
     let osrel = release.split_once('-').map_or(release, |(r, _)| r);
     let derived = || {
@@ -311,8 +358,11 @@ fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec
                 ));
                 return String::new();
             };
-            let from = param_h.map_or_else(|| "no mnt".to_string(), |p| format!("no {}", p.display()));
-            notes.push(format!("jail {name}: OSVERSION {v} derived from its version {version} ({from})"));
+            let from =
+                param_h.map_or_else(|| "no mnt".to_string(), |p| format!("no {}", p.display()));
+            notes.push(format!(
+                "jail {name}: OSVERSION {v} derived from its version {version} ({from})"
+            ));
             v.to_string()
         }
     };
@@ -325,7 +375,9 @@ fn jail_system(poudriere_d: &Path, name: &str, host: &HostPaths, notes: &mut Vec
             "MACHINE={machine}\nMACHINE_ARCH={jail_machine_arch}\nARCH=${{MACHINE_ARCH}}\n"
         ));
     }
-    out.push_str(&format!("_OSRELEASE={release}\nOSREL={osrel}\nOSVERSION={osversion}\n"));
+    out.push_str(&format!(
+        "_OSRELEASE={release}\nOSREL={osrel}\nOSVERSION={osversion}\n"
+    ));
     out
 }
 
@@ -392,10 +444,16 @@ fn resolve_portsdir(
         if is_ports_tree(&p) {
             return Ok(p);
         }
-        bail!("poudriere tree '{tree}' points to {} which is not a ports tree", p.display());
+        bail!(
+            "poudriere tree '{tree}' points to {} which is not a ports tree",
+            p.display()
+        );
     }
     if tree_explicit {
-        bail!("no poudriere tree '{tree}' ({} does not exist)", mnt.display());
+        bail!(
+            "no poudriere tree '{tree}' ({} does not exist)",
+            mnt.display()
+        );
     }
     if is_ports_tree(fallback) {
         Ok(fallback.to_path_buf())
@@ -463,7 +521,11 @@ fn resolve_options_dir(
 ///   <jail>-<tree>-<set>-make.conf
 fn make_conf_layers(jail: Option<&str>, tree: &str, set: Option<&str>) -> Vec<String> {
     let mut v = vec!["make.conf".to_string()];
-    v.extend(layer_stems(jail, Some(tree), set).into_iter().map(|s| format!("{s}-make.conf")));
+    v.extend(
+        layer_stems(jail, Some(tree), set)
+            .into_iter()
+            .map(|s| format!("{s}-make.conf")),
+    );
     v
 }
 
@@ -485,7 +547,10 @@ fn poudriere_conf_value(
     set: Option<&str>,
     name: &str,
 ) -> Option<String> {
-    let mut files = vec![poudriere_conf.to_path_buf(), poudriere_d.join("poudriere.conf")];
+    let mut files = vec![
+        poudriere_conf.to_path_buf(),
+        poudriere_d.join("poudriere.conf"),
+    ];
     files.extend(
         poudriere_conf_layers(jail, tree, set)
             .into_iter()
@@ -493,7 +558,9 @@ fn poudriere_conf_value(
     );
     let mut value = None;
     for file in files {
-        let Ok(text) = fs::read_to_string(&file) else { continue };
+        let Ok(text) = fs::read_to_string(&file) else {
+            continue;
+        };
         for line in text.lines() {
             if let Some(v) = shell_assignment(line, name) {
                 value = (!v.is_empty()).then(|| v.to_string());
@@ -570,7 +637,10 @@ fn poudriere_conf_layers(jail: Option<&str>, tree: Option<&str>, set: Option<&st
 /// dropped. A commented-out line is no assignment.
 fn shell_assignment<'a>(line: &'a str, name: &str) -> Option<&'a str> {
     let line = line.trim();
-    let line = line.strip_prefix("export ").map(str::trim_start).unwrap_or(line);
+    let line = line
+        .strip_prefix("export ")
+        .map(str::trim_start)
+        .unwrap_or(line);
     let value = line.strip_prefix(name)?.strip_prefix('=')?;
     let value = match value.find(" #") {
         Some(i) => &value[..i],
@@ -597,8 +667,10 @@ fn layer_make_conf(
     ccache: bool,
     staging_dir: &Path,
 ) -> Result<StagedConf> {
-    let mut paths: Vec<PathBuf> =
-        make_conf_layers(jail, tree, set).iter().map(|n| poudriere_d.join(n)).collect();
+    let mut paths: Vec<PathBuf> = make_conf_layers(jail, tree, set)
+        .iter()
+        .map(|n| poudriere_d.join(n))
+        .collect();
     paths.extend(plugin_make_confs(poudriere_d));
     concat_make_conf(&paths, env, overlays, jail_lines, ccache, staging_dir)
 }
@@ -608,7 +680,9 @@ fn layer_make_conf(
 /// shell glob's order (names sorted, dot entries left out); only a regular
 /// file counts, as for its `[ -f ]`.
 fn plugin_make_confs(poudriere_d: &Path) -> Vec<PathBuf> {
-    let Ok(dir) = fs::read_dir(poudriere_d.join("hooks/plugins")) else { return Vec::new() };
+    let Ok(dir) = fs::read_dir(poudriere_d.join("hooks/plugins")) else {
+        return Vec::new();
+    };
     let mut names: Vec<std::ffi::OsString> = dir
         .filter_map(|e| e.ok().map(|e| e.file_name()))
         .filter(|n| !n.as_encoded_bytes().starts_with(b"."))
@@ -624,8 +698,16 @@ fn plugin_make_confs(poudriere_d: &Path) -> Vec<PathBuf> {
 /// Stage a make.conf holding the jail environment alone, no layers.
 #[cfg(test)]
 pub(crate) fn stage_jail_make_conf(staging_dir: &Path) -> Result<PathBuf> {
-    let (path, _, _) =
-        concat_make_conf(&[], QueryEnv::Jail { package_building: true }, &[], "", false, staging_dir)?;
+    let (path, _, _) = concat_make_conf(
+        &[],
+        QueryEnv::Jail {
+            package_building: true,
+        },
+        &[],
+        "",
+        false,
+        staging_dir,
+    )?;
     Ok(path.expect("the jail environment is never empty"))
 }
 
@@ -693,7 +775,10 @@ mod tests {
             options_dir_candidates(None, "t", Some("s")),
             vec!["t-s-options", "s-options", "t-options", "options"]
         );
-        assert_eq!(options_dir_candidates(None, "t", None), vec!["t-options", "options"]);
+        assert_eq!(
+            options_dir_candidates(None, "t", None),
+            vec!["t-options", "options"]
+        );
     }
 
     #[test]
@@ -737,42 +822,75 @@ mod tests {
         fake_tree(&ports);
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let req = Request { jail: Some("j"), ..Request::default() };
+        let req = Request {
+            jail: Some("j"),
+            ..Request::default()
+        };
         let staged = |pd: &Path| {
             let s = resolve_host(&host(tmp.path(), pd, &ports, tmp.path()), &req, &stage).unwrap();
-            (fs::read_to_string(s.make_conf.unwrap()).unwrap(), s.notes, s.conf_hash)
+            (
+                fs::read_to_string(s.make_conf.unwrap()).unwrap(),
+                s.notes,
+                s.conf_hash,
+            )
         };
 
         let pd = fake_jail(tmp.path(), "amd64", "11.2-RELEASE", Some("1102000"));
         let (conf, notes, hash) = staged(&pd);
         let os = "_OSRELEASE=11.2-RELEASE\nOSREL=11.2\nOSVERSION=1102000\n";
         assert!(conf.contains(os) && !conf.contains("MACHINE"), "{conf}");
-        assert!(conf.find(os).unwrap() < conf.find("LOCALBASE").unwrap(), "{conf}");
+        assert!(
+            conf.find(os).unwrap() < conf.find("LOCALBASE").unwrap(),
+            "{conf}"
+        );
         assert!(notes.is_empty(), "{notes:?}");
 
         let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE-p2 1403000", None);
         let (conf, notes, other) = staged(&pd);
-        assert!(conf.contains("_OSRELEASE=14.3-RELEASE-p2\nOSREL=14.3\nOSVERSION=1403000\n"), "{conf}");
-        assert!(notes.iter().any(|n| n.contains("OSVERSION 1403000 derived")), "{notes:?}");
+        assert!(
+            conf.contains("_OSRELEASE=14.3-RELEASE-p2\nOSREL=14.3\nOSVERSION=1403000\n"),
+            "{conf}"
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("OSVERSION 1403000 derived")),
+            "{notes:?}"
+        );
         assert_ne!(hash, other, "the jail's system keys its own generation");
 
         for (arch, lines) in [
-            ("i386", "MACHINE=i386\nMACHINE_ARCH=i386\nARCH=${MACHINE_ARCH}\n"),
-            ("arm64.aarch64", "MACHINE=arm64\nMACHINE_ARCH=aarch64\nARCH=${MACHINE_ARCH}\n"),
+            (
+                "i386",
+                "MACHINE=i386\nMACHINE_ARCH=i386\nARCH=${MACHINE_ARCH}\n",
+            ),
+            (
+                "arm64.aarch64",
+                "MACHINE=arm64\nMACHINE_ARCH=aarch64\nARCH=${MACHINE_ARCH}\n",
+            ),
         ] {
             let pd = fake_jail(tmp.path(), arch, "14.3-RELEASE", Some("1403000"));
             let (conf, _, _) = staged(&pd);
-            assert!(conf.contains(&format!("{lines}_OSRELEASE=14.3-RELEASE\n")), "{arch}: {conf}");
+            assert!(
+                conf.contains(&format!("{lines}_OSRELEASE=14.3-RELEASE\n")),
+                "{arch}: {conf}"
+            );
         }
 
         let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE", None);
         fs::remove_file(pd.join("jails/j/version")).unwrap();
         let (conf, notes, _) = staged(&pd);
         assert!(!conf.contains("OSREL"), "{conf}");
-        assert!(notes.iter().any(|n| n.contains("this host's system")), "{notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains("this host's system")),
+            "{notes:?}"
+        );
         fs::remove_dir_all(pd.join("jails")).unwrap();
         let (conf, notes, _) = staged(&pd);
-        assert!(!conf.contains("OSREL") && notes.len() == 1, "{conf}{notes:?}");
+        assert!(
+            !conf.contains("OSREL") && notes.len() == 1,
+            "{conf}{notes:?}"
+        );
     }
 
     /// An armv7 jail on an arm64 host still gets its cross-build lines: its
@@ -788,19 +906,39 @@ mod tests {
         fake_tree(&ports);
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let req = Request { jail: Some("j"), ..Request::default() };
-        let host = HostPaths { arch: "arm64.aarch64", ..host(tmp.path(), tmp.path(), &ports, tmp.path()) };
+        let req = Request {
+            jail: Some("j"),
+            ..Request::default()
+        };
+        let host = HostPaths {
+            arch: "arm64.aarch64",
+            ..host(tmp.path(), tmp.path(), &ports, tmp.path())
+        };
         let staged = |host: &HostPaths, pd: &Path| {
-            let s = resolve_host(&HostPaths { poudriere_d: pd, ..*host }, &req, &stage).unwrap();
+            let s = resolve_host(
+                &HostPaths {
+                    poudriere_d: pd,
+                    ..*host
+                },
+                &req,
+                &stage,
+            )
+            .unwrap();
             fs::read_to_string(s.make_conf.unwrap()).unwrap()
         };
 
         let pd = fake_jail(tmp.path(), "arm.armv7", "14.3-RELEASE", Some("1403000"));
         let conf = staged(&host, &pd);
-        assert!(conf.contains("MACHINE=arm\nMACHINE_ARCH=armv7\nARCH=${MACHINE_ARCH}\n"), "{conf}");
+        assert!(
+            conf.contains("MACHINE=arm\nMACHINE_ARCH=armv7\nARCH=${MACHINE_ARCH}\n"),
+            "{conf}"
+        );
 
         let pd = fake_jail(tmp.path(), "amd64", "14.3-RELEASE", Some("1403000"));
-        let amd64_host = HostPaths { arch: "amd64", ..host };
+        let amd64_host = HostPaths {
+            arch: "amd64",
+            ..host
+        };
         let conf = staged(&amd64_host, &pd);
         assert!(!conf.contains("MACHINE"), "{conf}");
     }
@@ -824,12 +962,27 @@ mod tests {
         fs::create_dir_all(plugins.join("none")).unwrap(); // a plugin with no make.conf
         fs::write(plugins.join("loose"), "not a plugin\n").unwrap();
         fs::write(pd.join("make.conf"), "LAYER=1\n").unwrap();
-        let s = resolve_host(&host(tmp.path(), &pd, &ports, tmp.path()), &Request::default(), &stage).unwrap();
+        let s = resolve_host(
+            &host(tmp.path(), &pd, &ports, tmp.path()),
+            &Request::default(),
+            &stage,
+        )
+        .unwrap();
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
-        let at = |s: &str| conf.find(s).unwrap_or_else(|| panic!("{s} missing: {conf}"));
-        assert!(at("LAYER=1") < at("A=1") && at("A=1") < at("B=1") && at("B=1") < at("LOCALBASE"), "{conf}");
+        let at = |s: &str| {
+            conf.find(s)
+                .unwrap_or_else(|| panic!("{s} missing: {conf}"))
+        };
+        assert!(
+            at("LAYER=1") < at("A=1") && at("A=1") < at("B=1") && at("B=1") < at("LOCALBASE"),
+            "{conf}"
+        );
         assert!(!conf.contains("H=1"), "{conf}");
-        let want = [pd.join("make.conf"), plugins.join("a/make.conf"), plugins.join("b/make.conf")];
+        let want = [
+            pd.join("make.conf"),
+            plugins.join("a/make.conf"),
+            plugins.join("b/make.conf"),
+        ];
         assert_eq!(s.make_conf_sources, want);
     }
 
@@ -845,16 +998,31 @@ mod tests {
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
         let pd = fake_jail(tmp.path(), "amd64", "11.2-RELEASE", None);
-        let req = Request { jail: Some("j"), ..Request::default() };
+        let req = Request {
+            jail: Some("j"),
+            ..Request::default()
+        };
         let s = resolve_host(&host(tmp.path(), &pd, &ports, tmp.path()), &req, &stage).unwrap();
         let out = std::process::Command::new("/usr/bin/make")
-            .args(["-C", "/usr/ports/security/ca_root_nss", "-V", "COMPLETE_OPTIONS_LIST", "-V", "OSVERSION"])
+            .args([
+                "-C",
+                "/usr/ports/security/ca_root_nss",
+                "-V",
+                "COMPLETE_OPTIONS_LIST",
+                "-V",
+                "OSVERSION",
+            ])
             .arg(format!("__MAKE_CONF={}", s.make_conf.unwrap().display()))
             .env_remove("MAKEFLAGS")
             .output()
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        assert_eq!(text, "ETCSYMLINK\n1102000\n", "{}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(
+            text,
+            "ETCSYMLINK\n1102000\n",
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     /// Under a poudriere.d, -p must name a tree poudriere knows; only the
@@ -875,22 +1043,55 @@ mod tests {
         let host = host(tmp.path(), &pd, &ports, &db);
         let none = Request::default();
 
-        let s = resolve_host(&host, &Request { tree: Some("main"), ..none }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                tree: Some("main"),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.portsdir, named);
-        let err = resolve_host(&host, &Request { tree: Some("mian"), ..none }, &stage)
-            .unwrap_err()
-            .to_string();
+        let err = resolve_host(
+            &host,
+            &Request {
+                tree: Some("mian"),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.starts_with("no poudriere tree 'mian'"), "{err}");
         // No -p and no default tree: the fallback.
         assert_eq!(resolve_host(&host, &none, &stage).unwrap().portsdir, ports);
 
         // -P: taken as given, but checked.
-        let s = resolve_host(&host, &Request { portsdir: Some(&named), ..none }, &stage).unwrap();
+        let s = resolve_host(
+            &host,
+            &Request {
+                portsdir: Some(&named),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap();
         assert_eq!(s.portsdir, named);
-        assert!(matches!(s.env, QueryEnv::Jail { .. }), "still a poudriere build");
-        let err = resolve_host(&host, &Request { portsdir: Some(&db), ..none }, &stage)
-            .unwrap_err()
-            .to_string();
+        assert!(
+            matches!(s.env, QueryEnv::Jail { .. }),
+            "still a poudriere build"
+        );
+        let err = resolve_host(
+            &host,
+            &Request {
+                portsdir: Some(&db),
+                ..none
+            },
+            &stage,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("is not a ports tree"), "{err}");
     }
 
@@ -912,15 +1113,29 @@ mod tests {
         fs::create_dir_all(pd.join("ports/main")).unwrap();
         let old_mnt = tmp.path().join("old-mnt");
         fake_tree(&old_mnt.join("ports"));
-        fs::write(pd.join("ports/main/mnt"), format!("{}\n", old_mnt.display())).unwrap();
+        fs::write(
+            pd.join("ports/main/mnt"),
+            format!("{}\n", old_mnt.display()),
+        )
+        .unwrap();
         let host = host(tmp.path(), &pd, &ports, &db);
 
-        let err = resolve_host(&host, &Request { tree: Some("main"), ..Request::default() }, &stage)
-            .unwrap_err()
-            .to_string();
+        let err = resolve_host(
+            &host,
+            &Request {
+                tree: Some("main"),
+                ..Request::default()
+            },
+            &stage,
+        )
+        .unwrap_err()
+        .to_string();
         assert_eq!(
             err,
-            format!("poudriere tree 'main' points to {} which is not a ports tree", old_mnt.display())
+            format!(
+                "poudriere tree 'main' points to {} which is not a ports tree",
+                old_mnt.display()
+            )
         );
     }
 
@@ -935,7 +1150,11 @@ mod tests {
         assert_eq!(v("NO_PACKAGE_BUILDING='yes'  # for this box"), Some("yes"));
         assert_eq!(v("NO_PACKAGE_BUILDING="), Some(""), "an empty value unsets");
         assert_eq!(v("NO_PACKAGE_BUILDING=\"\""), Some(""));
-        assert_eq!(v("# NO_PACKAGE_BUILDING=yes"), None, "the sample's commented line");
+        assert_eq!(
+            v("# NO_PACKAGE_BUILDING=yes"),
+            None,
+            "the sample's commented line"
+        );
         assert_eq!(v("NO_PACKAGE_BUILDING_X=yes"), None);
         assert_eq!(v("XNO_PACKAGE_BUILDING=yes"), None);
     }
@@ -948,7 +1167,10 @@ mod tests {
             poudriere_conf_layers(Some("j"), Some("t"), Some("s")),
             ["s", "t", "j", "t-s", "j-t", "j-s", "j-t-s"]
         );
-        assert_eq!(poudriere_conf_layers(Some("j"), None, Some("s")), ["s", "j", "j-s"]);
+        assert_eq!(
+            poudriere_conf_layers(Some("j"), None, Some("s")),
+            ["s", "j", "j-s"]
+        );
         assert!(poudriere_conf_layers(None, None, None).is_empty());
     }
 
@@ -962,7 +1184,11 @@ mod tests {
         fs::create_dir_all(&pd).unwrap();
         let npb = |jail, tree, set| no_package_building(&conf, &pd, jail, tree, set);
         assert!(!npb(None, None, None), "no file at all");
-        fs::write(&conf, "# NO_PACKAGE_BUILDING=yes\nBASEFS=/usr/local/poudriere\n").unwrap();
+        fs::write(
+            &conf,
+            "# NO_PACKAGE_BUILDING=yes\nBASEFS=/usr/local/poudriere\n",
+        )
+        .unwrap();
         assert!(!npb(None, None, None));
         fs::write(&conf, "NO_PACKAGE_BUILDING=yes\n").unwrap();
         assert!(npb(None, None, None));
@@ -972,8 +1198,15 @@ mod tests {
         assert!(npb(None, None, Some("s")));
         assert!(!npb(None, None, Some("other")));
         fs::write(pd.join("j-s-poudriere.conf"), "NO_PACKAGE_BUILDING=\n").unwrap();
-        assert!(!npb(Some("j"), None, Some("s")), "the jail-set file comes last");
-        fs::write(pd.join("default-poudriere.conf"), "NO_PACKAGE_BUILDING=yes\n").unwrap();
+        assert!(
+            !npb(Some("j"), None, Some("s")),
+            "the jail-set file comes last"
+        );
+        fs::write(
+            pd.join("default-poudriere.conf"),
+            "NO_PACKAGE_BUILDING=yes\n",
+        )
+        .unwrap();
         assert!(!npb(None, None, None), "no -p, no tree file");
         assert!(npb(None, Some("default"), None));
     }
@@ -996,7 +1229,11 @@ mod tests {
         assert!(fda(None, None, None));
         fs::write(pd.join("poudriere.conf"), "FLAVOR_DEFAULT_ALL=no\n").unwrap();
         assert!(!fda(None, None, None), "poudriere.d's turns it off");
-        fs::write(pd.join("j-poudriere.conf"), "export FLAVOR_DEFAULT_ALL=yes\n").unwrap();
+        fs::write(
+            pd.join("j-poudriere.conf"),
+            "export FLAVOR_DEFAULT_ALL=yes\n",
+        )
+        .unwrap();
         assert!(fda(Some("j"), None, None));
         assert!(!fda(Some("other"), None, None));
         fs::write(pd.join("j-poudriere.conf"), "FLAVOR_DEFAULT_ALL=YES\n").unwrap();
@@ -1018,16 +1255,32 @@ mod tests {
         let db = tmp.path().join("db");
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let host = HostPaths { poudriere_conf: &conf, ..host(tmp.path(), &pd, &ports, &db) };
+        let host = HostPaths {
+            poudriere_conf: &conf,
+            ..host(tmp.path(), &pd, &ports, &db)
+        };
 
         let on = resolve(&host, &Request::default(), &[], &stage).unwrap();
-        assert_eq!(on.env, QueryEnv::Jail { package_building: true });
+        assert_eq!(
+            on.env,
+            QueryEnv::Jail {
+                package_building: true
+            }
+        );
         fs::write(&conf, "NO_PACKAGE_BUILDING=yes\n").unwrap();
         let off = resolve(&host, &Request::default(), &[], &stage).unwrap();
-        assert_eq!(off.env, QueryEnv::Jail { package_building: false });
+        assert_eq!(
+            off.env,
+            QueryEnv::Jail {
+                package_building: false
+            }
+        );
         let text = fs::read_to_string(off.make_conf.unwrap()).unwrap();
         assert!(!text.contains("PACKAGE_BUILDING"), "{text}");
-        assert!(text.contains("BATCH=yes") && text.contains("LOCALBASE=/nonexistent"), "{text}");
+        assert!(
+            text.contains("BATCH=yes") && text.contains("LOCALBASE=/nonexistent"),
+            "{text}"
+        );
         assert_ne!(on.conf_hash, off.conf_hash);
     }
 
@@ -1040,7 +1293,10 @@ mod tests {
         fs::write(tree.join("Mk/bsd.port.mk"), "# fake\n").unwrap();
         fs::create_dir_all(pd.join("ports/mytree")).unwrap();
         fs::write(pd.join("ports/mytree/mnt"), format!("{}\n", tree.display())).unwrap();
-        assert_eq!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).unwrap(), tree);
+        assert_eq!(
+            resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).unwrap(),
+            tree
+        );
         // A tree pointing at a non-ports dir is an error, not a fallback.
         fs::write(pd.join("ports/mytree/mnt"), "/nonexistent\n").unwrap();
         assert!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).is_err());
@@ -1066,14 +1322,30 @@ mod tests {
         }
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", Some("s1"), QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(
+            &pd,
+            Some("j1"),
+            "t1",
+            Some("s1"),
+            QueryEnv::Host,
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         assert_eq!(sources.len(), 8);
         let text = fs::read_to_string(path.unwrap()).unwrap();
         let idx = |needle: &str| text.find(needle).unwrap();
         let order: Vec<usize> = layers.iter().map(|(_, c)| idx(c)).collect();
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "layers out of order: {text}");
-        assert!(!text.contains("PACKAGE_BUILDING") && !text.contains("LOCALBASE"), "{text}");
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "layers out of order: {text}"
+        );
+        assert!(
+            !text.contains("PACKAGE_BUILDING") && !text.contains("LOCALBASE"),
+            "{text}"
+        );
     }
 
     /// A jail's own `<jail>-make.conf` symlinked to a layer already read
@@ -1089,8 +1361,18 @@ mod tests {
         std::os::unix::fs::symlink(pd.join("make.conf"), pd.join("j1-make.conf")).unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, sources) =
-            layer_make_conf(&pd, Some("j1"), "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(
+            &pd,
+            Some("j1"),
+            "t1",
+            None,
+            QueryEnv::Host,
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         assert_eq!(sources, vec![pd.join("make.conf")], "{sources:?}");
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert_eq!(text.matches("OVERLAYS+=/x").count(), 1, "{text}");
@@ -1106,7 +1388,18 @@ mod tests {
         fs::write(pd.join("s1-make.conf"), "B=2\n").unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, _, _) = layer_make_conf(&pd, None, "t1", Some("s1"), QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let (path, _, _) = layer_make_conf(
+            &pd,
+            None,
+            "t1",
+            Some("s1"),
+            QueryEnv::Host,
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         assert!(text.lines().any(|l| l == "A=1"), "{text}");
         assert!(text.lines().any(|l| l == "B=2"), "{text}");
@@ -1120,25 +1413,75 @@ mod tests {
         fs::write(pd.join("make.conf"), "LOCALBASE=/opt/local\n").unwrap();
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let (path, jail_hash, _) =
-            layer_make_conf(&pd, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", false, &stage).unwrap();
+        let (path, jail_hash, _) = layer_make_conf(
+            &pd,
+            None,
+            "t1",
+            None,
+            QueryEnv::Jail {
+                package_building: true,
+            },
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         let text = fs::read_to_string(path.unwrap()).unwrap();
         // poudriere's own lines come before the layers, as in a jail...
         assert!(text.find("PACKAGE_BUILDING=yes").unwrap() < text.find("/opt/local").unwrap());
         // ...and the hidden LOCALBASE after them, so no layer can undo it.
-        assert!(text.trim_end().ends_with("LOCALBASE=/nonexistent"), "{text}");
+        assert!(
+            text.trim_end().ends_with("LOCALBASE=/nonexistent"),
+            "{text}"
+        );
 
         // The environment keys its own cache generation.
-        let (_, host_hash, _) = layer_make_conf(&pd, None, "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let (_, host_hash, _) = layer_make_conf(
+            &pd,
+            None,
+            "t1",
+            None,
+            QueryEnv::Host,
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         assert_ne!(jail_hash, host_hash);
 
         // An empty layering still stages a make.conf in a jail's environment.
         let empty = tmp.path().join("empty.d");
         fs::create_dir_all(&empty).unwrap();
-        let (path, _, sources) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Jail { package_building: true }, &[], "", false, &stage).unwrap();
+        let (path, _, sources) = layer_make_conf(
+            &empty,
+            None,
+            "t1",
+            None,
+            QueryEnv::Jail {
+                package_building: true,
+            },
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         assert!(sources.is_empty());
         assert!(path.is_some());
-        let (path, _, _) = layer_make_conf(&empty, None, "t1", None, QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let (path, _, _) = layer_make_conf(
+            &empty,
+            None,
+            "t1",
+            None,
+            QueryEnv::Host,
+            &[],
+            "",
+            false,
+            &stage,
+        )
+        .unwrap();
         assert!(path.is_none());
     }
 
@@ -1149,16 +1492,32 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(poudriere_etc(None).unwrap(), None);
         assert_eq!(poudriere_etc(Some("".into())).unwrap(), None);
-        assert_eq!(poudriere_etc(Some(tmp.path().into())).unwrap().as_deref(), Some(tmp.path()));
+        assert_eq!(
+            poudriere_etc(Some(tmp.path().into())).unwrap().as_deref(),
+            Some(tmp.path())
+        );
         let file = tmp.path().join("file");
         fs::write(&file, "").unwrap();
         for bad in [file, tmp.path().join("absent")] {
-            let err = poudriere_etc(Some(bad.clone().into())).unwrap_err().to_string();
-            assert_eq!(err, format!("POUDRIERE_ETC {} is not a directory", bad.display()));
+            let err = poudriere_etc(Some(bad.clone().into()))
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                err,
+                format!("POUDRIERE_ETC {} is not a directory", bad.display())
+            );
         }
-        assert!(poudriere_etc(Some(".".into())).unwrap().unwrap().is_absolute());
+        assert!(
+            poudriere_etc(Some(".".into()))
+                .unwrap()
+                .unwrap()
+                .is_absolute()
+        );
         let note = poudriere_etc_note(Path::new("/e"), true);
-        assert_eq!(note, "poudriere.conf and poudriere.d read from /e (POUDRIERE_ETC)");
+        assert_eq!(
+            note,
+            "poudriere.conf and poudriere.d read from /e (POUDRIERE_ETC)"
+        );
         let note = poudriere_etc_note(Path::new("/e"), false);
         assert_eq!(note, "POUDRIERE_ETC /e has no poudriere.d: a local build");
     }
@@ -1200,12 +1559,19 @@ mod tests {
         // CCACHE_DIR a real directory: both lines, after the layers.
         fs::create_dir_all(&ccache).unwrap();
         let present = staged();
-        let at = |needle: &str| present.find(needle).unwrap_or_else(|| panic!("{needle}: {present}"));
+        let at = |needle: &str| {
+            present
+                .find(needle)
+                .unwrap_or_else(|| panic!("{needle}: {present}"))
+        };
         assert!(
             at("PACKAGE_BUILDING=yes") < at("WITH_CCACHE_BUILD=yes\nCCACHE_DIR=/root/.ccache\n"),
             "{present}"
         );
-        assert!(at("CCACHE_DIR=/root/.ccache\n") < at("LOCALBASE=/nonexistent"), "{present}");
+        assert!(
+            at("CCACHE_DIR=/root/.ccache\n") < at("LOCALBASE=/nonexistent"),
+            "{present}"
+        );
     }
 
     /// A non-default-flavor port, matched as `Blacklist::matches` wants it.
@@ -1226,7 +1592,10 @@ mod tests {
         fake_tree(&ports);
         let stage = tmp.path().join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let req = Request { jail: Some("j"), ..Request::default() };
+        let req = Request {
+            jail: Some("j"),
+            ..Request::default()
+        };
         let host = HostPaths {
             arch: "amd64",
             supported_archs: "amd64 i386",
@@ -1238,13 +1607,32 @@ mod tests {
 
         // This host's kernel runs only amd64/i386 natively: aarch64 is
         // emulated, so qemu-blacklist applies.
-        let s = resolve_host(&HostPaths { poudriere_d: &pd, ..host }, &req, &stage).unwrap();
+        let s = resolve_host(
+            &HostPaths {
+                poudriere_d: &pd,
+                ..host
+            },
+            &req,
+            &stage,
+        )
+        .unwrap();
         assert!(s.blacklist.matches(&key, false), "{:?}", s.blacklist);
 
         // A host whose kernel also runs aarch64 natively: no emulation, so
         // qemu-blacklist is never even looked at.
-        let native = HostPaths { supported_archs: "amd64 i386 aarch64", ..host };
-        let s = resolve_host(&HostPaths { poudriere_d: &pd, ..native }, &req, &stage).unwrap();
+        let native = HostPaths {
+            supported_archs: "amd64 i386 aarch64",
+            ..host
+        };
+        let s = resolve_host(
+            &HostPaths {
+                poudriere_d: &pd,
+                ..native
+            },
+            &req,
+            &stage,
+        )
+        .unwrap();
         assert!(!s.blacklist.matches(&key, false), "{:?}", s.blacklist);
     }
 
@@ -1255,8 +1643,16 @@ mod tests {
         fs::create_dir_all(&pd).unwrap();
         // A line may hold several origins, split on whitespace, and '#'
         // comments the rest of the line away — no globs anywhere.
-        fs::write(pd.join("blacklist"), "# comment\n\nwww/nginx mail/dovecot\n").unwrap();
-        fs::write(pd.join("s1-blacklist"), "devel/py-foo@py312   # one flavor only\n").unwrap();
+        fs::write(
+            pd.join("blacklist"),
+            "# comment\n\nwww/nginx mail/dovecot\n",
+        )
+        .unwrap();
+        fs::write(
+            pd.join("s1-blacklist"),
+            "devel/py-foo@py312   # one flavor only\n",
+        )
+        .unwrap();
 
         let bl = Blacklist::load(&pd, None, "default", Some("s1"));
         assert_eq!(bl.sources.len(), 2);
@@ -1294,8 +1690,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();
-        fs::write(pd.join("blacklist"), "devel/py-foo@- net/bar@all devel/py-baz@py312\n")
-            .unwrap();
+        fs::write(
+            pd.join("blacklist"),
+            "devel/py-foo@- net/bar@all devel/py-baz@py312\n",
+        )
+        .unwrap();
         let bl = Blacklist::load(&pd, None, "default", None);
 
         // `origin@-` matches only the default flavor, never another one.
@@ -1334,7 +1733,10 @@ mod tests {
                 "j-t-s-blacklist"
             ]
         );
-        assert_eq!(blacklist_layers(None, "t", None, false), vec!["blacklist", "t-blacklist"]);
+        assert_eq!(
+            blacklist_layers(None, "t", None, false),
+            vec!["blacklist", "t-blacklist"]
+        );
         // Emulating always loads qemu-blacklist too, and last.
         assert_eq!(
             blacklist_layers(None, "t", None, true),

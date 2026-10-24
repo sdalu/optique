@@ -8,11 +8,13 @@ use std::io::{BufRead, Write};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::Terminal;
 
-use super::{build_app, dispatch_key, stop_background_makes, ui, App, Focus, KeyOutcome, OverlayKind};
+use super::{
+    App, Focus, KeyOutcome, OverlayKind, build_app, dispatch_key, stop_background_makes, ui,
+};
 use crate::optfiles::OptionsFiles;
 use crate::query::refresher::Refresher;
 use crate::session::Session;
@@ -44,7 +46,9 @@ pub fn run_driver(
     overlays: Vec<crate::config::Overlay>,
     minimal: bool,
 ) -> Result<()> {
-    let mut app = build_app(session, files, staging_db, refresher, blacklist, overlays, minimal);
+    let mut app = build_app(
+        session, files, staging_db, refresher, blacklist, overlays, minimal,
+    );
     let mut terminal = Terminal::new(TestBackend::new(DEFAULT_COLS, DEFAULT_ROWS))?;
 
     let stdin = std::io::stdin();
@@ -109,7 +113,12 @@ fn exec(
                 writeln!(out, "err keys needs text to type")?;
             } else {
                 for c in raw.chars() {
-                    if press(app, terminal, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), out)? {
+                    if press(
+                        app,
+                        terminal,
+                        KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+                        out,
+                    )? {
                         return Ok(true);
                     }
                 }
@@ -207,7 +216,12 @@ fn settle(app: &mut App, arg: &str, out: &mut impl Write) -> Result<()> {
     } else {
         match arg.parse::<u64>() {
             Ok(ms) => ms,
-            Err(_) => return Ok(writeln!(out, "err settle timeout must be milliseconds: {arg}")?),
+            Err(_) => {
+                return Ok(writeln!(
+                    out,
+                    "err settle timeout must be milliseconds: {arg}"
+                )?);
+            }
         }
     };
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -248,8 +262,7 @@ fn resize(terminal: &mut DriverTerminal, arg: &str, out: &mut impl Write) -> Res
 /// follows it: a lone `ctrl-` modifies nothing.
 fn strip_modifier<'a>(spec: &'a str, prefix: &str) -> Option<&'a str> {
     let head = spec.get(..prefix.len())?;
-    (head.eq_ignore_ascii_case(prefix) && spec.len() > prefix.len())
-        .then(|| &spec[prefix.len()..])
+    (head.eq_ignore_ascii_case(prefix) && spec.len() > prefix.len()).then(|| &spec[prefix.len()..])
 }
 
 /// Parse a key spec: optional `ctrl-`/`alt-` prefixes, then a single
@@ -358,7 +371,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut app = super::super::tests::app_for(tmp.path(), &[("cat/alpha", &[])]);
         let out = run(&mut app, &["key\u{a0}x", "keys\u{2003}ab"]);
-        assert_eq!(out, "err unknown command: key\u{a0}x\nerr unknown command: keys\u{2003}ab\n");
+        assert_eq!(
+            out,
+            "err unknown command: key\u{a0}x\nerr unknown command: keys\u{2003}ab\n"
+        );
     }
 
     /// `keys` types every character, trailing spaces included.
@@ -377,16 +393,30 @@ mod tests {
     fn a_page_key_pages_without_a_dump_first() {
         let tmp = tempfile::tempdir().unwrap();
         let names: Vec<String> = (0..60).map(|i| format!("cat/p{i:02}")).collect();
-        let graph: Vec<(&str, &[&str])> = names.iter().map(|n| (n.as_str(), &[] as &[&str])).collect();
+        let graph: Vec<(&str, &[&str])> =
+            names.iter().map(|n| (n.as_str(), &[] as &[&str])).collect();
         let mut app = super::super::tests::app_for(tmp.path(), &graph);
         run(&mut app, &["key pgdn"]);
         // 35 rows, less the status bar and the list's border, less one.
-        assert_eq!(app.list_state.selected(), Some(DEFAULT_ROWS as usize - 1 - 2 - 1));
+        assert_eq!(
+            app.list_state.selected(),
+            Some(DEFAULT_ROWS as usize - 1 - 2 - 1)
+        );
     }
 
     #[test]
     fn unknown_key_specs_are_rejected() {
-        for bad in ["", " ", "nosuchkey", "f0", "f13", "ctrl-", "alt-", "enterr", "0x41"] {
+        for bad in [
+            "",
+            " ",
+            "nosuchkey",
+            "f0",
+            "f13",
+            "ctrl-",
+            "alt-",
+            "enterr",
+            "0x41",
+        ] {
             assert!(parse_key_spec(bad).is_none(), "{bad:?} must not parse");
         }
     }
