@@ -18,7 +18,8 @@ interfaces sit side by side on the session.
 │ entry           main.rs · cli.rs                                     │
 │                 parse, dispatch, run_scan, banner, exit status       │
 ├──────────────────────────────────────────────────────────────────────┤
-│ resolution      config.rs · roots.rs                                 │
+│ resolution      config/{mod,local,poudriere,synth}.rs · roots.rs     │
+│                 synth.rs                                             │
 │                 which build, tree, options dir, staged make.conf,    │
 │                 blacklist, overlays; which roots                     │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -46,8 +47,12 @@ interfaces sit side by side on the session.
 | :-- | :-- | :-- |
 | `main.rs` | Entry, dispatch, the shared scan, every command's body, the startup banner, exit status (1 = something pending, 2 = usage, 3 = error) | `run`, `run_scan`/`Scanned`, `cmd_scan`, `cmd_sync`, `cmd_decide`, `cmd_clean`, `clean_options_dir`, `find_redundant`, `cmd_tui`, `WritePass`, `commit_writes`, `needs_attention` |
 | `cli.rs` | The command line: clap definitions, the checks clap cannot do across levels, roots from arguments and `-f` lists | `disambiguate_synth`, `check_action_first`, `Cli::check_globals`, `collect_roots` |
-| `config.rs` | Which build is configured and how queries see it: tree, options dir, staged make.conf and its hash, query environment, blacklist, overlays, notes | `Request`, `Settings`, `QueryEnv`, `resolve`, `resolve_poudriere`, `resolve_local`, `resolve_synth`, `stage_make_conf`, `jail_system`, `plugin_make_confs`, `Blacklist` |
-| `roots.rs` | Roots as the build tool reads them, before the scan: MOVED for the listed origins, build by build, then `@all`/`@-` | `apply_moved`, `MovedPolicy`, `MovedRoots`, `resolve`, `expand`, `query_flavors`, `synth_installed` |
+| `config/mod.rs` | Which build is configured and how queries see it: the resolution every build shares (overlays, options place, framework values, the staged make.conf and its hash) and the choice between local and poudriere | `Request`, `Settings`, `QueryEnv`, `resolve`, `resolve_host`, `finish`, `stage_make_conf` |
+| `config/local.rs` | A local build: the host's make.conf, PORTSDIR and PORT_DBDIR | `resolve`, `make_defaults` |
+| `config/poudriere.rs` | A poudriere build: poudriere.d's make.conf layers and hook plugins, the jail's system, options dir, blacklist, poudriere.conf settings | `resolve`, `jail_system`, `plugin_make_confs`, `concat_make_conf`, `Blacklist` |
+| `config/synth.rs` | A synth build: synth.ini read as synth reads it, the profile's make.conf under synth's scan header, the tree synth falls back to | `resolve`, `resolve_synth`, `synth_ini_lookup`, `synth_ini_misreads` |
+| `roots.rs` | Roots as the build tool reads them, before the scan: MOVED for the listed origins, build by build, then `@all`/`@-` | `apply_moved`, `MovedPolicy`, `MovedRoots`, `resolve`, `expand`, `query_flavors` |
+| `synth.rs` | What synth does with the scan: with no list, the installed packages matched against its flavor index; the options-file check that refuses a build | `installed_roots`, `installed_in_index`, `flavor_index`, `refuses_port` |
 | `query/wrapper.rs` | The makefile piped to `make`: includes the port, prints `OPTIQUE\|TAG\|value` lines | `WRAPPER` |
 | `query/makerunner.rs` | One `make` per port, cleared environment, the builder's `USER` and `HOME`, a pool of workers, killable | `QueryCtx`, `Identity`, `run_query`, `MakeRunner`, `kill_active_makes` |
 | `query/parse.rs` | The dump into a `PortInfo` | `parse_dump`, `parse_depends` |
@@ -176,7 +181,7 @@ roots into the scan's: `@all` and (under `FLAVOR_DEFAULT_ALL`) bare origins
 become every flavor of the port; `@-` becomes the default flavor.
 `scanner::scan` takes its roots as given; a dependency never goes through
 MOVED. Under `-s` with no list, `run_scan` first takes the installed
-packages and keeps those synth's index has (`roots::synth_installed`:
+packages and keeps those synth's index has (`synth::installed_in_index`:
 the categories' `SUBDIR` lines and each port's flavors).
 
 ## Querying and caching

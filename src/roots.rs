@@ -4,9 +4,9 @@
 //! ~8531-8537, ~8714-8724: `FLAVOR_ALL`, `FLAVOR_DEFAULT`).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use crate::cache::Cache;
+use crate::config::QueryEnv;
 use crate::model::origin::PortKey;
 use crate::moved::{ListedMove, Moved, MovedResult};
 use crate::optfiles::OptionsFiles;
@@ -138,6 +138,17 @@ pub enum MovedPolicy {
     Synth,
 }
 
+impl From<QueryEnv> for MovedPolicy {
+    /// The policy of the build queries are made for.
+    fn from(env: QueryEnv) -> Self {
+        match env {
+            QueryEnv::Jail { .. } => MovedPolicy::Poudriere,
+            QueryEnv::Host => MovedPolicy::Local,
+            QueryEnv::Synth => MovedPolicy::Synth,
+        }
+    }
+}
+
 /// The listed roots once MOVED has been read for them ([`apply_moved`]).
 #[derive(Debug, Default)]
 pub struct MovedRoots {
@@ -228,174 +239,9 @@ pub fn resolve(
     expand(roots, &flavors, default_all)
 }
 
-/// One line's `SUBDIR` entry, the way synth's `grep_Makefile` regex reads
-/// it (portscan.adb ~1266:
-/// `^SUBDIR[[:space:]]*[:+:]=[[:space:]]*([[:graph:]]*)`, applied to the
-/// line already trimmed): `SUBDIR`, optional whitespace, one `:` or `+`,
-/// `=`, optional whitespace, then the first run of non-space graphic
-/// characters — a second name on the same line is never read.
-fn subdir_entry(line: &str) -> Option<&str> {
-    let is_blank = |c: char| c == ' ' || c == '\t';
-    let rest = line.trim().strip_prefix("SUBDIR")?.trim_start_matches(is_blank);
-    let rest = rest.strip_prefix(['+', ':'])?.strip_prefix('=')?.trim_start_matches(is_blank);
-    let name = rest.split_whitespace().next().unwrap_or("");
-    (!name.is_empty()).then_some(name)
-}
-
-/// The categories synth's prescan reads from one ports tree, the way
-/// `prescan_ports_tree` lists them (portscan.adb ~1045): every directory
-/// entry starting with a lowercase ASCII letter, except the ports
-/// framework's own `base`, `distfiles` and `packages`. Sorted, as synth's
-/// own walk is.
-fn synth_categories(portsdir: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(portsdir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| name.chars().next().is_some_and(|c| c.is_ascii_lowercase()))
-        .filter(|name| !matches!(name.as_str(), "base" | "distfiles" | "packages"))
-        .collect();
-    out.sort();
-    out
-}
-
-/// synth's flavor index, built the way `prescan_ports_tree` /
-/// `grep_Makefile` build it (portscan.adb ~1045, ~1266): `category/name`
-/// for every `SUBDIR` entry of every category Makefile under `portsdir` and
-/// each of `overlays` (optique's own notion of the tree; synth itself knows
-/// none). A category with no Makefile of its own is not read — synth's
-/// `walk_all_subdirectories` fallback for that case is outside this scan's
-/// scope. An origin absent from this index is "missing from ports" to
-/// synth, whatever is on disk at its path.
-pub fn synth_index(portsdir: &Path, overlays: &[PathBuf]) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for tree in overlays.iter().map(PathBuf::as_path).chain(std::iter::once(portsdir)) {
-        for category in synth_categories(tree) {
-            let Ok(text) = std::fs::read_to_string(tree.join(&category).join("Makefile")) else {
-                continue;
-            };
-            for line in text.lines() {
-                if let Some(name) = subdir_entry(line) {
-                    out.insert(format!("{category}/{name}"));
-                }
-            }
-        }
-    }
-    out
-}
-
-/// The installed packages synth roots (`installed`: origin and flavor
-/// annotation of each), and those it skips with why. synth matches each
-/// against its flavor index, where a port without FLAVORS is its bare
-/// origin and a flavored one is listed only as `origin@flavor`
-/// (portscan-pilot.adb ~1137-1173, portscan.adb ~1726-1762): an origin not
-/// in [`synth_index`] is skipped as "missing from ports" — absent from
-/// synth's own index, not merely a directory without a Makefile; a port
-/// without FLAVORS is rooted as its bare origin, whatever the annotation;
-/// a flavored port only when the annotation names one of its FLAVORS.
-/// `exists` says whether the index has an origin, `flavors` gives the
-/// FLAVORS of those queried; a port whose FLAVORS are unknown (a failed
-/// query) is kept as given for the scan to report.
-pub fn synth_installed(
-    installed: &[PortKey],
-    exists: impl Fn(&str) -> bool,
-    flavors: &HashMap<String, Vec<String>>,
-) -> (Vec<PortKey>, Vec<(PortKey, &'static str)>) {
-    let mut kept = Vec::new();
-    let mut seen = HashSet::new();
-    let mut skipped = Vec::new();
-    for key in installed {
-        let root = if !exists(&key.origin) {
-            Err("missing from ports")
-        } else {
-            match flavors.get(&key.origin) {
-                None => Ok(key.clone()),
-                Some(fl) if fl.is_empty() => Ok(PortKey::new(key.origin.clone(), None)),
-                Some(fl) => match &key.flavor {
-                    Some(f) if fl.contains(f) => Ok(key.clone()),
-                    _ => Err("package unmatched"),
-                },
-            }
-        };
-        match root {
-            Ok(k) => {
-                if seen.insert(k.clone()) {
-                    kept.push(k);
-                }
-            }
-            Err(why) => skipped.push((key.clone(), why)),
-        }
-    }
-    (kept, skipped)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// synth's flavor index comes from each category Makefile's `SUBDIR`
-    /// entries (`prescan_ports_tree` / `grep_Makefile`, portscan.adb ~1045,
-    /// ~1266), not merely a directory with a Makefile: a port present on
-    /// disk but left out of its category's `SUBDIR` list is "missing from
-    /// ports" to synth, exactly as one truly absent from the tree would be.
-    #[test]
-    fn synth_installed_checks_the_subdir_index_not_the_makefile() {
-        let tmp = tempfile::tempdir().unwrap();
-        let portsdir = tmp.path().join("ports");
-        std::fs::create_dir_all(portsdir.join("misc/other")).unwrap();
-        std::fs::create_dir_all(portsdir.join("misc/local")).unwrap();
-        std::fs::write(portsdir.join("misc/Makefile"), "SUBDIR += other\n").unwrap();
-        std::fs::write(portsdir.join("misc/other/Makefile"), "PKGNAME=other-1.0\n").unwrap();
-        std::fs::write(portsdir.join("misc/local/Makefile"), "PKGNAME=local-1.0\n").unwrap();
-
-        let index = synth_index(&portsdir, &[]);
-        let exists = |o: &str| index.contains(o);
-        let (kept, skipped) =
-            synth_installed(&keys(&["misc/local", "misc/other"]), exists, &HashMap::new());
-        assert_eq!(kept, keys(&["misc/other"]));
-        let skipped: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} {why}")).collect();
-        assert_eq!(skipped, ["misc/local missing from ports"]);
-    }
-
-    /// synth roots an installed package only when its flavor index matches
-    /// it: a stale flavor, a flavored port's unannotated package and an
-    /// origin gone from the tree are skipped, an unflavored port is rooted
-    /// bare whatever its annotation says.
-    #[test]
-    fn synth_installed_keeps_what_the_flavor_index_matches() {
-        let flavors: HashMap<String, Vec<String>> = [
-            ("misc/flav".to_string(), vec!["full".into(), "nox".into()]),
-            ("misc/plain".to_string(), Vec::new()),
-        ]
-        .into();
-        let exists = |o: &str| o != "misc/gone";
-        let (kept, skipped) = synth_installed(
-            &keys(&[
-                "misc/flav@nox",
-                "misc/flav@old",
-                "misc/flav",
-                "misc/plain@py39",
-                "misc/plain",
-                "misc/gone",
-                "misc/broken@x",
-            ]),
-            exists,
-            &flavors,
-        );
-        assert_eq!(kept, keys(&["misc/flav@nox", "misc/plain", "misc/broken@x"]));
-        let skipped: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} {why}")).collect();
-        assert_eq!(
-            skipped,
-            [
-                "misc/flav@old package unmatched",
-                "misc/flav package unmatched",
-                "misc/gone missing from ports",
-            ]
-        );
-    }
 
     fn keys(specs: &[&str]) -> Vec<PortKey> {
         specs.iter().map(|s| PortKey::parse(s).unwrap()).collect()

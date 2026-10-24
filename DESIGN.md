@@ -41,7 +41,7 @@ writes at the top of every jail's make.conf (`PACKAGE_BUILDING` and the
 three others, copied from `setup_makeconf` in its `common.sh`, which skip
 more probes and change a few option defaults) and ends with
 `LOCALBASE=/nonexistent`, after the layers so none can undo it
-(`src/config.rs`). Between the two, after the layers, come the hook
+(`src/config/poudriere.rs`). Between the two, after the layers, come the hook
 plugins' `hooks/plugins/*/make.conf`, which poudriere appends there too.
 Being part of the staged text, the environment is
 covered by the make.conf hash, so it keys its own cache generation. On the
@@ -145,8 +145,8 @@ but read in place: a staged copy lost the directory its relative
 hashed, in any build; `--clear-cache` is the documented answer, since
 following includes means evaluating make.conf the way make does. Detection stays the default because it is right
 for most hosts; `-l` exists because a host running poudriere may still
-build some ports itself, and only the flag can say so (`src/config.rs`,
-`resolve`).
+build some ports itself, and only the flag can say so
+(`src/config/mod.rs`, `resolve`).
 
 `-p` names a poudriere tree and nothing else: without poudriere.d it is
 an error, as `-j` and `-z` are, and a tree poudriere does not know is an

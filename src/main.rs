@@ -25,6 +25,7 @@ mod report;
 mod roots;
 mod session;
 mod staging;
+mod synth;
 mod tui;
 
 use std::io::Write as _;
@@ -645,93 +646,6 @@ fn query_ctx(settings: &config::Settings, port_dbdir: std::path::PathBuf) -> Que
     }
 }
 
-/// Origins of everything installed, from pkg(8) — synth's natural root set
-/// when no list is given (synth builds what is installed). Flavors come from
-/// the pkg "flavor" annotation; `repo` restricts to packages installed from
-/// that pkg repository (%R).
-fn installed_roots(repos: &[String]) -> Result<Vec<model::origin::PortKey>> {
-    let origins = pkg_query("%n\t%o\t%R")?;
-    // One line per annotation; only the "flavor" ones matter.
-    let annots = pkg_query("%n\t%At\t%Av")?;
-    let roots = parse_installed(&origins, &annots, repos);
-    if roots.is_empty() {
-        if repos.is_empty() {
-            anyhow::bail!("no installed packages with port origins found (pkg query -a %o)");
-        }
-        anyhow::bail!(
-            "no installed packages from {} \
-             (check the names with: pkg query -a %R | sort -u)",
-            repos_phrase(repos)
-        );
-    }
-    Ok(roots)
-}
-
-/// `pkg query -a FORMAT`, its stdout; a failing query fails the run rather
-/// than reading as no packages (or no flavors).
-fn pkg_query(format: &str) -> Result<String> {
-    let out = std::process::Command::new("pkg")
-        .args(["query", "-a", format])
-        .output()
-        .map_err(|e| anyhow::anyhow!("cannot run pkg query: {e}"))?;
-    if !out.status.success() {
-        anyhow::bail!("pkg query failed: {}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// "repository 'a'" or "repositories 'a', 'b'".
-fn repos_phrase(repos: &[String]) -> String {
-    let noun = if repos.len() == 1 { "repository" } else { "repositories" };
-    format!("{noun} '{}'", repos.join("', '"))
-}
-
-/// Pure part of installed_roots: `origins` lines are
-/// `package\torigin\trepository`, `annots` lines are
-/// `package\tannotation\tvalue`. Both are keyed by package, not origin:
-/// several flavors of one origin can be installed at once (polkit-qt-1 for
-/// qt5 and qt6), each its own root. Unparsable origins are skipped,
-/// duplicates collapse, the result is sorted.
-fn parse_installed(
-    origins: &str,
-    annots: &str,
-    repos: &[String],
-) -> Vec<model::origin::PortKey> {
-    let mut flavor: std::collections::HashMap<&str, &str> = Default::default();
-    for line in annots.lines() {
-        let mut f = line.split('\t');
-        if let (Some(pkg), Some("flavor"), Some(value)) = (f.next(), f.next(), f.next()) {
-            flavor.insert(pkg, value);
-        }
-    }
-    let mut roots = std::collections::BTreeSet::new();
-    for line in origins.lines() {
-        let mut f = line.split('\t');
-        let (Some(pkg), Some(origin), pkg_repo) = (f.next(), f.next(), f.next()) else {
-            continue;
-        };
-        let origin = origin.trim();
-        if origin.is_empty() {
-            continue;
-        }
-        if !repos.is_empty() {
-            let from = pkg_repo.map(str::trim).unwrap_or("");
-            if !repos.iter().any(|r| r == from) {
-                continue;
-            }
-        }
-        let spec = match flavor.get(pkg) {
-            Some(fl) => format!("{origin}@{fl}"),
-            None => origin.to_string(),
-        };
-        // Packages not built from ports may carry unparsable origins: skip.
-        if let Some(key) = model::origin::PortKey::parse(&spec) {
-            roots.insert(key);
-        }
-    }
-    roots.into_iter().collect()
-}
-
 /// The resolved root list plus notes destined for the startup banner's
 /// aligned `note:` block (nothing is printed here).
 struct RootSet {
@@ -753,14 +667,14 @@ fn listed_roots(origins: &[String], files: &[std::path::PathBuf]) -> Result<Root
 /// installed packages when nothing was given.
 fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
     if origins.is_empty() && cli.files.is_empty() && cli.synth.is_some() {
-        let roots = installed_roots(&cli.repo)?;
+        let roots = synth::installed_roots(&cli.repo)?;
         let note = if cli.repo.is_empty() {
             format!("no ports given; using {} installed package(s) as the list", roots.len())
         } else {
             format!(
                 "no ports given; using {} installed package(s) from {}",
                 roots.len(),
-                repos_phrase(&cli.repo)
+                synth::repos_phrase(&cli.repo)
             )
         };
         let roots = roots.into_iter().map(roots::Listed::port).collect();
@@ -917,50 +831,9 @@ fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     moved
 }
 
-/// Why synth would refuse to build with the saved options of a port whose
-/// options are `options`, `text` being the file synth reads for it; None
-/// when it would not. synth's check (portscan-packages.adb ~808-916,
-/// `passed_options_cache_check`, run before every build by
-/// portscan-pilot.adb ~418-424) counts every line with `+=` right after
-/// `OPTIONS_FILE_SET` or `OPTIONS_FILE_UNSET`'s length, and fails the file
-/// when an entry names an option the port lacks or when the count is not
-/// the port's number of options, more or fewer.
-fn synth_refuses(text: &[u8], options: &[String]) -> Option<String> {
-    let options: std::collections::BTreeSet<&str> = options.iter().map(String::as_str).collect();
-    let mut count = 0usize;
-    for line in text.split(|&b| b == b'\n') {
-        let name = if line.get(16..18) == Some(b"+=") {
-            &line[18..]
-        } else if line.get(18..20) == Some(b"+=") {
-            &line[20..]
-        } else {
-            continue;
-        };
-        count += 1;
-        let name = String::from_utf8_lossy(name);
-        if !options.contains(name.as_ref()) {
-            return Some(format!("saved {name} is no option of the port"));
-        }
-    }
-    (count != options.len())
-        .then(|| format!("{count} saved entries for the port's {} options", options.len()))
-}
-
-/// The file synth checks for `info` under `files`' options dir, and what it
-/// says of it ([`synth_refuses`]): `<category>_<name>/options` by origin,
-/// for a port without flavors; a flavored port's name carries its
-/// `@flavor` there, a file that never exists, so it is never refused.
-fn synth_refuses_port(files: &optfiles::OptionsFiles, info: &PortInfo) -> Option<String> {
-    if !info.flavors.is_empty() {
-        return None;
-    }
-    let bytes = files.bytes(&info.key.origin.replace('/', "_"))?;
-    synth_refuses(&bytes, &info.options.complete)
-}
-
 /// Does a scan row make `scan` exit 1? A conflict always does (saved
 /// options violate the port's own constraints), and so does a file synth
-/// would refuse (`synth_refuses`, under -s), whatever the status; missing
+/// would refuse (`synth::refuses`, under -s), whatever the status; missing
 /// or outdated configuration only does when make.conf leaves something
 /// open (`mc_covered` false). Blacklisted ports never do — they are never
 /// built here.
@@ -1063,17 +936,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
             }
         }
-        match settings.env {
-            config::QueryEnv::Jail { package_building } => eprintln!(
-                "  {} poudriere jail (host packages under /usr/local not seen{})",
-                tint(paint, ansi::CYAN, "environment:"),
-                if package_building { "" } else { "; NO_PACKAGE_BUILDING set" }
-            ),
-            config::QueryEnv::Synth => eprintln!(
-                "  {} synth scan slave (host packages under /usr/local not seen)",
-                tint(paint, ansi::CYAN, "environment:")
-            ),
-            config::QueryEnv::Host => {}
+        if let Some(env) = settings.env.description() {
+            eprintln!("  {} {env}", tint(paint, ansi::CYAN, "environment:"));
         }
         if !settings.blacklist.is_empty() {
             for (i, src) in settings.blacklist.sources.iter().enumerate() {
@@ -1092,16 +956,8 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let files = optfiles::OptionsFiles::new(&settings.options_dir);
     let mut given = rs.roots.clone();
     if rs.installed {
-        // synth roots only the installed packages its flavor index matches:
-        // present only when its origin is in synth's own index — each
-        // category Makefile's SUBDIR entries (roots::synth_index) — not
-        // merely a directory holding a Makefile.
-        let synth_index = roots::synth_index(&ctx.portsdir, &ctx.overlays);
-        let exists = |o: &str| synth_index.contains(o);
         let installed: Vec<_> = given.iter().map(|l| l.key.clone()).collect();
-        let origins = installed.iter().map(|k| k.origin.clone()).filter(|o| exists(o)).collect();
-        let flavors = roots::query_flavors(&origins, &ctx, &files, jobs, &mut cache);
-        let (kept, skipped) = roots::synth_installed(&installed, exists, &flavors);
+        let (kept, skipped) = synth::installed_in_index(&installed, &ctx, &files, jobs, &mut cache);
         if !skipped.is_empty() && !cli.quiet {
             let list: Vec<String> = skipped.iter().map(|(k, why)| format!("{k} ({why})")).collect();
             eprintln!(
@@ -1115,11 +971,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     }
     // MOVED, read for the listed origins as the build reads it, each time:
     // never cached, as the cache's carry-over takes MOVED to be read per run.
-    let policy = match settings.env {
-        config::QueryEnv::Jail { .. } => roots::MovedPolicy::Poudriere,
-        config::QueryEnv::Host => roots::MovedPolicy::Local,
-        config::QueryEnv::Synth => roots::MovedPolicy::Synth,
-    };
+    let policy = roots::MovedPolicy::from(settings.env);
     let exists = |o: &str| ctx.locate(o).is_some();
     let listing = roots::apply_moved(&given, policy, cli.follow_moved, &moved, exists);
     if cli.follow_moved && policy == roots::MovedPolicy::Synth && !cli.quiet {
@@ -1432,7 +1284,7 @@ fn cmd_scan(cli: &Cli, rs: &RootSet, json: bool, with_options: bool) -> Result<u
     for (key, info) in &sess.ports {
         // synth refuses the whole build over one such file, options or not.
         let synth_refuses = (settings.env == config::QueryEnv::Synth)
-            .then(|| synth_refuses_port(&scanned.files, info))
+            .then(|| synth::refuses_port(&scanned.files, info))
             .flatten();
         if !info.options.has_options() && synth_refuses.is_none() {
             hidden += 1;
@@ -1978,39 +1830,11 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::split_raw_origins;
-
-    /// synth refuses a file with an entry the port lacks, or with more or
-    /// fewer entries than the port has options, every SET or UNSET line
-    /// counted; such a file trips scan's gate whatever its status.
+    /// A file synth refuses trips scan's gate whatever its status.
     #[test]
     fn a_file_synth_refuses_trips_the_gate() {
-        use super::{needs_attention, synth_refuses};
+        use super::needs_attention;
         use crate::session::UiStatus;
-        let opts: Vec<String> = ["A", "B"].iter().map(|s| s.to_string()).collect();
-        let file = |body: &str| {
-            format!("# This file is auto-generated by 'make config'.\n_OPTIONS_READ=x-1.0\n{body}")
-        };
-        let both = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
-        assert_eq!(synth_refuses(both.as_bytes(), &opts), None);
-        let gone = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=GONE\n");
-        assert_eq!(
-            synth_refuses(gone.as_bytes(), &opts).as_deref(),
-            Some("saved GONE is no option of the port")
-        );
-        let short = file("OPTIONS_FILE_SET+=A\n");
-        assert_eq!(
-            synth_refuses(short.as_bytes(), &opts).as_deref(),
-            Some("1 saved entries for the port's 2 options")
-        );
-        // A repeated line is one more entry, as synth counts it.
-        let twice = file("OPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_UNSET+=B\n");
-        assert_eq!(
-            synth_refuses(twice.as_bytes(), &opts).as_deref(),
-            Some("3 saved entries for the port's 2 options")
-        );
-        // A port with no options at all and a stray entry.
-        assert!(synth_refuses(both.as_bytes(), &[]).is_some());
-
         // The gate: a refused file trips it even when the port is ok or
         // make.conf covers what is open; a blacklisted port never does.
         assert!(needs_attention(&UiStatus::Ok, false, true, true));
@@ -2019,54 +1843,6 @@ mod tests {
         assert!(!needs_attention(&UiStatus::Stale, false, true, false));
         assert!(needs_attention(&UiStatus::Conflict, false, true, false));
         assert!(!needs_attention(&UiStatus::Conflict, true, true, true));
-    }
-
-    /// `synth_refuses_port` reads `<category>_<name>/options` by origin,
-    /// never by the port's own `OPTIONS_NAME` (which a flavor or an
-    /// OPTIONS_SUB port names differently): synth's own lookup
-    /// (portscan-packages.adb ~816) builds that path from the catport, not
-    /// from anything the port's Makefile sets.
-    #[test]
-    fn synth_refuses_port_reads_by_origin_not_options_name() {
-        use super::synth_refuses_port;
-        use crate::model::port::PortInfo;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("misc_port")).unwrap();
-        std::fs::write(
-            tmp.path().join("misc_port/options"),
-            b"# This file is auto-generated by 'make config'.\n\
-              _OPTIONS_READ=x-1.0\n\
-              OPTIONS_FILE_SET+=A\n\
-              OPTIONS_FILE_UNSET+=GONE\n",
-        )
-        .unwrap();
-        let files = crate::optfiles::OptionsFiles::new(tmp.path());
-        let mut info = PortInfo::stub("misc/port");
-        info.options.complete = vec!["A".to_string()];
-        // A deliberately different OPTIONS_NAME: the file above must still
-        // be read, by the origin alone.
-        info.options_name = "something_else".to_string();
-        assert_eq!(
-            synth_refuses_port(&files, &info).as_deref(),
-            Some("saved GONE is no option of the port")
-        );
-    }
-
-    /// A flavored port's file, named `<category>_<name>@<flavor>/options`,
-    /// never exists under the plain by-origin path synth checks, so it is
-    /// never refused — whatever that path holds, even a file that would
-    /// trip a flavorless port.
-    #[test]
-    fn synth_refuses_port_never_refuses_a_flavored_port() {
-        use super::synth_refuses_port;
-        use crate::model::port::PortInfo;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("misc_port")).unwrap();
-        std::fs::write(tmp.path().join("misc_port/options"), b"short\n").unwrap();
-        let files = crate::optfiles::OptionsFiles::new(tmp.path());
-        let mut info = PortInfo::stub("misc/port");
-        info.flavors = vec!["full".to_string()];
-        assert_eq!(synth_refuses_port(&files, &info), None);
     }
 
     /// A shared file is redundant only when no flavor reading it deviates:
@@ -2127,63 +1903,6 @@ mod tests {
         assert!(!shown_ok(&UiStatus::Unconfigured, true, false), "-m, something open");
         assert!(!shown_ok(&UiStatus::Conflict, true, true));
     }
-    use super::parse_installed;
-
-    #[test]
-    fn installed_list_flavors_and_repo_filter() {
-        let origins = "nginx\twww/nginx\tpoudriere\n\
-                       ImageMagick7-nox11\tgraphics/ImageMagick7\tSynth\n\
-                       binutils\tdevel/binutils\tSynth\n\
-                       nginx\twww/nginx\tpoudriere\n\
-                       junk\tnot-an-origin\tSynth\n";
-        let annots = "ImageMagick7-nox11\tflavor\tnox11\n\
-                      binutils\tflavor\tnative\n\
-                      nginx\tcpe\tsomething\n";
-        // Unfiltered: three ports, flavors applied, dup and junk dropped.
-        let all = parse_installed(origins, annots, &[]);
-        let names: Vec<String> = all.iter().map(|k| k.to_string()).collect();
-        assert_eq!(
-            names,
-            vec!["devel/binutils@native", "graphics/ImageMagick7@nox11", "www/nginx"]
-        );
-        // Repo filter keeps only Synth-built packages.
-        let synth = parse_installed(origins, annots, &["Synth".to_string()]);
-        let names: Vec<String> = synth.iter().map(|k| k.to_string()).collect();
-        assert_eq!(names, vec!["devel/binutils@native", "graphics/ImageMagick7@nox11"]);
-        // Several repositories: a package from any of them is kept.
-        let both =
-            parse_installed(origins, annots, &["Synth".to_string(), "poudriere".to_string()]);
-        assert_eq!(both.len(), 3);
-        // Unknown repo: empty (caller turns this into an error).
-        assert!(parse_installed(origins, annots, &["nope".to_string()]).is_empty());
-    }
-
-    /// Several flavors of one origin installed side by side are each a
-    /// root: keyed by origin, all but the last annotated one were dropped
-    /// (183 of 2230 packages on one host).
-    #[test]
-    fn installed_list_keeps_every_flavor_of_one_origin() {
-        let origins = "polkit-qt5-1\tsysutils/polkit-qt-1\tSynth\n\
-                       polkit-qt6-1\tsysutils/polkit-qt-1\tSynth\n\
-                       gpu-firmware-amd-kmod-aldebaran\tgraphics/gpu-firmware-amd-kmod\tSynth\n\
-                       gpu-firmware-amd-kmod-arcturus\tgraphics/gpu-firmware-amd-kmod\tSynth\n";
-        let annots = "polkit-qt5-1\tflavor\tqt5\n\
-                      polkit-qt6-1\tflavor\tqt6\n\
-                      gpu-firmware-amd-kmod-aldebaran\tflavor\taldebaran\n\
-                      gpu-firmware-amd-kmod-arcturus\tflavor\tarcturus\n";
-        let names: Vec<String> =
-            parse_installed(origins, annots, &[]).iter().map(|k| k.to_string()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "graphics/gpu-firmware-amd-kmod@aldebaran",
-                "graphics/gpu-firmware-amd-kmod@arcturus",
-                "sysutils/polkit-qt-1@qt5",
-                "sysutils/polkit-qt-1@qt6",
-            ]
-        );
-    }
-
     #[test]
     fn split_raw_origins_forms() {
         let raw: Vec<String> = ["www/nginx", "-f", "list1", "mail/dovecot", "--file=list2"]
