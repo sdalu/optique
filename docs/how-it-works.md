@@ -98,7 +98,7 @@ whose query fails, count in `scan`'s exit status.
 
 Answers are cached under `~/.cache/optique/`, so a later run queries only
 the ports whose inputs changed: a warm run over a thousand ports takes well
-under a second. The man page's "Query cache" subsection is the reference;
+under a second ([benchmark](benchmark.md)). The man page's "Query cache" subsection is the reference;
 the reasons, the measurements and what was rejected are in
 [DESIGN.md](../DESIGN.md#persistent-cache-keyed-on-what-actually-changed).
 

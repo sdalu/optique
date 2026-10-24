@@ -19,8 +19,11 @@ options/`IMPLIES`/make.conf — it is what `poudriere options -C` runs for one
 port at a time, and reimplementing bmake's variable expansion would drift
 from it the moment a port leans on something clever. What optique changes is
 the walk: `poudriere options -C` visits ports serially with a dialog each,
-while independent make processes parallelise freely. A cold run over about a
-thousand ports takes roughly 56 seconds, a warm one (cache hit) about 0.4.
+while independent make processes parallelise freely. A single query costs
+more than `config-conditional` does, since it reads far more of the port,
+so the cold gain is the parallelism alone: on 876 ports, 27 seconds against
+poudriere's 49 to check, 0.2 warm, 174.6 with one job
+([docs/benchmark.md](docs/benchmark.md)).
 
 ## Queries see a jail, not the host
 
