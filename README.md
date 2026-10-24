@@ -137,6 +137,8 @@ Every command takes the same global options after its name (`-z set`,
 - [Dependency loops](docs/dependency-loops.md): how they are found and
   broken
 - [How it works](docs/how-it-works.md): the query pipeline and the cache
+- [Benchmark](docs/benchmark.md): optique against `poudriere options -C`,
+  time and dialogs, on a large closure and a workstation list
 - [Architecture](docs/architecture.md): the layers, a map of the code,
   each command's flow, the options model and the TUI's loop
 - [Conformance](docs/conformance.md): how optique was checked against the
