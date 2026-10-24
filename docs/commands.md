@@ -154,7 +154,9 @@ optique leaves to make, never writing or removing it (`clean` included),
 an options file it cannot model: one whose `options.local` assigns a SET
 or UNSET list afresh, dropping the file's lines, or with `?=`, which
 assigns only while the file leaves that list out (so a write turning
-every option on would bring it to life); one where either file has
+every option on would bring it to life); one whose options file itself
+assigns either list with `?=`, which assigns nothing where the port's
+Makefile set the list first (devel/subversion); one where either file has
 a line it cannot model — an assignment to anything but the SET and UNSET
 lists and the bookkeeping `make config` writes, a `!=`, a directive, a `$`
 expansion, or a line that is no assignment; and one a port reads none of,
@@ -216,7 +218,10 @@ list is an error the other way round:
 
 - `-r`/`--redundant` — also remove files whose recorded configuration is
   exactly what defaults plus the `make.conf` overlay would produce anyway,
-  so removing them changes nothing on a later `sync`.
+  so removing them changes nothing on a later `sync`. A member of a
+  conditional group whose option is off counts: make drops it from
+  `PORT_OPTIONS`, but its dependencies were added first, so a file
+  choosing it is kept.
 - `-u`/`--unused` — also remove entries for ports outside the dependency
   closure of the given package list, which is then required. If the scan
   of that closure has any error — a port that fails to query, a listed

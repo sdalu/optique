@@ -769,7 +769,12 @@ is redundant only when the outcome with it and
 .Pa options.local
 equals the outcome with
 .Pa options.local
-alone.
+alone, counting the members of a conditional group whose option is off:
+.Xr make 1
+drops them from
+.Va PORT_OPTIONS
+only after their dependencies were added, so a file choosing one builds
+otherwise.
 Bare defaults also count as decided:
 .Cm scan
 and the TUI then only flag deviations and conflicts, a port the defaults
@@ -1270,6 +1275,11 @@ or left to
 .Xr make 1
 .Pq see Cm sync ,
 is left as it is, the toggle's refusal shown instead.
+An option a
+.Pa make.conf
+knob or an
+.Pa options.local
+UNSET entry decides keeps its value.
 .It Ic U
 Revert the port to its saved state, from either pane.
 .It Ic u
@@ -2036,7 +2046,11 @@ dropping the file's lines for that list, or with
 .Ql ?= ,
 which assigns only while the options file leaves that list unassigned, so
 that a write turning every option on, with no UNSET line, would bring it to
-life; one where either file holds a line
+life; one whose options file itself assigns either list with
+.Ql ?= ,
+which assigns nothing where the port's Makefile set the list first
+.Pq Pa devel/subversion ;
+one where either file holds a line
 .Nm
 cannot model \(em an assignment to any variable but those two lists and the
 .Va _OPTIONS_READ
@@ -2131,6 +2145,23 @@ Disagreements confined to options one flavor does not even have, such as those
 removed by
 .Va OPTIONS_EXCLUDE ,
 are structural and not reported.
+An option only a non-default flavor has, which the file therefore never
+records
+.Po
+.Ql AOSD
+of
+.Pa multimedia/audacious-plugins@gtk3 ,
+which
+.Ql @qt6
+lacks
+.Pc ,
+shows that flavor's own outcome, and the TUI and
+.Cm decide
+refuse to change it.
+A hand-written
+.Ql UNSET
+pattern in the file is not carried over by a non-default flavor's write
+when it matches one of that flavor's options, which it would turn off.
 An option a flavor takes out of the list through
 .Va OPTIONS_SLAVE ,
 as
@@ -2323,7 +2354,8 @@ the
 .Pa make.conf
 overlay produce anyway, so that removing them changes nothing; an
 .Pa options.local
-beside one is counted on both sides, as under
+beside one is counted on both sides, and a conditional group's members
+too, as under
 .Fl m .
 .It Fl u , Fl -unused
 Also remove entries for ports outside the dependency closure of the given
@@ -3632,3 +3664,22 @@ adds the port, until the port itself or the
 changes; run once with
 .Fl -clear-cache
 if such a port should have come back.
+A port whose own Makefile runs
+.Xr make 1
+on another port while it parses
+.Po
+.Pa www/caddy-custom
+reads
+.Pa www/caddy Ns 's
+version so
+.Pc
+is queried again after any tree update, since that other port is not among
+the files its answer names.
+.Pp
+A local build's
+.Pa make.conf
+edited while
+.Nm
+runs (the TUI open) is noticed by its size or modification time: a warning
+says so, and no further answer is cached for the run, its generation being
+the text the file had at startup.
