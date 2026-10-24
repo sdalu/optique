@@ -33,9 +33,9 @@ pub struct Plan {
 pub struct Outcome {
     /// Ports the plan actually changed, in plan order.
     pub touched: Vec<PortKey>,
-    /// Every port the plan names that the closure holds with options, in
-    /// plan order: its file is written as the staged state says, unless it
-    /// already says the same. A plan confirming an unconfigured port's
+    /// Every port the plan names that the closure holds with options and
+    /// either changed or refused nothing for, in plan order: its file is
+    /// written as the staged state says, unless it already says the same. A plan confirming an unconfigured port's
     /// defaults changes nothing staged and still records them.
     pub named: Vec<PortKey>,
     /// (port, option, why) for every value the port's rules refused.
@@ -178,7 +178,11 @@ pub fn apply_plan(sess: &mut Session, plan: &Plan) -> Outcome {
         if changed {
             outcome.touched.push(key.clone());
         }
-        outcome.named.push(key.clone());
+        // A port whose values were refused is named for nothing to write:
+        // only a change, or a plan honoured for it, records its file.
+        if changed || refused.is_empty() {
+            outcome.named.push(key.clone());
+        }
         asked.push((key, wanted, refused));
     }
     // Order must not hide a broken promise. A value can be undone after it

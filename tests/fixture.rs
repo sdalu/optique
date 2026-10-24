@@ -110,7 +110,7 @@ fn a_plan_naming_an_option_the_flavor_excludes_is_honoured() {
     let f = Fixture::new();
     let order = ["misc/flav", "misc/flav@nox"];
     let nox = f.scan_port(&order, "misc/flav@nox");
-    assert_eq!(common::option(&nox, "X11")["staged"], true, "{nox}");
+    assert_eq!(option(&nox, "X11")["staged"], true, "{nox}");
     let plan = f.decide(&order, r#"{"misc/flav@nox": {"X11": true, "A": true}}"#);
     assert_eq!(plan["applied"], true, "{plan}");
     assert_eq!(plan["rejected"], serde_json::json!([]), "{plan}");
