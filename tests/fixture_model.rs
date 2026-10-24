@@ -765,7 +765,9 @@ fn prevents_patterns_and_unlisted_implies_conflict_as_check_config_fails() {
 /// option is off only after the option helpers ran (the mail/faces case):
 /// with WITH=SOX and AUDIO off, make has SOX off yet SOX_RUN_DEPENDS in
 /// RUN_DEPENDS. optique reads the dependencies from make: misc/condep is
-/// in its closure, SOX off.
+/// in its closure. SOX is staged on, the value a file would record: WITH
+/// turned it on and its helpers ran with it, so recording it off would
+/// build otherwise.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn a_pruned_group_members_dependencies_stay() {
@@ -791,5 +793,5 @@ fn a_pruned_group_members_dependencies_stay() {
         .iter()
         .find(|p| p["port"] == origin)
         .unwrap();
-    assert_eq!(flagged(cond, "staged"), ["DOCS"], "{cond}");
+    assert_eq!(flagged(cond, "staged"), ["DOCS", "SOX"], "{cond}");
 }
