@@ -112,10 +112,11 @@ docs/reference/, and optique conforms to them: it predicts what the
 upstream tool will actually do, tells the user that this follows an
 upstream defect, and the conformance table records it as "conforms to an
 upstream defect". So optique reads a synth.ini key with a tab in it as
-synth does (ignored, the default used) and names the line; it reports
-that synth will abort on an options file with a line its fixed-offset
-probe overruns, rather than accepting the file silently; it follows
-poudriere's collapsed MOVED chains.
+synth does (ignored, the default used) and names the line; it follows
+poudriere's collapsed MOVED chains; and it never writes an options-file
+line that synth's fixed-offset probe would overrun, so no file optique
+writes makes synth abort. A file optique did not write and synth aborts
+on is left to the synth user: optique neither reports nor rejects it.
 
 Rejected: copying every defect so that optique and the tool always agree,
 which makes optique wrong in the same way and hides the fault; and
