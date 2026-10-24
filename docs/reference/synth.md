@@ -41,6 +41,7 @@ Contents:
 - [Options](#options)
 - [The scan](#the-scan)
 - [The rebuild decision](#the-rebuild-decision)
+- [Likely defects](#likely-defects)
 - [Limits visible in the code](#limits-visible-in-the-code)
 - [Sources](#sources)
 
@@ -511,29 +512,80 @@ tests on `pkg rquery` output; matches are fetched with `pkg fetch` into
 `Directory_packages`. `force` and `test` delete the named ports' packages
 first (`force_delete`), so those are always built.
 
+## Likely defects
+
+Behaviour that reads as a defect rather than a design choice: synth
+crashes or loops, gives a result its own code intends otherwise, treats
+two equivalent inputs differently, or contradicts its manual. Each item is
+described where the link points.
+
+**Crashes and wrong results**
+
+- The cached options check misses every flavored port: it looks for
+  `<cat>_<port>@<flavor>/options`, while the framework's default
+  `OPTIONS_NAME` (`Mk/bsd.options.mk`) has no flavor, so the file is never
+  found and the port always passes. A port that sets its own
+  `OPTIONS_NAME` is checked against the wrong file the same way
+  ([Cached options check](#cached-options-check)).
+- `passed_options_cache_check` slices bytes 17-18 and 19-20 of each line
+  without checking its length, so a line shorter than 18 bytes, or an 18-
+  or 19-byte line without `+=` at 17-18, raises `Constraint_Error`, which
+  nothing on the call path (`limited_cached_options_check`,
+  `sanity_check_then_prefail`, `synth.adb`) catches. `default.gpr` keeps
+  Ada's run-time checks. `make config` writes such lines itself for a
+  package name of four or five characters: for `x11-wm/wmx`, both
+  `_OPTIONS_READ=wmx-8` and `# Options for wmx-8` are 19 bytes.
+- The same check counts option lines, not distinct names, so a
+  hand-written file naming an option twice fails a port whose options did
+  not change.
+- The scan reads its 15 values by line position from a file into which
+  `make` writes both standard output and standard error: one diagnostic
+  line shifts every value after it ([The query](#the-query)).
+- The ccache test is `Ada.Directories.Exists` on the configured string,
+  so the default `disabled` is a path relative to synth's working
+  directory: a directory of that name there turns ccache on
+  ([make.conf](#makeconf)).
+- When the selected profile has no `Directory_packages`, a blank
+  `[<profile>]` header is appended even if one already exists
+  ([How missing keys are filled](#how-missing-keys-are-filled)).
+- The INI reader raises `Constraint_Error` on a header with no `]`, keeps
+  the `\r` of a CRLF file in every value, keeps a tab in a key, and takes
+  no indented `[name]` for a header
+  ([How a value is read](#how-a-value-is-read)).
+
+**Inconsistent treatment**
+
+- `<profile>-environment` is applied to builders but not to the scanner,
+  so a variable it sets can change what a port builds without changing
+  what the scan saw ([Environment of a make run](#environment-of-a-make-run)).
+- A port list given as arguments loses a trailing `/`; the same origin as
+  a line of a list file keeps it and is refused
+  ([The port list](#the-port-list)).
+- `LIB_DEPENDS_ALL`, the subpackages' library dependencies, is parsed as a
+  build dependency, so those entries do not count in `librun` and
+  `min_librun`, against which recorded package dependencies are checked
+  ([Parsing dependencies](#parsing-dependencies)).
+
+**Documentation**
+
+- `synth.1` says the options directory's initial value "comes from a
+  system scan"; the code uses the constant `/var/db/ports`.
+- `Directory_repository` is written to `synth.ini` but never read: it is
+  always `Directory_packages` plus `/All`.
+
 ## Limits visible in the code
 
-- The cached options check derives the directory from the port key, so for a
-  flavored port it looks for `<cat>_<port>@<flavor>/options`. The framework's
-  default `OPTIONS_NAME` is `PKGORIGIN` with `/` replaced by `_`
-  (`Mk/bsd.options.mk`), without the flavor, so for flavored ports the file is
-  never found and the check always passes. A port that sets its own
-  `OPTIONS_NAME` is checked against the wrong file in the same way.
-- The cached options check reads the host's `Directory_options`; options set
-  through `<profile>-make.conf` are not part of that check, only of the scan.
-- `passed_options_cache_check` slices bytes 17-18 and 19-20 of each line
-  without checking its length. The build (`default.gpr`) keeps Ada's run-time
-  checks, so a line shorter than 18 bytes, or an 18- or 19-byte line without
-  `+=` at 17-18, raises `Constraint_Error`. No handler on the call path
-  (`limited_cached_options_check`, `sanity_check_then_prefail`, `synth.adb`)
-  catches it. `make config` writes such lines itself for a package name
-  of four or five characters: for `x11-wm/wmx`, both
-  `_OPTIONS_READ=wmx-8` and `# Options for wmx-8` are 19 bytes.
-- The scan output is parsed by line position with standard error merged into
-  it, so a line of diagnostics from `make` shifts every following value.
+Choices that hold today but narrow what synth notices:
+
+- The cached options check reads the host's `Directory_options`; options
+  set through `<profile>-make.conf` are not part of that check, only of
+  the scan.
+- Whether a cached option was under `SET` or `UNSET` is not compared with
+  the port's current selection: the check detects an obsolete option list,
+  not changed choices.
 - A dependency without `@flavor` on a flavored port resolves to the first
   flavor in the index, that is the first entry `FLAVORS` returned when the
-  index was built.
+  index was built, as the framework's own default flavor is.
 - `index_out_of_date` looks no deeper than the entries of each category
   directory, so an in-place edit of a port's `Makefile` (a new flavor, say)
   does not by itself mark the index stale.

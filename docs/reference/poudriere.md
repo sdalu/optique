@@ -31,6 +31,7 @@ Contents:
 - [Gathering metadata](#gathering-metadata)
 - [The build queue](#the-build-queue)
 - [Incremental rebuild](#incremental-rebuild)
+- [Likely defects](#likely-defects)
 - [Tests on options and dependencies](#tests-on-options-and-dependencies)
 - [Sources](#sources)
 
@@ -571,6 +572,61 @@ dependencies and `PKG_NO_VERSION_FOR_DEPS=no`.
 `test/bulk-build-inc-delete_old_pkg-changed-dep-pkgname.sh` renames a
 dependency's package through a make.conf option (`misc_foo_SET= RENAME`)
 and expects its dependent rebuilt by the package-base check (15).
+
+## Likely defects
+
+Behaviour that reads as a defect rather than a design choice: poudriere
+loops, gives a result its own code intends otherwise, treats two
+equivalent inputs differently, or contradicts its manual. Each item is
+described where the link points.
+
+**Loops and wrong results**
+
+- A `MOVED` cycle such as `a|b`, `b|a` collapses to `a|a`, and
+  `check_moved` loops forever when `a` does not exist ([MOVED](#moved)).
+- `parse_MOVED.awk` collapses chains in file order, so `A|B` followed by
+  `B|C` sends `A` to `C` even when `B` exists again; `check_moved` never
+  tests `B` ([MOVED](#moved)).
+- In `_delete_old_pkg`, the `originspec_decode` after `return 0` on a
+  `MOVED` origin can never run.
+
+**Inconsistent treatment**
+
+- `include_poudriere_confs` scans the arguments before the sub-command
+  defaults the tree to `default`, so a build without `-p` reads neither
+  `default-poudriere.conf` nor `<jail>-default-poudriere.conf`, while
+  `setup_makeconf`, called later, does read `default-make.conf` and
+  `<jail>-default-make.conf` ([Configuration files](#configuration-files),
+  [The layered files](#the-layered-files)).
+- `poudriere options` gives `LOCALBASE=/nonexistent`, `DIALOG4PORTS` and
+  `PKG_BIN` to its recursive `make` run only; the run on the named port
+  itself sees the exported `LOCALBASE`
+  ([poudriere options](#poudriere-options)).
+- `poudriere options` without `-j` looks up layer names with an empty jail
+  part, such as `-default-make.conf`, and runs make in the main tree only,
+  so a port that exists only in an overlay cannot be configured
+  ([poudriere options](#poudriere-options)).
+- `test/common.bulk.sh` passes `-O` to `poudriere options`, whose
+  `getopts` string has no `O` ([Tests](#tests-on-options-and-dependencies)).
+
+**Documentation**
+
+- `poudriere.8` says the options directory is null-mounted into the jail;
+  the code copies it into the reference jail and null-mounts that copy
+  into the builders
+  ([Which directory a build reads](#which-directory-a-build-reads)).
+- `poudriere-options.8` says `-o` expands to `$POUDRIERE_ETC/name`; the
+  code writes `$POUDRIERE_ETC/poudriere.d/name`, with no `-options`
+  suffix, a name no build looks for unless the user adds the suffix
+  ([poudriere options](#poudriere-options)).
+
+**Questionable rather than wrong**
+
+- `testport -c` writes the choices into the reference jail's copy of the
+  options directory, so they are used for that test and then lost, never
+  saved to `poudriere.d`.
+- `POUDRIERE_ETC` taken from the environment skips the check that `-e`
+  makes that the path is a directory.
 
 ## Tests on options and dependencies
 
