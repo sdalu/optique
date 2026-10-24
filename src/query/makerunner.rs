@@ -338,6 +338,7 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         anyhow::bail!("make failed ({}): {why}", out.status);
     }
     let mut info = parse::parse_dump(key, &text)?;
+    info.outside_files = outside_files(&info.makefiles, &portdir, ctx);
     info.makefiles = tree_files(&info.makefiles, &portdir, &ctx.portsdir);
     adopt_options_file(&mut info, &ctx.port_dbdir);
     Ok(info)
@@ -361,6 +362,48 @@ fn adopt_options_file(info: &mut PortInfo, port_dbdir: &Path) {
     }
 }
 
+/// The files of `.MAKE.MAKEFILES` (`made`) that no other key covers, as
+/// absolute paths, sorted: not in the main tree (`tree_files`, carried over
+/// a tree update), an overlay (keyed by its files' mtimes), the options dir
+/// the query read (the entry's own hashes), the query's make.conf (the
+/// make.conf hash) or `/dev` (the wrapper itself). What is left is what
+/// make.conf `.include`s, for every port or for some (`.if ${.CURDIR:M…}`),
+/// and `/usr/share/mk`.
+fn outside_files(made: &[String], portdir: &Path, ctx: &QueryCtx) -> Vec<String> {
+    let mut covered: Vec<PathBuf> = vec![ctx.portsdir.clone(), ctx.port_dbdir.clone()];
+    covered.extend(ctx.portsdir.canonicalize());
+    covered.extend(ctx.overlays.iter().cloned());
+    let mut files: Vec<String> = made
+        .iter()
+        .map(|name| resolve_dots(&portdir.join(name)))
+        .filter(|path| {
+            !path.starts_with("/dev")
+                && ctx.make_conf.as_deref() != Some(path.as_path())
+                && !covered.iter().any(|dir| path.starts_with(dir))
+        })
+        .filter_map(|path| path.to_str().map(str::to_string))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// `path` with `.` dropped and `..` taken back by name, as make names a
+/// slave's master (`cat/slave/../master/Makefile`).
+fn resolve_dots(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// The files of `.MAKE.MAKEFILES` (`made`) that lie in the main tree,
 /// relative to it, sorted: a relative name is the port directory's, `..`
 /// is resolved by name, as make names a slave's master (`cat/slave/../
@@ -371,16 +414,7 @@ fn tree_files(made: &[String], portdir: &Path, portsdir: &Path) -> Vec<String> {
     let mut files: Vec<String> = made
         .iter()
         .filter_map(|name| {
-            let mut path = PathBuf::new();
-            for part in portdir.join(name).components() {
-                match part {
-                    std::path::Component::ParentDir => {
-                        path.pop();
-                    }
-                    std::path::Component::CurDir => {}
-                    other => path.push(other),
-                }
-            }
+            let path = resolve_dots(&portdir.join(name));
             let rel = trees
                 .iter()
                 .flatten()
@@ -1141,6 +1175,39 @@ mod tests {
             !pma.deps.iter().any(|d| d.spec.contains("-zts/")),
             "the host's threaded httpd leaked into databases/phpmyadmin5: {:?}",
             pma.deps
+        );
+    }
+
+    /// Of the files make read, those no other key covers are kept: what
+    /// make.conf includes and /usr/share/mk, not the trees, the options
+    /// dir, the query's own make.conf or /dev; a relative name is the
+    /// port directory's.
+    #[test]
+    fn outside_files_are_what_no_other_key_covers() {
+        let ctx = QueryCtx {
+            portsdir: PathBuf::from("/ports"),
+            make_conf: Some(PathBuf::from("/stage/make.conf")),
+            port_dbdir: PathBuf::from("/db"),
+            overlays: vec![PathBuf::from("/overlay")],
+            identity: Identity::Invoker,
+            framework: Vec::new(),
+        };
+        let made: Vec<String> = [
+            "/dev/stdin",
+            "/usr/share/mk/sys.mk",
+            "/stage/make.conf",
+            "/etc/make.conf.d/opts.conf",
+            "Makefile",
+            "../../Mk/bsd.port.mk",
+            "/overlay/cat/port/Makefile.local",
+            "/db/cat_port/options",
+            "/usr/share/mk/sys.mk",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(
+            outside_files(&made, Path::new("/ports/cat/port"), &ctx),
+            ["/etc/make.conf.d/opts.conf", "/usr/share/mk/sys.mk"]
         );
     }
 }

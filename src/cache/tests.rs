@@ -783,3 +783,51 @@ fn the_trees_parse_time_scripts_are_cargos() {
         assert!(readers(script).is_empty(), "{script}");
     }
 }
+
+/// A file make.conf includes is part of what an entry was made from: the
+/// generation it is in keeps it only while that file holds what it held,
+/// while entries that never read the file stay.
+#[test]
+fn an_included_make_conf_change_drops_its_readers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dbdir = tmp.path().join("db");
+    fs::create_dir_all(&dbdir).unwrap();
+    let cache_dir = tmp.path().join("cache");
+    let included = tmp.path().join("opts.conf");
+    fs::write(&included, "OPTIONS_UNSET+=DOCS\n").unwrap();
+    let reader = PortInfo {
+        outside_files: vec![included.display().to_string()],
+        ..info("cat/reader")
+    };
+    let other = info("cat/other");
+    let files = OptionsFiles::new(&dbdir);
+    let mut c = Cache::open(&cache_dir, "tree1", "conf1");
+    c.insert(&reader, &files);
+    c.insert(&other, &files);
+
+    let c = Cache::open(&cache_dir, "tree1", "conf1");
+    assert!(c.lookup(&reader.key, &files).is_some());
+    assert_eq!(c.note(), None);
+
+    fs::write(&included, "OPTIONS_UNSET+=NLS\n").unwrap();
+    let c = Cache::open(&cache_dir, "tree1", "conf1");
+    assert!(
+        c.lookup(&reader.key, &files).is_none(),
+        "the include changed"
+    );
+    assert!(
+        c.lookup(&other.key, &files).is_some(),
+        "it never read the include"
+    );
+    assert_eq!(
+        c.note(),
+        Some("cache: 1 entries dropped: a file make.conf includes changed")
+    );
+
+    fs::remove_file(&included).unwrap();
+    let c = Cache::open(&cache_dir, "tree1", "conf1");
+    assert!(
+        c.lookup(&reader.key, &files).is_none(),
+        "the include is gone"
+    );
+}

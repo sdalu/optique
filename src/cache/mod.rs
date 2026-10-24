@@ -76,7 +76,29 @@ struct CacheEntry {
     /// those, not the two above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     moved_hashes: Option<(String, String)>,
+    /// The hash of each of `info.outside_files` when the query was made, in
+    /// order: what make.conf `.include`s, which no other key covers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    outside_hashes: Vec<String>,
     info: PortInfo,
+}
+
+impl CacheEntry {
+    /// Do the files outside every other key still hold what they held for
+    /// the query? `now` memoizes each file's hash, read once per opening.
+    fn outside_unchanged(&self, now: &mut HashMap<String, String>) -> bool {
+        self.info.outside_files.len() == self.outside_hashes.len()
+            && self
+                .info
+                .outside_files
+                .iter()
+                .zip(&self.outside_hashes)
+                .all(|(file, then)| {
+                    now.entry(file.clone())
+                        .or_insert_with(|| file_hash(Path::new(file)))
+                        == then
+                })
+    }
 }
 
 impl Cache {
@@ -135,12 +157,33 @@ impl Cache {
         prune_old_generations(cache_dir, &generation);
 
         let mut map = HashMap::new();
+        // An entry whose make.conf includes changed since its query is
+        // left out: the latest line for a port decides, kept or not.
+        let mut now = HashMap::new();
+        let mut stale = HashSet::new();
         if let Ok(text) = fs::read_to_string(&path) {
             for line in text.lines() {
                 if let Ok(entry) = serde_json::from_str::<CacheEntry>(line) {
-                    map.insert(entry.info.key.clone(), entry);
+                    let key = entry.info.key.clone();
+                    if entry.outside_unchanged(&mut now) {
+                        stale.remove(&key);
+                        map.insert(key, entry);
+                    } else {
+                        map.remove(&key);
+                        stale.insert(key);
+                    }
                 }
             }
+        }
+        if !stale.is_empty() {
+            let dropped = format!(
+                "{} entries dropped: a file make.conf includes changed",
+                stale.len()
+            );
+            note = Some(match note {
+                Some(carried) => format!("{carried}; {dropped}"),
+                None => format!("cache: {dropped}"),
+            });
         }
         let file = OpenOptions::new()
             .create(true)
@@ -188,6 +231,11 @@ impl Cache {
             options_hash: files.hash(&info.options_name),
             local_hash: files.local_hash(&info.options_name),
             moved_hashes: moved_hashes(info),
+            outside_hashes: info
+                .outside_files
+                .iter()
+                .map(|f| file_hash(Path::new(f)))
+                .collect(),
             info: info.clone(),
         };
         if let Some(f) = &mut self.file
@@ -808,7 +856,7 @@ fn short(s: &str) -> String {
 /// one wrote with missing fields. Part of every generation file name
 /// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
 /// by the prune pass since nothing can read them again.
-const SCHEMA: u32 = 19;
+const SCHEMA: u32 = 20;
 
 /// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {

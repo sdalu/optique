@@ -93,11 +93,11 @@ relative path does not find its file here any more than it would in the
 jail (synth's profile make.conf is handled the same way, as synth appends
 it to each builder's).
 
-**Limitation:** the query cache is keyed on the text of the make.conf
-files, not of the files they `.include`. After editing an included file,
-run with `--clear-cache` once, or its change is not seen until something
-else invalidates the cached answers; a tree update no longer does for most
-of them ([the cache](how-it-works.md#what-it-does-not-see)).
+The query cache is keyed on the text of the make.conf files and, per
+answer, on each file they `.include` that make read for that port, so an
+edit to an included file is seen at the next run. A file a `.sinclude`
+skipped because it did not exist is not: after creating one, run with
+`--clear-cache` once ([the cache](how-it-works.md#what-it-does-not-see)).
 
 ## A make.conf moving the options
 
@@ -387,8 +387,8 @@ not, optique configures ports for a build on this host, the way
   override them;
 - the one make.conf layer is `/etc/make.conf`, or the file
   `__MAKE_CONF` names in the environment, read in place so that its
-  relative `.include`s resolve (the cache limitation under
-  [make.conf layers](#makeconf-layers) still applies);
+  relative `.include`s resolve, and keyed with them
+  ([make.conf layers](#makeconf-layers));
 - queries see the host's installed packages under `/usr/local`, since
   they are what the build will find (no `LOCALBASE=/nonexistent`);
 - queries run as the invoking user, with its `USER` and `HOME`, not as a

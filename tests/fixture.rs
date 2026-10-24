@@ -578,6 +578,40 @@ fn a_flavor_the_port_gives_its_own_file_is_managed() {
     assert_eq!(f.make_v("misc/flavfile", "PORT_OPTIONS"), ["A", "X11"]);
 }
 
+/// A make.conf `.include` is part of what the cache keys on: an edit to the
+/// included file alone is a new answer for the ports that read it, without
+/// --clear-cache.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_included_make_conf_edit_is_not_served_from_cache() {
+    let f = Fixture::new();
+    let included = f.make_conf.with_file_name("opts.conf");
+    fs::write(&included, "OPTIONS_UNSET+=DOCS\n").unwrap();
+    fs::write(
+        &f.make_conf,
+        format!(".include \"{}\"\n", included.display()),
+    )
+    .unwrap();
+    let port = f.scan_port(&["misc/cond"], "misc/cond");
+    assert_eq!(option(&port, "DOCS")["staged"], false, "{port}");
+
+    fs::write(&included, "\n").unwrap();
+    let out = f.run("scan", &["--json", "--options", "misc/cond"]);
+    let err = stderr(&out);
+    assert!(
+        err.contains("dropped: a file make.conf includes changed"),
+        "{err}"
+    );
+    let report = common::json(&out);
+    let port = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "misc/cond")
+        .unwrap();
+    assert_eq!(option(port, "DOCS")["staged"], true, "{port}");
+}
+
 /// A make.conf moving OPTIONS_FILE: make reads the moved file, so an edit
 /// to it is a new answer, never the cached one made before it.
 #[test]

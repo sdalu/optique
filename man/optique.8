@@ -369,7 +369,14 @@ every overlay: the count and newest modification time of its files, down to
 .It
 the text of the staged
 .Pa make.conf
-layers, not of the files they include;
+layers;
+.It
+per answer, the content of the other files
+.Xr make 1
+read for it outside the trees and the options directory: what a
+.Pa make.conf
+includes, and
+.Pa /usr/share/mk ;
 .It
 the host values the ports framework computes for any port
 .Pq release, architecture, CPU count: its Va _EXPORTED_VARS ,
@@ -645,10 +652,6 @@ Delete the persistent query cache
 .Pq every generation file, drafts left alone
 before running; given alone, without a subcommand or a package list, clear
 it and exit.
-Needed after editing a file that a
-.Pa make.conf
-includes; see
-.Sx CAVEATS .
 .It Fl -color Ar when
 When to colorize output:
 .Cm auto
@@ -2572,9 +2575,8 @@ the jail; synth's profile
 is handled the same way.
 The query cache is keyed on the text of the
 .Pa make.conf
-files, not of the files they include: after editing an included file, run
-once with
-.Fl -clear-cache .
+files and on each file they include
+.Pq see Sx CAVEATS No for one that did not exist yet .
 .Pp
 The layers are wrapped in the environment of a
 .Xr poudriere 8
@@ -3457,26 +3459,21 @@ implementation with
 .An Claude ,
 Anthropic's coding assistant.
 .Sh CAVEATS
-The query cache is keyed on the text of the
+The query cache keys each answer on the files a
 .Pa make.conf
-files themselves
-.Pq the poudriere.d layers, synth's profile file, or a local build's Pa /etc/make.conf ,
-not on the files they pull in with
+pulls in with
 .Ic .include
 or
-.Ic .sinclude .
-After editing such an included file,
-.Nm
-keeps serving the answers cached under the old content, without any
-warning, until a
-.Pa make.conf
-layer itself changes: a ports tree update keeps every answer its changes
-leave alone
-.Pq see Sx Query cache .
-Run once with
+.Ic .sinclude
+that
+.Xr make 1
+read for it, but a file a
+.Ic .sinclude
+skipped because it did not exist was not read: after creating one,
+run once with
 .Fl -clear-cache
 .Pq or use Fl -no-cache
-to have the edit seen.
+to have it seen.
 .Pp
 A git ports tree is known by its commit: a port edited in the tree and not
 committed is not seen, and its cached answer stays.

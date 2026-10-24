@@ -179,9 +179,10 @@ over.
 
 ### What it does not see
 
-- Files a make.conf `.include`s: after editing one, run once with
-  `--clear-cache`. A tree update does not clear their stale answers any
-  more, since it keeps whatever its changes leave alone.
+- A file a make.conf `.sinclude`s that did not exist when a port was
+  queried: after creating one, run once with `--clear-cache`. An edit to
+  an included file that exists is seen: each answer is keyed on the files
+  make read for it, includes and `/usr/share/mk` too.
 - A port edited in a git tree and not committed: the tree is known by its
   commit. Edit ports in an [overlay](configuration.md#overlays), keyed by
   its files' mtimes, or run with `--no-cache` while editing.

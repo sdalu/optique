@@ -70,6 +70,13 @@ pub struct PortInfo {
     /// update on (`cache::Invalidation`).
     #[serde(default)]
     pub makefiles: Vec<String>,
+    /// The other files make read for the query (`.MAKE.MAKEFILES`), outside
+    /// the trees, the options dir and the query's own make.conf: what
+    /// make.conf `.include`s, and `/usr/share/mk`. Absolute, sorted; a cache
+    /// entry is kept only while each still holds what it held when the
+    /// query was made.
+    #[serde(default)]
+    pub outside_files: Vec<String>,
 }
 
 impl PortInfo {
@@ -106,6 +113,7 @@ impl PortInfo {
             default_versions: vec![],
             warnings: vec![],
             makefiles: vec![],
+            outside_files: vec![],
         }
     }
 }

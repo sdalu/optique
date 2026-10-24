@@ -141,9 +141,9 @@ them (so `/etc/make.conf` counts as it does for `make config`), the host
 environment applies, and the make.conf (`__MAKE_CONF`, else
 `/etc/make.conf`) is hashed like a layer so the cache keys its content,
 but read in place: a staged copy lost the directory its relative
-`.include`s resolve from, and every query failed. Included files are not
-hashed, in any build; `--clear-cache` is the documented answer, since
-following includes means evaluating make.conf the way make does. Detection stays the default because it is right
+`.include`s resolve from, and every query failed. What a make.conf
+includes is keyed per answer, from what make read for it ("Persistent
+cache, keyed on what actually changed"). Detection stays the default because it is right
 for most hosts; `-l` exists because a host running poudriere may still
 build some ports itself, and only the flag can say so
 (`src/config/mod.rs`, `resolve`).
@@ -202,6 +202,22 @@ recognise, the key is the mtimes of `Mk/bsd.port.mk`, `MOVED` and
 `UPDATING`, kept whole: most updates leave the framework alone but touch
 `MOVED` or `UPDATING`, and an mtime cut to a prefix would let updates hours
 apart share a generation.
+
+An answer is also keyed on the files make read for it that no other key
+covers (`PortInfo::outside_files`): `.MAKE.MAKEFILES`, less the trees, the
+options dir, the query's own make.conf and `/dev`. That leaves what
+make.conf `.include`s, for every port or only for some (`.if
+${.CURDIR:M*/www/*}`), and `/usr/share/mk`. Each entry records their
+hashes, and opening a generation hashes each distinct file once (about ten
+on a closure of 93 ports) and leaves out the entries whose files changed,
+saying how many. An edit to an included file used to be served stale until
+`--clear-cache`. What make never read is not seen: a file a `.sinclude`
+skipped because it did not exist, then created. Rejected: asking the
+make.conf probe outside any port (`makerunner::options_place`) for its
+`.MAKE.MAKEFILES` and folding those files into the make.conf hash, which
+misses an include made for some ports only and discards every entry for
+any change; and evaluating make.conf to follow its includes by hand, which
+is make's job.
 
 A cache generation corresponds to one tree commit, so whatever the tree
 alone decides is cached with the query: whether a port ships a `pkg-help`

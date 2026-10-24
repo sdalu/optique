@@ -231,6 +231,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
         default_versions,
         warnings,
         makefiles,
+        outside_files: Vec::new(),
     })
 }
 
