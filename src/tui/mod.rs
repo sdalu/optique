@@ -1,3 +1,6 @@
+//! The interactive interface: the app state the panes draw from, the app
+//! built over a scanned session, and the event loop.
+
 mod apply_modal;
 mod driver;
 mod editor;

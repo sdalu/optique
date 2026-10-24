@@ -1,3 +1,7 @@
+//! The makefiles piped to make(1): the wrapper that dumps a port's options
+//! and dependencies, and the once-a-run probe of what bsd.port.mk computes for
+//! any port.
+
 /// The wrapper makefile piped to `make -f /dev/stdin optique-config`.
 ///
 /// It includes the port's Makefile (which pulls in the whole ports framework)

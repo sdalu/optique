@@ -1,3 +1,7 @@
+//! The MOVED files of the tree and its overlays, read and followed as
+//! poudriere's `parse_MOVED.awk` and `check_moved` do: where a listed origin
+//! went, or why it leads to no port.
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 

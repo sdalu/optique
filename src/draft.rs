@@ -1,3 +1,6 @@
+//! Drafts: the TUI's unapplied edits, saved on quitting under the cache dir,
+//! keyed by options dir, and read back on the next launch against it.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

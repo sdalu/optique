@@ -1,3 +1,6 @@
+//! Port identity: [`PortKey`], an origin with an optional flavor, and the
+//! check of a bare origin.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};

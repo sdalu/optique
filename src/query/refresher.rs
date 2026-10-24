@@ -1,3 +1,6 @@
+//! The TUI's background re-scan: a thread that re-queries the roots it is
+//! sent after an edit and streams its progress and results back.
+
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::cache::Cache;

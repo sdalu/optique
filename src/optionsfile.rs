@@ -1,3 +1,7 @@
+//! One saved options file, `${PORT_DBDIR}/<OPTIONS_NAME>/options`, with its
+//! options.local: parsed as make reads them, the lines optique cannot model
+//! kept aside, and rendered as `make config` writes it.
+
 use std::collections::BTreeSet;
 
 use crate::model::options::{mentions, unsets};

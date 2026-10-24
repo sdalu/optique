@@ -1,3 +1,7 @@
+//! A port's options as bsd.options.mk sees them: groups and their kinds, each
+//! option's metadata, the make.conf layers and which one a value comes from,
+//! and make's `:N` pattern match that UNSET entries are applied with.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};

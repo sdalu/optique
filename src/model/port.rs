@@ -1,3 +1,6 @@
+//! [`PortInfo`], what one query of the ports tree tells of a port@flavor, with
+//! its dependency edges and its description.
+
 use serde::{Deserialize, Serialize};
 
 use super::options::PortOptions;

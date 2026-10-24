@@ -1,3 +1,7 @@
+//! The command line: clap's definition of the actions and their flags, the
+//! rewriting and checks clap cannot make itself (a bare `-s`, the action
+//! first), and the roots gathered from origins and list files.
+
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::path::PathBuf;

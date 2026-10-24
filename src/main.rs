@@ -1,3 +1,7 @@
+//! The entry point: the arguments read and checked, the cache cleared when
+//! asked, one command run, and its outcome made an exit status (1 for
+//! decisions pending, 2 for bad usage, 3 for a failed run).
+
 /// `println!` for the stdout payload, handing back the write's error instead
 /// of panicking on it: a reader that went away (`optique scan | head`) must
 /// end the run with a documented status, not Rust's 101.

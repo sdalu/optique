@@ -1,3 +1,6 @@
+//! Reading what a query printed: the wrapper's `OPTIQUE|...` lines made a
+//! [`PortInfo`], `_UNIFIED_DEPENDS` made dependency edges.
+
 use std::collections::BTreeSet;
 use std::path::Path;
 

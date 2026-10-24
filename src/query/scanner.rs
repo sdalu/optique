@@ -1,3 +1,7 @@
+//! The closure scan: breadth first from the roots through every dependency,
+//! each port taken from the cache or queried on a miss, and a dependency on
+//! an origin in no tree refused as poudriere's `deps_sanity` refuses it.
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::cache::Cache;
