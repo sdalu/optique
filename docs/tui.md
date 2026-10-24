@@ -119,14 +119,14 @@ re-query a restored draft starts.
 Each row starts with two marker columns. The first is the port's state,
 left to right as the pane sorts them, worst first:
 
-| Marker | Meaning                                                                                    |
-| :----: | :----------------------------------------------------------------------------------------- |
-| `✗`    | conflict — staged options violate `PREVENTS` or a group rule                               |
-| `?`    | unconfigured — no saved options file                                                       |
-| `!`    | stale — the option list changed since the file was written                                 |
-| `≠`    | contradicts the make.conf `OPTIONS_SET`/`OPTIONS_UNSET` policy; shown only in the `w` view |
-| `≈`    | needs no attention because make.conf already decides it; shown only in the `m` view        |
-| `✓`    | ok                                                                                         |
+| Marker | Meaning                                                                                     |
+| :----: | :------------------------------------------------------------------------------------------ |
+| `✗`    | conflict — staged options violate `PREVENTS` or a group rule                                |
+| `?`    | unconfigured — no saved options file                                                        |
+| `!`    | stale — the option list changed since the file was written                                  |
+| `≠`    | contradicts the make.conf `OPTIONS_SET`/`OPTIONS_UNSET` policy; shown only in the `w` view  |
+| `≈`    | needs no attention because make.conf already decides it; shown only in the `m` view or `-m` |
+| `✓`    | ok                                                                                          |
 
 The second is `*` when the port has staged changes not yet applied, and
 blank otherwise. An edit hides no state: an edited port that has never
@@ -148,7 +148,9 @@ the latter:
 ```
 
 It is not a port: no key selects it, and the selection steps over it.
-Neither `s` (alphabetical order) nor `t` (no ok port listed) shows it.
+`s` (alphabetical order) never shows it, and `t` (no ok port listed) only
+while it keeps the selected port listed after a refresh made it ok, until the
+selection moves.
 
 Four further markers may trail the port's name:
 
@@ -219,7 +221,8 @@ global `OPTIONS_SET`/`OPTIONS_UNSET`, bright green for the per-port
 `${OPTIONS_NAME}_SET`/`_UNSET`, red bold for a `*_FORCE` knob or a
 make.conf `WITH`/`WITHOUT`, which also locks the toggle — and, under
 make.conf's `OPTIONS_OVERRIDE`, red bold for every option, on where the
-override names it; then `implied by X` when an `IMPLIES` chain locked the
+override names it, except that a `*_FORCE` knob or `WITH`/`WITHOUT` still
+decides the option it names, on top of the override; then `implied by X` when an `IMPLIES` chain locked the
 option on, and a `⚠broken`/`⚠ignored` badge on an option whose enabling
 marks the port `BROKEN` or `IGNORE` (`<OPT>_BROKEN`/`<OPT>_IGNORE`). An
 option the port no longer has
@@ -417,7 +420,7 @@ parse is quoted whole in the error.
 
 | Key           | Effect                                                 |
 | :------------ | :----------------------------------------------------- |
-| `t`           | show only ports needing attention, hiding `✓` ones     |
+| `t`           | hide ok ports; a refresh keeps the selected one        |
 | `s`           | problems first, or a stable alphabetical order         |
 | `m`           | count ports make.conf fully decides as ok (marker `≈`) |
 | `w`           | flag ports contradicting make.conf's policy (`≠`)      |

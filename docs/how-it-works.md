@@ -20,8 +20,9 @@ are in [DESIGN.md](../DESIGN.md).
 ┌────────────────────────────────────────────────────────────────┐
 │ make -f /dev/stdin optique-config      up to 16 at once        │
 │   PORT_DBDIR   the options dir                                 │
-│   __MAKE_CONF  jail prelude · poudriere.d layers ·             │
-│                LOCALBASE=/nonexistent                          │
+│   __MAKE_CONF  the build's make.conf: poudriere's jail prelude │
+│                and layers, or synth's header and profile;      │
+│                LOCALBASE=/nonexistent (host make.conf for -l)  │
 └─────────┬──────────────────────────────────────────────────────┘
           │ .info OPTIQUE|… lines: options, deps, BROKEN/IGNORE
           ▾
@@ -49,10 +50,15 @@ apart on a tree old enough to still fold `TEST_DEPENDS` in; see
 [dependency loops](dependency-loops.md)). A query takes about 0.2–0.6 s, and
 up to 16 run in parallel (`-J` changes that).
 
-Every query runs under the make.conf poudriere would use for the same jail,
-tree and set, wrapped in a poudriere jail's environment: what poudriere puts
-at the top of every jail's make.conf, and `LOCALBASE=/nonexistent` so that
-the packages installed on the host do not answer the Makefiles' probes. See
+Every query runs under the make.conf the build would use. For poudriere,
+that is the one it would use for the same jail, tree and set, wrapped in a
+poudriere jail's environment: what poudriere puts at the top of every
+jail's make.conf, and `LOCALBASE=/nonexistent` so that the packages
+installed on the host do not answer the Makefiles' probes. For synth, it
+is the header synth writes for its scan slave, the profile's make.conf,
+and the same `LOCALBASE` line, synth's chroot having nothing installed
+either. A local build (`-l`) reads the host's own make.conf as is, and its
+queries see the installed packages, as its build would. See
 [configuration](configuration.md) for the order the files are read in.
 
 ## The cache
@@ -63,7 +69,7 @@ HEAD (on a tree without git, the mtimes of `Mk/bsd.port.mk`, `MOVED` and
 even in a git checkout, since overlay ports are edited before any commit),
 the hash of the layered make.conf, and the content of the
 port's options file and of the `options.local` beside it, which make reads
-after it. A local or synth build also keys on pkg's database
+after it. A local build also keys on pkg's database
 (`local.sqlite`), since its queries see the installed packages: a package
 install or delete starts a new generation. Files a make.conf `.include`s are not part of that hash:
 after editing one, run once with `--clear-cache`. A warm run over a thousand ports takes well under a second;

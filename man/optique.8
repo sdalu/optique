@@ -390,7 +390,8 @@ tty-ness judged per stream.
 The interactive TUI is unaffected.
 .It Fl n , Fl -dry-run
 Report what
-.Cm sync
+.Cm sync ,
+.Cm decide
 and
 .Cm clean
 would change without touching anything.
@@ -437,7 +438,7 @@ settle showing as done
 .Ql ok (no file: defaults + make.conf)
 in
 .Cm scan ,
-.Sq \(ap
+.Sq \(~~
 in the TUI, as under its
 .Ic m
 view
@@ -495,7 +496,8 @@ needs no attention because
 .Pa make.conf
 already decides it; shown only in the
 .Ic m
-view.
+view or under
+.Fl m .
 .It \[u2713]
 ok.
 .El
@@ -662,7 +664,14 @@ or
 which the options file cannot override and which also locks the toggle;
 under
 .Va OPTIONS_OVERRIDE
-every option of the port shows that way, on where the override names it.
+every option of the port shows that way, on where the override names it,
+except that a
+.Va *_FORCE
+knob or
+.Va WITH
+or
+.Va WITHOUT
+still decides the option it names, on top of the override.
 That column is empty only when no
 .Pa make.conf
 layer names the option.
@@ -929,6 +938,8 @@ Jump to the next flavor of the same origin; from the option pane the cursor
 stays on the same option when that flavor has it.
 .It Ic t
 Show only ports needing attention, hiding the ok ones.
+A port a refresh, an edit or an apply made ok while selected stays listed
+until the selection moves to another port.
 .It Ic s
 Toggle problems-first versus stable alphabetical sort.
 Alphabetical order keeps neighbours in place while working down the list;
@@ -1034,7 +1045,7 @@ pane too short to leave the options four rows; the options scroll under it.
 When the text is cut, the rule under the panel reads
 .Ql [v] full text .
 A port that has neither reads
-.Dq No description available ,
+.Dq \&No description available ,
 and one whose
 .Pa pkg-descr
 cannot be read says so.
@@ -1257,9 +1268,11 @@ or is annotated
 when
 .Pa make.conf
 decides all of them.
-Ports that are fully
+An unconfigured or stale port that is fully
 .Cm mc-covered
-never demand attention, and neither do blacklisted ports: poudriere will not
+does not demand attention (a conflict still does, and so does, under
+.Fl s ,
+a file synth would refuse), and blacklisted ports never do: poudriere will not
 build them in this jail, tree and set, so their options cannot hold a build up.
 Ports without any options are counted separately and not listed.
 .Pp
@@ -1466,7 +1479,7 @@ With
 .Fl q
 the per-port rows and the banner are dropped, leaving only the summary and any
 warnings on standard error, which makes
-.Nm Fl q Cm scan
+.Nm Cm scan Fl q
 usable directly as a
 .Xr cron 8
 gate that speaks up only when something is pending.
@@ -1986,12 +1999,10 @@ knobs and
 and
 .Va WITHOUT
 .Pq applied after them, pinning the option likewise ,
-which is what the
-.Ql mc ,
-.Ql mc:port
-and
-.Ql FORCED
-badges report.
+which is what the TUI's
+.Pa make.conf
+column reports, coloured by the layer that decides
+.Pq see Sx tui .
 As in
 .Pa bsd.options.mk ,
 an entry of an UNSET list, in

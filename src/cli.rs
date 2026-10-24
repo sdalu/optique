@@ -250,7 +250,7 @@ pub struct Cli {
     #[arg(long = "clear-cache", global = true)]
     pub clear_cache: bool,
 
-    /// Show what sync/clean would change without touching anything;
+    /// Show what sync/decide/clean would change without touching anything;
     /// the TUI previews changes in its apply dialog instead and ignores this
     #[arg(short = 'n', long = "dry-run", global = true)]
     pub dry_run: bool,

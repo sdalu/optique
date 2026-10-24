@@ -38,7 +38,7 @@ not change a result; **known gap**, with what it can change.
 | Conditional SINGLE/MULTI groups (named in `ALL_OPTIONS`) checked only while that option is on, their members dropped otherwise | `bsd.port.mk` pre-check-config | matches: `ALL_OPTIONS` is dumped and tested as make tests it |
 | RADIO and PREVENTS always checked; SINGLE never picks a member by itself | `bsd.port.mk` pre-check-config | matches |
 | New options: no SET/UNSET line anywhere (`NEW_OPTIONS`); `_FILE_COMPLETE_OPTIONS_LIST` is written, never read | `bsd.options.mk`, `bsd.port.mk` do-config | matches for "new"; "undecided" is judged by outcome — **differs on purpose** ("make.conf decisions are judged by outcome") |
-| The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=` assigns only a list no earlier line (file, then `options.local`) assigned, a trailing backslash continues the line, `#` starts a comment and `\#` is a literal `#` | `bsd.options.mk` (`.include`) | matches; a `!=` line (a shell command) is not run — **differs**: ignored, with a warning naming the file and line |
+| The options file is a makefile: several words per line, spaces around `+=`, `=` and `:=` reset, `?=` assigns only a list no earlier line (file, then `options.local`) assigned, a trailing backslash continues the line, `#` starts a comment and `\#` is a literal `#` | `bsd.options.mk` (`.include`) | matches; a `!=` line (a shell command) is not run — **differs on purpose**: reading an options file never runs a command it holds; the line is ignored, with a warning naming the file and line |
 | What `make config` writes: header, `_OPTIONS_READ`, list, one SET/UNSET line per option | `bsd.port.mk` do-config | matches |
 | `rmconfig` keeps a directory holding `options.local` | `bsd.port.mk` | matches (`clean`) |
 | `OPTIONS_NAME` ignores the flavor: flavors share one file | `bsd.options.mk` | matches; who writes it — **differs on purpose** ("Flavors sharing one options file") |
@@ -50,7 +50,7 @@ not change a result; **known gap**, with what it can change.
 | Behaviour | Upstream | Verdict |
 | :-- | :-- | :-- |
 | Options directory: `[jail-][tree-][set-]options` candidates, first existing wins; the one written when none exists | `use_options`, `options.sh` | matches; where a less specific directory exists, optique writes the one bulk reads, where `poudriere options` would create a new one — documented in the man page |
-| `-o name` under poudriere.d vs a path | `options.sh` | differs: optique's `-o` is a path (man page) |
+| `-o name` under poudriere.d vs a path | `options.sh` | **differs on purpose**: optique's `-o` is the directory itself, used verbatim, as `-P` is the tree; `-z`/`-j`/`-p` already select poudriere.d's candidates (man page) |
 | make.conf layers, order, realpath dedupe | `setup_makeconf`, `append_make` | matches |
 | Hook plugins' `make.conf` after the layers | `setup_makeconf` | matches |
 | ccache: `WITH_CCACHE_BUILD=yes`, `CCACHE_DIR=/root/.ccache` after the layers when poudriere.conf's `CCACHE_DIR` is a directory | `setup_ccache` | matches |
@@ -71,7 +71,8 @@ not change a result; **known gap**, with what it can change.
 | Options changed since the package: pkg annotation vs `SELECTED_OPTIONS` | `common.sh` | consistent: optique rewrites a file when the outcome or its option list changes; neither changes what poudriere compares, so no spurious rebuild |
 | Overlays: `-O` order, `OVERLAYS+=` | `bulk.sh`, `common.sh` | matches |
 | `poudriere options` runs `make config` on the host, no jail prelude | `options.sh` | **differs on purpose**: optique asks what the jail's build will see |
-| `poudriere -e etcdir`; the old `<mnt>/ports` tree layout | `common.sh` | not modelled; the second fails loudly |
+| `poudriere -e etcdir` (another poudriere.conf and poudriere.d) | `common.sh` | **known gap**: optique always reads `/usr/local/etc`'s, so under `-e` it reads other layers and options directories than the build |
+| The old `<mnt>/ports` tree layout | `common.sh` | not modelled; fails loudly |
 
 ## synth
 
@@ -83,7 +84,8 @@ not change a result; **known gap**, with what it can change.
 | synth's INI reader keeps a tab around a key or value, keeps the spaces of `[ name ]`, and takes no indented `[name]` for a header | ini-files `config.adb` | **differs on purpose**: a reader bug not replicated; optique reads such lines as meant and names each in a note, since synth reads them otherwise |
 | `Directory_options` (default `/var/db/ports`) as `PORT_DBDIR`, `options.local` included | `parameters.adb`, `replicant.adb` | matches |
 | Missing `Directory_portsdir`: synth tries `$PORTSDIR`, `make -V PORTSDIR`, then `/usr/dports`, `/usr/ports` | `parameters.adb` | not modelled (`/usr/ports`): synth writes every key back into synth.ini on first use |
-| Scan make.conf: `SYNTHPROFILE`, `USE_PACKAGE_DEPENDS_ONLY`, `PACKAGE_BUILDING`, `BATCH`, the ccache lines when `Directory_ccache` exists, then `<profile>-make.conf` | `replicant.adb` `create_make_conf` | matches; synth's test mode adds `DEVELOPER=1` (not modelled: `-s` configures builds), and an unreadable `<profile>-make.conf` is skipped by synth where optique stops with an error |
+| Scan make.conf: `SYNTHPROFILE`, `USE_PACKAGE_DEPENDS_ONLY`, `PACKAGE_BUILDING`, `BATCH`, the ccache lines when `Directory_ccache` exists, then `<profile>-make.conf` | `replicant.adb` `create_make_conf` | matches; synth's test mode adds `DEVELOPER=1` (not modelled: `-s` configures builds) |
+| An unreadable `<profile>-make.conf` | `replicant.adb` | **differs on purpose**: synth skips it silently, building without it; optique stops with an error rather than configure against settings the user did not mean to drop |
 | `varcache.conf` (`OSVERSION`, `ARCH`, … from `Directory_system`) | `replicant-platform.adb` | not copied: while `Directory_system` is `/` the host gives the same `OSVERSION`, `ARCH` and `OPSYS`; the rest (`_OSRELEASE=…-SYNTH`, `UID=0`, `PYTHONBASE`, `_SMP_CPUS`) changes no option or dependency; **known gap** when `Directory_system` is not `/` |
 | An empty `/usr/local` in the scan chroot | `replicant.adb` | `LOCALBASE=/nonexistent` — **differs on purpose** |
 | Scan environment `env -i PATH=… TERM=dumb USER=root HOME=/root LANG=C` | `portscan.adb` | not modelled: queries get `PATH`, `HOME`, `TMPDIR`, `PKG_DBDIR`; nothing in the options or dependency paths reads the others |

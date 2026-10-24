@@ -351,8 +351,9 @@ places to look for one setting.
 `-O name` is read from `poudriere.d/ports/<name>/mnt`, as `poudriere bulk
 -O` reads it (`--overlay-dir` is the literal counterpart, as `-P` is of
 `-p`), and reaches make as `OVERLAYS+=` lines where poudriere writes them
-in the jail's make.conf (`jail_start` in its `common.sh`): after the
-prelude, before the poudriere.d layers. The overlay list is then read
+in the jail's make.conf (`jail_start` in its `common.sh`): after
+`USE_PACKAGE_DEPENDS` and `BATCH`, before `PACKAGE_BUILDING`, the jail's
+system lines and the poudriere.d layers. The overlay list is then read
 back from make (`-V OVERLAYS`), so a layer, `/etc/make.conf` or, for a
 local build, the environment counts as for the build. A port is taken
 from the first overlay holding `<origin>/Makefile`, else from the main

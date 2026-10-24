@@ -25,8 +25,8 @@ does: `origin@all` and, under `FLAVOR_DEFAULT_ALL`, a bare `origin` query
 the FLAVORS of whatever it last moved to, not the old origin, which has
 no directory to query.
 Across arguments and files, duplicates are dropped and first-seen order is
-kept. With neither, every subcommand but `clean`
-refuses — "no port origins given (arguments or -f pkglist)"
+kept. With neither, every subcommand but `clean` and `decide` (which
+then takes the plan's own ports) refuses — "no port origins given (arguments or -f pkglist)"
  once a subcommand is named, or the equivalent message
 for the bare default-TUI invocation — and plain
 `clean` (without `--unused`) needs no list at all — see [`clean`](#clean).
@@ -72,8 +72,9 @@ computes from the saved ones, `*_FORCE` included, violate a group rule or
 `PREVENTS`, which `make check-config` checks for an `OPTIONS_SLAVE` option
 too). A flagged port also lists what
 `make.conf` leaves `undecided`, or is marked `[mc-covered ≈]` when `make.conf`
-settles every option by itself; `mc-covered` and blacklisted ports never
-count against the exit gate. `--json` prints one
+settles every option by itself. An unconfigured or stale `mc-covered` port
+does not count against the exit gate (a conflict still does, and so does,
+under `-s`, a file synth would refuse); blacklisted ports never count. `--json` prints one
 object on stdout instead of the table, and `--options` adds each port's full
 per-option detail — see [machine-interface.md](machine-interface.md) for
 both shapes.
@@ -178,7 +179,7 @@ a run is read at one level.
 | `-J`, `--jobs`        | `JOBS`      | parallel `make` jobs (min(16, ncpu))   |
 | `--no-cache`          | —           | skip the persistent query cache        |
 | `--clear-cache`       | —           | delete the query cache first           |
-| `-n`, `--dry-run`     | —           | report changes for `sync`/`clean` only |
+| `-n`, `--dry-run`     | —           | preview `sync`/`decide`/`clean` writes |
 | `-m`, `--minimal`     | —           | persist only deviations                |
 | `-v`, `--verbose`     | —           | more per-subcommand detail             |
 | `-q`, `--quiet`       | —           | drop banner and per-item stdout rows   |
@@ -212,8 +213,9 @@ decision.
 A `scan` decision is pending when a port is unconfigured or stale with
 undecided options, has a conflict, is caught in a dependency loop that is
 not fully blacklisted, or could not be checked because its query failed.
-Ports make.conf fully decides (`[mc-covered ≈]`) and blacklisted ports
-never count. Per-file failures during `sync` or `clean` are reported one by
+An unconfigured or stale port make.conf fully decides (`[mc-covered ≈]`)
+does not count, nor does any blacklisted port; under `-s`, a file synth
+would refuse counts whatever the port's status. Per-file failures during `sync` or `clean` are reported one by
 one and counted in the summary without failing the run. A file `sync`
 cannot write stops it from writing or removing any other: every file is
 written aside first and renamed into place only once all of them were.

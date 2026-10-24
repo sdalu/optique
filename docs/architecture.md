@@ -24,7 +24,7 @@ interfaces sit side by side on the session.
 ├──────────────────────────────────────────────────────────────────────┤
 │ query           query/{scanner,makerunner,wrapper,parse,refresher}   │
 │                 cache.rs · moved.rs · deps.rs                        │
-│                 make -V in parallel → PortInfo, closure, loops       │
+│                 wrapper | make -f /dev/stdin → PortInfo, closure     │
 ├──────────────────────────────────────────────────────────────────────┤
 │ model           model/{origin,port,options}.rs                       │
 │                 optionsfile.rs · optfiles.rs                         │
@@ -87,7 +87,7 @@ Every command but `clean` (without `--unused`) starts with the same scan.
   │ Cache::open        generation v<SCHEMA>-<tree>-<make.conf>           │
   │ Moved::load_all    MOVED of the tree and every overlay               │
   │ roots::resolve     @all, @-, FLAVOR_DEFAULT_ALL (through MOVED)      │
-  │ scanner::scan      breadth-first closure, cache first, make -V       │
+  │ scanner::scan      breadth-first closure, cache first, wrapper make  │
   │ deps::detect       dependency loops (Tarjan)                         │
   └──────────────────────────────────────────────┬───────────────────────┘
                                                  ▾
