@@ -133,11 +133,7 @@ fn run() -> Result<()> {
             let (origins, files) = split_raw_origins(raw).unwrap_or_else(|e| e.exit());
             let mut all_files = cli.files.clone();
             all_files.extend(files);
-            let rs = RootSet {
-                roots: cli::collect_roots(&origins, &all_files)?,
-                notes: Vec::new(),
-                installed: false,
-            };
+            let rs = listed_roots(&cli, &origins, &all_files)?;
             cmd_tui(&cli, &rs, false)
         }
         None => {
@@ -257,6 +253,9 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     eprintln!("{} options dir {}", tint(paint, ansi::BOLD, "optique clean:"), settings.options_dir.display());
     for note in &settings.notes {
         eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+    }
+    for refusal in &settings.refusals {
+        eprintln!("  {}       {refusal}", tint(paint, ansi::RED, "error:"));
     }
 
     let (mut removals, live, mut warnings) =
@@ -571,6 +570,7 @@ fn query_ctx(settings: &config::Settings, port_dbdir: std::path::PathBuf) -> Que
         make_conf: settings.make_conf.clone(),
         port_dbdir,
         overlays: settings.overlay_paths(),
+        identity: settings.env.identity(),
     }
 }
 
@@ -669,6 +669,26 @@ struct RootSet {
     /// The roots are synth's implicit list, the installed packages, which
     /// the scan matches against the tree as synth does.
     installed: bool,
+    /// Under -s, the bare origins of the list given: synth refuses the
+    /// list on any whose port has flavors, which the scan says.
+    synth_bare: Vec<model::origin::PortKey>,
+}
+
+/// The roots a list given names; under -s, with a note for each entry
+/// synth would refuse, and the bare origins kept for the scan to check.
+fn listed_roots(cli: &Cli, origins: &[String], files: &[std::path::PathBuf]) -> Result<RootSet> {
+    let listed = cli::collect_roots(origins, files)?;
+    let synth = cli.synth.is_some();
+    Ok(RootSet {
+        synth_bare: if synth {
+            listed.roots.iter().filter(|k| k.flavor.is_none()).cloned().collect()
+        } else {
+            Vec::new()
+        },
+        roots: listed.roots,
+        notes: if synth { listed.synth_refusals } else { Vec::new() },
+        installed: false,
+    })
 }
 
 /// Roots for a subcommand: the given list, or — in synth mode only — the
@@ -685,13 +705,9 @@ fn roots_or_installed(cli: &Cli, origins: &[String]) -> Result<RootSet> {
                 repos_phrase(&cli.repo)
             )
         };
-        return Ok(RootSet { roots, notes: vec![note], installed: true });
+        return Ok(RootSet { roots, notes: vec![note], installed: true, synth_bare: Vec::new() });
     }
-    Ok(RootSet {
-        roots: cli::collect_roots(origins, &cli.files)?,
-        notes: Vec::new(),
-        installed: false,
-    })
+    listed_roots(cli, origins, &cli.files)
 }
 
 /// Split an external-subcommand argument vector into origins and -f/--file
@@ -948,6 +964,9 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         for note in rs.notes.iter().chain(settings.notes.iter()) {
             eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
+        for refusal in &settings.refusals {
+            eprintln!("  {}       {refusal}", tint(paint, ansi::RED, "error:"));
+        }
         // In lookup order: the first holding a port answers for it.
         for (i, o) in settings.overlays.iter().enumerate() {
             let label = if i == 0 { "overlay:" } else { "        " };
@@ -1018,6 +1037,14 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
             );
         }
         given = kept;
+    }
+    if !rs.synth_bare.is_empty() && !cli.quiet {
+        // FLAVORS from the bare origins' own queries, which the scan reuses.
+        let origins = rs.synth_bare.iter().map(|k| k.origin.clone()).collect();
+        let flavors = roots::query_flavors(&origins, &ctx, &files, jobs, &mut cache);
+        for note in roots::synth_bare_flavored(&rs.synth_bare, &flavors) {
+            eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+        }
     }
     let roots =
         roots::resolve(&given, settings.flavor_default_all, &ctx, &files, jobs, &mut cache, &moved);
@@ -1710,13 +1737,10 @@ fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
             roots: plan.roots(),
             notes: vec!["no port list given; the plan's own ports are the closure roots".into()],
             installed: false,
+            synth_bare: Vec::new(),
         }
     } else {
-        RootSet {
-            roots: cli::collect_roots(&args.roots.origins, &cli.files)?,
-            notes: Vec::new(),
-            installed: false,
-        }
+        listed_roots(cli, &args.roots.origins, &cli.files)?
     };
 
     let scanned = run_scan(cli, &rs)?;

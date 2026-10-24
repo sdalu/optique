@@ -2356,6 +2356,7 @@ mod tests {
                 make_conf: None,
                 port_dbdir: db.path().to_path_buf(),
                 overlays: Vec::new(),
+                identity: crate::query::makerunner::Identity::Invoker,
             },
             1,
             crate::cache::Cache::disabled(),

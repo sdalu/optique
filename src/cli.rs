@@ -489,12 +489,61 @@ pub struct RootsArgs {
 }
 
 
+/// The roots a list gives, and what synth would make of the list.
+#[derive(Debug)]
+pub struct Listed {
+    pub roots: Vec<PortKey>,
+    /// One note per entry synth would refuse ([`synth_refusal`]), for -s to
+    /// print; a bare origin of a flavored port is found after the query
+    /// (`roots::synth_bare_flavored`).
+    pub synth_refusals: Vec<String>,
+}
+
+/// Why synth refuses a list holding `entry`, if it does: `store_origins`
+/// and `valid_file` take an entry only when it is a key of synth's flavor
+/// index, verbatim, and refuse the whole list on the first that is not. A
+/// list file's line is trimmed of spaces and kept whole, a trailing `/`
+/// included; a command-line argument loses one trailing `/`. optique reads
+/// poudriere's syntax in every mode, so each of these is fine for optique
+/// and a refusal for synth.
+pub fn synth_refusal(entry: &str, from_file: bool) -> Option<&'static str> {
+    let entry = if from_file {
+        entry.trim_matches(' ')
+    } else {
+        entry.strip_suffix('/').unwrap_or(entry)
+    };
+    if entry.trim().is_empty() {
+        return None;
+    }
+    let why = if entry.starts_with('#') {
+        "is a comment line"
+    } else if entry.contains(char::is_whitespace) {
+        "holds more than an origin"
+    } else if entry.ends_with('/') {
+        "ends in '/'"
+    } else if entry.starts_with('/') {
+        "starts with '/'"
+    } else if entry.split_once('@').is_some_and(|(_, f)| f == crate::roots::FLAVOR_ALL) {
+        "names @all"
+    } else if entry.split_once('@').is_some_and(|(_, f)| f == crate::roots::FLAVOR_DEFAULT) {
+        "names @-"
+    } else {
+        return None;
+    };
+    Some(why)
+}
+
 /// Merge positional origins and pkglist files into parsed root keys,
 /// dropping duplicates while preserving first-seen order.
-pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Vec<PortKey>> {
+pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Listed> {
     let mut out: Vec<PortKey> = Vec::new();
     let mut seen: HashSet<PortKey> = HashSet::new();
+    let mut synth_refusals = Vec::new();
     let mut push = |spec: &str, source: &str, from_pkglist: bool| -> anyhow::Result<()> {
+        if let Some(why) = synth_refusal(spec, from_pkglist) {
+            let entry = if from_pkglist { source.to_string() } else { "argument".to_string() };
+            synth_refusals.push(format!("synth refuses this list: {entry} {spec:?} {why}"));
+        }
         let spec = if from_pkglist {
             // poudriere(8) reads a pkglist line with `read`, splitting it on
             // whitespace: only the first word is the origin, whatever comes
@@ -546,15 +595,14 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
     for f in files {
         let text = std::fs::read_to_string(f)
             .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
-        let source = f.display().to_string();
-        for line in text.lines() {
-            push(line, &source, true)?;
+        for (n, line) in text.lines().enumerate() {
+            push(line, &format!("{} line {}", f.display(), n + 1), true)?;
         }
     }
     if out.is_empty() {
         anyhow::bail!("no port origins given (arguments or -f pkglist)");
     }
-    Ok(out)
+    Ok(Listed { roots: out, synth_refusals })
 }
 
 #[cfg(test)]
@@ -613,7 +661,8 @@ mod tests {
             &["www/nginx".to_string(), "editors/vim".to_string()],
             &[f1.path().to_path_buf(), f2.path().to_path_buf()],
         )
-        .unwrap();
+        .unwrap()
+        .roots;
         let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
         assert_eq!(
             names,
@@ -637,7 +686,7 @@ mod tests {
         writeln!(f, "sysutils/tmux/\nsysutils/screen  terminal multiplexer\n/mail/dovecot")
             .unwrap();
 
-        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
+        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap().roots;
         let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux", "sysutils/screen", "mail/dovecot"]);
     }
@@ -650,7 +699,7 @@ mod tests {
     fn a_pkglist_line_is_a_comment_only_when_its_first_word_is() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "sysutils/tmux #note\n#sysutils/tmux").unwrap();
-        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap();
+        let roots = collect_roots(&[], &[f.path().to_path_buf()]).unwrap().roots;
         let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
@@ -663,7 +712,8 @@ mod tests {
     fn leading_or_trailing_slash_is_stripped_on_the_command_line_too() {
         let roots =
             collect_roots(&["/sysutils/tmux".to_string(), "sysutils/tmux/".to_string()], &[])
-                .unwrap();
+                .unwrap()
+                .roots;
         let names: Vec<String> = roots.iter().map(|k| k.to_string()).collect();
         assert_eq!(names, vec!["sysutils/tmux"]);
     }
@@ -687,6 +737,33 @@ mod tests {
         let err = collect_roots(&[], &[f.path().to_path_buf()]).unwrap_err().to_string();
         assert!(err.contains("not-an-origin"));
         assert!(err.contains(&f.path().display().to_string()));
+    }
+
+    /// Under -s, each entry synth would refuse is named: a comment line,
+    /// a line holding more than an origin, a list line's trailing '/', a
+    /// leading '/', @all and @-; an argument's trailing '/' synth strips.
+    #[test]
+    fn entries_synth_refuses_are_named() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        writeln!(f, "# list\n  sysutils/tmux  \nsysutils/screen/\nmail/dovecot #x\n\n\t\nwww/nginx@all")
+            .unwrap();
+        let args = ["editors/vim/", "/x11/xterm", "devel/py-foo@-", "devel/py-foo@py311"];
+        let listed = collect_roots(&args.map(String::from), &[f.path().to_path_buf()]).unwrap();
+        let file = f.path().display();
+        assert_eq!(
+            listed.synth_refusals,
+            [
+                r#"synth refuses this list: argument "/x11/xterm" starts with '/'"#.to_string(),
+                r#"synth refuses this list: argument "devel/py-foo@-" names @-"#.to_string(),
+                format!(r##"synth refuses this list: {file} line 1 "# list" is a comment line"##),
+                format!(r#"synth refuses this list: {file} line 3 "sysutils/screen/" ends in '/'"#),
+                format!(r#"synth refuses this list: {file} line 4 "mail/dovecot #x" holds more than an origin"#),
+                format!(r#"synth refuses this list: {file} line 7 "www/nginx@all" names @all"#),
+            ]
+        );
+        assert_eq!(synth_refusal("cat/port", true), None);
+        assert_eq!(synth_refusal("cat/port@fl", false), None);
+        assert_eq!(synth_refusal("\tcat/port", true), Some("holds more than an origin"));
     }
 
     #[test]

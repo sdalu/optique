@@ -19,6 +19,24 @@ pub struct QueryCtx {
     pub port_dbdir: PathBuf,
     /// Trees laid over `portsdir`, in lookup order (`config::Settings`).
     pub overlays: Vec<PathBuf>,
+    /// Whose `USER` and `HOME` the query sees.
+    pub identity: Identity,
+}
+
+/// Who runs the query, as far as make can tell from the environment:
+/// `USER` and `HOME`. bsd.ccache.mk reads `USER`: under
+/// `WITH_CCACHE_BUILD` with no `CCACHE_DIR`, it falls back to
+/// /root/.ccache for root, and anyone else gets ccache disabled with a
+/// WARNING and no devel/ccache build dependency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Identity {
+    /// The invoking user, whose own make runs a local build: `USER` and
+    /// `HOME` as optique was given them, when set.
+    Invoker,
+    /// A builder's root: `USER=root` and `HOME=/root`, as poudriere's
+    /// `jail_start` exports them (`injail` keeps them) and synth's
+    /// `scan_environment` passes them.
+    Root,
 }
 
 impl QueryCtx {
@@ -95,7 +113,23 @@ impl MakeRunner {
 /// The only variables of optique's environment a query sees, when set.
 /// PKG_DBDIR is pkg's, not make's, but `pkg which` runs at parse time
 /// (Mk/bsd.default-versions.mk) and the cache key already folds it in.
-const PASSED_ENV: [&str; 4] = ["PATH", "HOME", "TMPDIR", "PKG_DBDIR"];
+/// `USER` and `HOME` follow the query's [`Identity`] ([`identity_env`]).
+const PASSED_ENV: [&str; 3] = ["PATH", "TMPDIR", "PKG_DBDIR"];
+
+/// `USER` and `HOME` for a query run as `identity`: root's for a builder,
+/// optique's own (`invoker`, when set) for the invoking user.
+fn identity_env(
+    identity: Identity,
+    invoker: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<(&'static str, std::ffi::OsString)> {
+    match identity {
+        Identity::Root => vec![("USER", "root".into()), ("HOME", "/root".into())],
+        Identity::Invoker => ["USER", "HOME"]
+            .into_iter()
+            .filter_map(|var| invoker(var).map(|value| (var, value)))
+            .collect(),
+    }
+}
 
 /// Run the wrapper makefile for one port@flavor and parse the dump.
 pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
@@ -132,13 +166,16 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
     // for one, reach make through the make.conf, never on the command line,
     // where OVERLAYS= would replace make.conf's `+=` list; a local build's
     // environment OVERLAYS has been written into its make.conf, where it
-    // keeps its place after --overlay-dir and its absolute path.
+    // keeps its place after --overlay-dir and its absolute path. USER and
+    // HOME are those of whoever runs the build: root in a builder, the
+    // invoking user for a local build.
     cmd.env_clear();
     for var in PASSED_ENV {
         if let Some(value) = std::env::var_os(var) {
             cmd.env(var, value);
         }
     }
+    cmd.envs(identity_env(ctx.identity, |var| std::env::var_os(var)));
     if let Some(conf) = &ctx.make_conf {
         cmd.arg(format!("__MAKE_CONF={}", conf.display()));
     }
@@ -370,33 +407,67 @@ mod tests {
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
+            identity: Identity::Invoker,
         };
         (tmp, ctx)
     }
 
-    /// A query sees none of optique's environment but PATH, HOME and TMPDIR:
-    /// an exported make variable (OPTIONS_SET, say) is no input the cache
-    /// keys, and no builder would see it. cargo exports CARGO_MANIFEST_DIR
-    /// to every test, so it stands for any such variable here.
+    /// A query sees none of optique's environment but PATH, TMPDIR,
+    /// PKG_DBDIR, and the USER and HOME of its identity: an exported make
+    /// variable (OPTIONS_SET, say) is no input the cache keys, and no builder
+    /// would see it. cargo exports CARGO_MANIFEST_DIR to every test, so it
+    /// stands for any such variable here.
     #[test]
-    fn a_query_sees_no_variable_of_the_environment_but_path_and_home() {
+    fn a_query_sees_no_variable_of_the_environment_but_path_and_its_identity() {
         let _lock = make_test_lock();
         assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some(), "run under cargo test");
-        assert!(std::env::var_os("PATH").is_some() && std::env::var_os("HOME").is_some());
+        assert!(std::env::var_os("PATH").is_some());
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("ports/cat/env");
         std::fs::create_dir_all(&dir).unwrap();
-        let makefile = "PKGNAME=${CARGO_MANIFEST_DIR:Dleak:Uclean}-${PATH:Dpath:Unopath}\
-                        -${HOME:Dhome:Unohome}-1.0\n";
-        std::fs::write(dir.join("Makefile"), makefile).unwrap();
-        let ctx = QueryCtx {
+        // Each of USER and HOME as `want` has it ("" for unset): `same`
+        // when make sees exactly that, `other` otherwise.
+        let is = |var: &str, want: &str| {
+            if want.is_empty() {
+                format!("!defined({var})")
+            } else {
+                format!("defined({var}) && \"${{{var}}}\" == \"{want}\"")
+            }
+        };
+        let makefile = |user: &str, home: &str| {
+            format!(
+                ".if {}\nU=same\n.else\nU=other\n.endif\n.if {}\nH=same\n.else\nH=other\n.endif\n\
+                 PKGNAME=${{CARGO_MANIFEST_DIR:Dleak:Uclean}}-${{PATH:Dpath:Unopath}}-${{U}}-${{H}}-1.0\n",
+                is("USER", user),
+                is("HOME", home),
+            )
+        };
+        let mut ctx = QueryCtx {
             portsdir: tmp.path().join("ports"),
             make_conf: None,
             port_dbdir: tmp.path().to_path_buf(),
             overlays: Vec::new(),
+            identity: Identity::Root,
         };
-        let info = run_query(&ctx, &PortKey::parse("cat/env").unwrap()).unwrap();
-        assert_eq!(info.pkgname, "clean-path-home-1.0");
+        let key = PortKey::parse("cat/env").unwrap();
+        std::fs::write(dir.join("Makefile"), makefile("root", "/root")).unwrap();
+        assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "clean-path-same-same-1.0");
+        // The invoker's own, whatever the test runs as, set or not.
+        ctx.identity = Identity::Invoker;
+        let env = |var| std::env::var(var).unwrap_or_default();
+        std::fs::write(dir.join("Makefile"), makefile(&env("USER"), &env("HOME"))).unwrap();
+        assert_eq!(run_query(&ctx, &key).unwrap().pkgname, "clean-path-same-same-1.0");
+    }
+
+    /// USER and HOME by identity: root's whatever optique runs as, or the
+    /// invoker's, each only when set.
+    #[test]
+    fn identity_env_gives_root_or_the_invokers_own() {
+        let invoker = |var: &str| (var == "USER").then(|| "alice".into());
+        let root = identity_env(Identity::Root, invoker);
+        assert_eq!(root, [("USER", "root".into()), ("HOME", "/root".into())]);
+        assert_eq!(identity_env(Identity::Invoker, invoker), [("USER", "alice".into())]);
+        assert!(identity_env(Identity::Invoker, |_| None).is_empty());
     }
 
     #[test]
@@ -503,6 +574,7 @@ mod tests {
             make_conf: None,
             port_dbdir: staging.path().to_path_buf(),
             overlays: Vec::new(),
+            identity: Identity::Invoker,
         };
         let key = PortKey::parse("www/nginx").unwrap();
 
@@ -537,6 +609,36 @@ mod tests {
         );
     }
 
+    /// Under `WITH_CCACHE_BUILD` with no `CCACHE_DIR`, bsd.ccache.mk keeps
+    /// ccache for root alone: a builder's query, run as root, has
+    /// devel/ccache as a build dependency; a query run as anyone else has
+    /// ccache disabled, and no such dependency.
+    /// Run with: cargo test -- --ignored
+    #[test]
+    #[ignore = "needs /usr/ports on a FreeBSD host"]
+    fn live_ccache_follows_the_identity() {
+        let _lock = make_test_lock();
+        let staging = tempfile::tempdir().unwrap();
+        let make_conf = staging.path().join("make.conf");
+        std::fs::write(&make_conf, "WITH_CCACHE_BUILD=yes\n").unwrap();
+        let mut ctx = QueryCtx {
+            portsdir: "/usr/ports".into(),
+            make_conf: Some(make_conf),
+            port_dbdir: staging.path().to_path_buf(),
+            overlays: Vec::new(),
+            identity: Identity::Root,
+        };
+        let key = PortKey::parse("sysutils/tmux").unwrap();
+        let ccache = |info: &PortInfo| info.deps.iter().any(|d| d.target.origin == "devel/ccache");
+        let root = run_query(&ctx, &key).unwrap();
+        assert!(ccache(&root), "root keeps ccache: {:?}", root.deps);
+        if std::env::var("USER").is_ok_and(|u| u != "root") {
+            ctx.identity = Identity::Invoker;
+            let user = run_query(&ctx, &key).unwrap();
+            assert!(!ccache(&user), "ccache disabled for a user: {:?}", user.deps);
+        }
+    }
+
     /// In a poudriere jail's environment, what the host has installed must not
     /// reach the answer. Each half fails on a host carrying the package it
     /// names (apr without LDAP, libiconv), and passes on any host once the
@@ -559,6 +661,7 @@ mod tests {
             make_conf: Some(make_conf),
             port_dbdir: db.path().to_path_buf(),
             overlays: Vec::new(),
+            identity: Identity::Root,
         };
 
         // Mk/Uses/iconv.mk adds libiconv when ${LOCALBASE}/include/iconv.h
@@ -625,6 +728,7 @@ mod tests {
             make_conf: Some(make_conf),
             port_dbdir: db.path().to_path_buf(),
             overlays: Vec::new(),
+            identity: Identity::Root,
         };
 
         let xml = run_query(&ctx, &PortKey::parse("textproc/php84-xml").unwrap()).unwrap();

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use crate::model::origin::PortKey;
+use crate::query::makerunner::Identity;
 
 const POUDRIERE_D: &str = "/usr/local/etc/poudriere.d";
 const POUDRIERE_CONF: &str = "/usr/local/etc/poudriere.conf";
@@ -36,6 +37,18 @@ pub enum QueryEnv {
     Jail { package_building: bool },
     /// synth's scan slave's: nothing installed, synth's make.conf header.
     Synth,
+}
+
+impl QueryEnv {
+    /// Who queries run as: root in poudriere's jail (`jail_start` exports
+    /// `USER=root` and `HOME=/root`, and `injail` keeps them) and in synth's
+    /// scan slave (`scan_environment`), the invoking user on the host.
+    pub fn identity(self) -> Identity {
+        match self {
+            QueryEnv::Host => Identity::Invoker,
+            QueryEnv::Jail { .. } | QueryEnv::Synth => Identity::Root,
+        }
+    }
 }
 
 /// A jail's LOCALBASE is empty when poudriere gathers ports, while the host
@@ -105,6 +118,9 @@ fn synth_ccache(setting: Option<&str>) -> bool {
 }
 
 const SYNTH_DIR: &str = "/usr/local/etc/synth";
+/// The trees synth tries, in order, after `PORTSDIR` and make's answer
+/// (`std_dports_loc`, `std_ports_loc` in its parameters.ads).
+const SYNTH_STANDARD_PORTSDIRS: &[&str] = &["/usr/dports", "/usr/ports"];
 /// Section of synth.ini whose settings apply to every profile.
 const SYNTH_GLOBAL_SECTION: &str = "Global Configuration";
 
@@ -130,6 +146,10 @@ pub struct Settings {
     /// Remarks about the resolution itself (e.g. a flag that does not apply
     /// to the selected backend), printed by the startup banner.
     pub notes: Vec<String>,
+    /// What the build tool itself will refuse to run on, though optique
+    /// reads past it (a synth.ini header with no `]`), printed by the
+    /// startup banner as errors.
+    pub refusals: Vec<String>,
     /// Ports trees laid over `portsdir`, in lookup order (the first holding
     /// a port shadows the others and the main tree): the `OVERLAYS` make
     /// itself reports once the make.conf is settled.
@@ -339,17 +359,36 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
     let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
     if let Some(profile) = req.synth {
         let env_profile = std::env::var("SYNTHPROFILE").ok();
+        let env_portsdir =
+            std::env::var_os("PORTSDIR").filter(|v| !v.is_empty()).map(PathBuf::from);
+        let make_portsdir = || {
+            let text = make_values(&["PORTSDIR"], None, &[])?;
+            let dir = text.trim();
+            (!dir.is_empty()).then(|| PathBuf::from(dir))
+        };
+        let host = SynthHost {
+            env_profile: env_profile.as_deref(),
+            env_portsdir: env_portsdir.as_deref(),
+            make_portsdir: &make_portsdir,
+            standard_portsdirs: SYNTH_STANDARD_PORTSDIRS,
+        };
         let settings = resolve_synth(
             Path::new(SYNTH_DIR),
             profile,
-            env_profile.as_deref(),
+            &host,
             req.portsdir,
             req.options_dir,
             staging_dir,
         )?;
         return finish(settings, Vec::new(), &pkg_db);
     }
-    let poudriere_d = Path::new(POUDRIERE_D);
+    // -l reads no poudriere configuration, so POUDRIERE_ETC is not asked.
+    let etc = if req.local { None } else { poudriere_etc(std::env::var_os("POUDRIERE_ETC"))? };
+    let (poudriere_conf, poudriere_d) = match &etc {
+        Some(etc) => (etc.join("poudriere.conf"), etc.join("poudriere.d")),
+        None => (PathBuf::from(POUDRIERE_CONF), PathBuf::from(POUDRIERE_D)),
+    };
+    let poudriere_d = poudriere_d.as_path();
     // Only a local build asks make for its defaults: a poudriere build
     // reads neither the environment's nor /etc/make.conf's.
     let local = req.local || !poudriere_d.is_dir();
@@ -362,7 +401,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         Default::default()
     };
     let host = HostPaths {
-        poudriere_conf: Path::new(POUDRIERE_CONF),
+        poudriere_conf: &poudriere_conf,
         poudriere_d,
         ports: ports.as_deref().unwrap_or(Path::new("/usr/ports")),
         db: db.as_deref().unwrap_or(Path::new("/var/db/ports")),
@@ -374,7 +413,41 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         arch: &arch,
         supported_archs: &supported_archs,
     };
-    resolve_host(&host, req, staging_dir)
+    let mut settings = resolve_host(&host, req, staging_dir)?;
+    if let Some(etc) = &etc {
+        settings.notes.insert(0, poudriere_etc_note(etc, !local));
+    }
+    Ok(settings)
+}
+
+/// poudriere's configuration root as `POUDRIERE_ETC` moves it (`value`,
+/// the variable as optique was given it): poudriere.in hands any non-empty
+/// value to the sub-command as `-e etcdir` would set it, made absolute.
+/// None when unset or empty. poudriere makes no check of it, `-e` alone
+/// asking for a directory; optique asks it of both, rather than read a
+/// poudriere.d that cannot be there as a missing one.
+fn poudriere_etc(value: Option<std::ffi::OsString>) -> Result<Option<PathBuf>> {
+    let Some(value) = value.filter(|v| !v.is_empty()) else { return Ok(None) };
+    let etc = std::path::absolute(&value)
+        .with_context(|| format!("resolving POUDRIERE_ETC {}", Path::new(&value).display()))?;
+    if !etc.is_dir() {
+        bail!("POUDRIERE_ETC {} is not a directory", etc.display());
+    }
+    Ok(Some(etc))
+}
+
+/// The banner's word on `POUDRIERE_ETC`: where poudriere's configuration
+/// was read from, or, when `etc` holds no poudriere.d (`poudriere` false),
+/// that the build is a local one for that reason.
+fn poudriere_etc_note(etc: &Path, poudriere: bool) -> String {
+    if poudriere {
+        format!(
+            "poudriere.conf and poudriere.d read from {} (POUDRIERE_ETC)",
+            etc.display()
+        )
+    } else {
+        format!("POUDRIERE_ETC {} has no poudriere.d: a local build", etc.display())
+    }
 }
 
 /// Run `cmd`, trimmed stdout on success, empty on any failure.
@@ -602,14 +675,34 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
     settings
 }
 
+/// A build on the host runs as the invoking user, whose `USER` its queries
+/// see (`Identity::Invoker`), and bsd.ccache.mk answers root and anyone
+/// else differently. `user`, optique's `USER` (None when unset), goes into
+/// the hash for such a build: the cache lives under `HOME`, which a `sudo`
+/// may keep while `USER` changes. A builder's queries run as root whoever
+/// runs optique, and are left alone.
+fn key_invoker(mut settings: Settings, user: Option<&str>) -> Settings {
+    if settings.env.identity() != Identity::Invoker {
+        return settings;
+    }
+    settings.conf_hash = invoker_hash(&settings.conf_hash, user);
+    settings
+}
+
+/// `conf_hash` with the invoker's `user` folded in.
+fn invoker_hash(conf_hash: &str, user: Option<&str>) -> String {
+    crate::cache::sha256_hex(format!("{conf_hash}\nUSER {user:?}\n").as_bytes())
+}
+
 /// The finishing steps common to every backend once its own `Settings` are
 /// built: paths absolute, `overlays` settled against what make reports, and
-/// the host's installed packages keyed in. Shared by `resolve`'s synth path
-/// and `resolve_host`.
+/// the host's installed packages and the invoking user keyed in. Shared by
+/// `resolve`'s synth path and `resolve_host`.
 fn finish(settings: Settings, given: Vec<Overlay>, pkg_db: &Path) -> Result<Settings> {
     let settings = settings.absolute()?;
     let settings = with_overlays(settings, given);
-    Ok(key_installed_packages(settings, pkg_db))
+    let settings = key_installed_packages(settings, pkg_db);
+    Ok(key_invoker(settings, std::env::var("USER").ok().as_deref()))
 }
 
 /// A local build: `make config` on this host, built here. What is
@@ -688,6 +781,7 @@ fn resolve_local(
         env: QueryEnv::Host,
         blacklist: Blacklist::default(),
         notes,
+        refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: false,
     })
@@ -747,6 +841,7 @@ fn resolve_poudriere(
         env,
         blacklist,
         notes,
+        refusals: Vec::new(),
         overlays: Vec::new(),
         flavor_default_all: default_all,
     })
@@ -905,23 +1000,23 @@ fn resolve_portsdir(
 /// synth(1) layout: one `synth.ini` describing every profile, the profile's
 /// own `<profile>-make.conf` (no layering), and no blacklist at all. The
 /// options dir is a documented synth setting (`Directory_options`), so unlike
-/// poudriere there is nothing to probe for. `env_profile` is the
-/// environment's `SYNTHPROFILE`, which a bare -s (empty `profile`) heeds.
+/// poudriere there is nothing to probe for. `host` holds what synth reads
+/// from the host besides synth.ini.
 fn resolve_synth(
     synth_dir: &Path,
     profile: &str,
-    env_profile: Option<&str>,
+    host: &SynthHost,
     portsdir_flag: Option<&Path>,
     options_dir_flag: Option<&Path>,
     staging_dir: &Path,
 ) -> Result<Settings> {
-    let ini = fs::read_to_string(synth_dir.join("synth.ini")).unwrap_or_default();
+    let ini = read_synth_ini(&synth_dir.join("synth.ini"))?;
 
     let mut notes = Vec::new();
     // A bare -s (empty profile) follows synth's own selection.
     let selected;
     let profile = if profile.is_empty() {
-        let (name, source) = synth_selected_profile(&ini, env_profile);
+        let (name, source) = synth_selected_profile(&ini, host.env_profile);
         notes.push(format!("synth profile {name} ({source})"));
         selected = name;
         selected.as_str()
@@ -952,14 +1047,22 @@ fn resolve_synth(
             p
         }
         (None, None) => {
-            let fallback = PathBuf::from("/usr/ports");
-            if !is_ports_tree(&fallback) {
+            let Some((dir, source)) = synth_default_portsdir(host) else {
                 bail!(
-                    "synth profile '{profile}' sets no Directory_portsdir and \
-                     /usr/ports is not a ports tree"
+                    "synth profile '{profile}' sets no Directory_portsdir, and none of \
+                     PORTSDIR, make's PORTSDIR, {} exists",
+                    host.standard_portsdirs.join(", ")
+                );
+            };
+            if !is_ports_tree(&dir) {
+                bail!(
+                    "synth profile '{profile}' sets no Directory_portsdir, and {} \
+                     ({source}) is not a ports tree",
+                    dir.display()
                 );
             }
-            fallback
+            notes.push(format!("no Directory_portsdir: ports tree {} ({source})", dir.display()));
+            dir
         }
     };
 
@@ -997,9 +1100,59 @@ fn resolve_synth(
         env: QueryEnv::Synth,
         blacklist: Blacklist::default(),
         notes,
+        refusals: synth_ini_refusals(&ini),
         overlays: Vec::new(),
         flavor_default_all: false,
     })
+}
+
+/// What synth reads from the host besides synth.ini.
+struct SynthHost<'a> {
+    /// The environment's `SYNTHPROFILE`, which a bare -s heeds.
+    env_profile: Option<&'a str>,
+    /// The environment's `PORTSDIR`, when non-empty.
+    env_portsdir: Option<&'a Path>,
+    /// `PORTSDIR` as the host's make answers it outside any tree (the
+    /// environment's, else /etc/make.conf's), when it gives one; asked
+    /// only when the profile names no tree.
+    make_portsdir: &'a dyn Fn() -> Option<PathBuf>,
+    /// The trees synth tries last, in order: /usr/dports, /usr/ports.
+    standard_portsdirs: &'a [&'a str],
+}
+
+/// synth.ini as text: missing is empty, as for synth, which then writes a
+/// fresh one; any other read error stops the run, as synth stops on it
+/// ("Configuration failed to load"). Bytes that are not UTF-8 are decoded
+/// lossily, as a make.conf is read, rather than losing the whole file.
+fn read_synth_ini(path: &Path) -> Result<String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e)
+            .with_context(|| format!("reading {} (synth will not run without it)", path.display())),
+    }
+}
+
+/// The ports tree synth takes for a profile naming none, and what gave it
+/// (parameters.adb `determine_portsdirs`): the first that exists of the
+/// environment's `PORTSDIR`, make's `PORTSDIR` (synth asks `make -f
+/// /usr/share/mk/bsd.port.mk -V PORTSDIR`, which reads the environment
+/// and /etc/make.conf), /usr/dports, /usr/ports. synth's query includes the
+/// tree's own bsd.port.mk, and fails, stopping synth with a "blank
+/// PORTSDIR", whenever the tree it names is missing; optique asks make
+/// outside any tree and goes on to the next candidate instead.
+fn synth_default_portsdir(host: &SynthHost) -> Option<(PathBuf, &'static str)> {
+    if let Some(dir) = host.env_portsdir.filter(|d| d.exists()) {
+        return Some((dir.to_path_buf(), "from PORTSDIR"));
+    }
+    if let Some(dir) = (host.make_portsdir)().filter(|d| d.exists()) {
+        return Some((dir, "from make's PORTSDIR"));
+    }
+    host.standard_portsdirs
+        .iter()
+        .map(Path::new)
+        .find(|d| d.exists())
+        .map(|d| (d.to_path_buf(), "synth's default"))
 }
 
 /// The profile synth itself runs with, and what chose it
@@ -1051,10 +1204,17 @@ fn ini_trim(s: &str) -> &str {
 /// key or value as part of it, keeps the spaces of `[ name ]`, and takes no
 /// indented `[name]` for a header. optique reads them as meant; synth will
 /// not, so the file wants fixing.
+///
+/// A line with no data once its comment is cut (blank, tab-only, a
+/// tab-indented comment) holds nothing synth could misread. A data line
+/// ending in a CR, a CRLF file's, keeps it in its key or value for synth,
+/// which reads lines up to the LF alone; those lines are named in one note.
 fn synth_ini_misreads(text: &str) -> Vec<String> {
     let mut notes = Vec::new();
-    for (n, line) in text.lines().enumerate() {
+    let mut crlf = Vec::new();
+    for (n, raw) in text.split('\n').enumerate() {
         let n = n + 1;
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
         if let Some(rest) = line.trim_start().strip_prefix('[') {
             let name = rest.find(']').map(|end| &rest[..end]);
             if line.starts_with(|c: char| c.is_whitespace()) {
@@ -1065,13 +1225,61 @@ fn synth_ini_misreads(text: &str) -> Vec<String> {
             continue;
         }
         let data = ini_strip_comment(line);
+        if data.trim().is_empty() {
+            continue;
+        }
+        // A comment cut drops the CR with it.
+        if ini_strip_comment(raw).ends_with('\r') {
+            crlf.push(n);
+        }
         let (k, v) = data.split_once('=').unwrap_or((data, ""));
         let tabbed = |s: &str| s.trim_matches(' ') != s.trim();
         if tabbed(k) || tabbed(v) {
             notes.push(format!("synth.ini line {n}: synth keeps a tab around the key or value"));
         }
     }
+    if !crlf.is_empty() {
+        let (s, list) = (if crlf.len() == 1 { "" } else { "s" }, line_ranges(&crlf));
+        notes.push(format!(
+            "synth.ini line{s} {list}: synth keeps the CR of a CRLF line end in the key or value"
+        ));
+    }
     notes
+}
+
+/// Ascending line numbers as runs: `1-3, 5`.
+fn line_ranges(lines: &[usize]) -> String {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for &n in lines {
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == n => *end = n,
+            _ => runs.push((n, n)),
+        }
+    }
+    runs.iter()
+        .map(|&(a, b)| if a == b { a.to_string() } else { format!("{a}-{b}") })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The synth.ini lines synth fails on, each as an error: a section header
+/// (`[` in column 1, on a line longer than that) with no `]`, where
+/// config.adb's `Get_Value` takes `Index (..., "]") - 1` into a `Natural`
+/// and raises `Constraint_Error`, so synth stops with "Configuration failed
+/// to load". optique reads such a line as data, as before; the error says
+/// synth will not.
+fn synth_ini_refusals(text: &str) -> Vec<String> {
+    text.split('\n')
+        .enumerate()
+        .filter(|(_, raw)| raw.len() > 1 && raw.starts_with('[') && !raw.contains(']'))
+        .map(|(n, _)| {
+            format!(
+                "synth.ini line {}: a section header with no ']': synth fails to load \
+                 its configuration and will refuse to run",
+                n + 1
+            )
+        })
+        .collect()
 }
 
 /// Does synth.ini contain a `[name]` section header?
@@ -1538,6 +1746,7 @@ mod tests {
         let hash = |host: &HostPaths| resolve_host(host, &none, &stage).unwrap().conf_hash;
 
         let (_, bare, _) = concat_make_conf(&[], QueryEnv::Host, &[], "", false, &stage).unwrap();
+        let bare = invoker_hash(&bare, std::env::var("USER").ok().as_deref());
         assert_eq!(hash(&host), bare, "no database, nothing to key");
         fs::write(&pkg_db, "one package").unwrap();
         let one = hash(&host);
@@ -1566,7 +1775,7 @@ mod tests {
         fs::create_dir_all(&stage).unwrap();
         fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n", tree.display()))
             .unwrap();
-        let resolve = |profile| resolve_synth(&synth, profile, None, None, None, &stage).unwrap();
+        let resolve = |profile| resolve_synth(&synth, profile, &synth_host(None), None, None, &stage).unwrap();
 
         let pkg_db = tmp.path().join("local.sqlite");
         fs::write(&pkg_db, "one package").unwrap();
@@ -2427,6 +2636,203 @@ not a key value line
         assert_eq!(synth_ini_lookup(ini, "A", "Directory_portsdir"), None);
     }
 
+    /// The host as a test sees it: no PORTSDIR, make answering none, and
+    /// synth's own standard trees, of which /usr/ports may exist here.
+    fn synth_host(env_profile: Option<&str>) -> SynthHost<'_> {
+        fn no_make() -> Option<PathBuf> {
+            None
+        }
+        SynthHost {
+            env_profile,
+            env_portsdir: None,
+            make_portsdir: &no_make,
+            standard_portsdirs: SYNTH_STANDARD_PORTSDIRS,
+        }
+    }
+
+    /// A line with nothing left once its comment is cut is no misread, tab
+    /// or not; a data line's CR, which synth keeps, is, all such lines in
+    /// one note; a comment cut drops the CR, a header ignores it, and a CR
+    /// alone is a blank line.
+    #[test]
+    fn synth_ini_misreads_skip_empty_lines_and_name_crlf() {
+        let ini = "[A]\n\t\n\t# comment\n \t; comment\nk = v ; tab\there\n";
+        assert!(synth_ini_misreads(ini).is_empty(), "{:?}", synth_ini_misreads(ini));
+
+        let ini = "[A]\r\nk=v\r\nj=w\r\n\r\n; c\r\nm=x ; c\r\nn=y\r\n";
+        assert_eq!(
+            synth_ini_misreads(ini),
+            ["synth.ini lines 2-3, 7: synth keeps the CR of a CRLF line end in the key or value"]
+        );
+        assert_eq!(
+            synth_ini_misreads("[A]\nk=v\r\n"),
+            ["synth.ini line 2: synth keeps the CR of a CRLF line end in the key or value"]
+        );
+        // optique reads the value without it.
+        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v"));
+        assert_eq!(line_ranges(&[1, 2, 3, 5, 7, 8]), "1-3, 5, 7-8");
+    }
+
+    /// A header with no `]` makes synth fail to load its configuration:
+    /// named as a refusal, the line still read as data by optique. A lone
+    /// `[` is a one-character line synth skips, and an indented one no
+    /// header at all.
+    #[test]
+    fn synth_ini_header_without_bracket_is_a_refusal() {
+        let ini = "[A]\nk=v\n[B\n[\n  [C\n[D\r\n";
+        assert_eq!(
+            synth_ini_refusals(ini),
+            [
+                "synth.ini line 3: a section header with no ']': synth fails to load \
+                 its configuration and will refuse to run",
+                "synth.ini line 6: a section header with no ']': synth fails to load \
+                 its configuration and will refuse to run",
+            ]
+        );
+        assert!(synth_ini_refusals("[A]\nk=v\n").is_empty());
+        assert_eq!(synth_ini_lookup(ini, "A", "k").as_deref(), Some("v"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let tree = tmp.path().join("ports");
+        fake_tree(&tree);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(synth.join("synth.ini"), format!("[A]\nDirectory_portsdir={}\n[B\n", tree.display()))
+            .unwrap();
+        let s = resolve_synth(&synth, "A", &synth_host(None), None, Some(&tree), &stage).unwrap();
+        assert_eq!(s.refusals.len(), 1, "{:?}", s.refusals);
+        assert_eq!(s.portsdir, tree);
+    }
+
+    /// A missing synth.ini is none; one that cannot be read stops the run,
+    /// as it stops synth; bytes that are not UTF-8 cost only themselves.
+    #[test]
+    fn synth_ini_read_errors_stop_and_bad_bytes_are_kept_lossily() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(read_synth_ini(&tmp.path().join("absent")).unwrap(), "");
+        let err = read_synth_ini(tmp.path()).unwrap_err();
+        assert!(format!("{err:#}").contains("synth will not run"), "{err:#}");
+
+        let ini = tmp.path().join("synth.ini");
+        fs::write(&ini, b"; caf\xe9\n[A]\nDirectory_options=/opts\n").unwrap();
+        let text = read_synth_ini(&ini).unwrap();
+        assert_eq!(synth_ini_lookup(&text, "A", "Directory_options").as_deref(), Some("/opts"));
+
+        // Through the resolution: an unreadable synth.ini is an error.
+        let synth = tmp.path().join("synth");
+        fs::create_dir_all(synth.join("synth.ini")).unwrap();
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let tree = tmp.path().join("ports");
+        fake_tree(&tree);
+        assert!(resolve_synth(&synth, "A", &synth_host(None), Some(&tree), Some(&tree), &stage).is_err());
+    }
+
+    /// With no Directory_portsdir, synth takes the first that exists of
+    /// PORTSDIR, make's PORTSDIR, /usr/dports, /usr/ports; -P still comes
+    /// first, and the banner says which gave the tree.
+    #[test]
+    fn synth_portsdir_falls_back_as_synth_determines_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let [env, make, dports, ports] =
+            ["env", "make", "dports", "ports"].map(|d| tmp.path().join(d));
+        let absent = tmp.path().join("absent");
+        let standard = [dports.to_str().unwrap(), ports.to_str().unwrap()];
+        let answer = std::cell::RefCell::new(Some(make.clone()));
+        let make_portsdir = || answer.borrow().clone();
+        let host = |env_portsdir| SynthHost {
+            env_profile: None,
+            env_portsdir,
+            make_portsdir: &make_portsdir,
+            standard_portsdirs: &standard,
+        };
+        let pick = |env_portsdir| synth_default_portsdir(&host(env_portsdir));
+
+        assert_eq!(pick(Some(&env)), None, "nothing exists yet");
+        fake_tree(&ports);
+        assert_eq!(pick(Some(&env)), Some((ports.clone(), "synth's default")));
+        fake_tree(&dports);
+        assert_eq!(pick(Some(&env)), Some((dports.clone(), "synth's default")));
+        fake_tree(&make);
+        assert_eq!(pick(Some(&env)), Some((make.clone(), "from make's PORTSDIR")));
+        fake_tree(&env);
+        assert_eq!(pick(Some(&env)), Some((env.clone(), "from PORTSDIR")));
+        assert_eq!(pick(Some(&absent)), Some((make.clone(), "from make's PORTSDIR")));
+        *answer.borrow_mut() = None;
+        assert_eq!(pick(None), Some((dports.clone(), "synth's default")));
+
+        // Through the resolution: noted, -P first, and a candidate that is
+        // no tree is an error naming its source.
+        let synth = tmp.path().join("synth");
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(synth.join("synth.ini"), "[A]\n").unwrap();
+        let s = resolve_synth(&synth, "A", &host(Some(&env)), None, Some(&stage), &stage).unwrap();
+        assert_eq!(s.portsdir, env);
+        let note = format!("no Directory_portsdir: ports tree {} (from PORTSDIR)", env.display());
+        assert!(s.notes.contains(&note), "{:?}", s.notes);
+        let s = resolve_synth(&synth, "A", &host(Some(&env)), Some(&ports), Some(&stage), &stage).unwrap();
+        assert_eq!(s.portsdir, ports);
+        assert!(!s.notes.iter().any(|n| n.contains("Directory_portsdir")), "{:?}", s.notes);
+        let err = resolve_synth(&synth, "A", &host(Some(&stage)), None, Some(&stage), &stage)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("(from PORTSDIR) is not a ports tree"), "{err}");
+    }
+
+    /// POUDRIERE_ETC, when set and non-empty, must be a directory, made
+    /// absolute; the banner says where poudriere's configuration was read.
+    #[test]
+    fn poudriere_etc_must_be_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(poudriere_etc(None).unwrap(), None);
+        assert_eq!(poudriere_etc(Some("".into())).unwrap(), None);
+        assert_eq!(poudriere_etc(Some(tmp.path().into())).unwrap().as_deref(), Some(tmp.path()));
+        let file = tmp.path().join("file");
+        fs::write(&file, "").unwrap();
+        for bad in [file, tmp.path().join("absent")] {
+            let err = poudriere_etc(Some(bad.clone().into())).unwrap_err().to_string();
+            assert_eq!(err, format!("POUDRIERE_ETC {} is not a directory", bad.display()));
+        }
+        assert!(poudriere_etc(Some(".".into())).unwrap().unwrap().is_absolute());
+        let note = poudriere_etc_note(Path::new("/e"), true);
+        assert_eq!(note, "poudriere.conf and poudriere.d read from /e (POUDRIERE_ETC)");
+        let note = poudriere_etc_note(Path::new("/e"), false);
+        assert_eq!(note, "POUDRIERE_ETC /e has no poudriere.d: a local build");
+    }
+
+    /// Queries run as root in a builder, as the invoker on the host; the
+    /// host's cache generation keys the invoker's USER, a builder's none.
+    #[test]
+    fn identity_follows_the_build_and_keys_a_host_build() {
+        assert_eq!(QueryEnv::Host.identity(), Identity::Invoker);
+        assert_eq!(QueryEnv::Jail { package_building: true }.identity(), Identity::Root);
+        assert_eq!(QueryEnv::Synth.identity(), Identity::Root);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let synth = tmp.path().join("synth");
+        let tree = tmp.path().join("ports");
+        fake_tree(&tree);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&synth).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        let resolve = || resolve_synth(&synth, "A", &synth_host(None), Some(&tree), Some(&tree), &stage).unwrap();
+        let hash = |s: Settings| s.conf_hash;
+        let builder = hash(resolve());
+        assert_eq!(hash(key_invoker(resolve(), Some("alice"))), builder, "a builder runs as root");
+        let host = |user| {
+            let mut s = resolve();
+            s.env = QueryEnv::Host;
+            hash(key_invoker(s, user))
+        };
+        let (alice, root, unset) = (host(Some("alice")), host(Some("root")), host(None));
+        assert!(alice != root && root != unset && alice != unset && alice != builder);
+        assert_eq!(host(Some("alice")), alice);
+    }
+
     #[test]
     fn synth_notes_flag_missing_profile_and_live_options_dir() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2442,18 +2848,18 @@ not a key value line
 
         // Unknown named profile: noted, defaults still apply (/var/db/ports
         // triggers the live-dir note too). /usr/ports exists on this host.
-        let s = resolve_synth(&synth, "typo", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "typo", &synth_host(None), None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("'typo' has no section")), "{:?}", s.notes);
         assert!(s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
 
         // Bare -s honours profile_selected; known section → no missing note.
-        let s = resolve_synth(&synth, "", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "", &synth_host(None), None, None, &stage).unwrap();
         assert!(s.notes.iter().any(|n| n.contains("profile Live (synth.ini")), "{:?}", s.notes);
         assert!(!s.notes.iter().any(|n| n.contains("no section")), "{:?}", s.notes);
 
         // -o override: no live-dir note.
         let o = tmp.path().join("other");
-        let s = resolve_synth(&synth, "Live", None, None, Some(&o), &stage).unwrap();
+        let s = resolve_synth(&synth, "Live", &synth_host(None), None, Some(&o), &stage).unwrap();
         assert!(!s.notes.iter().any(|n| n.contains("live /var/db/ports")), "{:?}", s.notes);
     }
 
@@ -2473,7 +2879,7 @@ not a key value line
             .unwrap();
         fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
 
-        let s = resolve_synth(&synth, "A", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "A", &synth_host(None), None, None, &stage).unwrap();
         let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
         for var in ["OSVERSION", "ARCH", "_OSRELEASE"] {
             assert!(!conf.contains(var), "{var} in synth make.conf: {conf}");
@@ -2498,7 +2904,7 @@ not a key value line
         )
         .unwrap();
         let picked = |profile, env| {
-            let s = resolve_synth(&synth, profile, env, None, Some(&o), &stage).unwrap();
+            let s = resolve_synth(&synth, profile, &synth_host(env), None, Some(&o), &stage).unwrap();
             let staged = fs::read_to_string(s.make_conf.unwrap()).unwrap();
             let name = staged.lines().find_map(|l| l.strip_prefix("SYNTHPROFILE=")).unwrap().to_string();
             (name, s.notes)
@@ -2548,7 +2954,7 @@ not a key value line
         // A second profile's make.conf must not be picked up.
         fs::write(synth.join("Other-make.conf"), "A=1\n").unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         assert_eq!(s.options_dir, opts);
         assert!(s.options_dir.is_dir());
@@ -2574,7 +2980,7 @@ not a key value line
         // -o wins over Directory_options, -P over Directory_portsdir.
         let elsewhere = tmp.path().join("elsewhere");
         fake_tree(&elsewhere);
-        let s = resolve_synth(&synth, "LiveSystem", None, Some(&elsewhere), Some(&elsewhere), &stage)
+        let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), Some(&elsewhere), Some(&elsewhere), &stage)
             .unwrap();
         assert_eq!((s.portsdir.as_path(), s.options_dir.as_path()), (elsewhere.as_path(), elsewhere.as_path()));
         assert!(s.notes.is_empty(), "{:?}", s.notes);
@@ -2604,7 +3010,7 @@ not a key value line
         .unwrap();
         fs::write(synth.join("A-make.conf"), "X=1\n").unwrap();
         let staged = || {
-            let s = resolve_synth(&synth, "A", None, None, None, &stage).unwrap();
+            let s = resolve_synth(&synth, "A", &synth_host(None), None, None, &stage).unwrap();
             fs::read_to_string(s.make_conf.unwrap()).unwrap()
         };
 
@@ -2689,7 +3095,7 @@ not a key value line
         )
         .unwrap();
 
-        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
         assert_eq!(s.portsdir, tree);
         // Nonexistent Directory_options is still the target, not created yet.
         assert_eq!(s.options_dir, opts);
@@ -2708,7 +3114,7 @@ not a key value line
             format!("[LiveSystem]\nDirectory_portsdir={}/nope\n", tmp.path().display()),
         )
         .unwrap();
-        let err = resolve_synth(&synth, "LiveSystem", None, None, Some(&opts), &stage)
+        let err = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, Some(&opts), &stage)
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a ports tree"), "{err}");
@@ -2725,7 +3131,7 @@ not a key value line
             ),
         )
         .unwrap();
-        let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
+        let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
         assert_eq!(s.options_dir, Path::new("/var/db/ports"));
 
         // No synth.ini: options dir falls back to /var/db/ports (the portsdir
@@ -2733,7 +3139,7 @@ not a key value line
         // only exercised through -o here).
         fs::remove_file(synth.join("synth.ini")).unwrap();
         if is_ports_tree(Path::new("/usr/ports")) {
-            let s = resolve_synth(&synth, "LiveSystem", None, None, None, &stage).unwrap();
+            let s = resolve_synth(&synth, "LiveSystem", &synth_host(None), None, None, &stage).unwrap();
             assert_eq!(s.options_dir, Path::new("/var/db/ports"));
         }
     }
