@@ -5,8 +5,8 @@
 Run in order; a red gate is answered before anything else.
 
 - [ ] `make check` -- man page lint, one release everywhere (Cargo.toml,
-      cargo, Cargo.lock, the tags). Any `unchecked` line it prints is a
-      reader this host could not ask.
+      cargo, Cargo.lock, the tags), the sources as rustfmt writes them.
+      Any `unchecked` line it prints is a reader this host could not ask.
 - [ ] `make build`
 - [ ] `make tests`
 - [ ] `make tests-live` -- every round, wherever a real `/usr/ports` is

@@ -16,8 +16,7 @@ Traps:
 - A change to what the wrapper dumps or the parser keeps needs `SCHEMA`
   bumped in `src/cache/mod.rs`; the cache is keyed on the tree and make.conf,
   not on optique, so old entries are otherwise served as if current.
-- The tree is not rustfmt-formatted (`cargo fmt --check` differs in
-  hundreds of places); do not run `cargo fmt` over it, format only what
-  you write.
+- The tree is rustfmt-formatted, defaults only, and `make check` fails
+  when it is not (`check-fmt`): run `cargo fmt` before committing.
 - There is no terminal here for the TUI; drive it with `optique tui
   --drive` (`docs/tui.md`, "Driving the TUI headless").

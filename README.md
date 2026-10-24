@@ -159,7 +159,7 @@ The `Makefile` wraps cargo and runs under BSD and GNU make alike; `make`
 alone lists its targets.
 
 ```sh
-make check          # preflight: man page lint, one release everywhere
+make check          # preflight: man page lint, one release everywhere, rustfmt
 make build          # cargo build --release
 make tests          # unit and hermetic CLI tests
 make tests-live     # end to end against /usr/ports, on a FreeBSD host

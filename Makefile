@@ -73,13 +73,16 @@ help:						## show this help (the default)
 
 # --- preflight: runs none of optique's code --------------------------------
 
-check: check-man check-version			## preflight: this tree is fit to build and release
+check: check-man check-version check-fmt	## preflight: this tree is fit to build and release
 
 check-man:					## the man page lints clean (mandoc, warnings and above)
 	${MANDOC} ${MANDOCFLAGS} ${MANSRC}
 
 check-version:					## Cargo.toml, cargo, Cargo.lock and the tags name one release
 	@sh tests/check-version.sh '${VERSION}'
+
+check-fmt:					## the sources are as rustfmt writes them (`cargo fmt` fixes it)
+	${CARGO} fmt --check
 
 # Not part of check: the port is updated in the ports tree after a release,
 # so it lags one by design (docs/port.md).
@@ -151,5 +154,5 @@ tag:						## tag v<release> from Cargo.toml, after check and tests; pushes nothi
 clean:						## remove target/ (cargo clean)
 	${CARGO} clean
 
-.PHONY: help check check-man check-version check-port build tests \
+.PHONY: help check check-man check-version check-fmt check-port build tests \
 	tests-live screens install uninstall version tag clean
