@@ -1779,6 +1779,32 @@ fn a_removal_baseline_holds_no_slave_option() {
     assert!(!s.edited(&s.ports[&key]));
 }
 
+/// The same under an owner that is no default flavor: the removal baseline
+/// holds the other flavor's options too, at its defaults, as the staged
+/// set does.
+#[test]
+fn a_removal_baseline_holds_every_flavors_options() {
+    let mk = |flavor: &str, complete: &[&str]| {
+        let mut info = linked_info(&format!("cat/x@{flavor}"), &[], complete);
+        info.options.defaults = complete.iter().map(ToString::to_string).collect();
+        info.options.effective = info.options.defaults.clone();
+        info.flavors = vec!["a".into(), "b".into(), "c".into()];
+        info.options_name = "cat_x".into();
+        info
+    };
+    let mut ports = BTreeMap::new();
+    for info in [mk("b", &["BASE", "Y", "Z"]), mk("c", &["BASE", "X"])] {
+        ports.insert(info.key.clone(), info);
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut s = session_in(ports, tmp.path());
+    s.reload_saved(&files, ["cat_x"]);
+    let c = PortKey::parse("cat/x@c").unwrap();
+    assert_eq!(s.states["cat_x"].baseline, set(&["BASE", "X", "Y", "Z"]));
+    assert!(!s.edited(&s.ports[&c]));
+}
+
 #[test]
 fn reload_saved_refreshes_baseline() {
     let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);

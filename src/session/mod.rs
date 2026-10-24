@@ -405,7 +405,6 @@ impl Session {
         touched: impl IntoIterator<Item = &'a str>,
     ) {
         for name in touched {
-            let holds = self.file_options(name);
             let owner = self.owners.get(name).and_then(|k| self.ports.get(k));
             let (Some(state), Some(owner)) = (self.states.get_mut(name), owner) else {
                 continue;
@@ -426,13 +425,18 @@ impl Session {
             } else {
                 // Removed under -m: what make builds with no file but its
                 // options.local, which is what the removal was judged
-                // against, a conditional group's members included, within
-                // the options the state holds (no OPTIONS_SLAVE option or
-                // unlisted implied one, which the staged set never has).
-                built_with(owner, Some(&files.combined(name)))
-                    .into_iter()
-                    .filter(|o| holds.contains(o))
-                    .collect()
+                // against, a conditional group's members included, built as
+                // every other baseline is: each flavor's own options (no
+                // OPTIONS_SLAVE option or unlisted implied one, which the
+                // staged set never has), every flavor's under an owner that
+                // is no default flavor.
+                let others = sharing(&self.ports, name, &owner.key);
+                shared_enabled_by(
+                    apply::file_enabled_set,
+                    owner,
+                    &others,
+                    Some(&files.combined(name)),
+                )
             };
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
