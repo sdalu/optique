@@ -54,6 +54,10 @@ pub fn spawn(
             // A store per scan: the staging dir changes between scans as the
             // user edits, and within one it spares flavors re-reading a file.
             let files = OptionsFiles::new(&ctx.port_dbdir);
+            // The TUI's tests run their makes here: held, as every test
+            // running make holds it, so none outlives into one that kills.
+            #[cfg(test)]
+            let _lock = crate::query::makerunner::make_test_lock();
             let result = scanner::scan(
                 &roots,
                 &ctx,

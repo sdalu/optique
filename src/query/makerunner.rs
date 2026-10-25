@@ -1037,9 +1037,18 @@ mod tests {
     fn no_make_starts_once_quitting() {
         let _lock = make_test_lock();
         let (_tmp, ctx) = slow_port(0);
+        // Cleared however the test ends: left set, it fails every query
+        // test after it.
+        struct Resume;
+        impl Drop for Resume {
+            fn drop(&mut self) {
+                QUITTING.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let resume = Resume;
         assert_eq!(quit_makes(), 0);
         let err = run_query(&ctx, &PortKey::parse("cat/slow").unwrap()).unwrap_err();
-        QUITTING.store(false, std::sync::atomic::Ordering::SeqCst);
+        drop(resume);
         assert!(format!("{err:#}").contains("quitting"), "{err:#}");
         assert_eq!(active_make_count(), 0);
         run_query(&ctx, &PortKey::parse("cat/slow").unwrap()).unwrap();

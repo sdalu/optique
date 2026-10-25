@@ -933,6 +933,9 @@ mod tests {
             "OPTIONS_FILE_UNSET+=DOCS\n",
         )
         .unwrap();
+        // Past the file's ctime tick before the scan starts: a file changed
+        // at or after a query's start is not cached under it.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let ctx = QueryCtx {
             portsdir: "/usr/ports".into(),
             make_conf: None,
