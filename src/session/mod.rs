@@ -585,8 +585,13 @@ impl Session {
     /// or a file optique cannot manage.
     pub fn edit_refusal(&self, key: &PortKey) -> Option<String> {
         let info = self.ports.get(key)?;
-        self.revert_refusal(key)
-            .or_else(|| self.sibling_override(info))
+        // A sibling's override before an unmanaged file: it is the reason
+        // apply leaves the file alone either way (man page, CAVEATS).
+        if info.options.r#override.is_some() {
+            return self.revert_refusal(key);
+        }
+        self.sibling_override(info)
+            .or_else(|| self.revert_refusal(key))
     }
 
     /// Why the port's staged state cannot go back to its saved one (`U`):

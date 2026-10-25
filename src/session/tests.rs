@@ -2995,3 +2995,38 @@ fn a_stranded_edit_under_a_sibling_override_can_be_reverted() {
     s.revert(&gtk3.key);
     assert!(!s.edited(&info));
 }
+
+/// A sibling's OPTIONS_OVERRIDE is named before an options.local optique
+/// cannot manage: it is why apply leaves the file alone either way.
+#[test]
+fn a_sibling_override_is_named_before_an_unmanaged_local() {
+    let mk = |flavor: &str| {
+        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+        let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
+        let mut info = p.remove(&k).unwrap();
+        info.key = key.clone();
+        info.canonical = key;
+        info.flavors = vec!["qt".into(), "gtk3".into()];
+        info.options_name = "audio_plugins".into();
+        info
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("audio_plugins")).unwrap();
+    std::fs::write(
+        tmp.path().join("audio_plugins/options.local"),
+        "OPTIONS_FILE_SET=A\n",
+    )
+    .unwrap();
+    let mut qt = mk("qt");
+    qt.options.r#override = Some(set(&["A"]));
+    let gtk3 = mk("gtk3");
+    let ports: BTreeMap<_, _> = [qt, gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let s = session_in(ports, tmp.path());
+    let info = s.ports[&gtk3.key].clone();
+    assert!(s.unmanaged(&info).is_some(), "the local resets a list");
+    let why = s.edit_refusal(&gtk3.key).unwrap();
+    assert!(why.contains("audio/plugins@qt"), "{why}");
+}
