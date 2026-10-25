@@ -6166,4 +6166,11 @@ fn an_override_flavors_pane_shows_nothing_of_the_file() {
     for word in ["STALE", "UNMANAGED", "new X"] {
         assert!(!shown.contains(word), "{word}:\n{shown}");
     }
+    // Nor an N mark on X or Y, which the file it does not read omits.
+    assert!(
+        !shown
+            .lines()
+            .any(|l| l.contains("│N [") && (l.contains("] X ") || l.contains("] Y "))),
+        "{shown}"
+    );
 }
