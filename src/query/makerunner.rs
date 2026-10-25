@@ -79,14 +79,14 @@ pub enum ScanEvent {
 
 /// Fixed pool of worker threads turning PortKeys into ScanEvents.
 pub struct MakeRunner {
-    job_tx: Sender<PortKey>,
+    job_tx: Sender<(PortKey, std::time::SystemTime)>,
     pub events: Receiver<ScanEvent>,
     workers: Vec<JoinHandle<()>>,
 }
 
 impl MakeRunner {
     pub fn new(ctx: QueryCtx, jobs: usize) -> Self {
-        let (job_tx, job_rx) = crossbeam_channel::unbounded::<PortKey>();
+        let (job_tx, job_rx) = crossbeam_channel::unbounded::<(PortKey, std::time::SystemTime)>();
         let (ev_tx, ev_rx) = crossbeam_channel::unbounded::<ScanEvent>();
         let workers = (0..jobs.max(1))
             .map(|_| {
@@ -94,8 +94,7 @@ impl MakeRunner {
                 let ev_tx = ev_tx.clone();
                 let ctx = ctx.clone();
                 std::thread::spawn(move || {
-                    for key in job_rx.iter() {
-                        let since = std::time::SystemTime::now();
+                    for (key, since) in job_rx.iter() {
                         let ev = match run_query(&ctx, &key) {
                             Ok(info) => ScanEvent::PortDone(Box::new(info), since),
                             Err(e) => ScanEvent::PortError {
@@ -117,8 +116,17 @@ impl MakeRunner {
         }
     }
 
+    #[cfg(test)]
     pub fn submit(&self, key: PortKey) {
-        let _ = self.job_tx.send(key);
+        self.submit_since(key, std::time::SystemTime::now());
+    }
+
+    /// [`submit`](Self::submit), the query counted as started at `since`:
+    /// before the cache lookup that read the port's files, so a file
+    /// rewritten after that read is no file the answer is stored under
+    /// (`Cache::insert`).
+    pub fn submit_since(&self, key: PortKey, since: std::time::SystemTime) {
+        let _ = self.job_tx.send((key, since));
     }
 
     /// Close the job queue and wait for workers to drain.
@@ -385,10 +393,33 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         anyhow::bail!("make failed ({}): {why}", out.status);
     }
     let mut info = parse::parse_dump(key, &text)?;
+    // The port's own makefiles, the framework's and /usr/share/mk aside.
+    let framework = |f: &str| {
+        let f = Path::new(f);
+        f.starts_with("/usr/share/mk")
+            || std::iter::once(ctx.portsdir.as_path())
+                .chain(ctx.overlays.iter().map(PathBuf::as_path))
+                .any(|tree| f.starts_with(tree.join("Mk")))
+    };
+    // Regular files only: `.MAKE.MAKEFILES` names /dev/stdin, the wrapper
+    // piped in, whose read would wait on optique's own stdin for good.
+    info.sub_make = info
+        .makefiles
+        .iter()
+        .filter(|f| !framework(f))
+        .filter(|f| readable_makefile(Path::new(f)))
+        .any(|f| std::fs::read_to_string(f).is_ok_and(|t| crate::cache::makefile_runs_make(&t)));
     info.outside_files = outside_files(&info.makefiles, &portdir, ctx);
     info.makefiles = tree_files(&info.makefiles, &portdir, &ctx.portsdir);
     adopt_options_file(&mut info, &ctx.port_dbdir);
     Ok(info)
+}
+
+/// Is `path` a makefile optique may read: a regular file, never the
+/// /dev/stdin `.MAKE.MAKEFILES` names for the piped wrapper, nor a FIFO,
+/// whose read would wait for good.
+fn readable_makefile(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file())
 }
 
 /// A dumped `OPTIONS_FILE` one entry deep in the options dir the query read
@@ -956,6 +987,36 @@ mod tests {
         runner.shutdown();
         std::thread::sleep(std::time::Duration::from_millis(100));
         assert!(!sleeping(), "the grandchild outlived the kill");
+    }
+
+    /// A port whose own Makefile runs make on another one at parse time is
+    /// marked so at query time, the piped wrapper (/dev/stdin) aside; one
+    /// running anything else is not.
+    #[test]
+    fn a_port_running_make_at_parse_time_is_marked() {
+        let _lock = make_test_lock();
+        let key = PortKey::parse("cat/slow").unwrap();
+        let (_tmp, ctx) = slow_port_running("${MAKE} -C /nonexistent -V X 2>/dev/null || true");
+        assert!(run_query(&ctx, &key).unwrap().sub_make);
+        let (_tmp, ctx) = slow_port_running("echo x");
+        assert!(!run_query(&ctx, &key).unwrap().sub_make);
+    }
+
+    /// The makefiles read for `sub_make` are regular files: never
+    /// /dev/stdin (the piped wrapper, listed in .MAKE.MAKEFILES) nor a FIFO,
+    /// whose read would block on optique's own stdin for good.
+    #[test]
+    fn only_regular_makefiles_are_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("Makefile");
+        std::fs::write(&file, "X=1\n").unwrap();
+        let fifo = tmp.path().join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: mkfifo(2) takes a NUL-terminated path and a mode.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert!(readable_makefile(&file));
+        assert!(!readable_makefile(&fifo));
+        assert!(!readable_makefile(Path::new("/dev/stdin")));
     }
 
     /// Once quitting, no query starts a make: a worker taking its next port

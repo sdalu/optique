@@ -469,9 +469,13 @@ forms,
 or a per-port
 .Va <OPTIONS_NAME>_SET
 and the like, none of them assigned under a conditional or read by another
-line, no changed one expanding anything with
+line or named by a directive
+.Pq Ic .ifdef , .undef ,
+no changed one expanding anything with
 .Ql $ ,
-and the
+the rest of the
+.Pa make.conf
+the same in order, and the
 .Pa make.conf
 includes no file.
 .Xr make 1

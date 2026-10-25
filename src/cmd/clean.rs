@@ -369,10 +369,11 @@ fn find_redundant(
     let mut total = live.len();
     loop {
         for key in ask.drain(..) {
+            let since = std::time::SystemTime::now();
             match cache.lookup(&key, &pass.files) {
                 Some(info) => ready.push_back(Ok(info)),
                 None => {
-                    runner.submit(key);
+                    runner.submit_since(key, since);
                     in_flight += 1;
                 }
             }
@@ -430,10 +431,11 @@ fn find_redundant(
         let file = pass.files.combined(&removal.options_name);
         for sibling in sibling_origins(&trees, &removal.options_name.replacen('_', "/", 1)) {
             let key = PortKey::new(sibling, None);
+            let since = std::time::SystemTime::now();
             let info = match cache.lookup(&key, &pass.files) {
                 Some(info) => info,
                 None => {
-                    runner.submit(key.clone());
+                    runner.submit_since(key.clone(), since);
                     match runner.events.recv() {
                         Ok(ScanEvent::PortDone(info, since)) => {
                             cache.insert(&info, &pass.files, since);

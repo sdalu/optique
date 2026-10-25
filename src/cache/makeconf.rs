@@ -141,6 +141,25 @@ pub(super) fn option_edit(old: &str, new: &str) -> Option<Vec<String>> {
     if vars.is_empty() {
         return None;
     }
+    // In order, not as a multiset: make's value of a variable assigned on
+    // several lines follows their order. With the changed variables'
+    // lines, the comments and the blanks taken out, what is left is the
+    // same sequence of lines at the same depths, or the edit moved
+    // something no probe asks about (two DEFAULT_VERSIONS lines swapped).
+    let rest = |ls: &[Line]| -> Vec<(String, usize)> {
+        ls.iter()
+            .filter(|l| {
+                let t = l.text.trim();
+                !t.is_empty()
+                    && !t.starts_with('#')
+                    && !assignment(t).is_some_and(|(name, _)| vars.contains(name))
+            })
+            .map(|l| (l.text.trim().to_string(), l.depth))
+            .collect()
+    };
+    if rest(&old) != rest(&new) {
+        return None;
+    }
     for var in &vars {
         let reads = [
             format!("{{{var}}}"),
@@ -156,9 +175,25 @@ pub(super) fn option_edit(old: &str, new: &str) -> Option<Vec<String>> {
             if reads.iter().any(|r| line.text.contains(r.as_str())) {
                 return None;
             }
+            // A directive naming it reads it (`.ifdef WITH`, `.if
+            // defined(WITH)`, `.elifndef`) or drops it (`.undef WITH`).
+            if directive(&line.text).is_some() && names_word(&line.text, var) {
+                return None;
+            }
         }
     }
     Some(vars.into_iter().collect())
+}
+
+/// Does `text` name `var` as a whole word (no letter, digit, `_`, `-` or
+/// `.` either side, the characters a variable name holds)?
+fn names_word(text: &str, var: &str) -> bool {
+    let part = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.');
+    text.match_indices(var).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + var.len()..].chars().next();
+        !before.is_some_and(part) && !after.is_some_and(part)
+    })
 }
 
 /// How many times each line occurs in `lines`.
@@ -313,6 +348,42 @@ mod tests {
                 &format!("{cond}OPTIONS_UNSET+=X11\n")
             ),
             None
+        );
+        // Lines moved: make's value follows their order, so the rest must
+        // read the same in order, an option variable outside the edit too.
+        assert_eq!(
+            edit(
+                "DEFAULT_VERSIONS=ssl=openssl\nDEFAULT_VERSIONS+=python=3.11\n",
+                "DEFAULT_VERSIONS+=python=3.11\nDEFAULT_VERSIONS=ssl=openssl\nOPTIONS_UNSET+=DOCS\n"
+            ),
+            None
+        );
+        assert_eq!(
+            edit(
+                "OPTIONS_SET=A\nOPTIONS_SET+=B\n",
+                "OPTIONS_SET+=B\nOPTIONS_SET=A\nOPTIONS_UNSET+=DOCS\n"
+            ),
+            None
+        );
+        // A directive naming an edited variable reads or drops it.
+        for directive in [
+            ".ifdef WITH\nDEFAULT_VERSIONS+=ssl=openssl\n.endif\n",
+            ".if defined(WITH)\nDEFAULT_VERSIONS+=ssl=openssl\n.endif\n",
+            ".undef WITH\n",
+        ] {
+            assert_eq!(
+                edit(directive, &format!("WITH=X11\n{directive}")),
+                None,
+                "{directive}"
+            );
+        }
+        // One naming another variable sharing a prefix is no read of it.
+        assert_eq!(
+            edit(
+                ".ifdef WITHOUT_X\n.endif\n",
+                "WITH=X11\n.ifdef WITHOUT_X\n.endif\n"
+            ),
+            Some(vec!["WITH".to_string()])
         );
         // A continued line is read whole.
         assert_eq!(

@@ -542,13 +542,11 @@ fn carry_over_tree(text: &str, old: &str, new: &str, portsdir: &Path) -> Option<
         });
     }
     let (mut lines, mut dropped) = (Vec::new(), 0);
-    let mut sub_make: HashMap<String, bool> = HashMap::new();
     for line in text.lines().skip(1) {
         match serde_json::from_str::<CacheEntry>(line) {
-            Ok(entry)
-                if invalidation.keeps(&entry.info)
-                    && !runs_make_at_parse(portsdir, &entry.info, &mut sub_make) =>
-            {
+            // A port running make on another one at parse time read a port
+            // its makefiles never name (`PortInfo::sub_make`).
+            Ok(entry) if invalidation.keeps(&entry.info) && !entry.info.sub_make => {
                 lines.push(line.to_string());
             }
             Ok(_) => dropped += 1,
@@ -679,27 +677,18 @@ fn parse_time_readers(portsdir: &Path, changes: &[(char, String)]) -> Vec<String
     readers
 }
 
-/// Does one of the port's own makefiles (outside `Mk/`) run make while make
-/// parses it (`VAR!= ${MAKE} -C ../other -V X`)? That child make reads
-/// another port, which `.MAKE.MAKEFILES` never names: www/caddy-custom
-/// takes its version from www/caddy, mail/claws-mail-plugins its options
-/// from each plugin. Such an entry is carried over no tree change. `seen`
-/// remembers each file's answer for the run.
-fn runs_make_at_parse(portsdir: &Path, info: &PortInfo, seen: &mut HashMap<String, bool>) -> bool {
-    info.makefiles
+/// Does a makefile with this `text` run make while make parses it (`VAR!=
+/// ${MAKE} -C ../other -V X`)? That child make reads another port, which
+/// `.MAKE.MAKEFILES` never names: www/caddy-custom takes its version from
+/// www/caddy, mail/claws-mail-plugins its options from each plugin. Judged
+/// at query time (`PortInfo::sub_make`), for the port's makefiles in the
+/// tree or an overlay alike.
+pub(crate) fn makefile_runs_make(text: &str) -> bool {
+    logical_lines(text)
         .iter()
-        .filter(|file| !file.starts_with("Mk/") && !file.starts_with('/'))
-        .any(|file| {
-            *seen.entry(file.clone()).or_insert_with(|| {
-                fs::read_to_string(portsdir.join(file)).is_ok_and(|text| {
-                    logical_lines(&text)
-                        .iter()
-                        .filter(|line| !line.starts_with('\t'))
-                        .flat_map(|line| parse_commands(line))
-                        .any(|command| runs_make(&command))
-                })
-            })
-        })
+        .filter(|line| !line.starts_with('\t'))
+        .flat_map(|line| parse_commands(line))
+        .any(|command| runs_make(&command))
 }
 
 /// Is `command` a make run on a port: `${MAKE}`, `${MAKE_CMD}` or `make`,
@@ -1087,7 +1076,7 @@ fn short(s: &str) -> String {
 /// one wrote with missing fields. Part of every generation file name
 /// (`v<SCHEMA>-<tree>-<conf>.jsonl`); files from other schemas are reaped
 /// by the prune pass since nothing can read them again.
-const SCHEMA: u32 = 22;
+const SCHEMA: u32 = 23;
 
 /// Keep the current generation plus the most recent other one.
 fn prune_old_generations(dir: &Path, keep: &str) {

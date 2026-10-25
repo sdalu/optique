@@ -77,6 +77,12 @@ pub struct PortInfo {
     /// query was made.
     #[serde(default)]
     pub outside_files: Vec<String>,
+    /// One of the port's own makefiles, in the tree or an overlay, runs
+    /// make on another port while make parses it
+    /// (`cache::makefile_runs_make`): the answer read a port no file
+    /// above names, so it is carried over no tree change.
+    #[serde(default)]
+    pub sub_make: bool,
 }
 
 impl PortInfo {
@@ -114,6 +120,7 @@ impl PortInfo {
             warnings: vec![],
             makefiles: vec![],
             outside_files: vec![],
+            sub_make: false,
         }
     }
 }

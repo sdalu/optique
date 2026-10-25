@@ -86,12 +86,13 @@ pub fn scan(
         .collect();
     loop {
         while let Some(key) = pending.pop() {
+            let since = std::time::SystemTime::now();
             if let Some(info) = cache.lookup(&key, files) {
                 result.from_cache += 1;
                 let targets = register(info, blacklist, moved, &exists, &mut result);
                 pending.extend(targets.into_iter().filter(|t| seen.insert(t.clone())));
             } else {
-                runner.submit(key);
+                runner.submit_since(key, since);
                 in_flight += 1;
             }
         }

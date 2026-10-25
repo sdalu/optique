@@ -299,7 +299,9 @@ it parses (`VAR!= ${MAKE} -C ../other -V X`: www/caddy-custom takes
 www/caddy's version, mail/claws-mail-plugins its options from each
 plugin, which it also probes with `exists()`) reads that port in a child
 make `.MAKE.MAKEFILES` never names; such an entry, some seventeen ports,
-is carried over no tree change (`cache::runs_make_at_parse`). A `!=`
+is carried over no tree change (`PortInfo::sub_make`, judged at query
+time from every makefile the port read outside `Mk/` and
+`/usr/share/mk`, an overlay port's included). A `!=`
 running anything but make reads no other port. Uncommitted edits to the
 tree were already invisible to the key.
 
@@ -331,6 +333,13 @@ the entries that change cannot reach (`cache::makeconf`):
   outside any port is then the one every port sees. A changed line
   expanding anything (`$`) is no option edit: the probe outside any port
   cannot expand it as a port would (`${PORTNAME}` reads empty there).
+  With the changed variables' lines, the comments and the blanks taken
+  out, the rest of both texts must read the same in order, at the same
+  depths: make's value of a variable assigned on several lines follows
+  their order, and two `DEFAULT_VERSIONS` lines swapped change what no
+  probe asks. A directive naming a changed variable as a word (`.ifdef
+  WITH`, `.if defined(WITH)`, `.undef WITH`) reads or drops it, and
+  refuses the edit too.
 - make is asked those values under the old text and the new (two `make
   -V`s outside any port, `makerunner::make_conf_values`). The words in one
   value and not the other reach a port when one matches any of its
@@ -448,7 +457,8 @@ Reading once leaves a gap for a port with no cache entry yet: its file is
 first read when its answer is stored, after make read it, and a file
 rewritten in between (`make config`, another optique applying) would pair
 the new bytes with the old answer. An answer is not stored when a file
-its query read has a ctime at or after the query's start: a write or a
+its query read has a ctime at or after the query's start, taken before
+the cache lookup that first read the file: a write or a
 rename into place always moves it, which an mtime `cp -p` sets back does
 not. Each entry goes out in one write(2), whole under `O_APPEND` though
 two optiques share the generation, and a line cut short is ended before

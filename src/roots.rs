@@ -73,6 +73,8 @@ pub fn query_flavors(
 ) -> HashMap<String, Vec<String>> {
     let mut out = HashMap::new();
     let mut missing = Vec::new();
+    // Before the lookups read the ports' files (`MakeRunner::submit_since`).
+    let since = std::time::SystemTime::now();
     for origin in origins {
         let key = PortKey::new(origin.clone(), None);
         match cache.lookup(&key, files) {
@@ -88,7 +90,7 @@ pub fn query_flavors(
     let runner = MakeRunner::new(ctx.clone(), jobs.min(missing.len()));
     let pending = missing.len();
     for key in missing {
-        runner.submit(key);
+        runner.submit_since(key, since);
     }
     for _ in 0..pending {
         match runner.events.recv() {

@@ -940,34 +940,11 @@ fn an_option_edit_carries_over_what_it_cannot_reach() {
 /// tree change. A `!=` running anything else reads no other port.
 #[test]
 fn a_port_running_make_at_parse_time_is_not_carried() {
-    let tmp = tempfile::tempdir().unwrap();
-    let write = |rel: &str, text: &str| {
-        let path = tmp.path().join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    };
-    write(
-        "www/caddy-custom/Makefile",
-        "CADDY_VERSION!=\t${MAKE} -C ${.CURDIR}/../caddy  -V '$${DISTVERSION}'\n",
-    );
-    write(
-        "www/plain/Makefile",
-        "ARCH!= uname -p\nall:\n\t${MAKE} -C sub -V X\n",
-    );
-    let info = |dir: &str| PortInfo {
-        makefiles: vec![format!("{dir}/Makefile"), "Mk/bsd.port.mk".to_string()],
-        ..PortInfo::stub(dir)
-    };
-    let mut seen = HashMap::new();
-    assert!(runs_make_at_parse(
-        tmp.path(),
-        &info("www/caddy-custom"),
-        &mut seen
+    assert!(makefile_runs_make(
+        "CADDY_VERSION!=\t${MAKE} -C ${.CURDIR}/../caddy  -V '$${DISTVERSION}'\n"
     ));
-    assert!(!runs_make_at_parse(
-        tmp.path(),
-        &info("www/plain"),
-        &mut seen
+    assert!(!makefile_runs_make(
+        "ARCH!= uname -p\nall:\n\t${MAKE} -C sub -V X\n"
     ));
     assert!(runs_make(
         "${MAKE_CMD} -C ../claws-mail-${_addon} -V IGNORE"
