@@ -107,14 +107,17 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     }
     // The entries the closure reads: a key one entry deep
     // (`devel_git/lite-options`) uses its entry, and itself, an entry of
-    // its own to clean (`clean::classify_entries`). A port reading no file
-    // under its OPTIONS_NAME (`session::reads_no_file`: an OPTIONS_FILE
-    // moved, whose own file `read` keeps, or an OPTIONS_OVERRIDE) uses none.
+    // its own to clean (`clean::classify_entries`). A port under an
+    // OPTIONS_OVERRIDE uses none: make reads neither the file nor its
+    // .local (bsd.options.mk:300-304). One whose OPTIONS_FILE is moved still
+    // counts its own: the moved path may be that very file, spelled so it
+    // cannot be mapped into the options dir (`clean::read_through_moved`),
+    // and keeping an entry is the safe side.
     let used = scanned
         .result
         .ports
         .values()
-        .filter(|i| !session::reads_no_file(i))
+        .filter(|i| i.options.r#override.is_none())
         .flat_map(|i| {
             [
                 optfiles::key_entry(&i.options_name).to_string(),
@@ -499,7 +502,11 @@ fn find_redundant(
                 rescued.push((name.clone(), format!("{key}: query failed, left alone")));
                 break;
             };
-            if info.options_name != *name || !info.options.has_options() {
+            // A member under an OPTIONS_OVERRIDE reads none of it.
+            if info.options_name != *name
+                || !info.options.has_options()
+                || info.options.r#override.is_some()
+            {
                 continue;
             }
             if let Some(why) = shared_file_deviation(std::slice::from_ref(info), &local, &file) {

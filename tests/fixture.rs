@@ -197,7 +197,19 @@ fn clean_redundant_asks_a_family_member_reading_the_file() {
         "{}",
         stdout(&out)
     );
+    // A member under an OPTIONS_OVERRIDE reads none of it: no say.
+    fs::write(
+        &f.make_conf,
+        "misc_fam-x_UNSET+=B\n.if ${.CURDIR:M*/fam-x}\nOPTIONS_OVERRIDE=A\n.endif\n",
+    )
+    .unwrap();
+    let out = f.run("clean", &["-r", "-v"]);
+    assert!(!f.file("misc_fam").exists(), "{}", stdout(&out));
     // Without the member deviating, the file goes.
+    f.write_file(
+        "misc_fam",
+        "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=B\n",
+    );
     fs::write(&f.make_conf, "").unwrap();
     f.run("clean", &["-r"]);
     assert!(!f.file("misc_fam").exists());
@@ -1109,12 +1121,12 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
         assert_eq!(plan["applied"], true, "{order:?}: {plan}");
         assert!(!f.file("misc_flav").exists(), "{order:?}: {plan}");
     }
-    // @nox alone reads none of the shared file: listed alone, its entry is
-    // unused.
+    // Listed alone, @nox still keeps the shared entry under --unused: a
+    // moved path is not always provably another file, and keeping is safe.
     f.run("sync", &["misc/flav"]);
     assert!(f.file("misc_flav").exists());
     f.run("clean", &["--unused", "misc/flav@nox"]);
-    assert!(!f.file("misc_flav").exists(), "@nox reads another file");
+    assert!(f.file("misc_flav").exists(), "kept");
 }
 
 /// bsd.options.mk:300-366: make.conf giving one flavor an

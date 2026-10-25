@@ -2482,12 +2482,11 @@ Also remove entries for ports outside the dependency closure of the given
 package list
 .Pq positional origins and/or Fl f Ar pkglist ,
 which is then required.
-A port reading no file under its options name, its
-.Va OPTIONS_FILE
-moved or under an
+A port under an
 .Va OPTIONS_OVERRIDE ,
-uses no entry by that name; a moved file in the options directory is kept
-as the entry it reads.
+which reads no options file, uses no entry; one whose
+.Va OPTIONS_FILE
+is moved keeps its own entry as well as the one the moved file lies in.
 If any port in that closure fails to query, or there is any other error a
 .Cm scan
 would count
