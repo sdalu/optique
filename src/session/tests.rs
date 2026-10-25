@@ -1805,6 +1805,48 @@ fn a_removal_baseline_holds_every_flavors_options() {
     assert!(!s.edited(&s.ports[&c]));
 }
 
+/// After `-m` removes a file whose line a `*_FORCE` knob overrides, the
+/// staged set takes what make builds, as the baseline does: nothing is
+/// left edited.
+#[test]
+fn a_removal_leaves_no_forced_option_edited() {
+    let (mut ports, key) = mk_port(&["DOCS", "NLS"], &["DOCS"], vec![], vec![]);
+    ports.get_mut(&key).unwrap().options.force_unset = set(&["DOCS"]);
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    std::fs::write(
+        tmp.path().join("cat_port/options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS NLS\nOPTIONS_FILE_SET+=DOCS\nOPTIONS_FILE_UNSET+=NLS\n",
+    )
+    .unwrap();
+    let mut s = session_in(ports, tmp.path());
+    std::fs::remove_dir_all(tmp.path().join("cat_port")).unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    s.reload_saved(&files, ["cat_port"]);
+    assert!(!s.edited(&s.ports[&key]), "{:?}", s.state(&s.ports[&key]));
+}
+
+/// An options.local entry naming an option the port no longer has is no
+/// file's to drop: the port is not stale over it.
+#[test]
+fn an_options_local_entry_makes_no_port_stale() {
+    let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    std::fs::write(
+        tmp.path().join("cat_port/options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("cat_port/options.local"),
+        "OPTIONS_FILE_UNSET+=GONE\n",
+    )
+    .unwrap();
+    let s = session_in(ports, tmp.path());
+    assert_eq!(s.status(&s.ports[&key]), UiStatus::Ok);
+}
+
 #[test]
 fn reload_saved_refreshes_baseline() {
     let (ports, key) = mk_port(&["A"], &[], vec![], vec![]);

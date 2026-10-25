@@ -85,7 +85,9 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     // not written, however the plan got there.
     for name in &touched_names {
         for (key, info) in &sess.ports {
-            if info.options_name != *name {
+            // A flavor reading a file of its own takes no part in the
+            // write: its conflict is its own file's.
+            if info.options_name != *name || session::moved(info).is_some() {
                 continue;
             }
             let violations = sess.violations(info);

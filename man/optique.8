@@ -1661,6 +1661,14 @@ Each port is classified as
 or
 .Cm conflict
 .Pq the options make computes from the recorded ones, Va *_FORCE No and what Va IMPLIES No adds included, violate Va PREVENTS No or a group constraint .
+An
+.Pa options.local
+with no options file counts as a file with its lines: such a port is
+.Cm stale ,
+each option it does not decide named as added, or
+.Cm ok ,
+never
+.Cm unconfigured .
 Each
 .Va PREVENTS
 word is a pattern, matched against every option on, as the framework's
@@ -3545,12 +3553,14 @@ uses its exit status the same way:
 .Bl -tag -width Ds -compact
 .It 0
 The plan was honoured: every value asked for is the value recorded, and every
-file that had to be written was.
+file that had to be written, or removed, was.
 .It 1
 The plan was not honoured: some value was refused or undone, a port was not in
 the closure, or the result would conflict, and nothing was written; or a file
 could not be written, which stops the pass there, the files renamed before it
-staying, counted as written.
+staying, counted as written; or, under
+.Fl m ,
+a redundant file could not be removed.
 The report on standard output says which.
 .It 3
 An error occurred, for example a malformed plan or an unresolvable ports tree.

@@ -51,6 +51,60 @@ impl Outcome {
     }
 }
 
+/// Any JSON value, refused when one of its objects names a key twice.
+struct NoDuplicateKeys;
+
+impl<'de> serde::Deserialize<'de> for NoDuplicateKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = NoDuplicateKeys;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("JSON")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut seen = std::collections::HashSet::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if !seen.insert(key.clone()) {
+                        return Err(serde::de::Error::custom(format!("{key:?} named twice")));
+                    }
+                    map.next_value::<NoDuplicateKeys>()?;
+                }
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                while seq.next_element::<NoDuplicateKeys>()?.is_some() {}
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_bool<E>(self, _: bool) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_i64<E>(self, _: i64) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_u64<E>(self, _: u64) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_str<E>(self, _: &str) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(NoDuplicateKeys)
+            }
+        }
+        d.deserialize_any(Visitor)
+    }
+}
+
 impl Plan {
     /// Parse the JSON plan, naming the offending entry on bad input. An empty
     /// plan is an error: a caller that meant "change nothing" should not be
@@ -61,6 +115,10 @@ impl Plan {
         }
         let root: serde_json::Value =
             serde_json::from_str(text).context("plan is not valid JSON")?;
+        // serde_json keeps the last of a key named twice in one object,
+        // which would drop the rest of the plan unseen.
+        serde_json::from_str::<NoDuplicateKeys>(text)
+            .map_err(|e| anyhow::anyhow!("plan has a key {e}: each port and option goes once"))?;
         let obj = root.as_object().context(
             "plan must be a JSON object of ports: {\"category/port\": {\"OPTION\": true}}",
         )?;
@@ -284,6 +342,14 @@ mod tests {
     #[test]
     fn bad_plans_say_what_is_wrong() {
         let cases = [
+            (
+                r#"{"www/nginx": {"LUA": true}, "www/nginx": {"DOCS": false}}"#,
+                "named twice",
+            ),
+            (
+                r#"{"www/nginx": {"LUA": true, "LUA": false}}"#,
+                "named twice",
+            ),
             ("", "empty plan"),
             ("   \n", "empty plan"),
             ("not json", "valid JSON"),

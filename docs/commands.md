@@ -105,7 +105,10 @@ optique scan -z workstation --json --options -f pkglist
 
 Non-interactive status report over the closure, meant as a build gate: each
 port is `ok`, `unconfigured` (no saved options file), `stale` (the option
-list changed since the file was written) or `conflict` (the options make
+list changed since the file was written; an `options.local` with no
+options file counts as a file with its lines, so such a port is `stale`,
+each option it does not decide added, or `ok`, never `unconfigured`) or
+`conflict` (the options make
 computes from the saved ones, `*_FORCE` included, violate a group rule or
 `PREVENTS`, which `make check-config` checks for an `OPTIONS_SLAVE` option
 too; a `PREVENTS` word is a pattern, as make matches it, and what an option

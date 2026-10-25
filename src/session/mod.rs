@@ -438,6 +438,20 @@ impl Session {
                     Some(&files.combined(name)),
                 )
             };
+            // The removed file's line for an option a make.conf knob or
+            // options.local decides changed nothing make built; the staged
+            // set, which took it, takes the value make builds instead.
+            if files.own(name).is_none() {
+                for opt in &owner.options.complete {
+                    if owner.options.is_forced(opt) || combined.local_decides(opt) {
+                        if state.baseline.contains(opt) {
+                            state.staged.insert(opt.clone());
+                        } else {
+                            state.staged.remove(opt);
+                        }
+                    }
+                }
+            }
             state.saved = saved;
             // A `?=` in options.local takes effect or not by the file.
             self.locals.insert(name.to_string(), combined);
@@ -939,11 +953,17 @@ impl Session {
         // Obsolete: whatever it mentions, list or line, that the tree lost;
         // a non-default flavor cannot tell that from what it merely lacks,
         // and a write keeps those lines (apply::planned_file), so none.
+        // An entry options.local alone holds is no file's to drop: a write
+        // leaves options.local as it is (`PendingWrite::changes` agrees).
         let mentioned: BTreeSet<&str> = if is_preferred(owner) {
             saved
                 .complete
                 .iter()
                 .chain(saved.recorded())
+                .filter(|o| {
+                    !(saved.local_set.contains(*o) || saved.local_unset.contains(*o))
+                        || saved.complete.contains(*o)
+                })
                 .map(String::as_str)
                 .collect()
         } else {
