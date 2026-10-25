@@ -11,10 +11,37 @@ Run in order; a red gate is answered before anything else.
 - [ ] `make tests`
 - [ ] `make tests-live` -- every round, wherever a real `/usr/ports` is
       at hand; it also drives the TUI, so a changed key or help line can
-      break it. Where it cannot run, say it was skipped.
+      break it, and checks optique against make on real ports (the
+      `oracle_*` tests), so a change to what is staged, written or
+      judged identical can. Where it cannot run, say it was skipped.
 - [ ] A port test build (docs/port.md, "Test build") -- when the round
       touched a path the FreeBSD port installs from (`man/optique.8`, the
       binary's name). No test reaches the port's Makefile.
+
+## Before committing a fix
+
+- [ ] Every user of what the fix changes -- the function, the set, the
+      rule -- found by grep and judged: changed too, or why not. The
+      commit message lists them. (bc77c0e changed how "identical" is
+      judged and missed the baseline built from the same set: 1951abe.)
+- [ ] The fix's own assumptions checked against the cases the docs name:
+      a non-default flavor owning the file, a flavor make.conf moves, a
+      port with no file, `-m`. (2d224e9 assumed the owner was always the
+      default flavor.)
+- [ ] A regression test for the trigger, cycled: it fails with the fix
+      reverted and passes with it. Plus one for the nearest neighbour the
+      fix could break, not only the reported case.
+- [ ] Every gate above, `make tests-live` included, before the commit:
+      chain the commit on them (`&&`) rather than reading their output
+      after. Ask any session running a benchmark on this host first.
+
+## Before pushing
+
+- [ ] A fresh reviewer, given only the diff and the commit messages,
+      reads `git log -p origin/main..` for regressions and sibling sites
+      the fixes left; its findings are settled, and a commit settling
+      them is reviewed in turn, before the push.
+- [ ] Batches small enough that the review reads every diff in full.
 
 ## Documents
 

@@ -195,6 +195,14 @@ Two kinds of tests pin the table:
     (`misc/model-radio`); a pruned group member's dependency
     (`misc/condep`);
   - `tests/fixture_lists.rs`: `@all` and `@-`.
+- Oracle tests (`tests/live.rs`, `oracle_*`) run the binary over a small
+  closure of real ports (sysutils/tmux, security/sudo, ftp/curl,
+  mail/dovecot24) under a make.conf of option policy, and check it
+  against `make -V PORT_OPTIONS`: each port's staged set with no file,
+  `-m` planning none, a plan built from `scan`'s report replayed with
+  nothing refused, what make reads back from the files `sync` wrote, a
+  second `sync` writing nothing, and one free option per port flipped by
+  `decide` and built so.
 
 Every fixture port depends on a `ports-mgmt/pkg` stub, as every real port
 depends on pkg. poudriere and synth themselves were not run: their side

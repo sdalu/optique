@@ -1140,3 +1140,225 @@ fn minimal_scan_lists_problems_first() {
     );
     assert!(text.contains("ok (no file"), "{text}");
 }
+
+/// The oracle checks' roots: a small, stable closure from the host's tree,
+/// with flavors (mail/dovecot24, its Makefile naming a flavor's own options
+/// file) and a range of option kinds.
+const ORACLE_ROOTS: &[&str] = &[
+    "sysutils/tmux",
+    "security/sudo",
+    "ftp/curl",
+    "mail/dovecot24",
+];
+
+/// The make.conf both optique and make read in the oracle checks: option
+/// policy, so the layers are exercised, and nothing else.
+const ORACLE_MAKE_CONF: &str = "OPTIONS_UNSET+=DOCS EXAMPLES\nOPTIONS_SET+=IPV6\n";
+
+/// An oracle run's options dir, cache and make.conf.
+struct Oracle {
+    _tmp: tempfile::TempDir,
+    options: std::path::PathBuf,
+    cache: std::path::PathBuf,
+    make_conf: std::path::PathBuf,
+}
+
+impl Oracle {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let options = tmp.path().join("options");
+        fs::create_dir_all(&options).unwrap();
+        let make_conf = tmp.path().join("make.conf");
+        fs::write(&make_conf, ORACLE_MAKE_CONF).unwrap();
+        Oracle {
+            cache: tmp.path().join("cache"),
+            options,
+            make_conf,
+            _tmp: tmp,
+        }
+    }
+
+    /// `optique <action> -l -o <options> <roots>`, make.conf replaced.
+    fn optique(&self, action: &str, args: &[&str]) -> Command {
+        let mut c = optique(&self.cache, action);
+        c.env("__MAKE_CONF", &self.make_conf)
+            .arg("-l")
+            .arg("-o")
+            .arg(&self.options)
+            .args(args)
+            .args(ORACLE_ROOTS);
+        c
+    }
+
+    fn json(&self, action: &str, args: &[&str]) -> serde_json::Value {
+        parse_json(&self.optique(action, args).output().unwrap())
+    }
+
+    fn scan(&self) -> serde_json::Value {
+        self.json("scan", &["--json", "--options"])
+    }
+
+    /// make's own PORT_OPTIONS for `port` (`origin[@flavor]`), reading the
+    /// oracle's options dir and make.conf, as a build would.
+    fn make_port_options(&self, port: &str) -> std::collections::BTreeSet<String> {
+        let (origin, flavor) = port.split_once('@').unwrap_or((port, ""));
+        let mut c = Command::new("/usr/bin/make");
+        c.env("__MAKE_CONF", &self.make_conf)
+            .stdin(std::process::Stdio::null())
+            .arg("-C")
+            .arg(format!("/usr/ports/{origin}"))
+            .arg(format!("PORT_DBDIR={}", self.options.display()));
+        if !flavor.is_empty() {
+            c.arg(format!("FLAVOR={flavor}"));
+        }
+        let out = c.args(["-V", "PORT_OPTIONS"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every port with options whose `staged` set differs from make's
+    /// PORT_OPTIONS, each with what only optique has on and what only make
+    /// has. A member of a conditional group whose option is off is left
+    /// out: make drops it from PORT_OPTIONS after its helpers ran, and
+    /// `staged` is the value a write records (DESIGN.md, "make building
+    /// with the same options").
+    fn staged_against_make(&self, report: &serde_json::Value) -> Vec<String> {
+        let mut out = Vec::new();
+        for p in report["ports"].as_array().unwrap() {
+            let opts = p["options"].as_array().unwrap();
+            if opts.is_empty() {
+                continue;
+            }
+            let on = |name: &str| {
+                opts.iter()
+                    .any(|o| o["name"] == name && o["staged"] == true)
+            };
+            let dropped = |o: &serde_json::Value| {
+                let group = o["group"]["name"].as_str().unwrap_or_default();
+                !group.is_empty() && opts.iter().any(|g| g["name"] == group) && !on(group)
+            };
+            let port = p["port"].as_str().unwrap();
+            let made = self.make_port_options(port);
+            let mut only_optique = Vec::new();
+            let mut only_make = Vec::new();
+            for o in opts.iter().filter(|o| !dropped(o)) {
+                let name = o["name"].as_str().unwrap();
+                match (o["staged"] == true, made.contains(name)) {
+                    (true, false) => only_optique.push(name),
+                    (false, true) => only_make.push(name),
+                    _ => {}
+                }
+            }
+            if !only_optique.is_empty() || !only_make.is_empty() {
+                out.push(format!("{port}: +{only_optique:?} -{only_make:?}"));
+            }
+        }
+        out
+    }
+}
+
+/// Oracle: optique against make on real ports. With no options file each
+/// port's staged set is make's PORT_OPTIONS; -m plans no file for any; a
+/// plan built from scan's own report replays with nothing refused; a sync
+/// writes files make reads back as the very PORT_OPTIONS optique reported,
+/// and a second sync writes nothing.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn oracle_defaults_replay_and_round_trip_agree_with_make() {
+    let o = Oracle::new();
+    let report = o.scan();
+    assert_eq!(report["errors"], serde_json::json!([]), "{report}");
+    let diff = o.staged_against_make(&report);
+    assert!(
+        diff.is_empty(),
+        "staged differs from make:\n{}",
+        diff.join("\n")
+    );
+
+    let minimal = o.json("sync", &["-m", "-n", "--json"]);
+    assert_eq!(minimal["writes"], serde_json::json!([]), "{minimal}");
+
+    let plan: serde_json::Map<String, serde_json::Value> = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| !p["options"].as_array().unwrap().is_empty())
+        .map(|p| {
+            let values = p["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|x| (x["name"].as_str().unwrap().to_string(), x["staged"].clone()))
+                .collect::<serde_json::Map<_, _>>();
+            (p["port"].as_str().unwrap().to_string(), values.into())
+        })
+        .collect();
+    let replay = parse_json(&with_stdin(
+        o.optique("decide", &["-n"]),
+        &serde_json::Value::Object(plan).to_string(),
+    ));
+    assert_eq!(replay["rejected"], serde_json::json!([]), "{replay}");
+    assert_eq!(replay["unknown"], serde_json::json!([]), "{replay}");
+
+    let first = o.json("sync", &["--json"]);
+    assert_eq!(first["summary"]["failed"], 0, "{first}");
+    let again = o.json("sync", &["--json"]);
+    assert_eq!(again["summary"]["written"], 0, "{again}");
+    let after = o.scan();
+    let diff = o.staged_against_make(&after);
+    assert!(
+        diff.is_empty(),
+        "after sync, make reads otherwise:\n{}",
+        diff.join("\n")
+    );
+}
+
+/// Oracle: one free option flipped per port (in no group, no knob's, no
+/// IMPLIES either way) by decide, and make then builds each with the
+/// flipped value.
+#[test]
+#[ignore = "needs /usr/ports on a FreeBSD host"]
+fn oracle_decided_flips_are_what_make_builds() {
+    let o = Oracle::new();
+    let report = o.scan();
+    let mut plan = serde_json::Map::new();
+    let mut want: Vec<(String, String, bool)> = Vec::new();
+    for p in report["ports"].as_array().unwrap() {
+        if p["status"] == "conflict" {
+            continue;
+        }
+        let opts = p["options"].as_array().unwrap();
+        let implied = |name: &serde_json::Value| {
+            opts.iter()
+                .any(|q| q["implies"].as_array().is_some_and(|i| i.contains(name)))
+        };
+        let free = opts.iter().find(|x| {
+            x.get("group").is_none()
+                && x["locked"] == false
+                && x["implies"].as_array().is_some_and(Vec::is_empty)
+                && x["prevents"].as_array().is_some_and(Vec::is_empty)
+                && !implied(&x["name"])
+        });
+        let Some(x) = free else { continue };
+        let port = p["port"].as_str().unwrap().to_string();
+        let name = x["name"].as_str().unwrap().to_string();
+        let value = x["staged"] != true;
+        plan.insert(port.clone(), serde_json::json!({ name.clone(): value }));
+        want.push((port, name, value));
+    }
+    assert!(!want.is_empty(), "no free option to flip in {report}");
+    let out = with_stdin(
+        o.optique("decide", &[]),
+        &serde_json::Value::Object(plan).to_string(),
+    );
+    let decided = parse_json(&out);
+    assert_eq!(out.status.code(), Some(0), "{decided}");
+    let wrong: Vec<String> = want
+        .iter()
+        .filter(|(port, name, value)| o.make_port_options(port).contains(name) != *value)
+        .map(|(port, name, value)| format!("{port} {name}={value}"))
+        .collect();
+    assert!(wrong.is_empty(), "make does not build: {wrong:?}");
+}
