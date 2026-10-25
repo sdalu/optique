@@ -381,11 +381,7 @@ impl Session {
     /// lacks). None for an option the file can hold.
     pub fn unstored<'a>(&'a self, info: &'a PortInfo, opt: &str) -> Option<&'a PortInfo> {
         let owner = self.owner_info(info);
-        let theirs = |i: &PortInfo| i.options.complete.iter().any(|o| o == opt);
-        // Only the default flavor writes its own view alone; another owner
-        // writes every flavor's options (`apply::planned_file`).
-        (owner.key != info.key && is_preferred(owner) && theirs(info) && !theirs(owner))
-            .then_some(owner)
+        unstored_under(owner, info, opt).then_some(owner)
     }
 
     /// The port's dependencies, resolved to closure keys; unknown ones are
@@ -1429,6 +1425,15 @@ fn shared_enabled_by(
         }
     }
     close_implies(owner, set)
+}
+
+/// Whether the file `owner` writes never records `info`'s option `opt`:
+/// `info` is another flavor and has it, the owner, a default flavor, has
+/// not. Only the default flavor writes its own view alone; another owner
+/// writes every flavor's options (`apply::planned_file`).
+pub(crate) fn unstored_under(owner: &PortInfo, info: &PortInfo, opt: &str) -> bool {
+    let theirs = |i: &PortInfo| i.options.complete.iter().any(|o| o == opt);
+    owner.key != info.key && is_preferred(owner) && theirs(info) && !theirs(owner)
 }
 
 /// The closure's flavors reading the file `name`, but `except`: ports with

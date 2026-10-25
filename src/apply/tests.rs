@@ -1467,6 +1467,108 @@ fn leave_judges_a_default_flavor_owner_alone() {
     assert!(session.covered_by_makeconf(row), "done, as sync leaves it");
 }
 
+/// audio/plugins in the given flavor of `flavors`, with `complete`, A on
+/// by default and make.conf setting it.
+fn plugin(flavor: &str, flavors: &[&str], complete: &[&str]) -> PortInfo {
+    let mut info = mk_info(complete, &["A"]);
+    info.key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+    info.canonical = info.key.clone();
+    info.flavors = flavors.iter().map(ToString::to_string).collect();
+    info.options.mc_set = set_of(&["A"]);
+    info
+}
+
+/// What sync plans for these flavors, under Leave, and the session over
+/// them, whose rows scan and the TUI judge.
+fn leave_and_rows(
+    files: &OptionsFiles,
+    infos: &[&PortInfo],
+) -> (PlannedWrites, crate::session::Session) {
+    let none = BTreeSet::new();
+    let planned = plan_writes_for(
+        infos.iter().map(|i| {
+            let saved = files.saved(&i.options_name);
+            (&i.key, *i, sync_enabled_set(i, saved.as_ref()))
+        }),
+        files,
+        false,
+        Covered::Leave { edited: &none },
+    );
+    let ports: std::collections::BTreeMap<PortKey, PortInfo> = infos
+        .iter()
+        .map(|i| (i.key.clone(), (*i).clone()))
+        .collect();
+    let roots: Vec<PortKey> = ports.keys().cloned().collect();
+    let session = crate::session::Session::new(
+        ports,
+        std::collections::HashMap::new(),
+        &roots,
+        files,
+        false,
+    );
+    (planned, session)
+}
+
+/// A sibling may leave open an option the default owner has and settles
+/// (a FORCE, a group or IMPLIES differing by flavor): the file records it,
+/// so the row owes it and sync writes the file that settles it.
+#[test]
+fn leave_writes_for_a_sibling_option_the_owner_records() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut qt = plugin("qt", &["qt", "gtk3"], &["A", "B"]);
+    qt.options.force_unset = set_of(&["B"]);
+    let gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "B"]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
+    assert_eq!(session.undecided(&session.ports[&gtk3.key]), ["B"]);
+}
+
+/// With no default flavor in the closure the widest flavor owns the file
+/// and writes every flavor's options, AOSD included: it is undecided, and
+/// sync writes the file.
+#[test]
+fn leave_counts_every_option_under_a_widest_owner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let flavors = ["main", "qt", "gtk3"];
+    let qt = plugin("qt", &flavors, &["A"]);
+    let gtk3 = plugin("gtk3", &flavors, &["A", "AOSD"]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
+    assert_eq!(session.undecided(&session.ports[&gtk3.key]), ["AOSD"]);
+}
+
+/// A stale file whose new option make.conf decides is rewritten, and
+/// neither flavor's row owes anything, AOSD the file never records
+/// included.
+#[test]
+fn a_stale_file_make_conf_settles_reads_covered_for_each_flavor() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    fs::write(
+        tmp.path().join("cat_port/options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    )
+    .unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut qt = plugin("qt", &["qt", "gtk3"], &["A", "N"]);
+    qt.options.mc_unset = set_of(&["N"]);
+    let mut gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "N", "AOSD"]);
+    gtk3.options.mc_unset = set_of(&["N"]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
+    for key in [&qt.key, &gtk3.key] {
+        let row = &session.ports[key];
+        assert_eq!(
+            session.status(row),
+            crate::session::UiStatus::Stale,
+            "{key}"
+        );
+        assert!(session.covered_by_makeconf(row), "{key}");
+    }
+}
+
 /// A stale file is rewritten all the same, its port nothing undecided: it
 /// has outranked make.conf since it was written, and left as it is it would
 /// keep an option the port lacks, which synth refuses.

@@ -674,11 +674,15 @@ everywhere ("make.conf decisions are judged by outcome, not by mention"),
 so a SINGLE or RADIO sibling of the member make.conf picks gets no file
 where make, by mention, writes one. Such a port is the final state, so
 `scan` and the TUI count it done without `-m`. Of flavors sharing the
-file, a default-flavor owner is judged alone: it writes only its own
-options, so a file would settle nothing another flavor alone has
-(audacious-plugins@gtk3's AOSD); `Session::undecided` leaves such an
-option out too, so that flavor's row owes nothing for it and reads done
-as `sync` leaves it, the TUI refusing the option as before.
+file, every one must leave nothing open but an option the file never
+records: a default-flavor owner writes only its own options, so a file
+would settle nothing another flavor alone has (audacious-plugins@gtk3's
+AOSD). `Session::undecided` leaves such an option out by the same rule
+(`session::unstored_under`), so that flavor's row reads done as `sync`
+leaves it, the TUI refusing the option as before. Rejected: judging the
+default owner alone, which left a sibling owing an option the owner has
+(one a FORCE or group differing by flavor leaves open for it) with no
+file ever written to settle it.
 
 Whether the user edited the port is the caller's to say (`edited`, files
 whose staged set left its baseline). Rejected: comparing the staged set

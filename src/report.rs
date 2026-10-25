@@ -106,7 +106,8 @@ pub struct OptionReport {
     /// framework always turns on: DOCS, NLS, EXAMPLES, IPV6).
     pub default: bool,
     /// The value the options file records, null when it has no entry for the
-    /// option — that is exactly the case `undecided` reports.
+    /// option: `undecided` reports such an option unless make.conf decides
+    /// it or the shared file can never record it (`Session::unstored`).
     pub saved: Option<bool>,
     /// The option was added to the port since the file was written.
     pub new: bool,

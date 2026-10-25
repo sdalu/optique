@@ -97,7 +97,7 @@ re-running `make`:
 | `name`              | the option's name                                |
 | `staged`            | value that would be written now                  |
 | `default`           | the port's own default                           |
-| `saved`             | file's value; `null` = no entry (`undecided`)    |
+| `saved`             | file's value; `null` = no entry                  |
 | `new`               | added since the file was written[^4]             |
 | `makeconf`          | `{value, scope}`: `global`/`port`/`force`/`with`/`override`[^1] |
 | `locked`            | the file cannot change this value                |

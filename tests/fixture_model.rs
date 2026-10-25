@@ -481,6 +481,38 @@ fn a_port_make_conf_settles_reads_as_done_without_minimal() {
     assert!(!f.file("misc_cond").exists(), "make.conf decides: no file");
 }
 
+/// An option only a non-default flavor has (misc/flavextra@gtk3's AOSD,
+/// as multimedia/audacious-plugins) is one the shared file, written from
+/// the default flavor's view, never records: make.conf deciding A, the
+/// rest, scan counts that flavor owing nothing and sync writes no file.
+/// make, by mention, still names AOSD new for it (conformance.md).
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn an_option_the_shared_file_never_records_is_not_undecided() {
+    let f = Fixture::new();
+    std::fs::write(&f.make_conf, "OPTIONS_SET=A\n").unwrap();
+    let new = f.make("misc/flavextra", &["FLAVOR=gtk3", "-V", "NEW_OPTIONS"]);
+    assert_eq!(common::stdout(&new).trim(), "AOSD");
+    let ports = ["misc/flavextra@qt", "misc/flavextra@gtk3"];
+    let mut args = vec!["--json"];
+    args.extend(ports);
+    let report = common::json(&f.run("scan", &args));
+    let gtk3 = report["ports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["port"] == "misc/flavextra@gtk3")
+        .unwrap_or_else(|| panic!("{report}"));
+    assert_eq!(gtk3["undecided"], serde_json::json!([]), "{gtk3}");
+    assert_eq!(gtk3["mc_covered"], true, "{gtk3}");
+    assert_eq!(report["summary"]["attention"], 0, "{report}");
+    f.run("sync", &ports);
+    assert!(
+        !f.file("misc_flavextra").exists(),
+        "nothing to settle: no file"
+    );
+}
+
 /// make joins a line ending in `\` with the next before parsing it. The
 /// file sets AUDIO and, on a continued line, NAS: make has AUDIO and NAS
 /// on and nothing new; optique too, and the port is not stale.

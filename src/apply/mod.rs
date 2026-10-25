@@ -369,17 +369,14 @@ pub fn plan_writes_for<'a>(
             && files.hash(options_name) == crate::optfiles::ABSENT
         {
             let saved = files.saved(options_name);
-            let settled = |c: &Candidate| {
-                crate::session::undecided_options(c.info, saved.as_ref(), false).is_empty()
-            };
-            // A default flavor writes only its own options (`planned_file`):
-            // a file would settle nothing another flavor alone has, so only
-            // the owner's count, as `current` judges below.
-            let decided = if chosen.preferred {
-                settled(chosen)
-            } else {
-                cands.iter().all(settled)
-            };
+            // An option the file would never record (a default flavor
+            // writes only its own, `planned_file`) is no flavor's to decide,
+            // as `Session::undecided` judges the rows.
+            let decided = cands.iter().all(|c| {
+                crate::session::undecided_options(c.info, saved.as_ref(), false)
+                    .iter()
+                    .all(|opt| crate::session::unstored_under(chosen.info, c.info, opt))
+            });
             if decided {
                 continue;
             }
