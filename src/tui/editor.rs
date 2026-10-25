@@ -197,21 +197,25 @@ impl App {
                 (None, None) => None,
             })
         };
-        self.push_undo(&key);
+        // Snapshot first, pushed only once the toggle took: a refused one
+        // leaves the stack, a full one's oldest entry included, as it was.
+        let before = self.session.ports.get(&key).and_then(|i| {
+            self.session
+                .state(i)
+                .map(|s| (i.options_name.clone(), s.staged.clone()))
+        });
         match self.session.toggle(&key, &opt) {
             Ok(()) => {
+                if let Some((name, staged)) = before {
+                    self.push_undo_entry(name, staged);
+                }
                 self.mark_pending(&key);
                 match warn {
                     Some(w) => self.flash(&w, true),
                     None => self.message = None,
                 }
             }
-            Err(e) => {
-                // A refused toggle changed nothing: drop the snapshot instead
-                // of leaving a no-op entry on the stack.
-                self.undo.pop();
-                self.flash(&e, true);
-            }
+            Err(e) => self.flash(&e, true),
         }
     }
 

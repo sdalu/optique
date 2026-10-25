@@ -34,7 +34,7 @@ pub struct LiveEntry {
 
 /// The live origin `name` is `<entry>-<suffix>` of, if any: a name that
 /// maps to no port but extends a live port's entry past a `-`.
-fn live_prefix(name: &str, exists: &dyn Fn(&str) -> bool) -> Option<String> {
+pub fn live_prefix(name: &str, exists: &dyn Fn(&str) -> bool) -> Option<String> {
     let (_, port) = name.split_once('_')?;
     let start = name.len() - port.len();
     port.match_indices('-')
@@ -114,7 +114,14 @@ pub fn classify_entries(
                 });
                 continue;
             }
-            if let Some(owner) = live_prefix(&entry_name, &exists) {
+            // MOVED first: a port it names moved or removed vanished,
+            // whatever live port its name extends (security/openssl-devel,
+            // x11-wm/i3-gaps). Only a name MOVED does not know may be a live
+            // port's flavor's own file.
+            let resolved = moved.resolve(&PortKey::new(origin.clone(), None), exists);
+            if matches!(resolved, MovedResult::Unchanged)
+                && let Some(owner) = live_prefix(&entry_name, &exists)
+            {
                 live.push(LiveEntry {
                     options_name: name,
                     dir: dir.clone(),
@@ -123,7 +130,7 @@ pub fn classify_entries(
                 });
                 continue;
             }
-            let reason = match moved.resolve(&PortKey::new(origin.clone(), None), exists) {
+            let reason = match resolved {
                 MovedResult::MovedTo { key: new, .. } => {
                     format!("port moved to {new} (its options live under another name)")
                 }
@@ -478,6 +485,18 @@ mod tests {
         assert!(live[0].flavor_file);
         let gone: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
         assert_eq!(gone, ["mail_gone-mysql"]);
+
+        // One MOVED names removed or moved vanished, live prefix or not.
+        fs::create_dir_all(optdir.join("mail_dovecot24-old")).unwrap();
+        fs::write(optdir.join("mail_dovecot24-old/options"), "x\n").unwrap();
+        let moved = Moved::parse("mail/dovecot24-old||2026-01-01|removed\n");
+        let (removals, live, _) = classify_entries(&optdir, &portsdir, &[], &moved);
+        assert!(
+            removals
+                .iter()
+                .any(|r| r.options_name == "mail_dovecot24-old")
+        );
+        assert!(!live.iter().any(|l| l.options_name == "mail_dovecot24-old"));
     }
 
     /// A flavor's own file one entry deep (devel_git/lite-options) is an

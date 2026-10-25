@@ -242,6 +242,39 @@ fn scan_quiet_is_silent_when_nothing_is_pending() {
     assert_eq!(stdout(&out), "");
 }
 
+/// A flavor whose Makefile names its own options file (mail/dovecot24@mysql
+/// reads mail_dovecot24-mysql): plain clean and -r keep it, and --unused,
+/// with or without -r, removes it once the flavor is out of the closure and
+/// keeps it while it is in.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn clean_judges_a_flavor_named_file_alike_with_or_without_r() {
+    let f = Fixture::new();
+    f.write_file(
+        "misc_dove",
+        "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    );
+    f.write_file(
+        "misc_dove-mysql",
+        "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    );
+    let removed = |args: &[&str]| -> bool {
+        let mut all = vec!["--dry-run", "--json"];
+        all.extend_from_slice(args);
+        let report = common::json(&f.run("clean", &all));
+        report["removals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["options_name"] == "misc_dove-mysql")
+    };
+    assert!(!removed(&[]));
+    assert!(!removed(&["-r"]));
+    assert!(removed(&["--unused", "misc/dove"]));
+    assert!(removed(&["--unused", "-r", "misc/dove"]));
+    assert!(!removed(&["--unused", "-r", "misc/dove@mysql"]));
+}
+
 /// A SINGLE group with a member forced on by make.conf and the other chosen
 /// in the file is a conflict, and turning the chosen one off settles it.
 #[test]

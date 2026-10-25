@@ -76,19 +76,6 @@ impl App {
         push_capped(&mut self.undo, (options_name, staged));
     }
 
-    /// Snapshot the current staged set of the state a port edits (its
-    /// OPTIONS_NAME, shared by the flavors using the same file). Call this
-    /// *before* mutating it.
-    pub(super) fn push_undo(&mut self, key: &PortKey) {
-        let Some(name) = self.session.ports.get(key).map(|i| i.options_name.clone()) else {
-            return;
-        };
-        let Some(staged) = self.session.states.get(&name).map(|s| s.staged.clone()) else {
-            return;
-        };
-        self.push_undo_entry(name, staged);
-    }
-
     /// Restore the staged set recorded by the most recent change, whatever
     /// produced it (toggle, d, U, bulk, draft restore).
     pub(super) fn undo_last(&mut self) {

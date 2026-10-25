@@ -1608,6 +1608,13 @@ fn a_reset_changing_nothing_leaves_no_undo_entry() {
     let before = app.undo.len();
     press(&mut app, 'U');
     assert_eq!(app.undo.len(), before);
+    // On a full stack the oldest entry stays.
+    for i in 0..200 {
+        app.push_undo_entry(format!("entry{i}"), Default::default());
+    }
+    let oldest = app.undo.first().cloned();
+    press(&mut app, 'U');
+    assert_eq!(app.undo.first().cloned(), oldest);
     assert!(
         app.message
             .as_ref()

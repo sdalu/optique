@@ -361,6 +361,8 @@ fn find_redundant(
         files: optfiles::OptionsFiles::new(&settings.options_dir),
         pending: Default::default(),
         found: Redundancy::default(),
+        portsdir: settings.portsdir.clone(),
+        overlays: settings.overlay_paths(),
     };
     let mut ask: Vec<PortKey> = live.iter().map(|e| e.key.clone()).collect();
     let mut ready: std::collections::VecDeque<Answer> = Default::default();
@@ -402,17 +404,19 @@ fn find_redundant(
             }
             Err(_) => break,
         }
-        errp!(
-            "\r{}",
-            tint(
-                paint,
-                ansi::GRAY,
-                &format!("checking… {done}/{total} ports")
-            )
-        );
-        let _ = std::io::stderr().flush();
+        if !cli.quiet {
+            errp!(
+                "\r{}",
+                tint(
+                    paint,
+                    ansi::GRAY,
+                    &format!("checking… {done}/{total} ports")
+                )
+            );
+            let _ = std::io::stderr().flush();
+        }
     }
-    if done > 0 {
+    if done > 0 && !cli.quiet {
         errln!();
     }
     // An entry found redundant for its own port may still be read by a
@@ -423,43 +427,78 @@ fn find_redundant(
         .into_iter()
         .chain(std::iter::once(settings.portsdir.clone()))
         .collect();
+    // Every sibling of every entry about to go, asked at once over the
+    // worker pool; an answer that failed is None.
+    let siblings: Vec<(String, Vec<PortKey>)> = pass
+        .found
+        .removals
+        .iter()
+        .map(|r| {
+            let keys = sibling_origins(&trees, &r.options_name.replacen('_', "/", 1))
+                .into_iter()
+                .map(|o| PortKey::new(o, None))
+                .collect();
+            (r.options_name.clone(), keys)
+        })
+        .collect();
+    let mut answers: std::collections::HashMap<PortKey, Option<PortInfo>> = Default::default();
+    let mut waiting = 0usize;
+    for key in siblings.iter().flat_map(|(_, keys)| keys) {
+        if answers.contains_key(key) {
+            continue;
+        }
+        let since = std::time::SystemTime::now();
+        match cache.lookup(key, &pass.files) {
+            Some(info) => {
+                answers.insert(key.clone(), Some(info));
+            }
+            None => {
+                answers.insert(key.clone(), None);
+                runner.submit_since(key.clone(), since);
+                waiting += 1;
+            }
+        }
+    }
+    let total = waiting;
+    while waiting > 0 {
+        match runner.events.recv() {
+            Ok(ScanEvent::PortDone(info, since)) => {
+                cache.insert(&info, &pass.files, since);
+                answers.insert(info.key.clone(), Some(*info));
+            }
+            Ok(ScanEvent::PortError { .. }) => {}
+            Err(_) => break,
+        }
+        waiting -= 1;
+        if !cli.quiet {
+            errp!(
+                "\r{}",
+                tint(
+                    paint,
+                    ansi::GRAY,
+                    &format!("checking the families… {}/{total} ports", total - waiting)
+                )
+            );
+        }
+    }
+    if total > 0 && !cli.quiet {
+        errln!();
+    }
     let mut rescued = Vec::new();
-    for removal in &pass.found.removals {
-        let local = pass
-            .files
-            .under_local(&removal.options_name, Default::default());
-        let file = pass.files.combined(&removal.options_name);
-        for sibling in sibling_origins(&trees, &removal.options_name.replacen('_', "/", 1)) {
-            let key = PortKey::new(sibling, None);
-            let since = std::time::SystemTime::now();
-            let info = match cache.lookup(&key, &pass.files) {
-                Some(info) => info,
-                None => {
-                    runner.submit_since(key.clone(), since);
-                    match runner.events.recv() {
-                        Ok(ScanEvent::PortDone(info, since)) => {
-                            cache.insert(&info, &pass.files, since);
-                            *info
-                        }
-                        // Whether it reads the file is unknown: kept.
-                        _ => {
-                            rescued.push((
-                                removal.options_name.clone(),
-                                format!("{key}: query failed, left alone"),
-                            ));
-                            break;
-                        }
-                    }
-                }
+    for (name, keys) in &siblings {
+        let local = pass.files.under_local(name, Default::default());
+        let file = pass.files.combined(name);
+        for key in keys {
+            let Some(info) = answers.get(key).and_then(Option::as_ref) else {
+                // Whether it reads the file is unknown: kept.
+                rescued.push((name.clone(), format!("{key}: query failed, left alone")));
+                break;
             };
-            if info.options_name != removal.options_name || !info.options.has_options() {
+            if info.options_name != *name || !info.options.has_options() {
                 continue;
             }
-            if let Some(why) = shared_file_deviation(std::slice::from_ref(&info), &local, &file) {
-                rescued.push((
-                    removal.options_name.clone(),
-                    format!("{key} reads it: {why}"),
-                ));
+            if let Some(why) = shared_file_deviation(std::slice::from_ref(info), &local, &file) {
+                rescued.push((name.clone(), format!("{key} reads it: {why}")));
                 break;
             }
         }
@@ -498,6 +537,9 @@ struct RedundancyPass<'a> {
     files: optfiles::OptionsFiles,
     pending: std::collections::HashMap<PortKey, Flavors<'a>>,
     found: Redundancy,
+    /// The trees ports are found in, to tell a live port's entry.
+    portsdir: std::path::PathBuf,
+    overlays: Vec<std::path::PathBuf>,
 }
 
 /// The origins `<category>/<port>-<suffix>` beside `origin` in `trees`: a
@@ -542,14 +584,21 @@ impl<'a> RedundancyPass<'a> {
             // Answers arrive in any order: the smallest port names it. A
             // file one entry deep is the port's own key (its moved path
             // adopted, `makerunner::adopt_options_file`): read as surely.
+            // Only an entry named for no live port, nor extending one's
+            // past a `-` (those are judged as entries of their own, by
+            // --unused too): the one a port's own OPTIONS_FILE adopted.
+            let exists = |o: &str| {
+                crate::query::makerunner::locate(&self.portsdir, &self.overlays, o).is_some()
+            };
             let natural = info.key.origin.replacen('/', "_", 1);
-            let own = [
-                info.options_name.clone(),
-                optfiles::key_entry(&info.options_name).to_string(),
-            ]
-            .into_iter()
-            .filter(|entry| *entry != natural)
-            .map(|entry| (entry, info.key.to_string()));
+            let own = [optfiles::key_entry(&info.options_name).to_string()]
+                .into_iter()
+                .filter(|entry| *entry != natural)
+                .filter(|entry| {
+                    clean::origin_from_options_name(entry).is_none_or(|o| !exists(&o))
+                        && clean::live_prefix(entry, &exists).is_none()
+                })
+                .map(|entry| (entry, info.key.to_string()));
             for (entry, port) in clean::read_through_moved(self.options_dir, [info])
                 .into_iter()
                 .chain(own)

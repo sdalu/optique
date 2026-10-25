@@ -537,13 +537,18 @@ impl App {
     fn reset_selected(&mut self, reset: fn(&mut Session, &PortKey), msg: &str) {
         if let Some(key) = self.selected_key() {
             let before = self.staged_of(&key);
-            self.push_undo(&key);
             reset(&mut self.session, &key);
-            // Nothing moved: no undo entry, no re-query, and no claim.
+            // Nothing moved: no undo entry (none pushed, so a full stack
+            // keeps its oldest), no re-query, and no claim.
             if self.staged_of(&key) == before {
-                self.undo.pop();
                 self.flash("nothing to change", false);
                 return;
+            }
+            if let (Some(before), Some(name)) = (
+                before,
+                self.session.ports.get(&key).map(|i| i.options_name.clone()),
+            ) {
+                self.push_undo_entry(name, before);
             }
             self.mark_pending(&key);
             self.flash(msg, false);

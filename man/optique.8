@@ -2336,15 +2336,19 @@ leaves to
 .Pq see Cm sync
 is never removed, whichever option asks: a warning names it as kept.
 .Pp
-An entry named for no port but extending a live port's entry past a
+An entry named for no port, which
+.Pa MOVED
+does not name either, but extending a live port's entry past a
 .Ql -
 .Pq Pa mail_dovecot24-mysql
 may be a flavor's own file, the port's Makefile setting
 .Va OPTIONS_FILE :
 it is never removed as vanished, nor judged by
 .Fl r ;
-.Fl u
-keeps it while that port is in the closure.
+.Fl u ,
+with or without
+.Fl r ,
+keeps it while that port is in the closure and removes it once not.
 A flavor's own file one entry deep
 .Pq Pa devel_git/lite-options
 is an entry of its own the same way, removed with its port when the port is

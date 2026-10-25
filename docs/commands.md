@@ -244,11 +244,14 @@ list is an error the other way round:
 An options file optique leaves to make ([`sync`](#sync)) is never
 removed, whichever option asks; a warning names it as kept.
 
-An entry named for no port but extending a live port's entry past a `-`
-(`mail_dovecot24-mysql`) may be a flavor's own file, the port's Makefile
-setting `OPTIONS_FILE` (mail/dovecot24@mysql reads it): it is never
-removed as vanished, nor judged by `--redundant`; `--unused` keeps it
-while that port is in the closure. A flavor's own file one entry deep
+An entry named for no port, which `MOVED` does not name either, but
+extending a live port's entry past a `-` (`mail_dovecot24-mysql`) may be
+a flavor's own file, the port's Makefile setting `OPTIONS_FILE`
+(mail/dovecot24@mysql reads it): it is never removed as vanished, nor
+judged by `--redundant`; `--unused`, with or without `--redundant`, keeps
+it while that port is in the closure and removes it once not. One `MOVED`
+names moved or removed (`security_openssl-devel`) goes as any vanished
+entry. A flavor's own file one entry deep
 (`devel_git/lite-options`) is an entry of its own the same way, removed
 with its port when the port is gone.
 
@@ -314,7 +317,7 @@ a run is read at one level.
 | `-n`, `--dry-run`      | —           | preview `sync`/`decide`/`clean` writes |
 | `-m`, `--minimal`      | —           | persist only deviations                |
 | `-v`, `--verbose`      | —           | more per-subcommand detail             |
-| `-q`, `--quiet`        | —           | drop banner and per-item stdout rows   |
+| `-q`, `--quiet`        | —           | drop banner, progress, notes and rows  |
 | `--color`              | `WHEN`      | `auto`, `always` or `never`            |
 | `-h`, `--help`         | —           | print usage and exit                   |
 | `-V`, `--version`      | —           | print the version and exit             |
