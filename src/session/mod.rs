@@ -97,8 +97,7 @@ pub(crate) fn outranks(candidate: &PortInfo, owner: &PortInfo) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unmanaged {
     /// What makes it so, as `locked_by` names it: `options file`,
-    /// `options.local`, `OPTIONS_FILE` or `OPTIONS_OVERRIDE` (another
-    /// flavor's, which leaves the shared file to make).
+    /// `options.local` or `OPTIONS_FILE`.
     pub by: &'static str,
     /// The reason, in full.
     pub why: String,
@@ -539,36 +538,9 @@ impl Session {
     /// what optique cannot model (`unmanaged_file`). Nothing is written or
     /// removed for it, no edit is taken, and its state is make's own
     /// PORT_OPTIONS. A flavor moved elsewhere leaves the shared file to the
-    /// flavors still reading it. So does a flavor sharing the file with one
-    /// make.conf gives an OPTIONS_OVERRIDE, which reads none of it: apply
-    /// leaves the whole file alone (`apply::plan_writes_for`), so an edit
-    /// here could never be written.
+    /// flavors still reading it.
     pub fn unmanaged(&self, info: &PortInfo) -> Option<Unmanaged> {
-        moved(info)
-            .or_else(|| self.overridden_sharer(info))
-            .or_else(|| self.locals.get(&info.options_name).and_then(unmanaged_file))
-    }
-
-    /// The other flavor reading `info`'s options file that make.conf gives
-    /// an OPTIONS_OVERRIDE, as `unmanaged` reports it; none for a port with
-    /// one of its own, which its own rule decides.
-    fn overridden_sharer(&self, info: &PortInfo) -> Option<Unmanaged> {
-        if info.options.r#override.is_some() {
-            return None;
-        }
-        let other = self.ports.values().find(|i| {
-            i.options_name == info.options_name
-                && i.key != info.key
-                && i.options.r#override.is_some()
-                && moved(i).is_none()
-        })?;
-        Some(Unmanaged {
-            by: "OPTIONS_OVERRIDE",
-            why: format!(
-                "OPTIONS_OVERRIDE in make.conf decides {}, which shares this options file; it is left to make",
-                other.key
-            ),
-        })
+        moved(info).or_else(|| self.locals.get(&info.options_name).and_then(unmanaged_file))
     }
 
     /// The listed origins MOVED moves to this port: its key, or, for one

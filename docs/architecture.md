@@ -318,8 +318,7 @@ flavor make.conf moves `OPTIONS_FILE` for (`session::moved`), and, for
 each:
 
 1. leaves it alone when any flavor reading it has an `OPTIONS_OVERRIDE`
-   (`Session::unmanaged` then leaves it to make for the others too) or
-   when it is unmanaged (`session::unmanaged_file`);
+   or when it is unmanaged (`session::unmanaged_file`);
 2. picks the writer as the session picks the owner (`session::outranks`):
    the default flavor, else the flavor with the most options, the first
    on ties, whose file is then the union of every present flavor's

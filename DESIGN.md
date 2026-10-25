@@ -684,6 +684,14 @@ default owner alone, which left a sibling owing an option the owner has
 (one a FORCE or group differing by flavor leaves open for it) with no
 file ever written to settle it.
 
+Not handled: an `OPTIONS_OVERRIDE` make.conf gives only some flavors
+sharing a file. Apply leaves that file alone, while another flavor's row
+stays unconfigured and takes edits (man page, CAVEATS). Leaving the file
+to make for that flavor too (`Session::unmanaged`) was tried and taken
+back: the per-flavor JSON reports, the editor's banner and the list's
+per-frame status all had to learn the case, and an index had to keep the
+lookup off the drawing path, for a make.conf shape this rare.
+
 Whether the user edited the port is the caller's to say (`edited`, files
 whose staged set left its baseline). Rejected: comparing the staged set
 with what `sync` would record. In the TUI a refresh queries the edits

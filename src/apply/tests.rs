@@ -1595,33 +1595,6 @@ fn minimal_leave_creates_no_file_another_flavor_would_change() {
     }
 }
 
-/// A flavor make.conf gives an OPTIONS_OVERRIDE reads none of the shared
-/// file, and apply leaves the whole file alone: the other flavor's row
-/// leaves it to make too, owing nothing and taking no edit that could
-/// never be written.
-#[test]
-fn a_sibling_override_leaves_the_shared_file_to_make() {
-    let tmp = tempfile::tempdir().unwrap();
-    let files = OptionsFiles::new(tmp.path());
-    let mut qt = plugin("qt", &["qt", "gtk3"], &["A", "B"]);
-    qt.options.r#override = Some(set_of(&["A"]));
-    let gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "B"]);
-    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3], false);
-    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
-    let row = &session.ports[&gtk3.key];
-    assert!(
-        session.undecided(row).is_empty(),
-        "{:?}",
-        session.undecided(row)
-    );
-    assert_eq!(session.status(row), crate::session::UiStatus::Ok);
-    let why = session.edit_refusal(&gtk3.key).expect("edits refused");
-    assert!(
-        why.contains("OPTIONS_OVERRIDE") && why.contains("audio/plugins@qt"),
-        "{why}"
-    );
-}
-
 /// A stale file is rewritten all the same, its port nothing undecided: it
 /// has outranked make.conf since it was written, and left as it is it would
 /// keep an option the port lacks, which synth refuses.
