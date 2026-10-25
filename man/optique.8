@@ -1278,7 +1278,10 @@ A port whose options file takes no edit, under
 or left to
 .Xr make 1
 .Pq see Cm sync ,
-is left as it is, the toggle's refusal shown instead.
+is left as it is, the toggle's refusal shown instead, as it is by
+.Ic U ;
+either one changing nothing says so and leaves nothing for
+.Ic u .
 An option a
 .Pa make.conf
 knob or an
@@ -1323,7 +1326,8 @@ cancels; an input that does not parse is quoted whole in the error.
 Jump to the next or previous port needing attention; from the option pane,
 onto its first option needing attention.
 .It Ic f
-Jump to the next flavor of the same origin; from the option pane the cursor
+Jump to the next flavor of the same origin the list shows, past one it does
+not (no options, or hidden by the view); from the option pane the cursor
 stays on the same option when that flavor has it.
 .It Ic t
 Show only ports needing attention, hiding the ok ones.

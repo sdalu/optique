@@ -228,7 +228,13 @@ impl App {
             return;
         }
         let cur = siblings.iter().position(|k| *k == key).unwrap_or(0);
-        let next = siblings[(cur + 1) % siblings.len()].clone();
+        // The next flavor the list shows, past any it does not (one with no
+        // options, or one the view hides); the one after `key` when none.
+        let after = |n: usize| siblings[(cur + n) % siblings.len()].clone();
+        let next = (1..siblings.len())
+            .map(after)
+            .find(|k| self.visible.contains(k))
+            .unwrap_or_else(|| after(1));
         // The option under the cursor, to compare it across flavors.
         let option = match self.editor_rows.get(self.editor_idx) {
             Some(EditorRow::Option(name)) if self.focus == Focus::Editor => Some(name.clone()),

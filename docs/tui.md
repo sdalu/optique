@@ -414,9 +414,10 @@ move to the port and keep the pane. Entering the pane, and reaching another port
 it — `n`, `p` or a jump from `r` — puts the cursor on the port's first
 option needing attention: for a conflicting port, the first member, in row
 order, of the first rule it breaks; else, for a stale one, its first new
-option (`N`); else its first option. Never on a group header. `f` keeps the
-option the cursor is on, to compare it across flavors, and lands the same
-way only when the other flavor lacks it.
+option (`N`); else its first option. Never on a group header. `f` goes to the
+next flavor the list shows, past one it does not (no options, or hidden by
+the view), keeps the option the cursor is on, to compare it across
+flavors, and lands the same way only when the other flavor lacks it.
 
 `Space` and `d` leave alone what the options file cannot decide, and say
 why in the status bar: an option `*_FORCE`, `WITH`/`WITHOUT` or an UNSET

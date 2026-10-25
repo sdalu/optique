@@ -1570,6 +1570,51 @@ fn f_steps_through_the_flavors_of_an_origin() {
     );
 }
 
+/// `f` steps past a flavor the list does not show (here hidden by a filter)
+/// to the next one it does, rather than stopping on it.
+#[test]
+fn f_skips_a_flavor_the_list_does_not_show() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(
+        tmp.path(),
+        &[
+            ("cat/alpha@a", &[]),
+            ("cat/alpha@b", &[]),
+            ("cat/alpha@c", &[]),
+        ],
+    );
+    for k in ["cat/alpha@a", "cat/alpha@b", "cat/alpha@c"] {
+        app.session
+            .ports
+            .get_mut(&PortKey::parse(k).unwrap())
+            .unwrap()
+            .flavors = vec!["a".into(), "b".into(), "c".into()];
+    }
+    let b = PortKey::parse("cat/alpha@b").unwrap();
+    app.visible.retain(|k| *k != b);
+    app.select_index(0);
+    assert_eq!(selected(&app), "cat/alpha@a");
+    press(&mut app, 'f');
+    assert_eq!(selected(&app), "cat/alpha@c", "past the unlisted @b");
+}
+
+/// `U` or `d` that changes nothing leaves no undo entry: the next `u` undoes
+/// the change before it.
+#[test]
+fn a_reset_changing_nothing_leaves_no_undo_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(tmp.path(), &[("cat/alpha", &[]), ("cat/beta", &[])]);
+    app.select_index(0);
+    let before = app.undo.len();
+    press(&mut app, 'U');
+    assert_eq!(app.undo.len(), before);
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("nothing to change"))
+    );
+}
+
 /// Replace the app's refresher with channels the test drives: what a
 /// background scan would send arrives exactly when the test says.
 fn fake_refresher(

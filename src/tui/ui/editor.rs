@@ -504,7 +504,7 @@ fn row_lines(
             }
             EditorRow::ExcludedHeader => {
                 lines.push(Line::from(Span::styled(
-                    "── not in this flavor (managed via the default flavor)",
+                    "── not in this flavor (managed via the flavor owning the file)",
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::BOLD),
@@ -573,8 +573,13 @@ fn banner_lines(app: &App, info: &PortInfo, width: usize, lines: &mut Vec<Line<'
     if let Some(owner) = foreign_owner(app, info) {
         lines.push(Line::from(Span::styled(
             format!(
-                "options file owned by {} (default flavor view)",
-                owner.canonical
+                "options file owned by {} ({})",
+                owner.canonical,
+                if crate::session::is_preferred(owner) {
+                    "default flavor view"
+                } else {
+                    "widest view: the default flavor is not in the closure"
+                }
             ),
             Style::default().fg(Color::DarkGray),
         )));

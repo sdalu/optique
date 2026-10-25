@@ -318,7 +318,7 @@ fn help_around_rows(p: &HelpPen) -> Vec<Line<'static>> {
         p.legend(
             "not in flavor",
             Style::default().fg(Color::DarkGray),
-            "managed via the default flavor's view of the shared file",
+            "managed via the owning flavor's view of the shared file",
         ),
         p.blank(),
         p.head("In the pane's title"),

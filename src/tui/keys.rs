@@ -239,7 +239,13 @@ fn handle_command_key(app: &mut App, code: KeyCode) -> KeyOutcome {
         // vi's pair: 'u' undoes the last change, whichever port it was on;
         // 'U' takes the selected port back to its saved state.
         KeyCode::Char('u') => app.undo_last(),
-        KeyCode::Char('U') => app.reset_selected(Session::revert, "reverted to saved state"),
+        KeyCode::Char('U') => match app
+            .selected_key()
+            .and_then(|k| app.session.edit_refusal(&k))
+        {
+            Some(why) => app.flash(&why, true),
+            None => app.reset_selected(Session::revert, "reverted to saved state"),
+        },
         // A port whose file takes no edit keeps its state; say why.
         KeyCode::Char('d') => match app
             .selected_key()

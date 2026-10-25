@@ -536,11 +536,24 @@ impl App {
     /// re-queried like any other change.
     fn reset_selected(&mut self, reset: fn(&mut Session, &PortKey), msg: &str) {
         if let Some(key) = self.selected_key() {
+            let before = self.staged_of(&key);
             self.push_undo(&key);
             reset(&mut self.session, &key);
+            // Nothing moved: no undo entry, no re-query, and no claim.
+            if self.staged_of(&key) == before {
+                self.undo.pop();
+                self.flash("nothing to change", false);
+                return;
+            }
             self.mark_pending(&key);
             self.flash(msg, false);
         }
+    }
+
+    /// The staged set of the state `key` edits, if it has one.
+    fn staged_of(&self, key: &PortKey) -> Option<BTreeSet<String>> {
+        let info = self.session.ports.get(key)?;
+        self.session.state(info).map(|s| s.staged.clone())
     }
 
     /// Is this port blacklisted for the current jail/tree/set?
