@@ -106,12 +106,18 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
         );
     }
     // The entries the closure reads: a key one entry deep
-    // (`devel_git/lite-options`) uses its entry.
+    // (`devel_git/lite-options`) uses its entry, and itself, an entry of
+    // its own to clean (`clean::classify_entries`).
     let used = scanned
         .result
         .ports
         .values()
-        .map(|i| optfiles::key_entry(&i.options_name).to_string())
+        .flat_map(|i| {
+            [
+                optfiles::key_entry(&i.options_name).to_string(),
+                i.options_name.clone(),
+            ]
+        })
         .collect();
     // Sorted by port, so the port each note names is the same every run.
     let mut infos: Vec<&PortInfo> = scanned.result.ports.values().collect();
@@ -183,8 +189,22 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         kept_entries.extend(pruned.held.into_iter().map(|name| (name, why.to_string())));
     }
 
-    // Optionally find files that only repeat defaults + make.conf.
+    // Optionally find files that only repeat defaults + make.conf. An entry
+    // a live port's flavor may read is not judged from that port's
+    // answers, which are another file's.
     if args.redundant {
+        let (judged, flavor_files): (Vec<_>, Vec<_>) =
+            live.into_iter().partition(|e| !e.flavor_file);
+        if cli.verbose {
+            kept_entries.extend(flavor_files.iter().map(|e| {
+                let why = format!(
+                    "a flavor of {} may read it (an OPTIONS_FILE its Makefile sets); not judged",
+                    e.key
+                );
+                (e.options_name.clone(), why)
+            }));
+        }
+        let live = judged;
         let cache = open_cache.unwrap_or_else(|| new_cache(cli, &settings));
         let found = find_redundant(cli, &settings, jobs, cache, &live);
         removals.extend(found.removals);
@@ -194,20 +214,25 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             read.entry(entry).or_insert(port);
         }
     }
-    // A held entry the redundancy pass removes after all is not kept.
-    kept_entries.retain(|(name, _)| !removals.iter().any(|r| &r.options_name == name));
-    kept_entries.sort();
-    if cli.verbose && !args.json {
-        for (name, why) in &kept_entries {
-            outln!("keep  {name:<38} {why}")?;
-        }
-    }
-
     // An entry a moved OPTIONS_FILE has make read is kept whatever its
     // name says, even where the make.conf probe saw no move.
+    let before: Vec<String> = removals.iter().map(|r| r.options_name.clone()).collect();
     for note in clean::keep_read(&mut removals, &read) {
         eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
         warnings.push(note);
+    }
+    if cli.verbose {
+        for name in before {
+            if let Some(port) = read
+                .get(&name)
+                .filter(|_| !removals.iter().any(|r| r.options_name == name))
+            {
+                kept_entries.push((
+                    name,
+                    format!("make reads {port}'s options from it (OPTIONS_FILE)"),
+                ));
+            }
+        }
     }
 
     // Obsolete, unused and redundant removals were collected separately.
@@ -219,10 +244,24 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
             let note = format!("{}: {why}; kept", r.options_name);
             eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
             warnings.push(note);
+            if cli.verbose {
+                kept_entries.push((r.options_name.clone(), why));
+            }
             false
         }
         None => true,
     });
+
+    // Kept as the last filter left it: a held entry the redundancy pass
+    // removes after all is not kept, one a later filter took back is.
+    kept_entries.retain(|(name, _)| !removals.iter().any(|r| &r.options_name == name));
+    kept_entries.sort();
+    kept_entries.dedup_by(|a, b| a.0 == b.0);
+    if cli.verbose && !args.json {
+        for (name, why) in &kept_entries {
+            outln!("keep  {name:<38} {why}")?;
+        }
+    }
 
     // stdout carries either the listing or the JSON object, never both.
     if !args.json && !cli.quiet {
@@ -375,6 +414,60 @@ fn find_redundant(
     if done > 0 {
         eprintln!();
     }
+    // An entry found redundant for its own port may still be read by a
+    // sibling origin its Makefile.common sends there: asked last, for the
+    // few entries about to go.
+    let trees: Vec<std::path::PathBuf> = settings
+        .overlay_paths()
+        .into_iter()
+        .chain(std::iter::once(settings.portsdir.clone()))
+        .collect();
+    let mut rescued = Vec::new();
+    for removal in &pass.found.removals {
+        let local = pass
+            .files
+            .under_local(&removal.options_name, Default::default());
+        let file = pass.files.combined(&removal.options_name);
+        for sibling in sibling_origins(&trees, &removal.options_name.replacen('_', "/", 1)) {
+            let key = PortKey::new(sibling, None);
+            let info = match cache.lookup(&key, &pass.files) {
+                Some(info) => info,
+                None => {
+                    runner.submit(key.clone());
+                    match runner.events.recv() {
+                        Ok(ScanEvent::PortDone(info, since)) => {
+                            cache.insert(&info, &pass.files, since);
+                            *info
+                        }
+                        // Whether it reads the file is unknown: kept.
+                        _ => {
+                            rescued.push((
+                                removal.options_name.clone(),
+                                format!("{key}: query failed, left alone"),
+                            ));
+                            break;
+                        }
+                    }
+                }
+            };
+            if info.options_name != removal.options_name || !info.options.has_options() {
+                continue;
+            }
+            if let Some(why) = shared_file_deviation(std::slice::from_ref(&info), &local, &file) {
+                rescued.push((
+                    removal.options_name.clone(),
+                    format!("{key} reads it: {why}"),
+                ));
+                break;
+            }
+        }
+    }
+    pass.found
+        .removals
+        .retain(|r| !rescued.iter().any(|(n, _)| *n == r.options_name));
+    if pass.verbose {
+        pass.found.kept.extend(rescued);
+    }
     runner.shutdown();
     pass.found.kept.sort();
     pass.found
@@ -405,6 +498,31 @@ struct RedundancyPass<'a> {
     found: Redundancy,
 }
 
+/// The origins `<category>/<port>-<suffix>` beside `origin` in `trees`: a
+/// family sharing a Makefile.common may send every member to one options
+/// file (multimedia/avidemux-qt5, -cli and -plugins read
+/// multimedia_avidemux), which is not redundant while one of them would
+/// build otherwise without it.
+fn sibling_origins(trees: &[std::path::PathBuf], origin: &str) -> Vec<String> {
+    let Some((category, port)) = origin.split_once('/') else {
+        return Vec::new();
+    };
+    let prefix = format!("{port}-");
+    let mut out: Vec<String> = trees
+        .iter()
+        .filter_map(|t| std::fs::read_dir(t.join(category)).ok())
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(&prefix))
+        .map(|n| format!("{category}/{n}"))
+        .filter(|o| trees.iter().any(|t| t.join(o).join("Makefile").is_file()))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 impl<'a> RedundancyPass<'a> {
     fn warn(&mut self, note: String) {
         eprintln!("{} {note}", tint(self.paint, ansi::YELLOW, "warning:"));
@@ -419,8 +537,21 @@ impl<'a> RedundancyPass<'a> {
             Err((key, _)) => key.clone(),
         };
         if let Ok(info) = &result {
-            // Answers arrive in any order: the smallest port names it.
-            for (entry, port) in clean::read_through_moved(self.options_dir, [info]) {
+            // Answers arrive in any order: the smallest port names it. A
+            // file one entry deep is the port's own key (its moved path
+            // adopted, `makerunner::adopt_options_file`): read as surely.
+            let natural = info.key.origin.replacen('/', "_", 1);
+            let own = [
+                info.options_name.clone(),
+                optfiles::key_entry(&info.options_name).to_string(),
+            ]
+            .into_iter()
+            .filter(|entry| *entry != natural)
+            .map(|entry| (entry, info.key.to_string()));
+            for (entry, port) in clean::read_through_moved(self.options_dir, [info])
+                .into_iter()
+                .chain(own)
+            {
                 let named = self.found.read.entry(entry).or_insert_with(|| port.clone());
                 if port < *named {
                     *named = port;

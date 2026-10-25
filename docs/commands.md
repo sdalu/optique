@@ -221,7 +221,11 @@ list is an error the other way round:
   so removing them changes nothing on a later `sync`. A member of a
   conditional group whose option is off counts: make drops it from
   `PORT_OPTIONS`, but its dependencies were added first, so a file
-  choosing it is kept.
+  choosing it is kept. A file redundant for its own port is also asked
+  of the sibling origins named `<port>-<suffix>`, a family whose
+  Makefile.common may send each member to it (multimedia/avidemux-qt5
+  reads `multimedia_avidemux`): it is kept while one of them would build
+  otherwise without it.
 - `-u`/`--unused` — also remove entries for ports outside the dependency
   closure of the given package list, which is then required. If the scan
   of that closure has any error — a port that fails to query, a listed
@@ -236,6 +240,14 @@ list is an error the other way round:
 
 An options file optique leaves to make ([`sync`](#sync)) is never
 removed, whichever option asks; a warning names it as kept.
+
+An entry named for no port but extending a live port's entry past a `-`
+(`mail_dovecot24-mysql`) may be a flavor's own file, the port's Makefile
+setting `OPTIONS_FILE` (mail/dovecot24@mysql reads it): it is never
+removed as vanished, nor judged by `--redundant`; `--unused` keeps it
+while that port is in the closure. A flavor's own file one entry deep
+(`devel_git/lite-options`) is an entry of its own the same way, removed
+with its port when the port is gone.
 
 An entry is mapped back to its port by its name, which make derives from
 `OPTIONS_FILE`. A make.conf setting `OPTIONS_FILE` (to anything but

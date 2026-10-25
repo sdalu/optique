@@ -24,6 +24,23 @@ pub struct LiveEntry {
     pub options_name: String,
     pub dir: PathBuf,
     pub key: PortKey,
+    /// Named for no port, but `<entry>-<suffix>` of a live one's
+    /// (`key`): a flavor of it may read it through the OPTIONS_FILE its
+    /// Makefile sets (mail/dovecot24@mysql reads mail_dovecot24-mysql).
+    /// Never judged redundant from `key`'s answers, which are another
+    /// file's; `--unused` still judges it.
+    pub flavor_file: bool,
+}
+
+/// The live origin `name` is `<entry>-<suffix>` of, if any: a name that
+/// maps to no port but extends a live port's entry past a `-`.
+fn live_prefix(name: &str, exists: &dyn Fn(&str) -> bool) -> Option<String> {
+    let (_, port) = name.split_once('_')?;
+    let start = name.len() - port.len();
+    port.match_indices('-')
+        .map(|(i, _)| &name[..start + i])
+        .filter_map(origin_from_options_name)
+        .find(|origin| exists(origin))
 }
 
 /// Map an OPTIONS_NAME directory back to a port origin. Categories never
@@ -54,38 +71,73 @@ pub fn classify_entries(
     };
     for entry in entries.flatten() {
         let dir = entry.path();
-        if !dir.is_dir() || !dir.join("options").is_file() {
+        if !dir.is_dir() {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(origin) = origin_from_options_name(&name) else {
+        let entry_name = entry.file_name().to_string_lossy().into_owned();
+        // The entry's `options`, and each `<flavor>-options` a flavor's
+        // Makefile sets OPTIONS_FILE to (devel_git/lite-options), each by
+        // its key (`optfiles::key_file`).
+        let mut files: Vec<(String, Option<String>)> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|f| f.path().is_file())
+            .filter_map(|f| f.file_name().into_string().ok())
+            .filter_map(|f| match f.strip_suffix("-options") {
+                _ if f == "options" => Some((entry_name.clone(), None)),
+                Some(flavor) if !flavor.is_empty() => {
+                    Some((format!("{entry_name}/{f}"), Some(flavor.to_string())))
+                }
+                _ => None,
+            })
+            .collect();
+        files.sort();
+        if files.is_empty() {
+            continue;
+        }
+        let Some(origin) = origin_from_options_name(&entry_name) else {
             warnings.push(format!(
-                "{name}: cannot map back to a port origin, left alone"
+                "{entry_name}: cannot map back to a port origin, left alone"
             ));
             continue;
         };
-        if exists(&origin) {
-            live.push(LiveEntry {
-                options_name: name,
-                dir,
-                key: PortKey::new(origin, None),
-            });
-            continue;
-        }
-        let reason = match moved.resolve(&PortKey::new(origin, None), exists) {
-            MovedResult::MovedTo { key: new, .. } => {
-                format!("port moved to {new} (its options live under another name)")
+        for (name, flavor) in files {
+            if exists(&origin) {
+                live.push(LiveEntry {
+                    options_name: name,
+                    dir: dir.clone(),
+                    // A flavor's own file is not judged redundant from the
+                    // entry's flavors' answers, which are the entry's file's.
+                    flavor_file: flavor.is_some(),
+                    key: PortKey::new(origin.clone(), flavor),
+                });
+                continue;
             }
-            MovedResult::Unchanged => "port no longer exists in the tree".to_string(),
-            gone => gone
-                .gone_reason()
-                .expect("removed and cycle both have a reason"),
-        };
-        removals.push(Removal {
-            options_name: name,
-            dir,
-            reason,
-        });
+            if let Some(owner) = live_prefix(&entry_name, &exists) {
+                live.push(LiveEntry {
+                    options_name: name,
+                    dir: dir.clone(),
+                    key: PortKey::new(owner, None),
+                    flavor_file: true,
+                });
+                continue;
+            }
+            let reason = match moved.resolve(&PortKey::new(origin.clone(), None), exists) {
+                MovedResult::MovedTo { key: new, .. } => {
+                    format!("port moved to {new} (its options live under another name)")
+                }
+                MovedResult::Unchanged => "port no longer exists in the tree".to_string(),
+                gone => gone
+                    .gone_reason()
+                    .expect("removed and cycle both have a reason"),
+            };
+            removals.push(Removal {
+                options_name: name,
+                dir: dir.clone(),
+                reason,
+            });
+        }
     }
     removals.sort_by(|a, b| a.options_name.cmp(&b.options_name));
     live.sort_by(|a, b| a.options_name.cmp(&b.options_name));
@@ -404,12 +456,76 @@ mod tests {
         assert!(!removals.iter().any(|r| r.options_name == "cat_plain"));
     }
 
+    /// An entry named for no port but extending a live port's past a `-`
+    /// may be a flavor's own file (mail/dovecot24@mysql reads
+    /// mail_dovecot24-mysql, its Makefile setting OPTIONS_FILE): live, never
+    /// removed as vanished. A name extending no live port's entry still is.
+    #[test]
+    fn a_live_ports_flavor_file_is_not_vanished() {
+        let tmp = tempfile::tempdir().unwrap();
+        let portsdir = tmp.path().join("ports");
+        let optdir = tmp.path().join("options");
+        fs::create_dir_all(portsdir.join("mail/dovecot24")).unwrap();
+        fs::write(portsdir.join("mail/dovecot24/Makefile"), "# port\n").unwrap();
+        for name in ["mail_dovecot24-mysql", "mail_gone-mysql"] {
+            fs::create_dir_all(optdir.join(name)).unwrap();
+            fs::write(optdir.join(name).join("options"), "x\n").unwrap();
+        }
+        let (removals, live, _) = classify_entries(&optdir, &portsdir, &[], &Moved::default());
+        assert_eq!(live.len(), 1, "{live:?}");
+        assert_eq!(live[0].options_name, "mail_dovecot24-mysql");
+        assert_eq!(live[0].key.to_string(), "mail/dovecot24");
+        assert!(live[0].flavor_file);
+        let gone: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
+        assert_eq!(gone, ["mail_gone-mysql"]);
+    }
+
+    /// A flavor's own file one entry deep (devel_git/lite-options) is an
+    /// entry of its own: removed with its port when the port vanished, so
+    /// nothing is left behind, and live, unjudged by -r, while it lives.
+    #[test]
+    fn a_flavors_own_file_is_an_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let portsdir = tmp.path().join("ports");
+        let optdir = tmp.path().join("options");
+        fs::create_dir_all(portsdir.join("devel/git")).unwrap();
+        fs::write(portsdir.join("devel/git/Makefile"), "# port\n").unwrap();
+        for entry in ["devel_git", "devel_gone"] {
+            fs::create_dir_all(optdir.join(entry)).unwrap();
+            fs::write(optdir.join(entry).join("options"), "x\n").unwrap();
+            fs::write(optdir.join(entry).join("lite-options"), "x\n").unwrap();
+        }
+        let (removals, live, _) = classify_entries(&optdir, &portsdir, &[], &Moved::default());
+        let live: Vec<(String, String, bool)> = live
+            .iter()
+            .map(|e| (e.options_name.clone(), e.key.to_string(), e.flavor_file))
+            .collect();
+        assert_eq!(
+            live,
+            [
+                ("devel_git".into(), "devel/git".into(), false),
+                (
+                    "devel_git/lite-options".into(),
+                    "devel/git@lite".into(),
+                    true
+                ),
+            ]
+        );
+        let gone: Vec<&str> = removals.iter().map(|r| r.options_name.as_str()).collect();
+        assert_eq!(gone, ["devel_gone", "devel_gone/lite-options"]);
+        for r in &removals {
+            remove_entry(r).unwrap();
+        }
+        assert!(!optdir.join("devel_gone").exists(), "nothing left behind");
+    }
+
     #[test]
     fn split_unused_partitions() {
         let entry = |name: &str, origin: &str| LiveEntry {
             options_name: name.to_string(),
             dir: PathBuf::from("/opt").join(name),
             key: PortKey::parse(origin).unwrap(),
+            flavor_file: false,
         };
         // Deliberately unsorted input, only www/nginx is in the closure.
         let live = vec![
@@ -560,6 +676,7 @@ mod tests {
             options_name: name.into(),
             dir: PathBuf::from("/opt").join(name),
             key: PortKey::parse(origin).unwrap(),
+            flavor_file: false,
         }
     }
 

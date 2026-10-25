@@ -172,6 +172,59 @@ fn a_portsdir_dependency_is_followed_and_an_unknown_flavor_refused() {
     );
 }
 
+/// A family member whose Makefile sends it to another member's options file
+/// (multimedia/avidemux-qt5 reads multimedia_avidemux): clean -r keeps that
+/// file while the member would build otherwise without it, though it only
+/// repeats its namesake's defaults.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn clean_redundant_asks_a_family_member_reading_the_file() {
+    let f = Fixture::new();
+    let out = f.make("misc/fam-x", &["-V", "OPTIONS_FILE"]);
+    assert_eq!(
+        stdout(&out).trim(),
+        f.options.join("misc_fam/options").display().to_string()
+    );
+    f.write_file(
+        "misc_fam",
+        "_FILE_COMPLETE_OPTIONS_LIST=A B\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=B\n",
+    );
+    fs::write(&f.make_conf, "misc_fam-x_UNSET+=B\n").unwrap();
+    let out = f.run("clean", &["-r", "-v"]);
+    assert!(f.file("misc_fam").exists(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("misc/fam-x reads it"),
+        "{}",
+        stdout(&out)
+    );
+    // Without the member deviating, the file goes.
+    fs::write(&f.make_conf, "").unwrap();
+    f.run("clean", &["-r"]);
+    assert!(!f.file("misc_fam").exists());
+}
+
+/// A flavor's own file one entry deep (misc_flavfile/lite-options) is
+/// cleaned as an entry of its own: kept by `--unused` while its flavor is in
+/// the closure, removed once it is not, and kept by plain clean.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn clean_judges_a_flavors_own_file() {
+    let f = Fixture::new();
+    f.write_file("misc_flavfile", "OPTIONS_FILE_SET+=A\n");
+    fs::write(
+        f.options.join("misc_flavfile/lite-options"),
+        "OPTIONS_FILE_SET+=A\n",
+    )
+    .unwrap();
+    let lite = f.options.join("misc_flavfile/lite-options");
+    f.run("clean", &[]);
+    assert!(lite.exists(), "plain clean keeps a live flavor's file");
+    f.run("clean", &["--unused", "misc/flavfile@lite"]);
+    assert!(lite.exists(), "its flavor is in the closure");
+    f.run("clean", &["--unused", "misc/flavfile"]);
+    assert!(!lite.exists(), "its flavor is not");
+}
+
 /// A SINGLE group with a member forced on by make.conf and the other chosen
 /// in the file is a conflict, and turning the chosen one off settles it.
 #[test]
@@ -609,6 +662,35 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
     assert!(!err.contains("(OPTIONS_FILE); kept"), "{err}");
     assert!(f.file("misc_flav-nox").exists(), "{err}");
     assert!(!f.file("misc_gone").exists(), "{err}");
+
+    // Moved for this port to an entry named for no port: -r finds the port
+    // reads it and takes it back from the vanished removals; the report
+    // keeps it, in `kept` too.
+    fs::write(
+        &f.make_conf,
+        ".if ${.CURDIR:M*/misc/flav}\nOPTIONS_FILE=${PORT_DBDIR}/misc_elsewhere/options\n.endif\n",
+    )
+    .unwrap();
+    f.write_file("misc_elsewhere", "OPTIONS_FILE_UNSET+=A\n");
+    // An entry of its own, so -r queries misc/flav.
+    f.write_file("misc_flav", "OPTIONS_FILE_UNSET+=A\n");
+    let report = common::json(&f.run("clean", &["-r", "-v", "--dry-run", "--json"]));
+    assert!(
+        report["kept"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["options_name"] == "misc_elsewhere"),
+        "{report}"
+    );
+    assert!(
+        !report["removals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["options_name"] == "misc_elsewhere"),
+        "{report}"
+    );
 }
 
 /// A make.conf renaming the entries through OPTIONS_NAME rather than

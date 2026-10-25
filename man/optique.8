@@ -2313,6 +2313,20 @@ leaves to
 .Pq see Cm sync
 is never removed, whichever option asks: a warning names it as kept.
 .Pp
+An entry named for no port but extending a live port's entry past a
+.Ql -
+.Pq Pa mail_dovecot24-mysql
+may be a flavor's own file, the port's Makefile setting
+.Va OPTIONS_FILE :
+it is never removed as vanished, nor judged by
+.Fl r ;
+.Fl u
+keeps it while that port is in the closure.
+A flavor's own file one entry deep
+.Pq Pa devel_git/lite-options
+is an entry of its own the same way, removed with its port when the port is
+gone.
+.Pp
 An entry is mapped back to its port by its name, which
 .Xr make 1
 derives from
@@ -2370,6 +2384,15 @@ overlay produce anyway, so that removing them changes nothing; an
 beside one is counted on both sides, and a conditional group's members
 too, as under
 .Fl m .
+A file redundant for its own port is also asked of the sibling origins named
+.Ar port Ns - Ns Ar suffix ,
+a family whose Makefile.common may send each member to it
+.Po
+.Pa multimedia/avidemux-qt5
+reads
+.Pa multimedia_avidemux
+.Pc ,
+and kept while one of them would build otherwise without it.
 .It Fl u , Fl -unused
 Also remove entries for ports outside the dependency closure of the given
 package list
