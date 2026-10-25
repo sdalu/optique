@@ -195,7 +195,10 @@ Two kinds of tests pin the table:
     (`misc/model-defined-group`); an IMPLIES chain (`misc/model-implies`);
     an overfull RADIO group against `make check-config`
     (`misc/model-radio`); a pruned group member's dependency
-    (`misc/condep`);
+    (`misc/condep`); a port make.conf settles read done without `-m`,
+    no file written though `NEW_OPTIONS` names a SINGLE sibling; an option
+    only a non-default flavor has, never undecided, no file written
+    (`misc/flavextra`);
   - `tests/fixture_lists.rs`: `@all` and `@-`.
 - Oracle tests (`tests/live.rs`, `oracle_*`) run the binary over a small
   closure of real ports (sysutils/tmux, security/sudo, ftp/curl,

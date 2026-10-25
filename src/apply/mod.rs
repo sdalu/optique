@@ -373,7 +373,7 @@ pub fn plan_writes_for<'a>(
             // writes only its own, `planned_file`) is no flavor's to decide,
             // as `Session::undecided` judges the rows.
             let decided = cands.iter().all(|c| {
-                crate::session::undecided_options(c.info, saved.as_ref(), false)
+                crate::session::undecided_options(c.info, saved.as_ref(), minimal)
                     .iter()
                     .all(|opt| crate::session::unstored_under(chosen.info, c.info, opt))
             });

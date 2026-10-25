@@ -107,7 +107,9 @@ pub struct OptionReport {
     pub default: bool,
     /// The value the options file records, null when it has no entry for the
     /// option: `undecided` reports such an option unless make.conf decides
-    /// it or the shared file can never record it (`Session::unstored`).
+    /// it, the shared file can never record it (`Session::unstored`), -m
+    /// takes the defaults as the decision, an OPTIONS_OVERRIDE decides the
+    /// port, or the file is left to make (`Session::unmanaged`).
     pub saved: Option<bool>,
     /// The option was added to the port since the file was written.
     pub new: bool,

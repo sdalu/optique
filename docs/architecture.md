@@ -317,8 +317,9 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 flavor make.conf moves `OPTIONS_FILE` for (`session::moved`), and, for
 each:
 
-1. leaves it alone under `OPTIONS_OVERRIDE` or when it is unmanaged
-   (`session::unmanaged_file`);
+1. leaves it alone when any flavor reading it has an `OPTIONS_OVERRIDE`
+   (`Session::unmanaged` then leaves it to make for the others too) or
+   when it is unmanaged (`session::unmanaged_file`);
 2. picks the writer as the session picks the owner (`session::outranks`):
    the default flavor, else the flavor with the most options, the first
    on ties, whose file is then the union of every present flavor's
@@ -328,8 +329,10 @@ each:
    see;
 4. under `Covered::Leave` (`sync`, the TUI's apply; `decide` writes
    it), creates none when there is no file, the caller names no edit to
-   it, and make.conf leaves nothing undecided for the owner, or, when the
-   owner is no default flavor, for any flavor;
+   it, and make.conf leaves no flavor anything undecided but options the
+   file would never record (`session::unstored_under`: another flavor's
+   that a default-flavor owner lacks), judged as `Session::undecided`
+   judges the rows, under `-m` too;
 5. skips it when it is up to date (make would end up the same, and the
    list is complete), else renders it as `make config` would, less the
    `_OPTIONS_READ` line and with a pkgname comment of 20 bytes or more,

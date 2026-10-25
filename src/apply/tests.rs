@@ -1483,6 +1483,7 @@ fn plugin(flavor: &str, flavors: &[&str], complete: &[&str]) -> PortInfo {
 fn leave_and_rows(
     files: &OptionsFiles,
     infos: &[&PortInfo],
+    minimal: bool,
 ) -> (PlannedWrites, crate::session::Session) {
     let none = BTreeSet::new();
     let planned = plan_writes_for(
@@ -1491,7 +1492,7 @@ fn leave_and_rows(
             (&i.key, *i, sync_enabled_set(i, saved.as_ref()))
         }),
         files,
-        false,
+        minimal,
         Covered::Leave { edited: &none },
     );
     let ports: std::collections::BTreeMap<PortKey, PortInfo> = infos
@@ -1504,7 +1505,7 @@ fn leave_and_rows(
         std::collections::HashMap::new(),
         &roots,
         files,
-        false,
+        minimal,
     );
     (planned, session)
 }
@@ -1519,7 +1520,7 @@ fn leave_writes_for_a_sibling_option_the_owner_records() {
     let mut qt = plugin("qt", &["qt", "gtk3"], &["A", "B"]);
     qt.options.force_unset = set_of(&["B"]);
     let gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "B"]);
-    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3], false);
     assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
     assert_eq!(session.undecided(&session.ports[&gtk3.key]), ["B"]);
 }
@@ -1534,7 +1535,7 @@ fn leave_counts_every_option_under_a_widest_owner() {
     let flavors = ["main", "qt", "gtk3"];
     let qt = plugin("qt", &flavors, &["A"]);
     let gtk3 = plugin("gtk3", &flavors, &["A", "AOSD"]);
-    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3], false);
     assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
     assert_eq!(session.undecided(&session.ports[&gtk3.key]), ["AOSD"]);
 }
@@ -1556,7 +1557,7 @@ fn a_stale_file_make_conf_settles_reads_covered_for_each_flavor() {
     qt.options.mc_unset = set_of(&["N"]);
     let mut gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "N", "AOSD"]);
     gtk3.options.mc_unset = set_of(&["N"]);
-    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3], false);
     assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
     for key in [&qt.key, &gtk3.key] {
         let row = &session.ports[key];
@@ -1567,6 +1568,58 @@ fn a_stale_file_make_conf_settles_reads_covered_for_each_flavor() {
         );
         assert!(session.covered_by_makeconf(row), "{key}");
     }
+}
+
+/// Under -m with no file, one written from www/sogo@mysql's view would
+/// turn @pgsql's PGSQL default into MYSQL: not redundant, yet nothing is
+/// undecided, -m taking the defaults as the decision. sync writes none,
+/// and both rows read done.
+#[test]
+fn minimal_leave_creates_no_file_another_flavor_would_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let flavor = |f: &str, default: &str| {
+        let mut info = mk_info(&["MYSQL", "PGSQL"], &[default]);
+        info.key = PortKey::parse(&format!("www/sogo@{f}")).unwrap();
+        info.canonical = info.key.clone();
+        info.flavors = vec!["mysql".into(), "pgsql".into()];
+        info.options_name = "www_sogo".into();
+        info.options.defaults = [default.to_string()].into();
+        info
+    };
+    let (mysql, pgsql) = (flavor("mysql", "MYSQL"), flavor("pgsql", "PGSQL"));
+    let (planned, session) = leave_and_rows(&files, &[&mysql, &pgsql], true);
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+    for key in [&mysql.key, &pgsql.key] {
+        assert!(session.covered_by_makeconf(&session.ports[key]), "{key}");
+    }
+}
+
+/// A flavor make.conf gives an OPTIONS_OVERRIDE reads none of the shared
+/// file, and apply leaves the whole file alone: the other flavor's row
+/// leaves it to make too, owing nothing and taking no edit that could
+/// never be written.
+#[test]
+fn a_sibling_override_leaves_the_shared_file_to_make() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut qt = plugin("qt", &["qt", "gtk3"], &["A", "B"]);
+    qt.options.r#override = Some(set_of(&["A"]));
+    let gtk3 = plugin("gtk3", &["qt", "gtk3"], &["A", "B"]);
+    let (planned, session) = leave_and_rows(&files, &[&qt, &gtk3], false);
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+    let row = &session.ports[&gtk3.key];
+    assert!(
+        session.undecided(row).is_empty(),
+        "{:?}",
+        session.undecided(row)
+    );
+    assert_eq!(session.status(row), crate::session::UiStatus::Ok);
+    let why = session.edit_refusal(&gtk3.key).expect("edits refused");
+    assert!(
+        why.contains("OPTIONS_OVERRIDE") && why.contains("audio/plugins@qt"),
+        "{why}"
+    );
 }
 
 /// A stale file is rewritten all the same, its port nothing undecided: it

@@ -175,8 +175,10 @@ a line it cannot model — an assignment to anything but the SET and UNSET
 lists and the bookkeeping `make config` writes, a `!=`, a directive, a `$`
 expansion, or a line that is no assignment; and one a port reads none of,
 its `OPTIONS_FILE`, set by `make.conf` or its own Makefile, naming a file
-outside the options dir. A warning names the file and line, or the moved
-path. An `OPTIONS_FILE` one entry deep in the options dir is an options
+outside the options dir. A file one flavor reading it has an
+`OPTIONS_OVERRIDE` for is left alone too, since make reads none of it for
+that flavor: the other flavors sharing it show make's outcome and take no
+edit. A warning names the file and line, or the moved path. An `OPTIONS_FILE` one entry deep in the options dir is an options
 file like any other, read with its `.local` and written by `sync` and
 `decide`: `devel/git@lite` reads `devel_git/lite-options`, which its
 Makefile names. The port shows make's own outcome, every option locked with no

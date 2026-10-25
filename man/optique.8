@@ -1974,9 +1974,11 @@ under which
 reads no file, with
 .Va locked_by
 .Ql options file ,
-.Ql options.local
+.Ql options.local ,
+.Ql OPTIONS_FILE
 or
-.Ql OPTIONS_FILE ,
+.Ql OPTIONS_OVERRIDE
+.Pq another flavor sharing the file has one, so no apply writes it ,
 whichever makes it so, no
 .Va makeconf
 and a null
@@ -2166,6 +2168,14 @@ or by its own Makefile, naming a file outside the options directory, since
 .Xr make 1
 then reads neither the options directory's file nor its
 .Pa options.local .
+A file one flavor reading it has an
+.Va OPTIONS_OVERRIDE
+for is left alone too, since
+.Xr make 1
+reads none of it for that flavor: the other flavors sharing it show the
+outcome
+.Xr make 1
+gives them and take no edit.
 A warning names the file and line, or that
 .Va OPTIONS_FILE .
 An
