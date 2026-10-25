@@ -792,12 +792,16 @@ view
 .Pc
 whether it has a file, a stale one, or none.
 .It Fl q , Fl -quiet
-Drop the startup banner and the per-port and per-file listings on standard
-output.
-The summary line and all warnings and errors on standard error remain.
-Ignored by
-.Cm scan Fl -json ;
-mutually exclusive with
+Drop the startup banner, the progress line, the notes and the per-port and
+per-file listings on standard output, and
+.Cm scan Ns 's
+summary line when nothing is pending.
+Warnings and errors on standard error remain, and every other summary line.
+Under
+.Fl -json
+standard output is the JSON object either way; what goes to standard error is
+dropped the same.
+Mutually exclusive with
 .Fl v .
 .It Fl h , Fl -help
 Print usage and exit.
@@ -1709,9 +1713,10 @@ summary.
 .Bl -tag -width Ds
 .It Fl -json
 Print one machine-readable JSON object on standard output instead of the table;
-progress and the summary stay on standard error and
+progress and the summary stay on standard error, where
 .Fl q
-is ignored.
+drops what it drops without
+.Fl -json .
 The object has the keys
 .Va options_dir ,
 .Va ports_tree ,
@@ -1966,8 +1971,9 @@ again \(em see
 .Pp
 With
 .Fl q
-the per-port rows and the banner are dropped, leaving only the summary and any
-warnings on standard error, which makes
+the per-port rows, the banner, the progress line and the notes are dropped,
+and the summary too when nothing is pending, leaving any warnings on standard
+error: a run with nothing pending and nothing wrong prints nothing, which makes
 .Nm Cm scan Fl q
 usable directly as a
 .Xr cron 8
@@ -2229,9 +2235,10 @@ the same shape
 .Cm decide
 answers with, described under
 .Sx MACHINE INTERFACE .
-The summary and any warnings stay on standard error and
+The summary and any warnings stay on standard error, where
 .Fl q
-is ignored.
+drops what it drops without
+.Fl -json .
 .El
 .Ss decide
 .Nm Cm decide Oo Fl n Oc Oo Fl f Ar pkglist Oc Op Ar origin ...
@@ -2436,9 +2443,10 @@ Report on standard output as one JSON object instead of the per-entry listing:
 and
 .Va summary
 .Pq Va entries , Va removed , Va failed .
-The summary line stays on standard error and
+The summary line stays on standard error, where
 .Fl q
-is ignored.
+drops what it drops without
+.Fl -json .
 .El
 .Sh MACHINE INTERFACE
 Every subcommand but
@@ -3411,16 +3419,16 @@ Moves the query cache; see
 .Bl -tag -width Ds
 .It Pa ~/.cache/optique/
 Persistent query cache, one JSON Lines file per generation, named
-.Pa v<schema>-<tree revision>-<make.conf hash>.jsonl .
-The tree revision is the git commit the tree's
+.Pa v<schema>-<tree>-<make.conf>.jsonl ,
+each part the first 12 hexadecimal digits of a SHA-256: the tree's of its
+revision (the git commit the tree's
 .Pa .git
-names, or, on a tree without one,
-.Ql mtime-
-followed by the modification times of
+names, or, on a tree without one, the modification times of
 .Pa Mk/bsd.port.mk ,
 .Pa MOVED
 and
-.Pa UPDATING .
+.Pa UPDATING ) ,
+its path and its overlays, the make.conf's of its staged text.
 Overridden by
 .Ev XDG_CACHE_HOME ,
 in which case

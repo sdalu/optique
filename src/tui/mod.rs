@@ -253,7 +253,7 @@ pub fn run(
 fn stop_background_makes() {
     let stopped = crate::query::makerunner::quit_makes();
     if stopped > 0 {
-        eprintln!("optique: stopped {stopped} in-flight make process(es)");
+        errln!("optique: stopped {stopped} in-flight make process(es)");
     }
 }
 

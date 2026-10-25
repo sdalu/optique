@@ -12,6 +12,23 @@ macro_rules! outln {
     }};
 }
 
+/// `eprintln!` that never panics: stderr gone (`optique scan 2>&1 | head`)
+/// is no reason to end on Rust's 101; what is left to say is dropped.
+macro_rules! errln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+/// `eprint!`, likewise (`errln!`).
+macro_rules! errp {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod apply;
 mod cache;
 mod clean;
@@ -57,7 +74,7 @@ fn main() {
         });
         if !broken_pipe {
             // As the standard library would print it, causes included.
-            eprintln!("Error: {e:?}");
+            errln!("Error: {e:?}");
         }
         let _ = std::io::stdout().flush();
         std::process::exit(EXIT_ERROR);
@@ -80,7 +97,7 @@ fn run() -> Result<()> {
     if cli.clear_cache {
         let dir = cache::default_cache_dir();
         let (files, bytes) = cache::clear(&dir);
-        eprintln!(
+        errln!(
             "cache cleared: {files} file(s), {} KiB in {}",
             bytes / 1024,
             dir.display()

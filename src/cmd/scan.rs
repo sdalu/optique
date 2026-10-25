@@ -246,7 +246,11 @@ pub(crate) fn cmd_scan(cli: &Cli, rs: &RootSet, args: &cli::ScanArgs) -> Result<
     } else if !cli.quiet {
         print_table(cli, &rows)?;
     }
-    eprintln!("{line}");
+    // Under -q a run with nothing pending says nothing: the exit status
+    // answers, and cron(8) mails no output.
+    if !(cli.quiet && pending == 0) {
+        errln!("{line}");
+    }
     Ok(pending)
 }
 

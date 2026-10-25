@@ -349,7 +349,7 @@ impl Cache {
             return;
         }
         if let Some((path, _)) = self.watched.iter().find(|(f, at)| stamp(f) != *at) {
-            eprintln!(
+            errln!(
                 "warning: {} changed during the run: no more answers are cached",
                 path.display()
             );
@@ -1071,8 +1071,9 @@ fn cache_dir_for(xdg: Option<&str>, home: Option<&str>) -> PathBuf {
     PathBuf::from(home.unwrap_or("/tmp")).join(".cache/optique")
 }
 
-/// A hex id (commit, hash) cut to 12 digits for the file name; anything
-/// else, an mtime key, whole: cut, mtimes hours apart would share a name.
+/// A hex id (a digest for the file name, a commit for a note) cut to 12
+/// digits; anything else, an mtime key in a note, whole: cut, mtimes hours
+/// apart would read the same.
 fn short(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_hexdigit()) {
         s.chars().take(12).collect()

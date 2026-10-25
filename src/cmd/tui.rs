@@ -10,7 +10,7 @@ use super::{RootSet, query_ctx, run_scan};
 
 pub(crate) fn cmd_tui(cli: &Cli, rs: &RootSet, drive: bool) -> Result<()> {
     if cli.dry_run {
-        eprintln!(
+        errln!(
             "{} --dry-run has no effect in the TUI; the apply dialog previews changes",
             tint(stderr_color(cli), ansi::YELLOW, "note:")
         );

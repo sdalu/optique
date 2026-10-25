@@ -32,11 +32,11 @@ pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<
 
     let pass = WritePass::new(planned.writes, stale_files, planned.warnings);
     for w in &pass.warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+        errln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
 
     if pass.nothing_to_do() && !json {
-        eprintln!("everything up to date, nothing to write");
+        errln!("everything up to date, nothing to write");
         return Ok(());
     }
     // stdout carries either the listing or the JSON object, never both.
@@ -61,7 +61,7 @@ pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<
         report::print(&report)?;
     }
     for e in &report.errors {
-        eprintln!(
+        errln!(
             "{} {}: {}",
             tint(paint, ansi::RED, "error:"),
             e.subject,

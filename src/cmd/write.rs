@@ -114,7 +114,7 @@ pub(super) fn print_write_summary(
     dry_run: bool,
 ) {
     if dry_run {
-        eprintln!(
+        errln!(
             "dry run: {} file(s) would be written, {} removed in {}",
             pass.writes.len(),
             pass.removals.len(),
@@ -126,7 +126,7 @@ pub(super) fn print_write_summary(
         0 => String::new(),
         n => format!(", {n} failed"),
     };
-    eprintln!(
+    errln!(
         "{} file(s) written, {} removed in {}{failed}",
         report.summary.written,
         report.summary.removed,

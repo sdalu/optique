@@ -762,3 +762,31 @@ fn closed_stdout_exits_documented_status() {
         );
     }
 }
+
+/// stderr gone (`optique scan 2>&1 | head` once head is done) ends the run
+/// with a documented status, never Rust's 101 from a panicking `eprintln!`.
+#[test]
+fn a_closed_stderr_is_no_panic() {
+    let mut child = optique()
+        .args(["scan", "-f", "/nonexistent/list"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stderr.take());
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(3));
+}
+
+/// A package list read as poudriere's sh `read` reads it: a Latin-1 byte in
+/// a comment is no reason to refuse it.
+#[test]
+fn a_list_with_a_latin1_comment_is_read() {
+    let tmp = tempfile::tempdir().unwrap();
+    let list = tmp.path().join("list");
+    std::fs::write(&list, b"# liste \xe9t\xe9\nnot-an-origin\n").unwrap();
+    let out = optique().args(["scan", "-f"]).arg(&list).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("valid UTF-8"), "{err}");
+    assert!(err.contains("not-an-origin"), "the list was read: {err}");
+}

@@ -1308,7 +1308,7 @@ not a key value line
         if std::env::var_os("PORTSDIR").is_some()
             || make_values(&["PORTSDIR"], None, &[]).is_some_and(|t| !t.trim().is_empty())
         {
-            eprintln!("PORTSDIR set by the environment or /etc/make.conf; skipped");
+            errln!("PORTSDIR set by the environment or /etc/make.conf; skipped");
             return;
         }
         let tmp = tempfile::tempdir().unwrap();

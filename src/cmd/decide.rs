@@ -107,10 +107,10 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     report.moved = report::moved_entries(&scanned.moves);
     report::print(&report)?;
     for w in &report.warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+        errln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
     for e in &report.errors {
-        eprintln!(
+        errln!(
             "{} {}: {}",
             tint(paint, ansi::RED, "error:"),
             e.subject,
@@ -123,7 +123,7 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         } else {
             "some values could not be set"
         };
-        eprintln!(
+        errln!(
             "{} plan not honoured ({what}): {} value(s) refused, {} conflict(s), \
              {} unknown port(s) \u{2014} nothing written",
             tint(paint, ansi::RED, "error:"),

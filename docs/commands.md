@@ -326,7 +326,10 @@ with `-P`; see [configuration.md](configuration.md#synth) for the synth
 layout, [local builds](configuration.md#local-builds) for `-l`, and [Choosing the ports](#choosing-the-ports) for
 `--repo` and `-f`. `--verbose` reports each subcommand's own extra detail
 (effective options and warnings for `scan`, final state for `sync`,
-kept-reasons for `clean`); `--quiet` is ignored by `scan --json`. `--color`
+kept-reasons for `clean`); `--quiet` drops the banner, the progress line,
+the notes and the per-item rows, and `scan`'s summary when nothing is
+pending, so a clean `scan -q` prints nothing; under `--json` stdout is the
+JSON object either way. `--color`
 tints the `scan` marker column and the informational stderr output, judging
 stdout and stderr ttyness separately.
 

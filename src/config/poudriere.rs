@@ -473,8 +473,18 @@ fn resolve_portsdir(
     tree_explicit: bool,
 ) -> Result<PathBuf> {
     let mnt = poudriere_d.join("ports").join(tree).join("mnt");
-    if let Ok(path) = fs::read_to_string(&mnt) {
-        let p = PathBuf::from(path.trim());
+    // Only a missing `mnt` names no tree: one that cannot be read stops the
+    // run, rather than answer from another tree than poudriere builds from.
+    // Bytes, as poudriere reads the path.
+    let read = match fs::read(&mnt) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", mnt.display())),
+    };
+    if let Some(bytes) = read {
+        use std::os::unix::ffi::OsStrExt as _;
+        let trimmed = bytes.trim_ascii();
+        let p = PathBuf::from(std::ffi::OsStr::from_bytes(trimmed));
         if is_ports_tree(&p) {
             return Ok(p);
         }
@@ -1480,6 +1490,12 @@ mod tests {
         // A tree pointing at a non-ports dir is an error, not a fallback.
         fs::write(pd.join("ports/mytree/mnt"), "/nonexistent\n").unwrap();
         assert!(resolve_portsdir(&pd, Path::new("/nonexistent"), "mytree", true).is_err());
+        // So is a `mnt` that cannot be read, the default tree's included:
+        // no fallback to another tree.
+        fs::remove_file(pd.join("ports/mytree/mnt")).unwrap();
+        fs::create_dir_all(pd.join("ports/default/mnt")).unwrap();
+        let err = resolve_portsdir(&pd, &tree, "default", false).unwrap_err();
+        assert!(format!("{err:#}").contains("reading"), "{err:#}");
     }
 
     #[test]

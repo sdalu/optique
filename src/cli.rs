@@ -129,12 +129,16 @@ pub fn check_action_first(args: &[OsString]) -> Result<(), String> {
             !long.contains('=') && (VALUE_LONGS.contains(&a.as_str()) || a == "--synth")
         } else {
             // The first value option of a cluster takes the rest of the word,
-            // or the next word when it ends the cluster; a trailing `s` left
-            // by disambiguate_synth takes its profile.
+            // or the next word when it ends the cluster; `s` left by
+            // disambiguate_synth takes its profile the same way, so the
+            // letters of an attached one (`-sBuilds`) are no flags.
             let flags: Vec<char> = a[1..].chars().collect();
-            match flags.iter().position(|c| VALUE_SHORTS.contains(c)) {
+            match flags
+                .iter()
+                .position(|c| VALUE_SHORTS.contains(c) || *c == 's')
+            {
                 Some(p) => p == flags.len() - 1,
-                None => flags.last() == Some(&'s'),
+                None => false,
             }
         };
         i += if takes_next { 2 } else { 1 };
@@ -309,9 +313,9 @@ pub struct Cli {
     #[arg(short = 'v', long = "verbose", global = true)]
     pub verbose: bool,
 
-    /// Quiet: drop the startup banner and the per-port/per-file listings on
-    /// stdout (scan rows, sync writes, clean entries); the summary line and
-    /// all warnings/errors on stderr stay. Ignored by `scan --json`.
+    /// Quiet: drop the startup banner, the progress line, the notes and the
+    /// per-port/per-file listings (scan rows, sync writes, clean entries),
+    /// and scan's summary when nothing is pending; warnings and errors stay
     #[arg(short = 'q', long = "quiet", global = true)]
     pub quiet: bool,
 
@@ -471,7 +475,7 @@ pub struct SyncArgs {
     pub roots: RootsArgs,
 
     /// Report on stdout as one JSON object instead of the per-file listing
-    /// (the summary stays on stderr); -q is ignored
+    /// (the summary stays on stderr)
     #[arg(long = "json")]
     pub json: bool,
 }
@@ -492,7 +496,7 @@ pub struct CleanArgs {
     pub origins: Vec<String>,
 
     /// Report on stdout as one JSON object instead of the per-entry listing
-    /// (the summary stays on stderr); -q is ignored
+    /// (the summary stays on stderr)
     #[arg(long = "json")]
     pub json: bool,
 }
@@ -592,8 +596,11 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         push(o, "arguments", false)?;
     }
     for f in files {
-        let text = std::fs::read_to_string(f)
+        // Bytes, as poudriere's sh `read` takes them: a Latin-1 comment is
+        // no reason to refuse a list, and an origin is ASCII either way.
+        let bytes = std::fs::read(f)
             .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
+        let text = String::from_utf8_lossy(&bytes);
         for (n, line) in text.lines().enumerate() {
             push(line, &format!("{} line {}", f.display(), n + 1), true)?;
         }
@@ -839,6 +846,10 @@ mod tests {
                 "optique clean --set=ws -n -r",
             ),
             (&["optique", "-nzws", "decide"], "optique decide -nzws"),
+            // An attached profile's letters are no flags: `-sBuilds` takes
+            // no next word, even ending in `s`.
+            (&["optique", "-sBuilds", "scan"], "optique scan -sBuilds"),
+            (&["optique", "-sFoo", "scan"], "optique scan -sFoo"),
         ] {
             assert_eq!(
                 check(bad),

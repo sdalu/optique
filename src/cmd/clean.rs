@@ -38,7 +38,7 @@ struct CleanCtx {
 /// itself; a package list is only consulted for --unused.
 pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     if cli.minimal && !args.redundant {
-        eprintln!(
+        errln!(
             "{} --minimal does not affect clean; its counterpart here is --redundant",
             tint(stderr_color(cli), ansi::YELLOW, "note:")
         );
@@ -147,20 +147,20 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     } = ctx;
     let paint = stderr_color(cli);
     if !cli.quiet {
-        eprintln!(
+        errln!(
             "{} options dir {}",
             tint(paint, ansi::BOLD, "optique clean:"),
             settings.options_dir.display()
         );
         for note in &settings.notes {
-            eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+            errln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
         }
     }
     // Said even under -q, as run_scan does; --unused had it say it already.
     if used.is_none()
         && let Some(e) = settings.port_dbdir_error()
     {
-        eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
+        errln!("{} {e}", tint(paint, ansi::RED, "error:"));
     }
 
     let (vanished, live, mut warnings) = clean::classify_entries(
@@ -180,7 +180,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     let relocated = config::relocated_options(settings.options_place.as_ref());
     warnings.extend(relocated.clone());
     for w in &warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+        errln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
     let pruned = clean::prune(vanished, live, used.as_ref(), relocated.is_some());
     let (mut removals, live) = (pruned.removals, pruned.live);
@@ -218,7 +218,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     // name says, even where the make.conf probe saw no move.
     let before: Vec<String> = removals.iter().map(|r| r.options_name.clone()).collect();
     for note in clean::keep_read(&mut removals, &read) {
-        eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+        errln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
         warnings.push(note);
     }
     if cli.verbose {
@@ -242,7 +242,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     removals.retain(|r| match files.combined(&r.options_name).unmanaged() {
         Some((_, why)) => {
             let note = format!("{}: {why}; kept", r.options_name);
-            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
+            errln!("{} {note}", tint(paint, ansi::YELLOW, "warning:"));
             warnings.push(note);
             if cli.verbose {
                 kept_entries.push((r.options_name.clone(), why));
@@ -276,11 +276,11 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         let done = clean::remove_all(&removals);
         removed = done.count;
         for note in done.notes {
-            eprintln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
+            errln!("{} {note}", tint(paint, ansi::YELLOW, "note:"));
             warnings.push(note);
         }
         for (subject, message) in done.failed {
-            eprintln!("{} {subject}: {message}", tint(paint, ansi::RED, "error:"));
+            errln!("{} {subject}: {message}", tint(paint, ansi::RED, "error:"));
             errors.push(report::ErrorEntry { subject, message });
         }
     }
@@ -308,15 +308,15 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
     }
 
     if removals.is_empty() {
-        eprintln!("nothing to clean ({total_entries} entries kept)");
+        errln!("nothing to clean ({total_entries} entries kept)");
     } else if cli.dry_run {
-        eprintln!(
+        errln!(
             "dry run: {} of {total_entries} entries would be removed from {}",
             removals.len(),
             settings.options_dir.display()
         );
     } else {
-        eprintln!(
+        errln!(
             "{removed} entry(ies) removed from {}",
             settings.options_dir.display()
         );
@@ -401,7 +401,7 @@ fn find_redundant(
             }
             Err(_) => break,
         }
-        eprint!(
+        errp!(
             "\r{}",
             tint(
                 paint,
@@ -412,7 +412,7 @@ fn find_redundant(
         let _ = std::io::stderr().flush();
     }
     if done > 0 {
-        eprintln!();
+        errln!();
     }
     // An entry found redundant for its own port may still be read by a
     // sibling origin its Makefile.common sends there: asked last, for the
@@ -525,7 +525,7 @@ fn sibling_origins(trees: &[std::path::PathBuf], origin: &str) -> Vec<String> {
 
 impl<'a> RedundancyPass<'a> {
     fn warn(&mut self, note: String) {
-        eprintln!("{} {note}", tint(self.paint, ansi::YELLOW, "warning:"));
+        errln!("{} {note}", tint(self.paint, ansi::YELLOW, "warning:"));
         self.found.warnings.push(note);
     }
 

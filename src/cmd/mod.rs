@@ -170,7 +170,7 @@ fn load_moved(cli: &Cli, settings: &config::Settings) -> Moved {
     let (moved, warnings) = Moved::load_all(&trees);
     let paint = stderr_color(cli);
     for w in warnings {
-        eprintln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
+        errln!("{} {w}", tint(paint, ansi::YELLOW, "warning:"));
     }
     moved
 }
@@ -210,7 +210,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     // Writing to the options dir is harmless, only useless: said, even
     // under -q, and the run goes on (scan counts it among its errors).
     if let Some(e) = settings.port_dbdir_error() {
-        eprintln!("{} {e}", tint(paint, ansi::RED, "error:"));
+        errln!("{} {e}", tint(paint, ansi::RED, "error:"));
     }
 
     let t0 = Instant::now();
@@ -224,7 +224,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
                 .iter()
                 .map(|(k, why)| format!("{k} ({why})"))
                 .collect();
-            eprintln!(
+            errln!(
                 "  {}        synth skips {} installed package(s) its flavor index does not match: {}",
                 tint(paint, ansi::YELLOW, "note:"),
                 skipped.len(),
@@ -239,7 +239,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
     let exists = |o: &str| ctx.locate(o).is_some();
     let listing = roots::apply_moved(&given, policy, cli.follow_moved, &moved, exists);
     if cli.follow_moved && policy == roots::MovedPolicy::Synth && !cli.quiet {
-        eprintln!(
+        errln!(
             "  {}        --follow-moved has no effect under -s: synth does not read MOVED",
             tint(paint, ansi::YELLOW, "note:")
         );
@@ -252,6 +252,7 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         jobs,
         &mut cache,
     );
+    let quiet = cli.quiet;
     let mut result = scanner::scan(
         &roots,
         &ctx,
@@ -260,36 +261,46 @@ fn run_scan(cli: &Cli, rs: &RootSet) -> Result<Scanned> {
         &mut cache,
         &moved,
         &settings.blacklist,
+        // -q drops the progress line too, so a run with nothing to say is
+        // silent (a cron(8) gate mails nothing).
         move |p| {
+            if quiet {
+                return;
+            }
             let line = format!(
                 "scanning… {}/{} ports ({} cached)",
                 p.done, p.discovered, p.from_cache
             );
-            eprint!("\r{}", tint(paint, ansi::GRAY, &line));
+            errp!("\r{}", tint(paint, ansi::GRAY, &line));
             let _ = std::io::stderr().flush();
         },
     );
-    eprintln!();
+    if !quiet {
+        errln!();
+    }
 
     result.errors.splice(0..0, listing.errors);
     for m in &listing.moves {
-        eprintln!("{} {}", tint(paint, ansi::MAGENTA, "moved:"), m.message());
+        errln!("{} {}", tint(paint, ansi::MAGENTA, "moved:"), m.message());
     }
     for (key, msg) in &result.errors {
-        eprintln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
+        errln!("{} {key}: {msg}", tint(paint, ansi::RED, "error:"));
     }
 
-    say_overridden(paint, &result);
+    // Notes are no warnings: -q drops them with the rest.
+    if !quiet {
+        say_overridden(paint, &result);
+    }
     let read = say_moved_files(paint, &result);
-    say_options_files(paint, &result, &files, &read);
+    say_options_files(paint, quiet, &result, &files, &read);
 
     // A dependency loop is a property of the closure, not of one command:
     // whatever the caller went on to do, poudriere will not build it.
     let dep_loops = deps::detect(&result.ports, &result.aliases);
     for dl in &dep_loops {
-        eprintln!("{} {}", tint(paint, ansi::RED, "loop:"), dl.render());
+        errln!("{} {}", tint(paint, ansi::RED, "loop:"), dl.render());
         if let Some(extra) = dl.extra_line() {
-            eprintln!("       also tangled: {extra}");
+            errln!("       also tangled: {extra}");
         }
     }
 
@@ -317,7 +328,7 @@ fn print_banner(
     cache: &cache::Cache,
     jobs: usize,
 ) {
-    eprintln!(
+    errln!(
         "{} ports tree {} · {} jobs",
         tint(paint, ansi::BOLD, "optique:"),
         settings.portsdir.display(),
@@ -329,7 +340,7 @@ fn print_banner(
         .chain(settings.notes.iter())
         .map(String::as_str);
     for note in notes.chain(cache.note()) {
-        eprintln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
+        errln!("  {}        {note}", tint(paint, ansi::YELLOW, "note:"));
     }
     // In lookup order: the first holding a port answers for it.
     for (i, o) in settings.overlays.iter().enumerate() {
@@ -338,9 +349,9 @@ fn print_banner(
             Some(name) => format!("{name} ({})", o.path.display()),
             None => o.path.display().to_string(),
         };
-        eprintln!("  {}     {what}", tint(paint, ansi::CYAN, label));
+        errln!("  {}     {what}", tint(paint, ansi::CYAN, label));
     }
-    eprintln!(
+    errln!(
         "  {} {}{}",
         tint(paint, ansi::CYAN, "options dir:"),
         settings.options_dir.display(),
@@ -355,20 +366,20 @@ fn print_banner(
         )
     );
     if settings.make_conf_sources.is_empty() {
-        eprintln!("  {}   (none)", tint(paint, ansi::CYAN, "make.conf:"));
+        errln!("  {}   (none)", tint(paint, ansi::CYAN, "make.conf:"));
     } else {
         for (i, src) in settings.make_conf_sources.iter().enumerate() {
             let label = if i == 0 { "make.conf:" } else { "          " };
-            eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
+            errln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
         }
     }
     if let Some(env) = settings.env.description() {
-        eprintln!("  {} {env}", tint(paint, ansi::CYAN, "environment:"));
+        errln!("  {} {env}", tint(paint, ansi::CYAN, "environment:"));
     }
     if !settings.blacklist.is_empty() {
         for (i, src) in settings.blacklist.sources.iter().enumerate() {
             let label = if i == 0 { "blacklist:" } else { "          " };
-            eprintln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
+            errln!("  {}   {}", tint(paint, ansi::CYAN, label), src.display());
         }
     }
 }
@@ -385,7 +396,7 @@ fn say_overridden(paint: bool, result: &ScanResult) {
         .map(|(key, _)| key.to_string())
         .collect();
     if !overridden.is_empty() {
-        eprintln!(
+        errln!(
             "{} make.conf OPTIONS_OVERRIDE decides {} ({} options file not read)",
             tint(paint, ansi::YELLOW, "note:"),
             overridden.join(", "),
@@ -425,14 +436,14 @@ fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeS
         let mut said = std::collections::BTreeSet::new();
         for (port, path) in moved {
             if read.contains(name) {
-                eprintln!(
+                errln!(
                     "{} OPTIONS_FILE is {path} for {port}, outside the options dir: make reads \
                      that file, not {}, for it, and optique leaves its options alone",
                     tint(paint, ansi::YELLOW, "warning:"),
                     optfiles::key_label(name),
                 );
             } else if said.insert(*path) {
-                eprintln!(
+                errln!(
                     "{} OPTIONS_FILE is {path}, outside the options dir: make does not read {}, \
                      and optique leaves it alone",
                     tint(paint, ansi::YELLOW, "warning:"),
@@ -448,6 +459,7 @@ fn say_moved_files(paint: bool, result: &ScanResult) -> std::collections::BTreeS
 /// lines optique cannot model, an options.local, options with no line.
 fn say_options_files(
     paint: bool,
+    quiet: bool,
     result: &ScanResult,
     files: &optfiles::OptionsFiles,
     read: &std::collections::BTreeSet<&str>,
@@ -474,7 +486,7 @@ fn say_options_files(
         // command; a line optique cannot model leaves the file to the user
         // (apply::plan_writes), each line named once.
         for u in &both.unmodeled {
-            eprintln!(
+            errln!(
                 "{} {} line {} {}: optique leaves {file} alone",
                 tint(paint, ansi::YELLOW, "warning:"),
                 if u.file == "options" {
@@ -492,7 +504,7 @@ fn say_options_files(
         // An options.local assigning a list afresh drops the file's lines:
         // optique leaves the file alone (apply::plan_writes), said once.
         if let Some((_, why)) = both.unmanaged() {
-            eprintln!("{} {file}: {why}", tint(paint, ansi::YELLOW, "warning:"));
+            errln!("{} {file}: {why}", tint(paint, ansi::YELLOW, "warning:"));
             continue;
         }
         let mut adds = Vec::new();
@@ -504,8 +516,8 @@ fn say_options_files(
                 ));
             }
         }
-        if !adds.is_empty() {
-            eprintln!(
+        if !adds.is_empty() && !quiet {
+            errln!(
                 "{} {file}.local also {}; sync leaves it alone",
                 tint(paint, ansi::CYAN, "note:"),
                 adds.join(" and ")
@@ -516,7 +528,7 @@ fn say_options_files(
         };
         let unlined = saved.unlined();
         if !unlined.is_empty() {
-            eprintln!(
+            errln!(
                 "{} {file} has no SET or UNSET line for {}: make reads them at \
                  their defaults; sync writes them out",
                 tint(paint, ansi::YELLOW, "warning:"),

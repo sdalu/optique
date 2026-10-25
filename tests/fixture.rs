@@ -225,6 +225,23 @@ fn clean_judges_a_flavors_own_file() {
     assert!(!lite.exists(), "its flavor is not");
 }
 
+/// `scan -q` over a closure with nothing pending writes nothing at all, so
+/// it serves as a cron(8) gate that mails only when something is pending;
+/// with something pending the summary says so.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn scan_quiet_is_silent_when_nothing_is_pending() {
+    let f = Fixture::new();
+    let out = f.run("scan", &["-q", "misc/cond"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!stderr(&out).is_empty(), "pending: the summary says so");
+    f.run("sync", &["misc/cond"]);
+    let out = f.run("scan", &["-q", "misc/cond"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stderr(&out), "", "nothing pending, nothing said");
+    assert_eq!(stdout(&out), "");
+}
+
 /// A SINGLE group with a member forced on by make.conf and the other chosen
 /// in the file is a conflict, and turning the chosen one off settles it.
 #[test]
