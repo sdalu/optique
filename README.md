@@ -1,4 +1,4 @@
-# optique 👓
+<h1 align="center"><img src="docs/images/optique-banner.png" alt="optique" width="720"></h1>
 
 Configure the options of a whole build at once, in one screen: for
 poudriere, for synth, or for `make` on the host.
