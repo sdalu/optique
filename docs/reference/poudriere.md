@@ -328,7 +328,8 @@ is not rewritten (see `deps_sanity` below). `awk/parse_MOVED.awk` reads
 the file once and collapses chains in file order: a later `B|C` repoints
 an earlier `A|B` to `A|C` (`update_forwards`). `check_moved` then follows
 the collapsed entry: it returns the target if that origin exists, else
-looks the target up again, and so on. Two consequences:
+looks the target up again, and so on. A line with an empty old origin
+(`|B|…`) deletes `B`'s earlier entry. Two consequences:
 
 - `A` goes to `C` even when `B` exists again; `B` is never tested.
 - A cycle `a|b`, `b|a` collapses to `a|a` and `b|a`; when `a` does not

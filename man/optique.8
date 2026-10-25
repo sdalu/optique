@@ -3317,17 +3317,12 @@ since they are what the build will find
 so a package install or delete starts a new cache generation: the size and
 modification time of
 .Pa local.sqlite
-in the directory
-.Ql pkg config PKG_DBDIR
-names
-.Po
-.Pa ${LOCALBASE:-/usr/local}/sbin/pkg ,
-when there; else
+are part of the cache key, in the directory
+.Ql ${LOCALBASE:-/usr/local}/sbin/pkg config PKG_DBDIR
+prints when that pkg is there and prints an absolute path, else in
 .Ev PKG_DBDIR ,
-else
-.Pa /var/db/pkg
-.Pc
-are part of the cache key;
+else in
+.Pa /var/db/pkg ;
 .It
 queries run as the invoking user, with its
 .Ev USER
@@ -3437,14 +3432,15 @@ of a local build, instead of
 see
 .Sx LOCAL BUILDS .
 Poudriere and synth builds always pass their own.
-.It Ev LOCALBASE , Ev PKG_DBDIR
-Where a local build finds pkg's database, whose changes start a
-new cache generation: the directory
-.Pa ${LOCALBASE:-/usr/local}/sbin/pkg
-names, pkg.conf weighed, else
-.Ev PKG_DBDIR ;
-see
+.It Ev LOCALBASE
+Where a local build finds the pkg it asks for pkg's database
+.Pq Ql ${LOCALBASE:-/usr/local}/sbin/pkg config PKG_DBDIR ,
+whose changes start a new cache generation; see
 .Sx LOCAL BUILDS .
+.It Ev PKG_DBDIR
+Weighed by that pkg, with pkg.conf, and where the database is when no
+pkg answers, else
+.Pa /var/db/pkg .
 .It Ev SYNTHPROFILE
 The profile of a bare
 .Fl s ,
