@@ -107,11 +107,14 @@ pub(crate) fn cmd_clean(cli: &Cli, args: &cli::CleanArgs) -> Result<()> {
     }
     // The entries the closure reads: a key one entry deep
     // (`devel_git/lite-options`) uses its entry, and itself, an entry of
-    // its own to clean (`clean::classify_entries`).
+    // its own to clean (`clean::classify_entries`). A port reading no file
+    // under its OPTIONS_NAME (`session::reads_no_file`: an OPTIONS_FILE
+    // moved, whose own file `read` keeps, or an OPTIONS_OVERRIDE) uses none.
     let used = scanned
         .result
         .ports
         .values()
+        .filter(|i| !session::reads_no_file(i))
         .flat_map(|i| {
             [
                 optfiles::key_entry(&i.options_name).to_string(),
@@ -781,14 +784,6 @@ fn shared_file_deviation(
     local: &optionsfile::SavedOptionsFile,
     file: &optionsfile::SavedOptionsFile,
 ) -> Option<String> {
-    // bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never reads
-    // the file; it is kept, not judged redundant, whatever it says.
-    if let Some(info) = infos.iter().find(|i| i.options.r#override.is_some()) {
-        return Some(format!(
-            "{}: make.conf OPTIONS_OVERRIDE decides it, left alone",
-            info.key
-        ));
-    }
     infos.iter().find_map(|info| {
         let diff = clean::redundancy_diff(info, local, file);
         if diff.is_empty() {
@@ -840,27 +835,5 @@ mod tests {
             why.contains("www/sogo@pgsql") && why.contains("+MYSQL -PGSQL"),
             "{why}"
         );
-    }
-
-    /// bsd.options.mk:300-304: a flavor with an OPTIONS_OVERRIDE never
-    /// reads its options file, so `clean --redundant` must never judge it
-    /// redundant — even though its effective set, computed the override's
-    /// own way, would otherwise match defaults + make.conf exactly, which
-    /// is precisely what "redundant" means for every other port.
-    #[test]
-    fn an_overridden_flavors_file_is_never_redundant() {
-        use crate::model::port::PortInfo;
-        let mut info = PortInfo::stub("misc/cond");
-        info.options.complete = vec!["DOCS".into()];
-        info.options.defaults = ["DOCS".into()].into();
-        info.options.effective = ["DOCS".into()].into();
-        info.options.r#override = Some(["DOCS".to_string()].into());
-        let why = super::shared_file_deviation(
-            std::slice::from_ref(&info),
-            &Default::default(),
-            &Default::default(),
-        )
-        .expect("an override must never be judged redundant");
-        assert!(why.contains("OPTIONS_OVERRIDE"), "{why}");
     }
 }

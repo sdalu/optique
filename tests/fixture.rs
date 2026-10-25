@@ -1109,6 +1109,12 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
         assert_eq!(plan["applied"], true, "{order:?}: {plan}");
         assert!(!f.file("misc_flav").exists(), "{order:?}: {plan}");
     }
+    // @nox alone reads none of the shared file: listed alone, its entry is
+    // unused.
+    f.run("sync", &["misc/flav"]);
+    assert!(f.file("misc_flav").exists());
+    f.run("clean", &["--unused", "misc/flav@nox"]);
+    assert!(!f.file("misc_flav").exists(), "@nox reads another file");
 }
 
 /// bsd.options.mk:300-366: make.conf giving one flavor an

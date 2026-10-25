@@ -303,6 +303,18 @@ fn options_override_decides_the_port_and_the_file_is_untouched() {
         file,
         "sync must not touch it"
     );
+
+    // Nor is it redundant: make does not read it, so nothing judges it.
+    let out = f.run("clean", &["-r", "-v"]);
+    assert!(f.file("misc_cond").exists(), "{}", common::stdout(&out));
+    assert!(
+        common::stdout(&out).contains("misc/cond: make.conf OPTIONS_OVERRIDE decides it"),
+        "{}",
+        common::stdout(&out)
+    );
+    // But no port of the closure reads it: unused.
+    f.run("clean", &["--unused", origin]);
+    assert!(!f.file("misc_cond").exists(), "--unused removes it");
 }
 
 /// bsd.options.mk:300-304: an OPTIONS_OVERRIDE defined empty is still

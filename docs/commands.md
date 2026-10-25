@@ -246,7 +246,10 @@ list is an error the other way round:
   reads `multimedia_avidemux`): it is kept while one of them would build
   otherwise without it.
 - `-u`/`--unused` — also remove entries for ports outside the dependency
-  closure of the given package list, which is then required. If the scan
+  closure of the given package list, which is then required. A port
+  reading no file under its options name (its `OPTIONS_FILE` moved, or
+  under an `OPTIONS_OVERRIDE`) uses no entry by that name; a moved file in
+  the options dir is kept as the entry it reads. If the scan
   of that closure has any error — a port that fails to query, a listed
   origin gone, a dependency on an origin in no tree — the closure is
   incomplete and `clean` refuses to prune anything at all, rather than risk
