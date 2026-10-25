@@ -79,10 +79,10 @@ impl App {
             let Some(state) = self.session.state(info) else {
                 continue;
             };
-            // A flavor make.conf moves OPTIONS_FILE for reads a file of its
-            // own, not the staged one: its state is no content for the
-            // shared file the other flavors are queried with.
-            if crate::session::moved(info).is_some() {
+            // A flavor reading no shared file (`reads_no_file`) reads none of
+            // the staged one: its state is no content for the shared file
+            // the other flavors are queried with.
+            if crate::session::reads_no_file(info) {
                 batch.push(key);
                 continue;
             }
@@ -125,7 +125,7 @@ impl App {
         let shared: BTreeSet<String> = batch
             .iter()
             .filter_map(|k| self.session.ports.get(k))
-            .filter(|i| crate::session::moved(i).is_none())
+            .filter(|i| !crate::session::reads_no_file(i))
             .map(|i| i.options_name.clone())
             .collect();
         let siblings: Vec<PortKey> = self
@@ -134,7 +134,7 @@ impl App {
             .iter()
             .filter(|(k, i)| {
                 shared.contains(&i.options_name)
-                    && crate::session::moved(i).is_none()
+                    && !crate::session::reads_no_file(i)
                     && !batch.contains(k)
             })
             .map(|(k, _)| k.clone())
@@ -267,8 +267,8 @@ impl App {
                 let Some(info) = self.session.ports.get(key) else {
                     continue;
                 };
-                // One reading a file of its own was queried with it.
-                if crate::session::moved(info).is_some() {
+                // One reading no shared file needs none seeded.
+                if crate::session::reads_no_file(info) {
                     continue;
                 }
                 let name = &info.options_name;

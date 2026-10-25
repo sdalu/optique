@@ -314,11 +314,10 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 ## Writing files
 
 `apply::plan_writes_for` groups the ports by options file, leaving out a
-flavor make.conf moves `OPTIONS_FILE` for (`session::moved`), and, for
-each:
+flavor reading none of it (`session::reads_no_file`: make.conf moves its
+`OPTIONS_FILE`, or gives it an `OPTIONS_OVERRIDE`), and, for each:
 
-1. leaves it alone when any flavor reading it has an `OPTIONS_OVERRIDE`
-   or when it is unmanaged (`session::unmanaged_file`);
+1. leaves it alone when it is unmanaged (`session::unmanaged_file`);
 2. picks the writer as the session picks the owner (`session::outranks`):
    the default flavor, else the flavor with the most options, the first
    on ties, whose file is then the union of every present flavor's

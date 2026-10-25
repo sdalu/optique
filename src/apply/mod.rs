@@ -275,9 +275,11 @@ pub fn plan_writes_for<'a>(
 ) -> PlannedWrites {
     let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
-        // A flavor make.conf moves OPTIONS_FILE for reads none of the
-        // shared file (`session::moved`): it neither writes nor judges it.
-        if !info.options.has_options() || crate::session::moved(info).is_some() {
+        // A flavor reading none of the shared file (`session::reads_no_file`:
+        // its OPTIONS_FILE moved, or an OPTIONS_OVERRIDE, under which make
+        // reads no file, bsd.options.mk:300-304) neither writes nor judges
+        // it: the flavors reading it do.
+        if !info.options.has_options() || crate::session::reads_no_file(info) {
             continue;
         }
         let preferred = crate::session::is_preferred(info);
@@ -296,12 +298,6 @@ pub fn plan_writes_for<'a>(
     let mut removals = Vec::new();
     let mut warnings = Vec::new();
     for (options_name, cands) in &groups {
-        // bsd.options.mk:300-304: a port with an OPTIONS_OVERRIDE never
-        // reads its options file; one candidate having it is enough to
-        // leave the whole shared file alone, written or removed.
-        if cands.iter().any(|c| c.info.options.r#override.is_some()) {
-            continue;
-        }
         // A file optique cannot model (`session::unmanaged_file`: a line it
         // cannot read, an options.local resetting a list or assigning one
         // with `?=`): no write or removal of it can say what make ends up

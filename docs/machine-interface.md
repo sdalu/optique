@@ -129,7 +129,9 @@ re-running `make`:
     `status` is never `stale` or `unconfigured`
     (`conflict` still applies when the outcome breaks a group or `PREVENTS`
     rule). `decide` refuses any change to such a port's options, and `sync`
-    never writes or removes its options file.
+    never writes or removes its options file for it; given to some flavors
+    only, the other flavors still read the file, own it and have it
+    written.
 [^2]: `kind` is `group`, `multi`, `single` or `radio`.
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
     `NEW_OPTIONS`; a line settles the option even when the file's

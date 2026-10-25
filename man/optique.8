@@ -2828,6 +2828,15 @@ and never touches its options file, written or removed, under
 .Cm sync ,
 .Cm decide
 or the TUI's apply; the startup banner names every such port once.
+Given to only some flavors of a port, through a
+.Va FLAVOR
+test, it leaves those flavors reading none of the file the others share,
+as a moved
+.Va OPTIONS_FILE
+does
+.Pq see Cm sync :
+each reports its own override, while the flavors still reading the file
+own it, edit it and have it written.
 .Pp
 The layers are concatenated into one staged file, as poudriere concatenates
 them into the jail's
@@ -3816,23 +3825,3 @@ edited while
 runs (the TUI open) is noticed by its size or modification time: a warning
 says so, and no further answer is cached for the run, its generation being
 the text the file had at startup.
-.Pp
-An
-.Va OPTIONS_OVERRIDE
-that
-.Pa make.conf
-gives only some flavors of a port, through a
-.Va FLAVOR
-test, makes
-.Cm sync
-and the TUI's apply leave the options file those flavors share alone, as
-.Xr make 1
-reads none of it for them; another flavor sharing it is still shown
-unconfigured, and an edit to it is refused, naming the flavor whose
-override leaves the file alone, rather than taken and never written;
-.Ic U
-still drops an edit staged before that flavor joined the closure.
-Give it its own
-.Va OPTIONS_FILE ,
-or write the file with
-.Nm make Cm config .

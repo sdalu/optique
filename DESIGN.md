@@ -614,7 +614,11 @@ again when a refresh changes the file's owner or readers
 meets while the session followed the widest, which judged the file from
 one view and wrote it from another. A flavor whose
 `OPTIONS_FILE` names another file reads none of the file and is neither
-owner nor writer ("An options file optique cannot model is left to make").
+owner nor writer ("An options file optique cannot model is left to make"),
+and nor is one make.conf gives an `OPTIONS_OVERRIDE` (behind a `FLAVOR`
+test), under which make reads neither the file nor its `.local`
+(bsd.options.mk:300-366): both keep a state of their own
+(`session::reads_no_file`), and the file stays the other flavors'.
 
 Such an owner writes from its own view but drops nothing it does not see:
 it cannot tell an option it lacks (the default flavor's) from one the port
@@ -684,17 +688,15 @@ default owner alone, which left a sibling owing an option the owner has
 (one a FORCE or group differing by flavor leaves open for it) with no
 file ever written to settle it.
 
-Not handled: an `OPTIONS_OVERRIDE` make.conf gives only some flavors
-sharing a file. Apply leaves that file alone, while another flavor's row
-stays unconfigured; edits to it are refused, naming the override's
-flavor, so none is taken and silently never written (man page, CAVEATS);
-`U` still drops an edit staged before that flavor joined the closure, as
-going back writes nothing.
-The refusal walks the closure, so it is asked on an edit only. Leaving the file
-to make for that flavor too (`Session::unmanaged`) was tried and taken
-back: the per-flavor JSON reports, the editor's banner and the list's
-per-frame status all had to learn the case, and an index had to keep the
-lookup off the drawing path, for a make.conf shape this rare.
+An `OPTIONS_OVERRIDE` make.conf gives only some flavors sharing a file
+leaves the file to the flavors still reading it, as above. Rejected, in
+turn: skipping the whole file, which left another flavor's row
+unconfigured with nothing able to settle it; leaving it to make for every
+sharer (`Session::unmanaged`), which the per-flavor reports, the editor's
+banner and the list's per-frame status all had to learn; refusing the
+other flavors' edits, which kept the row unconfigured. The override
+flavor's own state also fixed its `--options` report, judged until then
+from the owner's view of a file it does not read.
 
 Whether the user edited the port is the caller's to say (`edited`, files
 whose staged set left its baseline). Rejected: comparing the staged set

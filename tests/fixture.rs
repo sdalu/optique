@@ -1111,6 +1111,93 @@ fn a_flavor_moving_options_file_leaves_the_owners_file_managed() {
     }
 }
 
+/// bsd.options.mk:300-366: make.conf giving one flavor an
+/// OPTIONS_OVERRIDE, behind a FLAVOR test, leaves it reading neither the
+/// shared file nor its .local, as a moved OPTIONS_FILE does: it reports its
+/// override and takes no edit, while the flavors still reading the file own
+/// it, sync and decide write it for them, once written they scan ok, and
+/// `clean -r` judges it for them alone.
+/// The same with the override on every flavor but @nox, which then owns it.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_flavor_override_leaves_the_file_to_the_flavors_reading_it() {
+    let f = Fixture::new();
+    fs::write(
+        &f.make_conf,
+        ".if ${FLAVOR:U} == nox\nOPTIONS_OVERRIDE=A\n.endif\n",
+    )
+    .unwrap();
+    let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "PORT_OPTIONS"]);
+    assert_eq!(stdout(&out).trim(), "A");
+    for order in [
+        ["misc/flav", "misc/flav@nox"],
+        ["misc/flav@nox", "misc/flav"],
+    ] {
+        let full = f.scan_port(&order, "misc/flav@full");
+        assert_eq!(full["status"], "unconfigured", "{order:?}: {full}");
+        assert_eq!(option(&full, "A")["locked"], false, "{order:?}: {full}");
+        let nox = f.scan_port(&order, "misc/flav@nox");
+        assert_eq!(nox["status"], "ok", "{order:?}: {nox}");
+        assert_eq!(
+            option(&nox, "A")["locked_by"],
+            "make.conf OPTIONS_OVERRIDE",
+            "{order:?}: {nox}"
+        );
+
+        let out = f.run("sync", &order);
+        assert!(
+            f.file("misc_flav").exists(),
+            "{order:?}: sync writes @full's file: {}",
+            stderr(&out)
+        );
+        let full = f.scan_port(&order, "misc/flav@full");
+        assert_eq!(full["status"], "ok", "{order:?}: {full}");
+        let out = f.run("scan", &order);
+        assert_eq!(out.status.code(), Some(0), "{order:?}: {}", stderr(&out));
+        // At @full's and @pgtk's defaults the file is redundant for the
+        // flavors reading it; @nox's override has no say.
+        let out = f.run("clean", &["-r", "-v"]);
+        assert!(!f.file("misc_flav").exists(), "{order:?}: {}", stdout(&out));
+
+        let plan = f.decide(&order, r#"{"misc/flav": {"A": false}}"#);
+        assert_eq!(plan["applied"], true, "{order:?}: {plan}");
+        assert_eq!(
+            f.make_v("misc/flav", "PORT_OPTIONS"),
+            ["X11", "Y"],
+            "{order:?}"
+        );
+        let out = f.make("misc/flav", &["FLAVOR=nox", "-V", "PORT_OPTIONS"]);
+        assert_eq!(stdout(&out).trim(), "A", "{order:?}: @nox reads no file");
+        let plan = f.decide(&order, r#"{"misc/flav@nox": {"A": false}}"#);
+        assert_eq!(
+            plan["rejected"][0]["reason"],
+            "OPTIONS_OVERRIDE in make.conf decides this port; its options file is not read",
+            "{order:?}: {plan}"
+        );
+        fs::remove_file(f.file("misc_flav")).unwrap();
+    }
+
+    // The override on @full and @pgtk: @nox alone reads the file, owns it,
+    // and has it written.
+    fs::write(
+        &f.make_conf,
+        ".if ${FLAVOR:U} != nox\nOPTIONS_OVERRIDE=X11\n.endif\n",
+    )
+    .unwrap();
+    let order = ["misc/flav", "misc/flav@nox"];
+    let nox = f.scan_port(&order, "misc/flav@nox");
+    assert_eq!(nox["status"], "unconfigured", "{nox}");
+    f.run("sync", &order);
+    assert!(f.file("misc_flav").exists(), "sync writes @nox's file");
+    let nox = f.scan_port(&order, "misc/flav@nox");
+    assert_eq!(nox["status"], "ok", "{nox}");
+    assert_eq!(f.make_v("misc/flav", "PORT_OPTIONS"), ["X11"]);
+    // At @nox's defaults it is redundant for @nox, the default flavor's
+    // override having no say.
+    let out = f.run("clean", &["-r", "-v"]);
+    assert!(!f.file("misc_flav").exists(), "{}", stdout(&out));
+}
+
 /// bsd.options.mk:341-363: a `?=` in options.local assigns only while the
 /// options file leaves the list unassigned. With misc/model-globs's file
 /// unsetting C, `OPTIONS_FILE_UNSET?=C` there is inert; once a write turns

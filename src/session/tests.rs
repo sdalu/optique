@@ -2706,7 +2706,9 @@ fn report_prefers_the_override_over_an_unmanaged_file() {
     }
     let s = session_in(ports, tmp.path());
     let info = s.ports[&key].clone();
-    assert!(s.unmanaged(&info).is_some());
+    // Under the override make reads neither the file nor its .local
+    // (bsd.options.mk:300-366): what is in them does not make it unmanaged.
+    assert_eq!(s.unmanaged(&info), None);
     assert!(
         s.edit_refusal(&key)
             .unwrap()
@@ -2840,89 +2842,9 @@ fn what_an_option_implies_goes_in_listed_or_not() {
     );
 }
 
-/// A flavor sharing its options file with one make.conf gives an
-/// OPTIONS_OVERRIDE takes no edit, naming that flavor: apply leaves the
-/// whole file alone, so none would ever be written. The planner agrees.
-/// An override on a flavor with no options, or a flavor reading a file
-/// of its own, refuses nothing, as the planner groups neither.
-#[test]
-fn a_sibling_override_refuses_edits_apply_would_never_write() {
-    let mk = |flavor: &str, complete: &[&str]| {
-        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
-        let (mut p, k) = mk_port(complete, &[], vec![], vec![]);
-        let mut info = p.remove(&k).unwrap();
-        info.key = key.clone();
-        info.canonical = key;
-        info.flavors = vec!["qt".into(), "gtk3".into()];
-        info.options_name = "audio_plugins".into();
-        info
-    };
-    let tmp = tempfile::tempdir().unwrap();
-    let mut qt = mk("qt", &["A", "B"]);
-    qt.options.r#override = Some(set(&["A"]));
-    qt.options.effective = set(&["A"]);
-    let gtk3 = mk("gtk3", &["A", "B"]);
-    let ports: BTreeMap<_, _> = [qt.clone(), gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let mut s = session_in(ports, tmp.path());
-    let why = s.edit_refusal(&gtk3.key).unwrap();
-    assert!(why.contains("audio/plugins@qt"), "{why}");
-    assert!(s.toggle(&gtk3.key, "B").is_err());
-    let (changed, skipped) = s.bulk_set(std::slice::from_ref(&gtk3.key), "B", true);
-    assert!(changed.is_empty() && skipped.len() == 1, "{skipped:?}");
-    s.reset_to_defaults(&gtk3.key);
-    let draft = crate::draft::Draft {
-        options_dir: tmp.path().to_path_buf(),
-        saved_at_secs: 0,
-        staged: [("audio_plugins".to_string(), set(&["B"]))].into(),
-        known: [("audio_plugins".to_string(), set(&["A", "B"]))].into(),
-    };
-    assert_eq!(s.restore_draft(&draft), 0, "a draft restores no edit");
-    assert!(!s.edited(&s.ports[&gtk3.key].clone()));
-    // The planner leaves the file alone: nothing it would write.
-    let files = OptionsFiles::new(tmp.path());
-    let planned = apply::plan_writes(
-        [&qt, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
-        &files,
-        false,
-    );
-    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
-
-    // An override on a flavor with no options: grouped by neither.
-    let mut bare = mk("qt", &[]);
-    bare.options.r#override = Some(BTreeSet::new());
-    let ports: BTreeMap<_, _> = [bare, gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let s = session_in(ports, tmp.path());
-    assert_eq!(s.edit_refusal(&gtk3.key), None);
-
-    // An override on a flavor reading a file of its own: that flavor
-    // reads none of the shared one, which the planner writes for gtk3.
-    let mut own = qt.clone();
-    own.options.moved_file = Some("/elsewhere/options".into());
-    let ports: BTreeMap<_, _> = [own.clone(), gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let s = session_in(ports, tmp.path());
-    assert_eq!(s.edit_refusal(&gtk3.key), None);
-    let planned = apply::plan_writes(
-        [&own, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
-        &files,
-        false,
-    );
-    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
-}
-
-/// The override on a flavor that does not own the file refuses the
-/// owner's edits too, and a draft for it: the sibling branch of
-/// `edit_refusal`, not the owner's own override.
-#[test]
-fn a_non_owner_override_refuses_the_owners_edits_and_draft() {
+/// Two flavors of audio/plugins sharing one options file, make.conf
+/// giving `with_override` an OPTIONS_OVERRIDE of A.
+fn plugins_with_override(with_override: &str) -> (BTreeMap<PortKey, PortInfo>, PortKey, PortKey) {
     let mk = |flavor: &str| {
         let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
         let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
@@ -2931,102 +2853,87 @@ fn a_non_owner_override_refuses_the_owners_edits_and_draft() {
         info.canonical = key;
         info.flavors = vec!["qt".into(), "gtk3".into()];
         info.options_name = "audio_plugins".into();
+        if flavor == with_override {
+            info.options.r#override = Some(set(&["A"]));
+            info.options.effective = set(&["A"]);
+        }
         info
     };
-    let tmp = tempfile::tempdir().unwrap();
-    let qt = mk("qt");
-    let mut gtk3 = mk("gtk3");
-    gtk3.options.r#override = Some(set(&["A"]));
-    let ports: BTreeMap<_, _> = [qt.clone(), gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let mut s = session_in(ports, tmp.path());
-    assert_eq!(
-        s.owners["audio_plugins"], qt.key,
-        "qt, the default, owns it"
-    );
-    let why = s.toggle(&qt.key, "B").unwrap_err();
-    assert!(why.contains("audio/plugins@gtk3"), "{why}");
-    let draft = crate::draft::Draft {
-        options_dir: tmp.path().to_path_buf(),
-        saved_at_secs: 0,
-        staged: [("audio_plugins".to_string(), set(&["B"]))].into(),
-        known: [("audio_plugins".to_string(), set(&["A", "B"]))].into(),
-    };
-    assert_eq!(s.restore_draft(&draft), 0);
-    let planned = apply::plan_writes(
-        [&qt, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
-        &OptionsFiles::new(tmp.path()),
+    let (qt, gtk3) = (mk("qt"), mk("gtk3"));
+    let keys = (qt.key.clone(), gtk3.key.clone());
+    let ports = [qt, gtk3].into_iter().map(|i| (i.key.clone(), i)).collect();
+    (ports, keys.0, keys.1)
+}
+
+/// What the session would have apply write, as the TUI hands it over.
+fn planned(s: &Session, dir: &std::path::Path) -> apply::PlannedWrites {
+    apply::plan_writes(
+        s.ports
+            .iter()
+            .filter_map(|(k, i)| Some((k, i, s.state(i)?.staged.clone()))),
+        &OptionsFiles::new(dir),
         false,
-    );
-    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
-}
-
-/// An edit a refresh strands under a sibling's OPTIONS_OVERRIDE (staged
-/// before the override flavor joined the closure) can still be dropped:
-/// going back to the saved state writes nothing, so `U` is not refused.
-#[test]
-fn a_stranded_edit_under_a_sibling_override_can_be_reverted() {
-    let mk = |flavor: &str| {
-        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
-        let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
-        let mut info = p.remove(&k).unwrap();
-        info.key = key.clone();
-        info.canonical = key;
-        info.flavors = vec!["qt".into(), "gtk3".into()];
-        info.options_name = "audio_plugins".into();
-        info
-    };
-    let tmp = tempfile::tempdir().unwrap();
-    let mut qt = mk("qt");
-    qt.options.r#override = Some(set(&["A"]));
-    let gtk3 = mk("gtk3");
-    let ports: BTreeMap<_, _> = [qt, gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let mut s = session_in(ports, tmp.path());
-    s.states.get_mut("audio_plugins").unwrap().staged = set(&["B"]);
-    let info = s.ports[&gtk3.key].clone();
-    assert!(s.edited(&info));
-    assert!(s.edit_refusal(&gtk3.key).is_some());
-    assert_eq!(s.revert_refusal(&gtk3.key), None);
-    s.revert(&gtk3.key);
-    assert!(!s.edited(&info));
-}
-
-/// A sibling's OPTIONS_OVERRIDE is named before an options.local optique
-/// cannot manage: it is why apply leaves the file alone either way.
-#[test]
-fn a_sibling_override_is_named_before_an_unmanaged_local() {
-    let mk = |flavor: &str| {
-        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
-        let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
-        let mut info = p.remove(&k).unwrap();
-        info.key = key.clone();
-        info.canonical = key;
-        info.flavors = vec!["qt".into(), "gtk3".into()];
-        info.options_name = "audio_plugins".into();
-        info
-    };
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("audio_plugins")).unwrap();
-    std::fs::write(
-        tmp.path().join("audio_plugins/options.local"),
-        "OPTIONS_FILE_SET=A\n",
     )
-    .unwrap();
-    let mut qt = mk("qt");
-    qt.options.r#override = Some(set(&["A"]));
-    let gtk3 = mk("gtk3");
-    let ports: BTreeMap<_, _> = [qt, gtk3.clone()]
-        .into_iter()
-        .map(|i| (i.key.clone(), i))
-        .collect();
-    let s = session_in(ports, tmp.path());
-    let info = s.ports[&gtk3.key].clone();
-    assert!(s.unmanaged(&info).is_some(), "the local resets a list");
-    let why = s.edit_refusal(&gtk3.key).unwrap();
-    assert!(why.contains("audio/plugins@qt"), "{why}");
+}
+
+/// make.conf giving one flavor an OPTIONS_OVERRIDE (behind a FLAVOR test)
+/// leaves that flavor reading no options file (bsd.options.mk:300-304), as
+/// a moved OPTIONS_FILE does: it owns and writes none, and reports its own
+/// override. The other flavor still reads the file: it owns it, takes
+/// edits, and apply writes it from its view, here with the override on the
+/// default flavor.
+#[test]
+fn an_override_on_the_default_flavor_leaves_the_file_to_the_other() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ports, qt, gtk3) = plugins_with_override("qt");
+    let mut s = session_in(ports, tmp.path());
+    assert_eq!(s.owners["audio_plugins"], gtk3, "the reader owns the file");
+    assert_eq!(s.edit_refusal(&gtk3), None);
+    s.toggle(&gtk3, "B").unwrap();
+    assert!(
+        s.is_staged(&s.ports[&qt].clone(), "A"),
+        "the override's own"
+    );
+    assert!(!s.is_staged(&s.ports[&qt].clone(), "B"), "not the file's");
+    let plan = planned(&s, tmp.path());
+    assert_eq!(plan.writes.len(), 1, "{:?}", plan.writes);
+    let qt_info = s.ports[&qt].clone();
+    for r in crate::report::option_reports(&s, &qt_info) {
+        assert_eq!(
+            r.locked_by.as_deref(),
+            Some("make.conf OPTIONS_OVERRIDE"),
+            "{}",
+            r.name
+        );
+        assert_eq!(r.makeconf.as_ref().unwrap().scope, "override", "{}", r.name);
+    }
+}
+
+/// The same with the override on a flavor that does not own the file: the
+/// owner keeps it and writes it, and the override flavor reports its own
+/// override, not the owner's view of the file.
+#[test]
+fn an_override_on_another_flavor_reports_its_own_outcome() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (ports, qt, gtk3) = plugins_with_override("gtk3");
+    let mut s = session_in(ports, tmp.path());
+    assert_eq!(s.owners["audio_plugins"], qt);
+    s.toggle(&qt, "B").unwrap();
+    assert!(s.edit_refusal(&gtk3).is_some());
+    let plan = planned(&s, tmp.path());
+    assert_eq!(plan.writes.len(), 1, "{:?}", plan.writes);
+    let gtk3_info = s.ports[&gtk3].clone();
+    for r in crate::report::option_reports(&s, &gtk3_info) {
+        assert_eq!(
+            r.locked_by.as_deref(),
+            Some("make.conf OPTIONS_OVERRIDE"),
+            "{}",
+            r.name
+        );
+        assert_eq!(r.staged, r.name == "A", "{}", r.name);
+    }
+    // Unconfigured until written, then settled like any other row.
+    let qt_info = s.ports[&qt].clone();
+    assert_eq!(s.status(&qt_info), UiStatus::Unconfigured);
+    assert_eq!(s.status(&gtk3_info), UiStatus::Ok);
 }

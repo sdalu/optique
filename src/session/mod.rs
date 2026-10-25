@@ -43,10 +43,10 @@ pub struct Session {
     pub ports: BTreeMap<PortKey, PortInfo>,
     /// OPTIONS_NAME -> editable state.
     pub states: HashMap<String, OptState>,
-    /// Canonical key -> the state of a flavor make.conf gives an
-    /// OPTIONS_FILE of its own (`moved`): it reads none of the shared
-    /// file, so it keeps out of that file's state, and its own is make's
-    /// PORT_OPTIONS, which no edit changes.
+    /// Canonical key -> the state of a flavor reading none of the shared
+    /// file (`reads_no_file`: an OPTIONS_FILE of its own, or an
+    /// OPTIONS_OVERRIDE): it keeps out of that file's state, and its own is
+    /// make's outcome, which no edit changes.
     pub moved_states: HashMap<PortKey, OptState>,
     /// Requested key -> canonical key (dep edges may use either form).
     pub aliases: HashMap<PortKey, PortKey>,
@@ -118,6 +118,16 @@ pub(crate) fn moved(info: &PortInfo) -> Option<Unmanaged> {
     })
 }
 
+/// Whether the port reads none of the options file optique manages: its
+/// OPTIONS_FILE is moved (`moved`), or make.conf gives it an
+/// OPTIONS_OVERRIDE, under which make reads no options file at all
+/// (bsd.options.mk:300-304). Such a flavor has a state of its own, and
+/// neither owns nor writes the shared file: the flavors still reading it
+/// do.
+pub(crate) fn reads_no_file(info: &PortInfo) -> bool {
+    moved(info).is_some() || info.options.r#override.is_some()
+}
+
 /// Whether optique can manage an options file, `combined` being the file
 /// with its options.local read after it (`OptionsFiles::combined`). It
 /// cannot when a line of either file is one optique cannot model, or
@@ -181,7 +191,7 @@ impl Session {
     fn rebuild_owners(&mut self) {
         let mut owners: HashMap<String, PortKey> = HashMap::new();
         for (key, info) in &self.ports {
-            if !info.options.has_options() || moved(info).is_some() {
+            if !info.options.has_options() || reads_no_file(info) {
                 continue;
             }
             match owners
@@ -198,10 +208,10 @@ impl Session {
     }
 
     /// The port whose view owns this port's options file (itself when it is
-    /// the owner or no other flavor is known, and when make.conf moved its
-    /// OPTIONS_FILE: the file it reads is its own).
+    /// the owner or no other flavor is known, and when it reads no shared
+    /// file, `reads_no_file`).
     pub fn owner_info<'a>(&'a self, info: &'a PortInfo) -> &'a PortInfo {
-        if moved(info).is_some() {
+        if reads_no_file(info) {
             return info;
         }
         self.owners
@@ -240,13 +250,19 @@ impl Session {
             return;
         }
         // A flavor reading a file of its own: make's PORT_OPTIONS, fresh
-        // from each query, as no edit changes it (`edit_refusal`).
-        if moved(info).is_some() {
-            let effective = info.options.effective.clone();
+        // from each query, as no edit changes it (`edit_refusal`). One under
+        // an OPTIONS_OVERRIDE reads no file: make's no-file outcome, the
+        // override alone, with what the file on disk says kept to report.
+        if reads_no_file(info) {
+            let (saved, effective) = if moved(info).is_some() {
+                (None, info.options.effective.clone())
+            } else {
+                (files.saved(&info.options_name), nofile_effective(info))
+            };
             self.moved_states.insert(
                 info.canonical.clone(),
                 OptState {
-                    saved: None,
+                    saved,
                     staged: effective.clone(),
                     baseline: effective,
                 },
@@ -357,10 +373,10 @@ impl Session {
     }
 
     /// The state the port shows: its options file's, shared by the flavors
-    /// reading it, or, for a flavor make.conf moves OPTIONS_FILE for, its
-    /// own (`moved_states`).
+    /// reading it, or, for a flavor reading none (`reads_no_file`), its own
+    /// (`moved_states`).
     pub fn state(&self, info: &PortInfo) -> Option<&OptState> {
-        if moved(info).is_some() {
+        if reads_no_file(info) {
             return self.moved_states.get(&info.canonical);
         }
         self.states.get(&info.options_name)
@@ -497,11 +513,8 @@ impl Session {
             // refresh that brought them queried the staged edits, which
             // would read as the baseline.
             let saved = files.saved(&name);
-            let baseline = if owner.options.r#override.is_some() {
-                nofile_effective(owner)
-            } else {
-                shared_enabled_by(apply::file_enabled_set, owner, &others, saved.as_ref())
-            };
+            let baseline =
+                shared_enabled_by(apply::file_enabled_set, owner, &others, saved.as_ref());
             let holds = self.file_options(&name);
             let Some(state) = self.states.get_mut(&name) else {
                 continue;
@@ -581,23 +594,8 @@ impl Session {
     }
 
     /// Why no edit of the port's options file is taken, whatever the
-    /// option: an OPTIONS_OVERRIDE, its own or a flavor's sharing the file,
-    /// or a file optique cannot manage.
+    /// option: an OPTIONS_OVERRIDE, or a file optique cannot manage.
     pub fn edit_refusal(&self, key: &PortKey) -> Option<String> {
-        let info = self.ports.get(key)?;
-        // A sibling's override before an unmanaged file: it is the reason
-        // apply leaves the file alone either way (man page, CAVEATS).
-        if info.options.r#override.is_some() {
-            return self.revert_refusal(key);
-        }
-        self.sibling_override(info)
-            .or_else(|| self.revert_refusal(key))
-    }
-
-    /// Why the port's staged state cannot go back to its saved one (`U`):
-    /// `edit_refusal` but for a sibling's OPTIONS_OVERRIDE, as going back
-    /// writes nothing and drops an edit a refresh stranded there.
-    pub fn revert_refusal(&self, key: &PortKey) -> Option<String> {
         let info = self.ports.get(key)?;
         // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
         // itself; the options file is never read, so editing it is pointless.
@@ -609,28 +607,6 @@ impl Session {
         }
         // A file optique cannot model is not its to edit.
         self.unmanaged(info).map(|u| u.why)
-    }
-
-    /// Another flavor sharing the file that an OPTIONS_OVERRIDE decides
-    /// makes apply leave the whole file alone (`apply::plan_writes_for`,
-    /// grouping as it does): an edit here would never be written. Asked on
-    /// an edit only, never while drawing: it walks the closure.
-    fn sibling_override(&self, info: &PortInfo) -> Option<String> {
-        if moved(info).is_some() {
-            return None;
-        }
-        let other = self.ports.values().find(|o| {
-            o.options_name == info.options_name
-                && o.key != info.key
-                && o.options.r#override.is_some()
-                && o.options.has_options()
-                && moved(o).is_none()
-        })?;
-        Some(format!(
-            "OPTIONS_OVERRIDE in make.conf decides {}, which shares this options file: \
-             apply leaves the file alone, so no edit here would be written (U drops one)",
-            other.key
-        ))
     }
 
     /// Toggle an option; returns a user-facing error when refused.
@@ -752,9 +728,9 @@ impl Session {
             if !info.options.complete.iter().any(|o| o == opt) {
                 continue;
             }
-            // A flavor reading a file of its own shares no state: it is
+            // A flavor reading no shared file shares no state: it is
             // refused by itself, and leaves the shared file to the others.
-            if moved(info).is_none() && !visited.insert(info.options_name.clone()) {
+            if !reads_no_file(info) && !visited.insert(info.options_name.clone()) {
                 continue;
             }
             let Some(state) = self.state(info) else {
@@ -824,9 +800,9 @@ impl Session {
     }
 
     pub fn revert(&mut self, key: &PortKey) {
-        // A flavor reading a file of its own has nothing to revert, and the
+        // A flavor reading no shared file has nothing to revert, and the
         // shared state is not its own.
-        if let Some(info) = self.ports.get(key).filter(|i| moved(i).is_none())
+        if let Some(info) = self.ports.get(key).filter(|i| !reads_no_file(i))
             && let Some(state) = self.states.get_mut(&info.options_name)
         {
             state.staged = state.baseline.clone();
@@ -1419,16 +1395,10 @@ fn saved_baseline(
     others: &[&PortInfo],
     files: &OptionsFiles,
 ) -> (Option<SavedOptionsFile>, BTreeSet<String>) {
+    // No owner has an OPTIONS_OVERRIDE: such a flavor reads no file and
+    // owns none (`reads_no_file`).
     let saved = files.saved(&owner.options_name);
-    // bsd.options.mk:300-304: with an OPTIONS_OVERRIDE, the file (even one
-    // left on disk saying otherwise) is never read; the baseline is make's
-    // no-file outcome, which `effective_with` computes from the override
-    // alone, same as it would with `saved` passed in.
-    let baseline = if owner.options.r#override.is_some() {
-        nofile_effective(owner)
-    } else {
-        shared_enabled(owner, others, saved.as_ref())
-    };
+    let baseline = shared_enabled(owner, others, saved.as_ref());
     (saved, baseline)
 }
 
@@ -1487,7 +1457,7 @@ fn sharing<'a>(
             i.options_name == name
                 && i.key != *except
                 && i.options.has_options()
-                && moved(i).is_none()
+                && !reads_no_file(i)
         })
         .collect()
 }

@@ -668,12 +668,13 @@ impl<'a> RedundancyPass<'a> {
             failed: None,
         };
         // A deviating default flavor settles it: no need to ask the
-        // others. Not one reading a file of its own (`session::moved`).
+        // others. Not one reading no file (`session::reads_no_file`): the
+        // others alone judge it then.
         let local = self
             .files
             .under_local(&entry.options_name, Default::default());
         let file = self.files.combined(&entry.options_name);
-        let deviates = session::moved(&f.infos[0]).is_none()
+        let deviates = !session::reads_no_file(&f.infos[0])
             && shared_file_deviation(&f.infos, &local, &file).is_some();
         if others.is_empty() || deviates {
             self.settle(f);
@@ -725,16 +726,26 @@ impl<'a> RedundancyPass<'a> {
         }
         // Answers arrive in any order; the reason names the same flavor each run.
         f.infos[1..].sort_by(|a, b| a.key.cmp(&b.key));
-        // A flavor make.conf moves OPTIONS_FILE for reads none of the file
-        // (`session::moved`); the file is judged for the others alone, and
-        // kept when none is left.
-        let (moved, readers): (Vec<PortInfo>, Vec<PortInfo>) = f
-            .infos
-            .into_iter()
-            .partition(|i| session::moved(i).is_some());
+        // A flavor reading none of the file (`session::reads_no_file`: its
+        // OPTIONS_FILE moved, or an OPTIONS_OVERRIDE) has no say: the file is
+        // judged for the others alone, as `sync -m` judges it, and kept when
+        // none is left.
+        let (apart, readers): (Vec<PortInfo>, Vec<PortInfo>) =
+            f.infos.into_iter().partition(session::reads_no_file);
         if readers.is_empty() {
-            if let (true, Some(u)) = (self.verbose, moved.first().and_then(session::moved)) {
-                self.found.kept.push((f.entry.options_name.clone(), u.why));
+            if self.verbose
+                && let Some(info) = apart.first()
+            {
+                let why = session::moved(info).map_or_else(
+                    || {
+                        format!(
+                            "{}: make.conf OPTIONS_OVERRIDE decides it, left alone",
+                            info.key
+                        )
+                    },
+                    |u| u.why,
+                );
+                self.found.kept.push((f.entry.options_name.clone(), why));
             }
             return;
         }

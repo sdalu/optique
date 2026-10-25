@@ -241,7 +241,7 @@ fn handle_command_key(app: &mut App, code: KeyCode) -> KeyOutcome {
         KeyCode::Char('u') => app.undo_last(),
         KeyCode::Char('U') => match app
             .selected_key()
-            .and_then(|k| app.session.revert_refusal(&k))
+            .and_then(|k| app.session.edit_refusal(&k))
         {
             Some(why) => app.flash(&why, true),
             None => app.reset_selected(Session::revert, "reverted to saved state"),

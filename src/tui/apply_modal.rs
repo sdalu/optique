@@ -247,8 +247,8 @@ impl App {
             .ports
             .iter()
             .filter(|(_, info)| touched.contains(info.options_name.as_str()))
-            // A flavor reading a file of its own takes no part in the write.
-            .filter(|(_, info)| crate::session::moved(info).is_none())
+            // A flavor reading no shared file takes no part in the write.
+            .filter(|(_, info)| !crate::session::reads_no_file(info))
             .filter(|(_, info)| self.session.status(info) == UiStatus::Conflict)
             .map(|(key, info)| {
                 files.insert(info.options_name.clone());

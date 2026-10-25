@@ -56,9 +56,9 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
         .named
         .iter()
         .filter_map(|k| sess.ports.get(k))
-        // A flavor make.conf gives a file of its own writes nothing: its
-        // OPTIONS_NAME names the shared file it does not read.
-        .filter(|i| session::moved(i).is_none())
+        // A flavor reading no shared file (`reads_no_file`) writes nothing:
+        // its OPTIONS_NAME names the shared file it does not read.
+        .filter(|i| !session::reads_no_file(i))
         .map(|i| i.options_name.clone())
         .collect();
     let staged = sess.ports.iter().filter_map(|(key, info)| {
@@ -85,9 +85,9 @@ pub(crate) fn cmd_decide(cli: &Cli, args: &cli::DecideArgs) -> Result<usize> {
     // not written, however the plan got there.
     for name in &touched_names {
         for (key, info) in &sess.ports {
-            // A flavor reading a file of its own takes no part in the
-            // write: its conflict is its own file's.
-            if info.options_name != *name || session::moved(info).is_some() {
+            // A flavor reading no shared file takes no part in the write:
+            // its conflict is not the file's.
+            if info.options_name != *name || session::reads_no_file(info) {
                 continue;
             }
             let violations = sess.violations(info);

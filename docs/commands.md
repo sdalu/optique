@@ -191,6 +191,11 @@ whichever flavor the list names first. The warning then names the port:
 reads that file, not misc_flav/options, for it, and optique leaves its
 options alone`.
 
+An `OPTIONS_OVERRIDE` make.conf gives one flavor only (behind the same
+kind of `FLAVOR` test) does the same: make reads neither the file nor its
+`.local` for that flavor, which reports its override, and the other
+flavors keep the file theirs to write.
+
 `--dry-run`/`-n` reports what
 would be written and removed without touching anything; `--json` answers in
 the same shape as `decide` (see [machine-interface.md](machine-interface.md))
