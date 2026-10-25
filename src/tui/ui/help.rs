@@ -132,7 +132,12 @@ fn help_markers(p: &HelpPen) -> Vec<Line<'static>> {
             "conflict",
             "staged options violate PREVENTS or group rules",
         ),
-        p.mark("?", Color::Yellow, "unconfigured", "no saved options file"),
+        p.mark(
+            "?",
+            Color::Yellow,
+            "unconfigured",
+            "no options file, make.conf leaves some open",
+        ),
         p.mark(
             "!",
             Color::LightRed,
@@ -149,7 +154,7 @@ fn help_markers(p: &HelpPen) -> Vec<Line<'static>> {
             "≈",
             Color::DarkGray,
             "mc-covered",
-            "decided by make.conf, no attention (m view)",
+            "decided by make.conf, no attention (stale: m view)",
         ),
         p.mark("✓", Color::DarkGray, "", "ok"),
         p.blank(),
@@ -406,7 +411,7 @@ fn help_views(p: &HelpPen) -> Vec<Line<'static>> {
     [
         p.keyline("t", "show only ports needing attention"),
         p.keyline("s", "toggle problems-first / stable alphabetical sort"),
-        p.keyline("m", "make.conf-decided ports count as ok (≈)"),
+        p.keyline("m", "make.conf-decided stale ports count as ok (≈)"),
         p.keyline("w", "flag make.conf contradictions (≠)"),
         p.keyline("L", "show only the ports caught in a dependency loop (∞)"),
         p.keyline(

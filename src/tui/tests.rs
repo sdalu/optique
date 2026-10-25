@@ -2156,8 +2156,9 @@ fn views_change_what_counts_as_a_problem() {
         info.options.mc_set = ["DOCS".to_string()].into();
     }
     let status = |app: &App, p: &str| app.effective_status(&info_of(app, p));
-    // alpha: unconfigured, but make.conf decides DOCS.
-    assert_eq!(status(&app, "cat/alpha"), UiStatus::Unconfigured);
+    // alpha: no file, but make.conf decides DOCS: done, m view or not,
+    // as apply writes it none.
+    assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
     press(&mut app, 'm');
     assert_eq!(status(&app, "cat/alpha"), UiStatus::Ok);
     // beta: its file turns DOCS off, make.conf turns it on.
@@ -2209,6 +2210,48 @@ fn the_apply_preview_scrolls_and_closes() {
     );
     press(&mut app, 'x');
     assert!(app.modal.is_none());
+}
+
+/// A port with no file make.conf settles gets none from apply, and the
+/// list counts it done; an edit to it is written, even once a refresh has
+/// queried the edit into the port's effective options, where it reads as
+/// what sync would record.
+#[test]
+fn apply_leaves_a_port_make_conf_settles_but_writes_its_edit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = three_ports(tmp.path());
+    let key = PortKey::parse("cat/alpha").unwrap();
+    let info = app.session.ports.get_mut(&key).unwrap();
+    info.options.mc_unset = ["DOCS".to_string()].into();
+    info.options.effective.clear();
+    let state = app.session.states.get_mut("cat_alpha").unwrap();
+    state.staged.clear();
+    state.baseline.clear();
+    assert_eq!(
+        app.effective_status(&info_of(&app, "cat/alpha")),
+        UiStatus::Ok
+    );
+    let touched = |app: &App| {
+        let planned = app.compute_writes();
+        planned.touched().map(str::to_owned).collect::<Vec<_>>()
+    };
+    assert!(!touched(&app).contains(&"cat_alpha".to_string()));
+
+    app.session.states.get_mut("cat_alpha").unwrap().staged = ["DOCS".to_string()].into();
+    let (ev, _req) = fake_refresher(&mut app);
+    let mut alpha = info_of(&app, "cat/alpha");
+    alpha.options.effective = ["DOCS".to_string()].into();
+    ev.send(done(vec![alpha], vec![])).unwrap();
+    app.drain_refresh_events();
+    assert!(
+        app.session.edited(&info_of(&app, "cat/alpha")),
+        "still edited"
+    );
+    assert!(touched(&app).contains(&"cat_alpha".to_string()));
+    press(&mut app, 'a');
+    press(&mut app, 'y');
+    let written = std::fs::read_to_string(tmp.path().join("options/cat_alpha/options")).unwrap();
+    assert!(written.contains("OPTIONS_FILE_SET+=DOCS"), "{written}");
 }
 
 /// Apply writes every port, listed or not, so its preview warns about a

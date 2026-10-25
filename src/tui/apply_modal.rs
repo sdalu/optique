@@ -209,16 +209,26 @@ pub(super) fn commit_apply(app: &mut App, skip_conflicting: bool) {
 
 impl App {
     /// Plan the options files to write for the current staged state.
-    fn compute_writes(&self) -> apply::PlannedWrites {
+    pub(super) fn compute_writes(&self) -> apply::PlannedWrites {
         let staged = self.session.ports.iter().filter_map(|(key, info)| {
             let state = self.session.state(info)?;
             Some((key, info, state.staged.clone()))
         });
+        // The files whose staged values differ from the state they started
+        // from: never the port's effective options, which a refresh queried
+        // with the edits in place.
+        let edited: BTreeSet<String> = self
+            .session
+            .ports
+            .values()
+            .filter(|info| self.session.edited(info))
+            .map(|info| info.options_name.clone())
+            .collect();
         apply::plan_writes_for(
             staged,
             &self.options_files,
             self.minimal,
-            apply::Covered::Leave,
+            apply::Covered::Leave { edited: &edited },
         )
     }
 

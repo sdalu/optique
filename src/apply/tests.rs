@@ -1359,18 +1359,58 @@ fn leave_creates_no_file_for_a_port_make_conf_decides() {
         .writes
         .len()
     };
+    let none = BTreeSet::new();
+    let leave = Covered::Leave { edited: &none };
     let as_sync = sync_enabled_set(&info, None);
-    assert_eq!(plan(&info, as_sync.clone(), Covered::Leave), 0);
+    assert_eq!(plan(&info, as_sync.clone(), leave), 0);
     assert_eq!(plan(&info, as_sync, Covered::Write), 1, "decide writes it");
+    // B turned on, and a refresh queried the edit into PORT_OPTIONS: only
+    // the caller can tell it from what sync records.
+    let mut refreshed = info.clone();
+    refreshed.options.effective = set_of(&["A", "B"]);
+    let edited = set_of(&["cat_port"]);
     assert_eq!(
-        plan(&info, set_of(&["A", "B"]), Covered::Leave),
+        plan(
+            &refreshed,
+            set_of(&["A", "B"]),
+            Covered::Leave { edited: &edited }
+        ),
         1,
         "an edit is written"
     );
     let mut open = info.clone();
     open.options.mc_unset.clear();
     let staged = sync_enabled_set(&open, None);
-    assert_eq!(plan(&open, staged, Covered::Leave), 1, "B is undecided");
+    assert_eq!(plan(&open, staged, leave), 1, "B is undecided");
+}
+
+/// Flavors sharing a file make.conf decides for each, their option lists
+/// apart (devel/git@lite), get none either: the shared staged set is no
+/// flavor's own, and is not compared with one.
+#[test]
+fn leave_creates_no_file_for_flavors_make_conf_decides() {
+    let tmp = tempfile::tempdir().unwrap();
+    let flavored = |flavor: &str, complete: &[&str]| {
+        let mut info = mk_info(complete, &["A"]);
+        info.key = PortKey::parse(&format!("devel/git@{flavor}")).unwrap();
+        info.canonical = info.key.clone();
+        info.flavors = vec!["default".into(), "lite".into()];
+        info.options.mc_set = set_of(&["A"]);
+        info.options.mc_unset = set_of(&["B", "GUI"]);
+        info
+    };
+    let full = flavored("default", &["A", "B", "GUI"]);
+    let lite = flavored("lite", &["A", "B"]);
+    let shared = sync_enabled_set(&full, None);
+    let ports = [(&full.key, &full), (&lite.key, &lite)];
+    let none = BTreeSet::new();
+    let planned = plan_writes_for(
+        ports.iter().map(|(k, i)| (*k, *i, shared.clone())),
+        &OptionsFiles::new(tmp.path()),
+        false,
+        Covered::Leave { edited: &none },
+    );
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
 }
 
 /// A stale file is rewritten all the same, its port nothing undecided: it
@@ -1394,7 +1434,9 @@ fn leave_still_rewrites_a_stale_file() {
         std::iter::once((&info.key.clone(), &info, enabled)),
         &files,
         false,
-        Covered::Leave,
+        Covered::Leave {
+            edited: &BTreeSet::new(),
+        },
     );
     assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
     assert!(

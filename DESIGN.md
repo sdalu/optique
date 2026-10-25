@@ -669,7 +669,18 @@ neutral: `bsd.options.mk` reads it after make.conf's `OPTIONS_SET` and
 `OPTIONS_UNSET`, so writing it freezes today's make.conf policy, and a
 later make.conf edit silently stops reaching the port. The ports tree's
 `Tools/scripts/redundant-opt-files.sh` lists the files make.conf makes
-redundant for the same reason.
+redundant for the same reason. Decided is judged by outcome, as
+everywhere ("make.conf decisions are judged by outcome, not by mention"),
+so a SINGLE or RADIO sibling of the member make.conf picks gets no file
+where make, by mention, writes one. Such a port is the final state, so
+`scan` and the TUI count it done without `-m`.
+
+Whether the user edited the port is the caller's to say (`edited`, files
+whose staged set left its baseline). Rejected: comparing the staged set
+with what `sync` would record. In the TUI a refresh queries the edits
+into the port's effective options, which `sync_enabled_set` reads, so an
+edit then compared equal and was dropped; and flavors sharing a file
+stage one set that is no flavor's own.
 
 A file already there is rewritten as before. Rejected:
 

@@ -580,12 +580,16 @@ impl App {
             return UiStatus::Ok;
         }
         let mut status = self.session.status(info);
-        // Under -m the defaults are the decision, as if the m view were on:
+        // A port with no file make.conf settles is done: apply, as sync,
+        // writes it none (`apply::Covered::Leave`). Under -m the defaults
+        // are the decision for a stale one too, as if the m view were on:
         // a port they settle needs no file, so it is not waiting on anyone.
-        if (self.mc_relax || self.minimal)
-            && matches!(status, UiStatus::Stale | UiStatus::Unconfigured)
-            && self.session.covered_by_makeconf(info)
-        {
+        let relaxed = match status {
+            UiStatus::Unconfigured => true,
+            UiStatus::Stale => self.mc_relax || self.minimal,
+            _ => false,
+        };
+        if relaxed && self.session.covered_by_makeconf(info) {
             status = UiStatus::Ok;
         }
         if self.warn_mc && status == UiStatus::Ok && !self.session.mc_deviations(info).is_empty() {
@@ -729,15 +733,9 @@ impl App {
             items.push(format!("all {} ports are configured", self.visible.len()));
             vec!["?: help".to_string()]
         } else {
-            // The ports never configured take their defaults in one go:
-            // those make.conf fully decides get no file
-            // (`apply::Covered::Leave`), so only another makes `a` worth it.
-            let writable = self.visible.iter().any(|key| {
-                let info = &self.session.ports[key];
-                self.effective_status(info) == UiStatus::Unconfigured
-                    && !self.session.covered_by_makeconf(info)
-            });
-            let defaults = writable.then(|| "a: write defaults for all".to_string());
+            // The ports never configured take their defaults in one go.
+            let defaults = (counts[UiStatus::Unconfigured as usize] > 0)
+                .then(|| "a: write defaults for all".to_string());
             defaults
                 .into_iter()
                 .chain([next.to_string(), "?: help".to_string()])

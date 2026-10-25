@@ -796,7 +796,12 @@ in the TUI, as under its
 .Ic m
 view
 .Pc
-whether it has a file, a stale one, or none.
+whether it has a file or a stale one; a port with no file they settle shows
+so without
+.Fl m
+too, as
+.Cm sync
+leaves it.
 .It Fl q , Fl -quiet
 Drop the startup banner, the progress line, the notes and the per-port and
 per-file listings on standard output, and
@@ -836,7 +841,9 @@ conflict: the staged options violate
 .Va PREVENTS
 or a group rule.
 .It \&?
-unconfigured: no saved options file.
+unconfigured: no saved options file, and an option
+.Pa make.conf
+leaves undecided.
 .It \&!
 stale: the option list changed since the file was written.
 .It \[u2260]
@@ -851,7 +858,7 @@ view.
 .It \[u2248]
 needs no attention because
 .Pa make.conf
-already decides it; shown only in the
+already decides it: a port with no options file always, a stale one only in the
 .Ic m
 view or under
 .Fl m .
@@ -955,9 +962,7 @@ At start the first message sums up what needs doing, as in
 .Ql 3 conflicting \[u00B7] 4 never configured \[u00B7] 2 stale \[em] a: write defaults for all \[u00B7] n: next problem \[u00B7] ?: help ,
 the
 .Ql a:
-part only when some ports were never configured and
-.Pa make.conf
-leaves an option of one of them undecided, or
+part only when some ports were never configured, or
 .Ql all 21 ports are configured \[em] ?: help
 when nothing does.
 Listed origins
@@ -1349,14 +1354,13 @@ and
 .Ic p
 still jump between problems in either order.
 .It Ic m
-Count stale and unconfigured ports as ok when
+Count stale ports as ok when
 .Pa make.conf
-already decides every added option
-.Pq stale
-or every option at all
-.Pq unconfigured ;
-such ports are marked
-.Ql \[u2248] .
+already decides every added option; such ports are marked
+.Ql \[u2248] ,
+as a port with no options file whose every option
+.Pa make.conf
+decides is without it.
 .It Ic w
 Flag ports whose options contradict the global
 .Va OPTIONS_SET
@@ -2015,10 +2019,26 @@ writes one, and it would outrank
 and
 .Va OPTIONS_UNSET ,
 freezing today's policy.
+Decided is judged by outcome, so a
+.Va OPTIONS_SINGLE
+or
+.Va OPTIONS_RADIO
+sibling of the member
+.Pa make.conf
+picks, or an option a forced one implies, counts as decided where
+.Xr make 1
+still lists it in
+.Va NEW_OPTIONS
+and writes a file.
+.Cm scan
+shows such a port as
+.Ql ok (no file: defaults + make.conf) ,
+and the TUI as
+.Sq \(~~ .
 A file already there is rewritten as above, since it has outranked
 .Pa make.conf
 since it was written.
-The TUI's apply does the same.
+The TUI's apply does the same, writing a port edited there all the same.
 .Pp
 The file is read the way
 .Pa bsd.options.mk

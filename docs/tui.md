@@ -97,9 +97,10 @@ needs doing, in list order, leaving out what is at zero:
 ```
 
 `a: write defaults for all` shows only when some ports were never
-configured and `make.conf` leaves an option of one of them undecided: the
-apply writes them their defaults in one go, and, as `sync`, no file for a
-port whose every option `make.conf` decides. Listed
+configured: the apply writes them their defaults in one go. A port with no
+file whose every option `make.conf` decides counts as done (`≈`), not as
+never configured: the apply, as `sync`, writes it no file unless it is
+edited. Listed
 origins `MOVED` moves and that were not followed, in no row, come first:
 `1 listed moved (fix the list) · 3 conflicting · …` (see
 [commands](commands.md#choosing-the-ports); stderr named each before the
@@ -128,10 +129,10 @@ left to right as the pane sorts them, worst first:
 | Marker | Meaning                                                                                     |
 | :----: | :------------------------------------------------------------------------------------------ |
 | `✗`    | conflict — staged options violate `PREVENTS` or a group rule                                |
-| `?`    | unconfigured — no saved options file                                                        |
+| `?`    | unconfigured — no saved options file, an option make.conf leaves undecided                  |
 | `!`    | stale — the option list changed since the file was written                                  |
 | `≠`    | contradicts the make.conf `OPTIONS_SET`/`OPTIONS_UNSET` policy; shown only in the `w` view  |
-| `≈`    | needs no attention because make.conf already decides it; shown only in the `m` view or `-m` |
+| `≈`    | needs no attention because make.conf already decides it; a stale port only in `m` or `-m`   |
 | `✓`    | ok                                                                                          |
 
 The second is `*` when the port has staged changes not yet applied, and
@@ -255,8 +256,7 @@ in, a `CONFLICT:` per rule the staged
 options break, and `STALE:` when the port's option list
 changed since its file was written, naming the options added and those
 gone — `STALE: new A B · obsolete X`, each part only when it has options.
-For a port the list counts as done (`≈` under `-m` or the `m` view, or
-`⊘`), the `STALE:` line is dimmed and says what settles it:
+For a port the list counts as done (`≈`, or `⊘`), the `STALE:` line is dimmed and says what settles it:
 `STALE: obsolete X — settled by the defaults (-m)`.
 A `CONFLICT:` names make.conf's hand in it after a `—`: the members on
 because a make.conf layer sets them where the options file does not, and
@@ -445,7 +445,7 @@ parse is quoted whole in the error.
 | :------------ | :----------------------------------------------------- |
 | `t`           | hide ok ports; a refresh keeps the selected one        |
 | `s`           | problems first, or a stable alphabetical order         |
-| `m`           | count ports make.conf fully decides as ok (marker `≈`) |
+| `m`           | count stale ports make.conf decides as ok (marker `≈`) |
 | `w`           | flag ports contradicting make.conf's policy (`≠`)      |
 | `L`           | show only the ports in a dependency loop (`∞`)         |
 | `/`           | filter the port list, starting afresh                  |
@@ -466,7 +466,8 @@ typed stays in view; the title keeps the count and the views.
 Ctrl-letter is never read as its plain letter.
 
 `m` applies to stale ports when make.conf decides every option they
-gained, and to unconfigured ones when it decides all of them.
+gained. A port with no file make.conf decides all of is `≈` without it:
+apply writes it no file, as `sync`.
 
 ## Why is this port here?
 
@@ -595,8 +596,8 @@ After an apply, the files it wrote are read again.
 Under `-m`/`--minimal`, only deviations from defaults and make.conf are
 persisted, and a bare default counts as already decided, so the
 interface flags only deviations and conflicts: a port the defaults and
-make.conf settle shows `≈` (as under the `m` view) rather than `?` or
-`!`, file or no file. A port whose configuration
+make.conf settle shows `≈` (as under the `m` view) rather than `!`, file
+or no file; a port with no file make.conf settles is `≈` without `-m`. A port whose configuration
 matches what its defaults and make.conf already produce gets no options
 file at all: apply skips writing it, and removes an existing file that
 had become identical.

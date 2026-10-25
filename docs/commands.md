@@ -140,9 +140,13 @@ would not change is left untouched even if the recorded package name is
 stale, matching `make config-conditional`. A port with no file whose every
 option `make.conf` decides gets none either, as `make config-conditional`
 and `poudriere options -C` write none: a file would outrank `make.conf`'s
-`OPTIONS_SET`/`UNSET` and freeze today's policy. A file already there is
-rewritten all the same, since it has outranked `make.conf` since it was
-written. A file naming an option with no
+`OPTIONS_SET`/`UNSET` and freeze today's policy. Decided is judged by
+outcome, so a `SINGLE` or `RADIO` sibling of the member `make.conf` picks,
+or an option a forced one implies, counts as decided where make still
+names it new and writes a file (see
+[conformance](conformance.md#the-ports-framework)). `scan` and the TUI
+count such a port done. A file already there is rewritten all the same,
+since it has outranked `make.conf` since it was written. A file naming an option with no
 `OPTIONS_FILE_SET` or `OPTIONS_FILE_UNSET` line — `make config` never writes
 one; a hand edit or a write cut short does — is warned about by every
 command that reads it, and `sync` completes it: make reads such an option at
@@ -394,9 +398,11 @@ consider worth persisting:
   deviations end up on disk.
 - Bare defaults then count as decided: `scan`'s exit gate and the TUI's
   attention views only flag deviations and conflicts, not every option a
-  port happens to have. A port the defaults and make.conf settle reads
-  `ok (no file: defaults + make.conf)` in `scan` (or names its stale
-  file's changes) and wears `≈` in the TUI, instead of `?` or `!`; the
+  port happens to have. A stale port the defaults and make.conf settle
+  names its file's changes in `scan`, as `ok (stale file …)`, and wears
+  `≈` in the TUI, instead of `!`, as a port with no file they settle does
+  without `-m` (`ok (no file: defaults + make.conf)`, as `sync` leaves
+  it); the
   JSON keeps its factual `status` (`unconfigured`, `stale`) with
   `mc_covered` true.
 

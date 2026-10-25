@@ -35,14 +35,16 @@ fn needs_attention(
     }
 }
 
-/// Whether scan shows a row as ok: its status is, or -m makes the defaults
-/// and make.conf the decision and they leave nothing open for this
-/// unconfigured or stale port. Rows sort on it, so the ones shown as
+/// Whether scan shows a row as ok: its status is, or make.conf leaves
+/// nothing open for this port with no file, or for this stale one under
+/// -m, which makes the defaults and make.conf the decision. Rows sort on it, so the ones shown as
 /// problems come first.
 fn shown_ok(status: &UiStatus, minimal: bool, covered: bool) -> bool {
     match status {
         UiStatus::Ok => true,
-        UiStatus::Unconfigured | UiStatus::Stale => minimal && covered,
+        // sync writes no file for a port make.conf settles: it is done.
+        UiStatus::Unconfigured => covered,
+        UiStatus::Stale => minimal && covered,
         _ => false,
     }
 }
@@ -346,8 +348,9 @@ fn print_table(cli: &Cli, rows: &[Row]) -> Result<()> {
             format!(" undecided: {}", row.undecided.join(" "))
         };
         let (marker, text) = match (&row.status, row.shown_ok(cli.minimal)) {
-            // Under -m the defaults are the decision: a port they settle
-            // is done, its file (or lack of one) left as sync will.
+            // A port with no file make.conf settles is done, left without
+            // one as sync leaves it; under -m the defaults are the decision
+            // for a stale one too, its file left as sync will.
             (UiStatus::Unconfigured, true) => {
                 ("", "ok (no file: defaults + make.conf)".to_string())
             }
@@ -475,8 +478,11 @@ mod tests {
         rows.sort_by_key(|(k, st, cov)| (shown_ok(st, true, *cov), k.to_string()));
         let order: Vec<&str> = rows.iter().map(|r| r.0).collect();
         assert_eq!(order, ["z/conflict", "a/nofile", "b/ok", "m/stale"]);
-        // Without -m an unconfigured port is a problem, covered or not.
-        assert!(!shown_ok(&UiStatus::Unconfigured, false, true));
+        // Without -m a stale port is a problem, covered or not; one with
+        // no file make.conf settles is done, as sync leaves it.
+        assert!(!shown_ok(&UiStatus::Stale, false, true));
+        assert!(shown_ok(&UiStatus::Unconfigured, false, true));
+        assert!(!shown_ok(&UiStatus::Unconfigured, false, false));
         assert!(
             !shown_ok(&UiStatus::Unconfigured, true, false),
             "-m, something open"

@@ -220,6 +220,38 @@ impl PlannedWrites {
     }
 }
 
+/// What a write pass does with a port that has no options file, whose
+/// options make.conf fully decides (none undecided,
+/// `session::undecided_options`), and no edit staged. A file already
+/// there is rewritten as before: it has outranked make.conf for every
+/// option it records since it was written, and a stale one left as it is
+/// would keep options the port lacks, which synth refuses
+/// (`synth::refuses`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Covered<'e> {
+    /// Write it as any other (`decide`, whose plan names its ports).
+    Write,
+    /// Leave it, as `make config-conditional` does when NEW_OPTIONS is
+    /// empty (`sync`, the TUI's apply): a file would record make.conf's
+    /// choices and outrank them from then on (bsd.options.mk applies the
+    /// file after OPTIONS_SET/UNSET), so the port would stop following a
+    /// later make.conf edit.
+    ///
+    /// `edited` names the options files whose staged values the user
+    /// changed, which are written all the same; `sync` stages none.
+    Leave { edited: &'e BTreeSet<String> },
+}
+
+/// [`plan_writes_for`] writing every file, those make.conf fully decides
+/// included ([`Covered::Write`]).
+pub fn plan_writes<'a>(
+    ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
+    files: &OptionsFiles,
+    minimal: bool,
+) -> PlannedWrites {
+    plan_writes_for(ports, files, minimal, Covered::Write)
+}
+
 /// Build the list of files that actually need (re)writing.
 ///
 /// A file is skipped when it is semantically identical: same complete option
@@ -235,40 +267,11 @@ impl PlannedWrites {
 /// In `minimal` mode a port whose final enabled set equals the no-file
 /// outcome (defaults + make.conf layers, IMPLIES-closed) is not persisted:
 /// an existing file becomes a removal, a missing one is left missing.
-/// What a write pass does with a port that has no options file, whose
-/// options make.conf fully decides (none undecided,
-/// `session::undecided_options`), its staged values those `sync` would
-/// record anyway. A file already there is rewritten as before: it has
-/// outranked make.conf for every option it records since it was written,
-/// and a stale one left as it is would keep options the port lacks, which
-/// synth refuses (`synth::refuses`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Covered {
-    /// Write it as any other (`decide`, whose plan names its ports).
-    Write,
-    /// Leave it, as `make config-conditional` does when NEW_OPTIONS is
-    /// empty (`sync`, the TUI's apply): a file would record make.conf's
-    /// choices and outrank them from then on (bsd.options.mk applies the
-    /// file after OPTIONS_SET/UNSET), so the port would stop following a
-    /// later make.conf edit.
-    Leave,
-}
-
-/// [`plan_writes_for`] writing every file, those make.conf fully decides
-/// included ([`Covered::Write`]).
-pub fn plan_writes<'a>(
-    ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
-    files: &OptionsFiles,
-    minimal: bool,
-) -> PlannedWrites {
-    plan_writes_for(ports, files, minimal, Covered::Write)
-}
-
 pub fn plan_writes_for<'a>(
     ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
     files: &OptionsFiles,
     minimal: bool,
-    covered: Covered,
+    covered: Covered<'_>,
 ) -> PlannedWrites {
     let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
@@ -357,15 +360,19 @@ pub fn plan_writes_for<'a>(
             }
         }
         // No file yet, make.conf decides every option of every flavor that
-        // would read one, and nobody staged anything else: as
-        // config-conditional, none is created.
-        if covered == Covered::Leave && files.hash(options_name) == crate::optfiles::ABSENT {
+        // would read one, and nobody edited it: as config-conditional, none
+        // is created. Edits are the caller's to name: in the TUI a refresh
+        // queries them into the port's effective options, so no set
+        // compared here would tell them from what sync records.
+        if let Covered::Leave { edited } = covered
+            && !edited.contains(options_name)
+            && files.hash(options_name) == crate::optfiles::ABSENT
+        {
             let saved = files.saved(options_name);
-            let untouched = cands.iter().all(|c| {
+            let decided = cands.iter().all(|c| {
                 crate::session::undecided_options(c.info, saved.as_ref(), false).is_empty()
-                    && c.enabled == sync_enabled_set(c.info, saved.as_ref())
             });
-            if untouched {
+            if decided {
                 continue;
             }
         }
