@@ -686,7 +686,9 @@ file ever written to settle it.
 
 Not handled: an `OPTIONS_OVERRIDE` make.conf gives only some flavors
 sharing a file. Apply leaves that file alone, while another flavor's row
-stays unconfigured and takes edits (man page, CAVEATS). Leaving the file
+stays unconfigured; edits to it are refused, naming the override's
+flavor, so none is taken and silently never written (man page, CAVEATS).
+The refusal walks the closure, so it is asked on an edit only. Leaving the file
 to make for that flavor too (`Session::unmanaged`) was tried and taken
 back: the per-flavor JSON reports, the editor's banner and the list's
 per-frame status all had to learn the case, and an index had to keep the

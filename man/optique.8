@@ -3828,7 +3828,8 @@ test, makes
 and the TUI's apply leave the options file those flavors share alone, as
 .Xr make 1
 reads none of it for them; another flavor sharing it is still shown
-unconfigured and takes edits no apply writes.
+unconfigured, and an edit to it is refused, naming the flavor whose
+override leaves the file alone, rather than taken and never written.
 Give it its own
 .Va OPTIONS_FILE ,
 or write the file with

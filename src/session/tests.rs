@@ -2839,3 +2839,81 @@ fn what_an_option_implies_goes_in_listed_or_not() {
         ["D conflicts with FOO: mutually exclusive"]
     );
 }
+
+/// A flavor sharing its options file with one make.conf gives an
+/// OPTIONS_OVERRIDE takes no edit, naming that flavor: apply leaves the
+/// whole file alone, so none would ever be written. The planner agrees.
+/// An override on a flavor with no options, or a flavor reading a file
+/// of its own, refuses nothing, as the planner groups neither.
+#[test]
+fn a_sibling_override_refuses_edits_apply_would_never_write() {
+    let mk = |flavor: &str, complete: &[&str]| {
+        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+        let (mut p, k) = mk_port(complete, &[], vec![], vec![]);
+        let mut info = p.remove(&k).unwrap();
+        info.key = key.clone();
+        info.canonical = key;
+        info.flavors = vec!["qt".into(), "gtk3".into()];
+        info.options_name = "audio_plugins".into();
+        info
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let mut qt = mk("qt", &["A", "B"]);
+    qt.options.r#override = Some(set(&["A"]));
+    qt.options.effective = set(&["A"]);
+    let gtk3 = mk("gtk3", &["A", "B"]);
+    let ports: BTreeMap<_, _> = [qt.clone(), gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let mut s = session_in(ports, tmp.path());
+    let why = s.edit_refusal(&gtk3.key).unwrap();
+    assert!(why.contains("audio/plugins@qt"), "{why}");
+    assert!(s.toggle(&gtk3.key, "B").is_err());
+    let (changed, skipped) = s.bulk_set(std::slice::from_ref(&gtk3.key), "B", true);
+    assert!(changed.is_empty() && skipped.len() == 1, "{skipped:?}");
+    s.reset_to_defaults(&gtk3.key);
+    let draft = crate::draft::Draft {
+        options_dir: tmp.path().to_path_buf(),
+        saved_at_secs: 0,
+        staged: [("audio_plugins".to_string(), set(&["B"]))].into(),
+        known: [("audio_plugins".to_string(), set(&["A", "B"]))].into(),
+    };
+    assert_eq!(s.restore_draft(&draft), 0, "a draft restores no edit");
+    assert!(!s.edited(&s.ports[&gtk3.key].clone()));
+    // The planner leaves the file alone: nothing it would write.
+    let files = OptionsFiles::new(tmp.path());
+    let planned = apply::plan_writes(
+        [&qt, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
+        &files,
+        false,
+    );
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+
+    // An override on a flavor with no options: grouped by neither.
+    let mut bare = mk("qt", &[]);
+    bare.options.r#override = Some(BTreeSet::new());
+    let ports: BTreeMap<_, _> = [bare, gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let s = session_in(ports, tmp.path());
+    assert_eq!(s.edit_refusal(&gtk3.key), None);
+
+    // An override on a flavor reading a file of its own: that flavor
+    // reads none of the shared one, which the planner writes for gtk3.
+    let mut own = qt.clone();
+    own.options.moved_file = Some("/elsewhere/options".into());
+    let ports: BTreeMap<_, _> = [own.clone(), gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let s = session_in(ports, tmp.path());
+    assert_eq!(s.edit_refusal(&gtk3.key), None);
+    let planned = apply::plan_writes(
+        [&own, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
+        &files,
+        false,
+    );
+    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
+}

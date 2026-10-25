@@ -592,6 +592,25 @@ impl Session {
                     .to_string(),
             );
         }
+        // Another flavor sharing the file that an OPTIONS_OVERRIDE decides
+        // makes apply leave the whole file alone (`apply::plan_writes_for`,
+        // grouping as it does): an edit here would never be written. Asked
+        // on an edit only, never while drawing: it walks the closure.
+        if moved(info).is_none()
+            && let Some(other) = self.ports.values().find(|o| {
+                o.options_name == info.options_name
+                    && o.key != info.key
+                    && o.options.r#override.is_some()
+                    && o.options.has_options()
+                    && moved(o).is_none()
+            })
+        {
+            return Some(format!(
+                "OPTIONS_OVERRIDE in make.conf decides {}, which shares this options file: \
+                 apply leaves the file alone, so no edit here would be written",
+                other.key
+            ));
+        }
         // A file optique cannot model is not its to edit.
         self.unmanaged(info).map(|u| u.why)
     }
@@ -1121,8 +1140,9 @@ impl Session {
                 else {
                     continue; // the draft names a port no longer in the closure
                 };
-                // A file that became one optique cannot manage takes no edit.
-                if self.unmanaged(owner).is_some() {
+                // A file that takes no edit now (one optique cannot manage,
+                // an OPTIONS_OVERRIDE) restores none.
+                if self.edit_refusal(&owner.key).is_some() {
                     continue;
                 }
                 let Some(state) = self.states.get(options_name) else {
