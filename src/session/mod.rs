@@ -581,8 +581,18 @@ impl Session {
     }
 
     /// Why no edit of the port's options file is taken, whatever the
-    /// option: an OPTIONS_OVERRIDE, or a file optique cannot manage.
+    /// option: an OPTIONS_OVERRIDE, its own or a flavor's sharing the file,
+    /// or a file optique cannot manage.
     pub fn edit_refusal(&self, key: &PortKey) -> Option<String> {
+        let info = self.ports.get(key)?;
+        self.revert_refusal(key)
+            .or_else(|| self.sibling_override(info))
+    }
+
+    /// Why the port's staged state cannot go back to its saved one (`U`):
+    /// `edit_refusal` but for a sibling's OPTIONS_OVERRIDE, as going back
+    /// writes nothing and drops an edit a refresh stranded there.
+    pub fn revert_refusal(&self, key: &PortKey) -> Option<String> {
         let info = self.ports.get(key)?;
         // bsd.options.mk:300-304: OPTIONS_OVERRIDE decides the port by
         // itself; the options file is never read, so editing it is pointless.
@@ -592,27 +602,30 @@ impl Session {
                     .to_string(),
             );
         }
-        // Another flavor sharing the file that an OPTIONS_OVERRIDE decides
-        // makes apply leave the whole file alone (`apply::plan_writes_for`,
-        // grouping as it does): an edit here would never be written. Asked
-        // on an edit only, never while drawing: it walks the closure.
-        if moved(info).is_none()
-            && let Some(other) = self.ports.values().find(|o| {
-                o.options_name == info.options_name
-                    && o.key != info.key
-                    && o.options.r#override.is_some()
-                    && o.options.has_options()
-                    && moved(o).is_none()
-            })
-        {
-            return Some(format!(
-                "OPTIONS_OVERRIDE in make.conf decides {}, which shares this options file: \
-                 apply leaves the file alone, so no edit here would be written",
-                other.key
-            ));
-        }
         // A file optique cannot model is not its to edit.
         self.unmanaged(info).map(|u| u.why)
+    }
+
+    /// Another flavor sharing the file that an OPTIONS_OVERRIDE decides
+    /// makes apply leave the whole file alone (`apply::plan_writes_for`,
+    /// grouping as it does): an edit here would never be written. Asked on
+    /// an edit only, never while drawing: it walks the closure.
+    fn sibling_override(&self, info: &PortInfo) -> Option<String> {
+        if moved(info).is_some() {
+            return None;
+        }
+        let other = self.ports.values().find(|o| {
+            o.options_name == info.options_name
+                && o.key != info.key
+                && o.options.r#override.is_some()
+                && o.options.has_options()
+                && moved(o).is_none()
+        })?;
+        Some(format!(
+            "OPTIONS_OVERRIDE in make.conf decides {}, which shares this options file: \
+             apply leaves the file alone, so no edit here would be written (U drops one)",
+            other.key
+        ))
     }
 
     /// Toggle an option; returns a user-facing error when refused.

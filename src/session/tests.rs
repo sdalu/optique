@@ -2917,3 +2917,81 @@ fn a_sibling_override_refuses_edits_apply_would_never_write() {
     );
     assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
 }
+
+/// The override on a flavor that does not own the file refuses the
+/// owner's edits too, and a draft for it: the sibling branch of
+/// `edit_refusal`, not the owner's own override.
+#[test]
+fn a_non_owner_override_refuses_the_owners_edits_and_draft() {
+    let mk = |flavor: &str| {
+        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+        let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
+        let mut info = p.remove(&k).unwrap();
+        info.key = key.clone();
+        info.canonical = key;
+        info.flavors = vec!["qt".into(), "gtk3".into()];
+        info.options_name = "audio_plugins".into();
+        info
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let qt = mk("qt");
+    let mut gtk3 = mk("gtk3");
+    gtk3.options.r#override = Some(set(&["A"]));
+    let ports: BTreeMap<_, _> = [qt.clone(), gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let mut s = session_in(ports, tmp.path());
+    assert_eq!(
+        s.owners["audio_plugins"], qt.key,
+        "qt, the default, owns it"
+    );
+    let why = s.toggle(&qt.key, "B").unwrap_err();
+    assert!(why.contains("audio/plugins@gtk3"), "{why}");
+    let draft = crate::draft::Draft {
+        options_dir: tmp.path().to_path_buf(),
+        saved_at_secs: 0,
+        staged: [("audio_plugins".to_string(), set(&["B"]))].into(),
+        known: [("audio_plugins".to_string(), set(&["A", "B"]))].into(),
+    };
+    assert_eq!(s.restore_draft(&draft), 0);
+    let planned = apply::plan_writes(
+        [&qt, &gtk3].into_iter().map(|i| (&i.key, i, set(&["B"]))),
+        &OptionsFiles::new(tmp.path()),
+        false,
+    );
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+}
+
+/// An edit a refresh strands under a sibling's OPTIONS_OVERRIDE (staged
+/// before the override flavor joined the closure) can still be dropped:
+/// going back to the saved state writes nothing, so `U` is not refused.
+#[test]
+fn a_stranded_edit_under_a_sibling_override_can_be_reverted() {
+    let mk = |flavor: &str| {
+        let key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+        let (mut p, k) = mk_port(&["A", "B"], &[], vec![], vec![]);
+        let mut info = p.remove(&k).unwrap();
+        info.key = key.clone();
+        info.canonical = key;
+        info.flavors = vec!["qt".into(), "gtk3".into()];
+        info.options_name = "audio_plugins".into();
+        info
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let mut qt = mk("qt");
+    qt.options.r#override = Some(set(&["A"]));
+    let gtk3 = mk("gtk3");
+    let ports: BTreeMap<_, _> = [qt, gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let mut s = session_in(ports, tmp.path());
+    s.states.get_mut("audio_plugins").unwrap().staged = set(&["B"]);
+    let info = s.ports[&gtk3.key].clone();
+    assert!(s.edited(&info));
+    assert!(s.edit_refusal(&gtk3.key).is_some());
+    assert_eq!(s.revert_refusal(&gtk3.key), None);
+    s.revert(&gtk3.key);
+    assert!(!s.edited(&info));
+}
