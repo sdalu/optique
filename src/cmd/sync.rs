@@ -20,7 +20,7 @@ pub(crate) fn cmd_sync(cli: &Cli, rs: &RootSet, args: &cli::SyncArgs) -> Result<
         let saved = files.saved(&info.options_name);
         (key, info, apply::sync_enabled_set(info, saved.as_ref()))
     });
-    let planned = apply::plan_writes(staged, files, cli.minimal);
+    let planned = apply::plan_writes_for(staged, files, cli.minimal, apply::Covered::Leave);
 
     // A port that lost ALL its options never reaches plan_writes; its
     // leftover file is dead configuration and must go too (unless another

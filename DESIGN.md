@@ -654,6 +654,37 @@ never actually decided by that mention. `bsd.options.mk` also force-enables
 independent of `OPTIONS_DEFAULT`; the parser folds these into the modeled
 defaults so the no-file outcome matches the framework's.
 
+## No options file for a port make.conf decides
+
+`sync` and the TUI's apply write no file for a port that has none, whose
+every option make.conf decides (`session::undecided_options` empty) and
+whose staged values are those `sync` would record: `make
+config-conditional` writes only when `NEW_OPTIONS` is non-empty, so
+`poudriere options -C` leaves such a port alone too
+(`apply::Covered::Leave`, `src/apply/mod.rs`). A file would not be
+neutral: `bsd.options.mk` reads it after make.conf's `OPTIONS_SET` and
+`OPTIONS_UNSET`, so writing it freezes today's make.conf policy, and a
+later make.conf edit silently stops reaching the port. The ports tree's
+`Tools/scripts/redundant-opt-files.sh` lists the files make.conf makes
+redundant for the same reason.
+
+A file already there is rewritten as before. Rejected:
+
+- *Leaving a stale file alone when make.conf covers its port.* It has
+  outranked make.conf for every option it records since it was written,
+  so leaving it changes nothing make.conf could reach; and a stale file
+  names options the port lost or misses ones it gained, which synth
+  refuses outright (`synth::refuses`, the entry-count check), `scan -s`
+  flags, and `sync`'s promise to finish every file it reads would break.
+- *Dropping only obsolete options from such a file, adding no new line.*
+  A file naming an option on neither list is incomplete (warned about by
+  every command, asked about again by `make config-conditional`), and the
+  count synth checks would still be off.
+- *Removing, in `sync`, a file make.conf makes redundant.* That deletes
+  recorded choices, which `clean -r` owns: it is the script's comparison,
+  made for every flavor reading the file rather than the default one
+  alone, and with `options.local` on both sides.
+
 ## Dependency loops: Tarjan, iterative, only poudriere's own edges
 
 Loop detection runs Tarjan's algorithm with an explicit stack rather than

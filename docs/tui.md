@@ -97,7 +97,9 @@ needs doing, in list order, leaving out what is at zero:
 ```
 
 `a: write defaults for all` shows only when some ports were never
-configured: the apply writes them their defaults in one go. Listed
+configured and `make.conf` leaves an option of one of them undecided: the
+apply writes them their defaults in one go, and, as `sync`, no file for a
+port whose every option `make.conf` decides. Listed
 origins `MOVED` moves and that were not followed, in no row, come first:
 `1 listed moved (fix the list) · 3 conflicting · …` (see
 [commands](commands.md#choosing-the-ports); stderr named each before the

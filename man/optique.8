@@ -955,7 +955,9 @@ At start the first message sums up what needs doing, as in
 .Ql 3 conflicting \[u00B7] 4 never configured \[u00B7] 2 stale \[em] a: write defaults for all \[u00B7] n: next problem \[u00B7] ?: help ,
 the
 .Ql a:
-part only when some ports were never configured, or
+part only when some ports were never configured and
+.Pa make.conf
+leaves an option of one of them undecided, or
 .Ql all 21 ports are configured \[em] ?: help
 when nothing does.
 Listed origins
@@ -2000,6 +2002,24 @@ adopts the effective value
 .Pq defaults plus Pa make.conf
 for options the file does not know about, and drops options that no longer
 exist.
+.Pp
+A port with no options file whose every option
+.Pa make.conf
+decides, none left undecided, gets none: neither
+.Nm make Cm config-conditional
+nor
+.Nm poudriere Cm options Fl C
+writes one, and it would outrank
+.Pa make.conf Ns 's
+.Va OPTIONS_SET
+and
+.Va OPTIONS_UNSET ,
+freezing today's policy.
+A file already there is rewritten as above, since it has outranked
+.Pa make.conf
+since it was written.
+The TUI's apply does the same.
+.Pp
 The file is read the way
 .Pa bsd.options.mk
 reads it: an option on both an

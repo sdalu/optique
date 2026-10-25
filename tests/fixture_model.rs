@@ -417,9 +417,9 @@ fn colon_and_question_assignments_are_read_as_make_reads_them() {
 /// bsd.options.mk:343 `.sinclude`s options.local whether or not the
 /// options file is there. With options.local alone setting AUDIO and NAS
 /// and unsetting DOCS and SOX, make has AUDIO and NAS on and nothing new;
-/// optique reads the port configured, nothing undecided or new. sync still
-/// writes the options file a port without one gets, and leaves
-/// options.local alone.
+/// optique reads the port configured, nothing undecided or new. Like
+/// `make config-conditional`, sync then creates no options file, and
+/// leaves options.local alone.
 #[test]
 #[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
 fn options_local_without_an_options_file_is_read() {
@@ -440,8 +440,8 @@ fn options_local_without_an_options_file_is_read() {
 
     f.run("sync", &[origin]);
     assert!(
-        f.file("misc_cond").exists(),
-        "a port with no options file gets one"
+        !f.file("misc_cond").exists(),
+        "nothing undecided: no options file, as config-conditional"
     );
     assert_eq!(std::fs::read_to_string(&local_path).unwrap(), local);
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);

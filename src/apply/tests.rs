@@ -1333,3 +1333,73 @@ fn two_files_of_one_entry_are_written_in_one_pass() {
     assert_eq!(read("options"), "default\n");
     assert_eq!(read("lite-options"), "lite\n");
 }
+
+fn set_of(options: &[&str]) -> BTreeSet<String> {
+    options.iter().map(ToString::to_string).collect()
+}
+
+/// Like `make config-conditional`, sync and the TUI's apply create no file
+/// for a port make.conf fully decides, staged as sync would stage it: the
+/// file would outrank make.conf from then on. decide's plan writes it, and
+/// so does an edit, or an option nothing decides.
+#[test]
+fn leave_creates_no_file_for_a_port_make_conf_decides() {
+    let tmp = tempfile::tempdir().unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut info = mk_info(&["A", "B"], &["A"]);
+    info.options.mc_set = set_of(&["A"]);
+    info.options.mc_unset = set_of(&["B"]);
+    let plan = |info: &PortInfo, enabled: BTreeSet<String>, covered| {
+        plan_writes_for(
+            std::iter::once((&info.key.clone(), info, enabled)),
+            &files,
+            false,
+            covered,
+        )
+        .writes
+        .len()
+    };
+    let as_sync = sync_enabled_set(&info, None);
+    assert_eq!(plan(&info, as_sync.clone(), Covered::Leave), 0);
+    assert_eq!(plan(&info, as_sync, Covered::Write), 1, "decide writes it");
+    assert_eq!(
+        plan(&info, set_of(&["A", "B"]), Covered::Leave),
+        1,
+        "an edit is written"
+    );
+    let mut open = info.clone();
+    open.options.mc_unset.clear();
+    let staged = sync_enabled_set(&open, None);
+    assert_eq!(plan(&open, staged, Covered::Leave), 1, "B is undecided");
+}
+
+/// A stale file is rewritten all the same, its port nothing undecided: it
+/// has outranked make.conf since it was written, and left as it is it would
+/// keep an option the port lacks, which synth refuses.
+#[test]
+fn leave_still_rewrites_a_stale_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("cat_port")).unwrap();
+    fs::write(
+        tmp.path().join("cat_port/options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=DOCS OBSOLETE\nOPTIONS_FILE_SET+=OBSOLETE\nOPTIONS_FILE_UNSET+=DOCS\n",
+    )
+    .unwrap();
+    let files = OptionsFiles::new(tmp.path());
+    let mut info = mk_info(&["DOCS", "NEW"], &[]);
+    info.options.mc_unset = set_of(&["NEW"]);
+    let saved = files.saved("cat_port");
+    let enabled = sync_enabled_set(&info, saved.as_ref());
+    let planned = plan_writes_for(
+        std::iter::once((&info.key.clone(), &info, enabled)),
+        &files,
+        false,
+        Covered::Leave,
+    );
+    assert_eq!(planned.writes.len(), 1, "{:?}", planned.writes);
+    assert!(
+        !planned.writes[0].content.contains("OBSOLETE"),
+        "{}",
+        planned.writes[0].content
+    );
+}

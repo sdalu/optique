@@ -214,7 +214,12 @@ impl App {
             let state = self.session.state(info)?;
             Some((key, info, state.staged.clone()))
         });
-        apply::plan_writes(staged, &self.options_files, self.minimal)
+        apply::plan_writes_for(
+            staged,
+            &self.options_files,
+            self.minimal,
+            apply::Covered::Leave,
+        )
     }
 
     /// The ports in conflict whose options files `planned` changes, and

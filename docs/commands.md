@@ -137,7 +137,12 @@ apply, adopts the effective value (default plus `make.conf`) for options the
 file does not know about yet, and drops options the port no longer has
 . A file whose complete option list and enabled set
 would not change is left untouched even if the recorded package name is
-stale, matching `make config-conditional`. A file naming an option with no
+stale, matching `make config-conditional`. A port with no file whose every
+option `make.conf` decides gets none either, as `make config-conditional`
+and `poudriere options -C` write none: a file would outrank `make.conf`'s
+`OPTIONS_SET`/`UNSET` and freeze today's policy. A file already there is
+rewritten all the same, since it has outranked `make.conf` since it was
+written. A file naming an option with no
 `OPTIONS_FILE_SET` or `OPTIONS_FILE_UNSET` line — `make config` never writes
 one; a hand edit or a write cut short does — is warned about by every
 command that reads it, and `sync` completes it: make reads such an option at

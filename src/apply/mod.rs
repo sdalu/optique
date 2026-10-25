@@ -235,10 +235,40 @@ impl PlannedWrites {
 /// In `minimal` mode a port whose final enabled set equals the no-file
 /// outcome (defaults + make.conf layers, IMPLIES-closed) is not persisted:
 /// an existing file becomes a removal, a missing one is left missing.
+/// What a write pass does with a port that has no options file, whose
+/// options make.conf fully decides (none undecided,
+/// `session::undecided_options`), its staged values those `sync` would
+/// record anyway. A file already there is rewritten as before: it has
+/// outranked make.conf for every option it records since it was written,
+/// and a stale one left as it is would keep options the port lacks, which
+/// synth refuses (`synth::refuses`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Covered {
+    /// Write it as any other (`decide`, whose plan names its ports).
+    Write,
+    /// Leave it, as `make config-conditional` does when NEW_OPTIONS is
+    /// empty (`sync`, the TUI's apply): a file would record make.conf's
+    /// choices and outrank them from then on (bsd.options.mk applies the
+    /// file after OPTIONS_SET/UNSET), so the port would stop following a
+    /// later make.conf edit.
+    Leave,
+}
+
+/// [`plan_writes_for`] writing every file, those make.conf fully decides
+/// included ([`Covered::Write`]).
 pub fn plan_writes<'a>(
     ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
     files: &OptionsFiles,
     minimal: bool,
+) -> PlannedWrites {
+    plan_writes_for(ports, files, minimal, Covered::Write)
+}
+
+pub fn plan_writes_for<'a>(
+    ports: impl Iterator<Item = (&'a PortKey, &'a PortInfo, BTreeSet<String>)>,
+    files: &OptionsFiles,
+    minimal: bool,
+    covered: Covered,
 ) -> PlannedWrites {
     let mut groups: std::collections::BTreeMap<String, Vec<Candidate<'a>>> = Default::default();
     for (key, info, enabled) in ports {
@@ -323,6 +353,19 @@ pub fn plan_writes<'a>(
                         reason: "defaults + make.conf produce this exact configuration".to_string(),
                     });
                 }
+                continue;
+            }
+        }
+        // No file yet, make.conf decides every option of every flavor that
+        // would read one, and nobody staged anything else: as
+        // config-conditional, none is created.
+        if covered == Covered::Leave && files.hash(options_name) == crate::optfiles::ABSENT {
+            let saved = files.saved(options_name);
+            let untouched = cands.iter().all(|c| {
+                crate::session::undecided_options(c.info, saved.as_ref(), false).is_empty()
+                    && c.enabled == sync_enabled_set(c.info, saved.as_ref())
+            });
+            if untouched {
                 continue;
             }
         }

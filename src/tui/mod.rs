@@ -729,9 +729,15 @@ impl App {
             items.push(format!("all {} ports are configured", self.visible.len()));
             vec!["?: help".to_string()]
         } else {
-            // The ports never configured take their defaults in one go.
-            let defaults = (counts[UiStatus::Unconfigured as usize] > 0)
-                .then(|| "a: write defaults for all".to_string());
+            // The ports never configured take their defaults in one go:
+            // those make.conf fully decides get no file
+            // (`apply::Covered::Leave`), so only another makes `a` worth it.
+            let writable = self.visible.iter().any(|key| {
+                let info = &self.session.ports[key];
+                self.effective_status(info) == UiStatus::Unconfigured
+                    && !self.session.covered_by_makeconf(info)
+            });
+            let defaults = writable.then(|| "a: write defaults for all".to_string());
             defaults
                 .into_iter()
                 .chain([next.to_string(), "?: help".to_string()])
