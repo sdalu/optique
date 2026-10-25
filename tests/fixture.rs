@@ -273,6 +273,16 @@ fn clean_judges_a_flavor_named_file_alike_with_or_without_r() {
     assert!(removed(&["--unused", "misc/dove"]));
     assert!(removed(&["--unused", "-r", "misc/dove"]));
     assert!(!removed(&["--unused", "-r", "misc/dove@mysql"]));
+
+    // MOVED turning misc/dove-mysql into misc/dove@mysql, the Makefile
+    // still naming the old file: -r finds the flavor reads it, and keeps it.
+    fs::write(
+        f.tree.join("MOVED"),
+        "misc/dove-mysql|misc/dove@mysql|2026-01-01|now a flavor\n",
+    )
+    .unwrap();
+    assert!(removed(&[]), "plain clean takes MOVED at its word");
+    assert!(!removed(&["-r"]), "-r asks the flavor");
 }
 
 /// A SINGLE group with a member forced on by make.conf and the other chosen
@@ -739,6 +749,28 @@ fn a_relocated_options_file_keeps_clean_from_removing_entries() {
             .unwrap()
             .iter()
             .any(|k| k["options_name"] == "misc_elsewhere"),
+        "{report}"
+    );
+    // Moved for this port one entry deep under a name of no port: the
+    // whole key is what -r finds read, and keeps.
+    fs::write(
+        &f.make_conf,
+        ".if ${.CURDIR:M*/misc/flav}\nOPTIONS_FILE=${PORT_DBDIR}/my_stuff/foo-options\n.endif\n",
+    )
+    .unwrap();
+    fs::create_dir_all(f.options.join("my_stuff")).unwrap();
+    fs::write(
+        f.options.join("my_stuff/foo-options"),
+        "OPTIONS_FILE_UNSET+=A\n",
+    )
+    .unwrap();
+    let report = common::json(&f.run("clean", &["-r", "--dry-run", "--json"]));
+    assert!(
+        !report["removals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|k| k["options_name"] == "my_stuff/foo-options"),
         "{report}"
     );
 }

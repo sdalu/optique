@@ -206,7 +206,7 @@ fn clean_options_dir(cli: &Cli, args: &cli::CleanArgs, ctx: CleanCtx) -> Result<
         }
         let live = judged;
         let cache = open_cache.unwrap_or_else(|| new_cache(cli, &settings));
-        let found = find_redundant(cli, &settings, jobs, cache, &live);
+        let found = find_redundant(cli, &settings, jobs, cache, &live, &moved);
         removals.extend(found.removals);
         warnings.extend(found.warnings);
         kept_entries.extend(found.kept);
@@ -348,6 +348,7 @@ fn find_redundant(
     jobs: usize,
     mut cache: cache::Cache,
     live: &[clean::LiveEntry],
+    moved: &Moved,
 ) -> Redundancy {
     use crate::query::makerunner::{MakeRunner, ScanEvent};
 
@@ -363,6 +364,7 @@ fn find_redundant(
         found: Redundancy::default(),
         portsdir: settings.portsdir.clone(),
         overlays: settings.overlay_paths(),
+        moved,
     };
     let mut ask: Vec<PortKey> = live.iter().map(|e| e.key.clone()).collect();
     let mut ready: std::collections::VecDeque<Answer> = Default::default();
@@ -540,6 +542,8 @@ struct RedundancyPass<'a> {
     /// The trees ports are found in, to tell a live port's entry.
     portsdir: std::path::PathBuf,
     overlays: Vec<std::path::PathBuf>,
+    /// MOVED, as `clean::classify_entries` reads it.
+    moved: &'a Moved,
 }
 
 /// The origins `<category>/<port>-<suffix>` beside `origin` in `trees`: a
@@ -590,15 +594,26 @@ impl<'a> RedundancyPass<'a> {
             let exists = |o: &str| {
                 crate::query::makerunner::locate(&self.portsdir, &self.overlays, o).is_some()
             };
+            // Judged as classify_entries judges the entry: a live port's
+            // is no vanished one; a name MOVED does not know that extends a
+            // live port's is a flavor's file, judged on its own. The key is
+            // recorded whole (`my_stuff/foo-options`), removals being per file.
             let natural = info.key.origin.replacen('/', "_", 1);
-            let own = [optfiles::key_entry(&info.options_name).to_string()]
-                .into_iter()
-                .filter(|entry| *entry != natural)
-                .filter(|entry| {
-                    clean::origin_from_options_name(entry).is_none_or(|o| !exists(&o))
-                        && clean::live_prefix(entry, &exists).is_none()
-                })
-                .map(|entry| (entry, info.key.to_string()));
+            let key = info.options_name.clone();
+            let entry = optfiles::key_entry(&key).to_string();
+            let origin = clean::origin_from_options_name(&entry);
+            let flavor_file = || {
+                let unknown = origin.as_ref().is_none_or(|o| {
+                    matches!(
+                        self.moved.resolve(&PortKey::new(o.clone(), None), exists),
+                        crate::moved::MovedResult::Unchanged
+                    )
+                });
+                unknown && clean::live_prefix(&entry, &exists).is_some()
+            };
+            let own =
+                (entry != natural && origin.as_ref().is_none_or(|o| !exists(o)) && !flavor_file())
+                    .then(|| (key, info.key.to_string()));
             for (entry, port) in clean::read_through_moved(self.options_dir, [info])
                 .into_iter()
                 .chain(own)
