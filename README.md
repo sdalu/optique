@@ -7,8 +7,9 @@ poudriere, for synth, or for `make` on the host.
 with a dialog for each, in dependency order, with no overview and no way
 back. optique resolves the whole dependency closure of a package list **in
 parallel** (about a thousand ports in under a minute cold, well under a
-second once cached, a second or two after a ports tree update; see the
-[benchmark](docs/benchmark.md)), shows every port in one interface with the ones that
+second once cached, a few seconds after a ports tree update; a 578-origin
+workstation in 90 seconds where `poudriere options -C` takes 45 minutes and
+1,162 dialogs; see the [benchmark](docs/benchmark.md)), shows every port in one interface with the ones that
 need a decision first, and writes every options file in a single atomic
 pass when you apply. It reads exactly what poudriere would — the options
 directory, the make.conf layers, the blacklist — for the jail, tree and set

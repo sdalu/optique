@@ -21,8 +21,11 @@ from it the moment a port leans on something clever. What optique changes is
 the walk: `poudriere options -C` visits ports serially with a dialog each,
 while independent make processes parallelise freely. A single query costs
 more than `config-conditional` does, since it reads far more of the port,
-so the cold gain is the parallelism alone: on 876 ports, 27 seconds against
-poudriere's 49 to check, 0.2 warm, 174.6 with one job
+so for a few origins the cold gain is the parallelism alone: 3 origins and
+876 ports take 32 seconds against poudriere's 48 to check, 189 with one job.
+poudriere walks each listed origin's closure apart, though, and optique the
+whole closure once: a 578-origin workstation (3,417 ports) takes 90 seconds
+against 45 minutes, 678 with one job, and 0.4 warm
 ([docs/benchmark.md](docs/benchmark.md)).
 
 ## Queries see a jail, not the host
