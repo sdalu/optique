@@ -547,8 +547,12 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
             // whitespace: only the first word is the origin, whatever comes
             // after it on the line, comment or not, is never part of it; a
             // line is a comment, skipped whole, only when that first word is
-            // empty or itself starts with '#' (common.sh ~9590-9593).
-            match spec.split_whitespace().next() {
+            // empty or itself starts with '#' (common.sh ~9590-9593). The
+            // default IFS splits on a space or a tab only: a carriage return
+            // or a no-break space stays in the word, and an origin with one
+            // is refused, never cut short (a CR-only file is one line, and
+            // a CRLF one's origins end in a carriage return).
+            match spec.split([' ', '\t']).find(|w| !w.is_empty()) {
                 Some(word) if !word.starts_with('#') => word,
                 _ => return Ok(()),
             }
@@ -568,7 +572,8 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         // A `~subpkg` is dropped, as poudriere's `originspec_decode` splits
         // it off before the flavor: the port's options are the origin's.
         // That one was named is kept, for MOVED (`roots::apply_moved`).
-        match Listed::parse(spec) {
+        // The parse trims; a list's word keeps what `read` left in it.
+        match Listed::parse(spec).filter(|_| !from_pkglist || spec.trim() == spec) {
             Some(k) => {
                 // `origin@all` and `origin@-` are kept as given: the scan
                 // reads them (`roots::expand`).
@@ -601,7 +606,9 @@ pub fn collect_roots(origins: &[String], files: &[PathBuf]) -> anyhow::Result<Ve
         let bytes = std::fs::read(f)
             .map_err(|e| anyhow::anyhow!("cannot read list file {}: {e}", f.display()))?;
         let text = String::from_utf8_lossy(&bytes);
-        for (n, line) in text.lines().enumerate() {
+        // On a newline alone, as `read` splits: a CRLF line's carriage
+        // return stays in its last word.
+        for (n, line) in text.split('\n').enumerate() {
             push(line, &format!("{} line {}", f.display(), n + 1), true)?;
         }
     }

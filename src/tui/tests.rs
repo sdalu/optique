@@ -590,6 +590,44 @@ fn description_panel_reads_pkg_descr_once() {
     );
 }
 
+/// A Latin-1 pkg-descr is shown, its stray byte replaced, not refused as
+/// unreadable.
+#[test]
+fn a_latin1_pkg_descr_is_shown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+    let descr = tmp.path().join("pkg-descr");
+    std::fs::write(&descr, b"Alpha fait des choses \xe9tranges.\n").unwrap();
+    let key = PortKey::parse("cat/alpha").unwrap();
+    app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
+    app.about_text.clear();
+    app.rebuild_editor();
+    assert!(screen(&mut app).contains("Alpha fait des choses"));
+}
+
+/// A pkg-descr's escape sequence never reaches the terminal: on screen it
+/// is spaces, the panel and the `v` overlay alike, its tabs kept to be laid
+/// out.
+#[test]
+fn a_pkg_descr_shows_no_control_character() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(tmp.path(), &[("cat/alpha", &[])]);
+    let descr = tmp.path().join("pkg-descr");
+    std::fs::write(&descr, b"Alpha\x1b[2J clears\rthe\tscreen.\nTwice.\n").unwrap();
+    let key = PortKey::parse("cat/alpha").unwrap();
+    app.session.ports.get_mut(&key).unwrap().about.pkg_descr = Some(descr.display().to_string());
+    app.about_text.clear();
+    app.rebuild_editor();
+    let shown = screen(&mut app);
+    assert!(shown.contains("Alpha [2J clears the"), "{shown}");
+    assert!(!shown.contains('\x1b') && !shown.contains('\r'));
+    app.focus = Focus::Editor;
+    app.open_port_about();
+    let lines = &app.port_help.as_ref().unwrap().lines;
+    let tail = &lines[lines.len() - 2..];
+    assert_eq!(tail, ["Alpha [2J clears the\tscreen.", "Twice."]);
+}
+
 /// A pkg-descr that cannot be read is said so, not shown as blank for
 /// the rest of the session: the panel tries it again next time.
 #[test]

@@ -14,7 +14,9 @@ Ports are named as positional `category/name[@flavor]` arguments, read from
 one or more `-f`/`--file` pkglists (one origin per line, read as poudriere
 reads it: a line is a comment, skipped whole, only when its first word
 starts with `#`, and anything past the first word on any other line,
-comment or not, is dropped with it — the poudriere pkglist format), or
+comment or not, is dropped with it — the poudriere pkglist format; words
+split on spaces and tabs only, so an origin ending a CRLF line keeps its
+carriage return and is refused), or
 both at once; `-f` is repeatable. A stray leading or trailing `/` is
 stripped from an origin, in a pkglist line or on the command line alike,
 and a `~subpackage` is dropped, as poudriere splits it off before the

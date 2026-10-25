@@ -642,6 +642,8 @@ starts with
 and whatever follows the first word on any other line, comment or not,
 is dropped with it
 .Pq the Xr poudriere 8 pkglist format .
+Words are split on spaces and tabs only, so an origin ending a CRLF
+line keeps its carriage return and is refused.
 As
 .Xr poudriere 8
 reads them, here and on the command line,
@@ -3295,10 +3297,16 @@ since they are what the build will find
 so a package install or delete starts a new cache generation: the size and
 modification time of
 .Pa local.sqlite
-in
+in the directory
+.Ql pkg config PKG_DBDIR
+names
+.Po
+.Pa ${LOCALBASE:-/usr/local}/sbin/pkg ,
+when there; else
 .Ev PKG_DBDIR ,
 else
-.Pa /var/db/pkg ,
+.Pa /var/db/pkg
+.Pc
 are part of the cache key;
 .It
 queries run as the invoking user, with its
@@ -3409,9 +3417,13 @@ of a local build, instead of
 see
 .Sx LOCAL BUILDS .
 Poudriere and synth builds always pass their own.
-.It Ev PKG_DBDIR
+.It Ev LOCALBASE , Ev PKG_DBDIR
 Where a local build finds pkg's database, whose changes start a
-new cache generation; see
+new cache generation: the directory
+.Pa ${LOCALBASE:-/usr/local}/sbin/pkg
+names, pkg.conf weighed, else
+.Ev PKG_DBDIR ;
+see
 .Sx LOCAL BUILDS .
 .It Ev SYNTHPROFILE
 The profile of a bare

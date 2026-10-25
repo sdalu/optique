@@ -213,7 +213,8 @@ fn preview_lines(
 /// `…/server-options`), keeping as many as fit. The last component is kept
 /// even when it alone does not fit.
 pub(super) fn elide_dir(dir: &str, room: usize) -> String {
-    if dir.chars().count() <= room {
+    use unicode_width::UnicodeWidthStr as _;
+    if dir.width() <= room {
         return dir.to_string();
     }
     let parts: Vec<&str> = dir.trim_end_matches('/').split('/').collect();
@@ -226,7 +227,7 @@ pub(super) fn elide_dir(dir: &str, room: usize) -> String {
     (1..=most)
         .rev()
         .map(elided)
-        .find(|e| e.chars().count() <= room)
+        .find(|e| e.width() <= room)
         .unwrap_or_else(|| elided(1))
 }
 
@@ -234,8 +235,9 @@ pub(super) fn elide_dir(dir: &str, room: usize) -> String {
 /// its last components by `elide_dir`, so the whole fits `room` columns as
 /// far as the paths can make it; 0 keeps their last component alone.
 pub(crate) fn elide_paths(text: &str, room: usize) -> String {
+    use unicode_width::UnicodeWidthStr as _;
     let mut out = text.to_string();
-    let width = |s: &str| s.chars().count();
+    let width = |s: &str| s.width();
     let mut from = 0;
     while let Some(at) = out[from..].find('/').map(|i| from + i) {
         // A path starts a word.
@@ -273,17 +275,20 @@ pub(super) fn wrapped_height(lines: &[Line], width: u16) -> usize {
                 return 1;
             }
             // Greedy wrapping: two rows in a row hold more than `width`
-            // columns, so this many rows always hold the whole line.
-            let bound = (2 * w.div_ceil(width as usize) + 1).min(u16::MAX as usize) as u16;
+            // columns, so this many rows always hold the whole line, and
+            // one more the marker after it. The row the marker lands on
+            // counts the rows of wrapped trailing spaces too, which leave
+            // nothing to see.
+            const MARK: &str = "\u{E000}";
+            let bound = (2 * w.div_ceil(width as usize) + 2).min(u16::MAX as usize) as u16;
             let area = Rect::new(0, 0, width, bound);
             let mut buf = ratatui::buffer::Buffer::empty(area);
-            Paragraph::new(line.clone())
+            Paragraph::new(vec![line.clone(), Line::raw(MARK)])
                 .wrap(Wrap { trim: false })
                 .render(area, &mut buf);
-            (0..bound)
-                .rev()
-                .find(|&y| (0..width).any(|x| buf[(x, y)].symbol() != " "))
-                .map_or(1, |y| y as usize + 1)
+            (1..bound)
+                .find(|&y| buf[(0, y)].symbol() == MARK)
+                .map_or(bound as usize - 1, usize::from)
         })
         .sum()
 }

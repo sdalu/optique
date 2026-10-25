@@ -1057,6 +1057,14 @@ impl Session {
             let Some(info) = self.ports.get(&key) else {
                 continue;
             };
+            // A blacklisted port brings nothing in: the scan walks none of
+            // its dependencies (poudriere gathers none), nor does the why.
+            if self
+                .blacklist
+                .matches(&info.canonical, info.is_default_flavor())
+            {
+                continue;
+            }
             for dep in self.resolved_deps(info) {
                 // Never rewrite a settled predecessor: a dependency cycle
                 // would otherwise make the chain walk loop forever.
@@ -1074,13 +1082,19 @@ impl Session {
     }
 
     /// Direct dependents of `target` within the closure: ports with a dep edge
-    /// resolving to it, in key order.
+    /// resolving to it, in key order, a blacklisted one aside (the scan
+    /// walks none of its dependencies).
     pub fn dependents(&self, target: &PortKey) -> Vec<PortKey> {
         let Some(target) = self.resolve(target) else {
             return Vec::new();
         };
         self.ports
             .iter()
+            .filter(|(_, info)| {
+                !self
+                    .blacklist
+                    .matches(&info.canonical, info.is_default_flavor())
+            })
             .filter(|(_, info)| self.resolved_deps(info).any(|d| d == target))
             .map(|(key, _)| key.clone())
             .collect()

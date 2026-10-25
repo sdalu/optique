@@ -190,9 +190,11 @@ pub fn flavor_index(portsdir: &Path, overlays: &[PathBuf]) -> HashSet<String> {
         .chain(std::iter::once(portsdir))
     {
         for category in categories(tree) {
-            let Ok(text) = fs::read_to_string(tree.join(&category).join("Makefile")) else {
+            // Bytes, as synth reads it: a Latin-1 comment drops no entry.
+            let Ok(bytes) = fs::read(tree.join(&category).join("Makefile")) else {
                 continue;
             };
+            let text = String::from_utf8_lossy(&bytes);
             for line in text.lines() {
                 if let Some(name) = subdir_entry(line) {
                     out.insert(format!("{category}/{name}"));
@@ -446,6 +448,21 @@ mod tests {
         let mut info = PortInfo::stub("misc/port");
         info.flavors = vec!["full".to_string()];
         assert_eq!(refuses_port(&files, &info), None);
+    }
+
+    /// A category Makefile is read as bytes, as synth reads it: a Latin-1
+    /// comment drops none of its entries.
+    #[test]
+    fn a_latin1_category_makefile_is_indexed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let portsdir = tmp.path().join("ports");
+        fs::create_dir_all(portsdir.join("misc")).unwrap();
+        fs::write(
+            portsdir.join("misc/Makefile"),
+            b"# caf\xe9\n    SUBDIR += other\n",
+        )
+        .unwrap();
+        assert!(flavor_index(&portsdir, &[]).contains("misc/other"));
     }
 
     /// synth builds ports-mgmt/pkg on its own path, with no options check:

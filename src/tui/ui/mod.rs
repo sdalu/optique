@@ -138,9 +138,11 @@ fn key_hint() -> Style {
 }
 
 /// Greedy word wrap; continuation lines are indented by `indent`. A word
-/// longer than the line is hard-split rather than left to overflow.
+/// longer than the line is hard-split rather than left to overflow. Widths
+/// are terminal columns: a wide character takes two, a combining mark none.
 fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
-    let width = width.max(indent + 1);
+    use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr as _};
+    let width = width.max(indent + 2);
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut first = true;
@@ -155,7 +157,7 @@ fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
             first = false;
         }
         let sep = usize::from(!cur.trim_end().is_empty());
-        if cur.chars().count() + sep + word.chars().count() > width && !cur.trim().is_empty() {
+        if cur.width() + sep + word.width() > width && !cur.trim().is_empty() {
             out.push(std::mem::take(&mut cur));
             cur = " ".repeat(indent);
         }
@@ -164,7 +166,7 @@ fn wrap_text(text: &str, width: usize, indent: usize) -> Vec<String> {
         }
         // A word wider than the line gets broken across lines.
         for c in word.chars() {
-            if cur.chars().count() >= width {
+            if cur.width() + c.width().unwrap_or(0) > width && !cur.trim().is_empty() {
                 out.push(std::mem::take(&mut cur));
                 cur = " ".repeat(indent);
             }

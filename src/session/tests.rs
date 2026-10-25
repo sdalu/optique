@@ -1570,10 +1570,23 @@ fn why_chain_and_dependents() {
     assert_eq!(chain.last(), Some(&leaf), "chain ends at the target");
     assert_eq!(chain, vec![other.clone(), leaf.clone()]);
 
-    assert_eq!(s.why_chain(&root), Some(vec![root]));
+    assert_eq!(s.why_chain(&root), Some(vec![root.clone()]));
     assert_eq!(s.why_chain(&orphan), None, "not reachable from the roots");
-    assert_eq!(s.dependents(&leaf), vec![mid, other]);
+    assert_eq!(s.dependents(&leaf), vec![mid.clone(), other.clone()]);
     assert!(s.dependents(&orphan).is_empty());
+
+    // A blacklisted port brings nothing in: the chain goes the long way,
+    // and it is no dependent.
+    let mut s = s;
+    let pd = tmp.path().join("poudriere.d");
+    std::fs::create_dir_all(&pd).unwrap();
+    std::fs::write(pd.join("blacklist"), "cat/other\n").unwrap();
+    s.blacklist = crate::config::Blacklist::load(&pd, None, "default", None);
+    assert_eq!(
+        s.why_chain(&leaf),
+        Some(vec![root.clone(), mid.clone(), leaf.clone()])
+    );
+    assert_eq!(s.dependents(&leaf), vec![mid]);
 }
 
 /// A cycle in the dep graph must neither hang the chain walk nor lengthen

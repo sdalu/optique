@@ -146,7 +146,10 @@ impl Moved {
         let mut warnings = Vec::new();
         for tree in trees {
             let file = tree.join("MOVED");
-            if let Ok(text) = std::fs::read_to_string(&file) {
+            // Bytes, as poudriere's awk reads it: one Latin-1 byte drops no
+            // line, let alone the file.
+            if let Ok(bytes) = std::fs::read(&file) {
+                let text = String::from_utf8_lossy(&bytes);
                 moved.add(&text, &file.display().to_string(), &mut warnings);
             }
         }
@@ -165,10 +168,13 @@ impl Moved {
     /// every earlier entry that led to `B` so it leads to `C` (or is
     /// removed with `B|C`'s reason, when `C` is empty). An entry `X|B`
     /// read after `B|C` keeps `B`: only earlier entries are repointed.
-    /// A line without a `|`, or with an empty old origin, names no move
-    /// and is skipped.
+    /// A line with an empty old origin (`|cat/foo|…`) cancels the entry of
+    /// its new one, as the awk deletes it: an overlay bringing back a port
+    /// the tree removed. A line without a `|` names no move and is skipped.
     fn add(&mut self, text: &str, file: &str, warnings: &mut Vec<String>) {
         for line in text.lines() {
+            // A reason is shown: no control character reaches the terminal.
+            let line = crate::query::parse::printable(line);
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -179,6 +185,14 @@ impl Moved {
             };
             let old = old.trim();
             if old.is_empty() {
+                let new = new.trim();
+                // Gone from what leads to its target too: a later entry
+                // repointing that target must not bring it back.
+                if let Some((Some(target), _)) = self.map.remove(new)
+                    && let Some(refs) = self.backrefs.get_mut(&target)
+                {
+                    refs.retain(|r| r != new);
+                }
                 continue;
             }
             if self.map.contains_key(old) {
@@ -326,6 +340,57 @@ mod tests {
             key: key(k),
             reason: reason.into(),
         }
+    }
+
+    /// A line with an empty old origin cancels its new one's entry, as
+    /// poudriere's awk deletes it: an overlay brings back a port the tree
+    /// removed.
+    #[test]
+    fn an_empty_source_line_drops_the_entry() {
+        let m = Moved::parse("cat/foo||2026-01-01|Has expired\n|cat/foo|2026-06-01|back\n");
+        assert_eq!(
+            m.resolve(&key("cat/foo"), |o| o == "cat/foo"),
+            MovedResult::Unchanged
+        );
+    }
+
+    /// The dropped entry stays dropped when its target moves on later, as
+    /// the awk deletes it by its record, not by its name.
+    #[test]
+    fn a_dropped_entry_is_not_repointed() {
+        let m = Moved::parse(
+            "cat/foo|cat/bar|2026-01-01|moved\n\
+             |cat/foo|2026-06-01|back\n\
+             cat/bar|cat/baz|2026-07-01|moved again\n",
+        );
+        let exists = |o: &str| o == "cat/foo" || o == "cat/baz";
+        assert_eq!(m.resolve(&key("cat/foo"), exists), MovedResult::Unchanged);
+    }
+
+    /// A reason's control characters are spaces: it is shown.
+    #[test]
+    fn a_reason_shows_no_control_character() {
+        let m = Moved::parse("cat/old|cat/new|2026-01-01|re\x1b[2Jnamed\n");
+        assert_eq!(
+            m.resolve(&key("cat/old"), |o| o == "cat/new"),
+            to("cat/new", "re [2Jnamed")
+        );
+    }
+
+    /// MOVED is read as bytes: a Latin-1 reason drops no line.
+    #[test]
+    fn a_latin1_moved_is_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("MOVED"),
+            b"cat/old|cat/new|2026-01-01|renomm\xe9\n",
+        )
+        .unwrap();
+        let (moved, _) = Moved::load_all(&[tmp.path()]);
+        assert_eq!(
+            moved.resolve(&key("cat/old"), |o| o == "cat/new"),
+            to("cat/new", "renomm\u{fffd}")
+        );
     }
 
     #[test]

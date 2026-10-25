@@ -596,6 +596,12 @@ reproduced.
 - **Radical.** `parse_MOVED.awk` collapses chains in file order, so `A|B`
   followed by `B|C` sends `A` to `C` even when `B` exists again;
   `check_moved` never tests `B` ([MOVED](#moved)).
+- A line with an empty old origin (`|cat/foo|…`) deletes `cat/foo`'s
+  entry but leaves its record among those leading to its target: after
+  `cat/foo|cat/bar`, `|cat/foo|…`, `cat/bar|cat/baz`, the awk prints
+  ` cat/baz` with no source, `load_moved` stores `cat/baz` as moved to
+  nothing, and a listed `cat/baz` aborts the run in
+  `test_port_origin_exist ""` ([MOVED](#moved)).
 - In `_delete_old_pkg`, the `originspec_decode` after `return 0` on a
   `MOVED` origin can never run.
 

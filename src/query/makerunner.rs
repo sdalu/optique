@@ -408,7 +408,10 @@ pub fn run_query(ctx: &QueryCtx, key: &PortKey) -> anyhow::Result<PortInfo> {
         .iter()
         .filter(|f| !framework(f))
         .filter(|f| readable_makefile(Path::new(f)))
-        .any(|f| std::fs::read_to_string(f).is_ok_and(|t| crate::cache::makefile_runs_make(&t)));
+        .any(|f| {
+            std::fs::read(f)
+                .is_ok_and(|b| crate::cache::makefile_runs_make(&String::from_utf8_lossy(&b)))
+        });
     info.outside_files = outside_files(&info.makefiles, &portdir, ctx);
     info.makefiles = tree_files(&info.makefiles, &portdir, &ctx.portsdir);
     adopt_options_file(&mut info, &ctx.port_dbdir);
@@ -1000,6 +1003,14 @@ mod tests {
         assert!(run_query(&ctx, &key).unwrap().sub_make);
         let (_tmp, ctx) = slow_port_running("echo x");
         assert!(!run_query(&ctx, &key).unwrap().sub_make);
+        // A Latin-1 byte in the Makefile hides no sub-make.
+        let (tmp, ctx) = slow_port_running("echo x");
+        std::fs::write(
+            tmp.path().join("ports/cat/slow/Makefile"),
+            b"# caf\xe9\nPKGNAME=slow-1.0\nX!= ${MAKE} -C /nonexistent -V X 2>/dev/null || true\n",
+        )
+        .unwrap();
+        assert!(run_query(&ctx, &key).unwrap().sub_make);
     }
 
     /// The makefiles read for `sub_make` are regular files: never

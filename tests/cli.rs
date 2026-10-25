@@ -790,3 +790,38 @@ fn a_list_with_a_latin1_comment_is_read() {
     assert!(!err.contains("valid UTF-8"), "{err}");
     assert!(err.contains("not-an-origin"), "the list was read: {err}");
 }
+
+/// A package list with CR-only line endings is one line to sh's `read`:
+/// its first word holds every origin, and is refused, never cut down to the
+/// first origin silently.
+#[test]
+fn a_cr_only_list_is_refused_not_cut_short() {
+    let tmp = tempfile::tempdir().unwrap();
+    let list = tmp.path().join("list");
+    std::fs::write(&list, b"www/nginx\rmail/dovecot\rsysutils/tmux\r").unwrap();
+    let out = optique().args(["scan", "-f"]).arg(&list).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{err}");
+    assert!(
+        err.contains("mail/dovecot"),
+        "the whole word is named: {err}"
+    );
+}
+
+/// A CRLF list is refused as poudriere's `read` refuses it: the carriage
+/// return stays in the origin.
+#[test]
+fn a_crlf_list_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let list = tmp.path().join("list");
+    std::fs::write(&list, b"www/nginx\r\n").unwrap();
+    let out = optique().args(["scan", "-f"]).arg(&list).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains(r#""www/nginx\r""#), "{err}");
+    // A no-break space is no separator to `read` either.
+    std::fs::write(&list, "www/nginx\u{a0}# web\n").unwrap();
+    let out = optique().args(["scan", "-f"]).arg(&list).output().unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("malformed port origin"), "{err}");
+}

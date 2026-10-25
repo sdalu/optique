@@ -93,10 +93,14 @@ host computes them alike.
 A plain `/var/db/ports` build does keep the host's view: it builds on the
 host it configures, so what that host has installed is part of the truth.
 That truth changes with every `pkg install` or `pkg delete`, so for a
-local build the size and mtime of pkg's `local.sqlite` (under
-`PKG_DBDIR`, else `/var/db/pkg`) are folded into the make.conf hash: a
-package change starts a new cache generation, and a missing database adds
-nothing.
+local build the size and mtime of pkg's `local.sqlite` are folded into
+the make.conf hash: a package change starts a new cache generation, and a
+missing database adds nothing. Where that database is, pkg is asked
+(`${LOCALBASE:-/usr/local}/sbin/pkg config PKG_DBDIR`), since pkg.conf
+can move it as surely as the environment; only that binary, by its full
+path, never a `pkg` found through `PATH`, which may be pkg(7)'s bootstrap
+offering to fetch pkg. Without it, or when it fails, `PKG_DBDIR` from the
+environment, else `/var/db/pkg`.
 
 ## Upstream's behaviour, not its bugs
 

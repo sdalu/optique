@@ -342,11 +342,17 @@ fn env_path_or(var: &str, default: &str) -> PathBuf {
 /// `Cli::check_globals` rejects the flag combinations that make no sense
 /// (-s or -l with -z/-j/-p, -p with -P), so `req` is consistent here.
 pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
-    // pkg(8)'s own default, which the environment may move.
+    // pkg(8)'s own default, which the environment may move, and the pkg
+    // that knows what pkg.conf says.
     let pkg_db = env_path_or("PKG_DBDIR", "/var/db/pkg").join("local.sqlite");
+    let pkg = env_path_or("LOCALBASE", "/usr/local").join("sbin/pkg");
+    let pkg_db = PkgDb {
+        pkg: &pkg,
+        fallback: &pkg_db,
+    };
     if let Some(profile) = req.synth {
         let settings = synth::resolve(profile, req, staging_dir)?;
-        return finish(settings, Vec::new(), &pkg_db, req.no_framework_probe);
+        return finish(settings, Vec::new(), pkg_db, req.no_framework_probe);
     }
     // -l reads no poudriere configuration, so POUDRIERE_ETC is not asked.
     let etc = if req.local {
@@ -382,7 +388,7 @@ pub fn resolve(req: &Request, staging_dir: &Path) -> Result<Settings> {
         make_conf: &make_conf,
         ports_from_make: ports.is_some(),
         db_from_make: db.is_some(),
-        pkg_db: &pkg_db,
+        pkg_db,
         env_overlays: &env_overlays(),
         arch: &arch,
         supported_archs: &supported_archs,
@@ -427,7 +433,7 @@ struct HostPaths<'a> {
     ports_from_make: bool,
     db_from_make: bool,
     /// pkg(8)'s database of installed packages (`local.sqlite`).
-    pkg_db: &'a Path,
+    pkg_db: PkgDb<'a>,
     /// `OVERLAYS` from optique's environment, made absolute against its own
     /// directory: what make would read for a local build.
     env_overlays: &'a [PathBuf],
@@ -479,13 +485,16 @@ fn given_overlays(poudriere_d: &Path, specs: &[OverlaySpec], local: bool) -> Res
                         dir.display()
                     );
                 }
-                let Ok(mnt) = fs::read_to_string(dir.join("mnt")) else {
+                // Bytes, as poudriere reads the path.
+                let Ok(mnt) = fs::read(dir.join("mnt")) else {
                     bail!(
                         "poudriere overlay '{name}' has no mnt file in {}",
                         dir.display()
                     );
                 };
-                (Some(name.clone()), PathBuf::from(mnt.trim()))
+                use std::os::unix::ffi::OsStrExt as _;
+                let path = PathBuf::from(std::ffi::OsStr::from_bytes(mnt.trim_ascii()));
+                (Some(name.clone()), path)
             }
             OverlaySpec::Dir(dir) => (None, dir.clone()),
         };
@@ -587,10 +596,17 @@ fn make_values(vars: &[&str], make_conf: Option<&Path>, drop_env: &[&str]) -> Op
 /// package installed or deleted can change their answers. The size and
 /// mtime of pkg's database go into the hash for such a build, making each
 /// change to it a new cache generation; a missing database adds nothing.
-fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
+fn key_installed_packages(mut settings: Settings, pkg_db: PkgDb) -> Settings {
     if settings.env != QueryEnv::Host {
         return settings;
     }
+    // Where pkg itself keeps it: pkg.conf may move it as surely as the
+    // environment, which `pkg config` weighs the same way pkg does.
+    let pkg_db = pkg_dbdir(pkg_db.pkg).map_or_else(
+        || pkg_db.fallback.to_path_buf(),
+        |dir| dir.join("local.sqlite"),
+    );
+    let pkg_db = pkg_db.as_path();
     let Ok(meta) = fs::metadata(pkg_db) else {
         return settings;
     };
@@ -602,6 +618,35 @@ fn key_installed_packages(mut settings: Settings, pkg_db: &Path) -> Settings {
     settings.conf_hash = fold(&settings.conf_hash);
     settings.conf_rest = fold(&settings.conf_rest);
     settings
+}
+
+/// Where pkg's database of installed packages is: asked of `pkg`, else
+/// `fallback` (the environment's `PKG_DBDIR` or pkg's default).
+#[derive(Clone, Copy)]
+struct PkgDb<'a> {
+    pkg: &'a Path,
+    fallback: &'a Path,
+}
+
+/// pkg's database directory as `pkg config PKG_DBDIR` gives it, the
+/// environment over pkg.conf, from the real binary `pkg` only: never a bare
+/// `pkg` through PATH, which may be the pkg(7) bootstrap shim asking to
+/// fetch pkg. None when it is missing, fails, or answers no absolute path:
+/// a relative one would be keyed against optique's working directory.
+fn pkg_dbdir(pkg: &Path) -> Option<PathBuf> {
+    if !pkg.is_file() {
+        return None;
+    }
+    let out = std::process::Command::new(pkg)
+        .args(["config", "PKG_DBDIR"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    use std::os::unix::ffi::OsStrExt as _;
+    let dir = out.stdout.trim_ascii();
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(dir))).filter(|d| d.is_absolute())
 }
 
 /// A build on the host runs as the invoking user, whose `USER` its queries
@@ -631,7 +676,7 @@ fn invoker_hash(conf_hash: &str, user: Option<&str>) -> String {
 fn finish(
     settings: Settings,
     given: Vec<Overlay>,
-    pkg_db: &Path,
+    pkg_db: PkgDb,
     no_framework_probe: bool,
 ) -> Result<Settings> {
     let settings = settings.absolute()?;
@@ -818,7 +863,10 @@ mod testutil {
             make_conf: Path::new("/nonexistent/make.conf"),
             ports_from_make: false,
             db_from_make: false,
-            pkg_db: Path::new("/nonexistent/local.sqlite"),
+            pkg_db: PkgDb {
+                pkg: Path::new("/nonexistent/pkg"),
+                fallback: Path::new("/nonexistent/local.sqlite"),
+            },
             env_overlays: &[],
             arch: "amd64",
             supported_archs: "amd64 i386",
@@ -862,6 +910,46 @@ mod testutil {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// pkg's database directory is asked of the real pkg binary, as pkg
+    /// reads it (pkg.conf too); a binary missing, failing or silent leaves
+    /// the environment's or the default.
+    #[test]
+    fn pkg_dbdir_asks_pkg() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = tmp.path().join("pkg");
+        let script = |body: &str| {
+            fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        script("[ \"$1 $2\" = \"config PKG_DBDIR\" ] && echo /pkgdb");
+        assert_eq!(pkg_dbdir(&fake), Some(PathBuf::from("/pkgdb")));
+        script("exit 1");
+        assert_eq!(pkg_dbdir(&fake), None);
+        script("true");
+        assert_eq!(pkg_dbdir(&fake), None);
+        script("echo db");
+        assert_eq!(pkg_dbdir(&fake), None, "relative");
+        assert_eq!(pkg_dbdir(&tmp.path().join("none")), None);
+    }
+
+    /// A poudriere overlay's `mnt` is read as bytes: a path that is no
+    /// UTF-8 still names its directory.
+    #[test]
+    fn an_overlay_mnt_is_read_as_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let pd = tmp.path().join("poudriere.d");
+        let target = tmp.path().join(std::ffi::OsStr::from_bytes(b"ov\xe9"));
+        fs::create_dir_all(&target).unwrap();
+        fs::create_dir_all(pd.join("ports/mine")).unwrap();
+        let mut mnt = target.as_os_str().as_bytes().to_vec();
+        mnt.push(b'\n');
+        fs::write(pd.join("ports/mine/mnt"), mnt).unwrap();
+        let got = given_overlays(&pd, &[OverlaySpec::Name("mine".into())], false).unwrap();
+        assert_eq!(got[0].path, target.canonicalize().unwrap());
+    }
     use testutil::*;
 
     /// A local build sees the installed packages (Makefiles probe
@@ -879,7 +967,10 @@ mod tests {
         let absent = tmp.path().join("no-poudriere.d");
         let pkg_db = tmp.path().join("local.sqlite");
         let host = HostPaths {
-            pkg_db: &pkg_db,
+            pkg_db: PkgDb {
+                pkg: Path::new("/nonexistent/pkg"),
+                fallback: &pkg_db,
+            },
             ..host(tmp.path(), &absent, &ports, &db)
         };
         let none = Request::default();
@@ -893,6 +984,25 @@ mod tests {
         assert_ne!(one, bare);
         fs::write(&pkg_db, "one package, then another").unwrap();
         assert_ne!(hash(&host), one, "an install is a new generation");
+
+        // pkg.conf moving the database: pkg's answer is keyed, not the
+        // fallback, which names nothing here.
+        use std::os::unix::fs::PermissionsExt as _;
+        let moved = tmp.path().join("moved");
+        fs::create_dir_all(&moved).unwrap();
+        fs::write(moved.join("local.sqlite"), "one package").unwrap();
+        let pkg = tmp.path().join("pkg");
+        fs::write(&pkg, format!("#!/bin/sh\necho {}\n", moved.display())).unwrap();
+        fs::set_permissions(&pkg, fs::Permissions::from_mode(0o755)).unwrap();
+        let nowhere = tmp.path().join("nowhere.sqlite");
+        let asked = HostPaths {
+            pkg_db: PkgDb {
+                pkg: &pkg,
+                fallback: &nowhere,
+            },
+            ..host
+        };
+        assert_ne!(hash(&asked), bare, "pkg's database is keyed");
 
         let pd = tmp.path().join("poudriere.d");
         fs::create_dir_all(&pd).unwrap();

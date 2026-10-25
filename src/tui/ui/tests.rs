@@ -17,6 +17,15 @@ fn a_long_options_dir_keeps_its_last_components() {
     assert_eq!(elide_dir("/ports", 3), "/ports", "nothing to elide");
 }
 
+/// A directory's room is counted in columns: wide characters take two.
+#[test]
+fn a_wide_options_dir_is_elided_by_columns() {
+    let dir = "/home/漢字漢字/opts";
+    assert_eq!(elide_dir(dir, 20), dir, "19 columns fit");
+    assert_eq!(elide_dir(dir, 18), "…/漢字漢字/opts");
+    assert_eq!(elide_dir(dir, 14), "…/opts");
+}
+
 /// A path in a text gives way to fit, down to its last component; the
 /// colon after it stays the text's.
 #[test]
@@ -222,6 +231,25 @@ fn wrap_text_hard_splits_a_word_longer_than_the_whole_line() {
         wrap_text("  supercalifragilistic", 8, 2)
             .iter()
             .all(|l| l.chars().count() <= 8)
+    );
+}
+
+/// Lines are measured in terminal columns: a wide character takes two, a
+/// combining mark none, so neither text overflows nor wraps early.
+#[test]
+fn wrap_text_measures_columns_not_characters() {
+    use ratatui::text::Line;
+    let wide = wrap_text("漢字 漢字 漢字", 10, 0);
+    assert!(
+        wide.iter().all(|l| Line::raw(l.as_str()).width() <= 10),
+        "{wide:?}"
+    );
+    assert_eq!(wide, ["漢字 漢字", "漢字"]);
+    assert_eq!(wrap_text("漢字漢字漢字", 5, 0), ["漢字", "漢字", "漢字"]);
+    // e + U+0301 is one column: the line fits as it is.
+    assert_eq!(
+        wrap_text("cafe\u{301} cafe\u{301}", 9, 0),
+        ["cafe\u{301} cafe\u{301}"]
     );
 }
 
@@ -605,4 +633,39 @@ fn the_help_names_the_flavor_glyphs_and_the_current_keys() {
         assert!(keys.contains(want), "{want:?} in\n{keys}");
     }
     assert!(!keys.contains("  I "), "I is no key");
+}
+
+/// `wrapped_height` counts every row the Paragraph lays the lines over,
+/// rows of wrapped trailing spaces too (a padded key at the end of a deep
+/// chain line): the oracle is the row a marker line after them lands on.
+#[test]
+fn wrapped_height_counts_rows_of_trailing_spaces() {
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::{Widget as _, Wrap};
+    let rows_by_paragraph = |lines: &[Line<'static>], width: u16| {
+        let mut all = lines.to_vec();
+        all.push(Line::raw("X"));
+        let area = Rect::new(0, 0, width, 40);
+        let mut buf = Buffer::empty(area);
+        Paragraph::new(all)
+            .wrap(Wrap { trim: false })
+            .render(area, &mut buf);
+        (0..40)
+            .find(|&y| buf[(0, y)].symbol() == "X")
+            .map(usize::from)
+            .unwrap()
+    };
+    for (text, width) in [
+        ("ab        ", 4),
+        ("  └─ dev/x            ", 10),
+        ("abcdef    ", 5),
+        ("abcd efgh ij", 4),
+    ] {
+        let lines = [Line::raw(text)];
+        assert_eq!(
+            popups::wrapped_height(&lines, width),
+            rows_by_paragraph(&lines, width),
+            "{text:?} in {width}"
+        );
+    }
 }

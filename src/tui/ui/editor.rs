@@ -270,7 +270,7 @@ fn draw_rule(
 ) {
     let dashes = |n: usize| Span::styled("─".repeat(n), style);
     let inner = (pane.width as usize).saturating_sub(2);
-    let width = |s: &Span| s.content.chars().count();
+    let width = |s: &Span| s.width();
     let middle = match label {
         None => vec![dashes(inner)],
         Some(RuleLabel::Title(t)) => {

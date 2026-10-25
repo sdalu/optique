@@ -84,12 +84,12 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
             "DEFAULT_VERSIONS" => default_versions = words(value),
             // As make names them; `makerunner` keeps the main tree's.
             "MAKEFILES" => makefiles = words(value),
-            "BROKEN" => broken = value.trim().to_string(),
-            "IGNORE" => ignore = value.trim().to_string(),
-            "DEPRECATED" => deprecated = value.trim().to_string(),
+            "BROKEN" => broken = shown(value),
+            "IGNORE" => ignore = shown(value),
+            "DEPRECATED" => deprecated = shown(value),
             "PKGHELP" => pkg_help = value.trim().to_string(),
-            "COMMENT" => about.comment = value.trim().to_string(),
-            "WWW" => about.www = words::<Vec<String>>(value).join(" "),
+            "COMMENT" => about.comment = shown(value),
+            "WWW" => about.www = words::<Vec<String>>(&shown(value)).join(" "),
             "DESCR" => descr = value.trim().to_string(),
             "GROUP" | "SINGLE" | "RADIO" | "MULTI" => {
                 let kind = match tag {
@@ -111,7 +111,7 @@ pub fn parse_dump(requested: &PortKey, text: &str) -> Result<PortInfo> {
                     continue;
                 };
                 let name = name.trim();
-                let v = v.trim();
+                let v = &shown(v);
                 // Group descriptions land on the group, everything else on defs.
                 if tag == "DESC"
                     && let Some(g) = opts.groups.iter_mut().find(|g| g.name == name)
@@ -318,6 +318,29 @@ fn words<C: FromIterator<String>>(s: &str) -> C {
     s.split_whitespace().map(str::to_string).collect()
 }
 
+/// A free-text value (a description, a reason) as it may be shown: a
+/// control character a Makefile put in it, an escape sequence or a
+/// carriage return, would reach the terminal raw and redraw it, so each one
+/// is a space.
+fn shown(s: &str) -> String {
+    printable(&s.replace('\t', " ")).trim().to_string()
+}
+
+/// `s` with every control character but a tab or a newline made a space:
+/// for text read from a port's files (pkg-help, pkg-descr, MOVED), whose
+/// tabs are laid out where it is drawn and lines split there.
+pub(crate) fn printable(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() && c != '\t' && c != '\n' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
 fn non_empty(s: String) -> Option<String> {
     if s.trim().is_empty() { None } else { Some(s) }
 }
@@ -398,6 +421,29 @@ make: /dev/stdin:4: OPTIQUE|DESC|A|use X | Y syntax
         let key = PortKey::parse("cat/foo").unwrap();
         let info = parse_dump(&key, text).unwrap();
         assert_eq!(info.options.defs["A"].desc, "use X | Y syntax");
+    }
+
+    /// A Makefile's escape sequence or carriage return in a description or
+    /// a reason never reaches the terminal: each control character is a
+    /// space, the text around it kept.
+    #[test]
+    fn control_characters_in_text_are_spaces() {
+        let text = "\
+make: /dev/stdin:2: OPTIQUE|PKGNAME|foo-1.0
+make: /dev/stdin:3: OPTIQUE|COMPLETE|A
+make: /dev/stdin:4: OPTIQUE|DESC|A|red\x1b[31m\rtext
+make: /dev/stdin:5: OPTIQUE|COMMENT|a\x07b\r
+make: /dev/stdin:6: OPTIQUE|BROKEN|x\x1b]0;t\x07y
+make: /dev/stdin:7: OPTIQUE|OPT_IGNORE|A|z\x1bw
+make: /dev/stdin:8: OPTIQUE|WWW|https://a\x1b[2J/ https://b/
+";
+        let key = PortKey::parse("cat/foo").unwrap();
+        let info = parse_dump(&key, text).unwrap();
+        assert_eq!(info.options.defs["A"].desc, "red [31m text");
+        assert_eq!(info.about.comment, "a b");
+        assert_eq!(info.broken.as_deref(), Some("x ]0;t y"));
+        assert_eq!(info.options.defs["A"].ignore.as_deref(), Some("z w"));
+        assert_eq!(info.about.www, "https://a [2J/ https://b/");
     }
 
     /// PKGHELP is always defined by the framework; only the ports that really

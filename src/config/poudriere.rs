@@ -382,7 +382,11 @@ fn jail_system(
         let (major, minor) = osrel.split_once('.')?;
         Some(major.parse::<u32>().ok()? * 100_000 + minor.parse::<u32>().ok()? * 1000)
     };
-    let param_h = read("mnt").map(|mnt| Path::new(&mnt).join("usr/include/sys/param.h"));
+    // Bytes: a jail's path need not be UTF-8.
+    let param_h = fs::read(dir.join("mnt")).ok().map(|mnt| {
+        use std::os::unix::ffi::OsStrExt as _;
+        Path::new(std::ffi::OsStr::from_bytes(mnt.trim_ascii())).join("usr/include/sys/param.h")
+    });
     let osversion = match param_h.as_deref().and_then(freebsd_version) {
         Some(v) => v,
         None => {
@@ -929,6 +933,31 @@ mod tests {
         // tree not explicit -> left out of the created name
         let dir = resolve_options_dir(pd, None, "default", false, Some("s"));
         assert_eq!(dir, pd.join("s-options"));
+    }
+
+    /// A jail mounted at a path that is not UTF-8 still gives its param.h's
+    /// OSVERSION, not one derived from its release.
+    #[test]
+    fn a_jail_mnt_is_read_as_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let ports = tmp.path().join("ports");
+        fake_tree(&ports);
+        let stage = tmp.path().join("stage");
+        fs::create_dir_all(&stage).unwrap();
+        let pd = fake_jail(tmp.path(), "amd64", "15.0-RELEASE", Some("1500068"));
+        let latin1 = tmp.path().join(std::ffi::OsStr::from_bytes(b"m\xe9nt"));
+        fs::rename(tmp.path().join("mnt"), &latin1).unwrap();
+        let mut line = latin1.as_os_str().as_bytes().to_vec();
+        line.push(b'\n');
+        fs::write(pd.join("jails/j/mnt"), line).unwrap();
+        let req = Request {
+            jail: Some("j"),
+            ..Request::default()
+        };
+        let s = resolve_host(&host(tmp.path(), &pd, &ports, tmp.path()), &req, &stage).unwrap();
+        let conf = fs::read_to_string(s.make_conf.unwrap()).unwrap();
+        assert!(conf.contains("OSVERSION=1500068\n"), "{conf}");
     }
 
     /// poudriere reads ports inside the jail: -j gives queries its release,

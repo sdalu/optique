@@ -518,7 +518,7 @@ pub(crate) fn stage_synth_make_conf(
 mod tests {
     use super::*;
     use crate::config::testutil::*;
-    use crate::config::{key_installed_packages, make_values};
+    use crate::config::{PkgDb, key_installed_packages, make_values};
 
     /// synth sees no host package, so the pkg database keys nothing for it;
     /// its profile names a cache generation of its own.
@@ -544,7 +544,11 @@ mod tests {
         fs::write(&pkg_db, "one package").unwrap();
         let s = resolve("A");
         let before = s.conf_hash.clone();
-        assert_eq!(key_installed_packages(s, &pkg_db).conf_hash, before);
+        let pkg_db = PkgDb {
+            pkg: Path::new("/nonexistent/pkg"),
+            fallback: &pkg_db,
+        };
+        assert_eq!(key_installed_packages(s, pkg_db).conf_hash, before);
         assert_ne!(resolve("B").conf_hash, before, "SYNTHPROFILE differs");
     }
 

@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use crate::deps::{DepLoop, EXTRA_SHOWN};
 use crate::model::origin::PortKey;
+use crate::query::parse::printable;
 
 use super::{App, EditorRow, Focus, OptInfo, PortHelp};
 
@@ -222,9 +223,10 @@ impl App {
             self.flash("this port ships no pkg-help", false);
             return;
         };
-        match std::fs::read_to_string(&path) {
+        // Bytes, a Latin-1 pkg-help shown rather than refused.
+        match std::fs::read(&path).map(|b| String::from_utf8_lossy(&b).into_owned()) {
             Ok(text) => {
-                let lines = text.lines().map(str::to_string).collect();
+                let lines = text.lines().map(printable).collect();
                 self.port_help = Some(PortHelp {
                     title: "pkg-help",
                     key,
@@ -295,8 +297,9 @@ impl App {
         let Some(path) = &self.session.ports[key].about.pkg_descr else {
             return Ok(None);
         };
-        std::fs::read_to_string(path)
-            .map(Some)
+        // Bytes, a Latin-1 pkg-descr shown rather than refused.
+        std::fs::read(path)
+            .map(|b| Some(printable(&String::from_utf8_lossy(&b))))
             .map_err(|e| format!("cannot read {path}: {e}"))
     }
 
