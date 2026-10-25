@@ -136,6 +136,7 @@ re-running `make`:
 [^4]: that is, the file has no SET or UNSET line for it, as make counts
     `NEW_OPTIONS`; a line settles the option even when the file's
     `_FILE_COMPLETE_OPTIONS_LIST`, which make never reads, misses it.
+    Never under an `OPTIONS_OVERRIDE`, whose `NEW_OPTIONS` is empty.
 [^5]: an options file optique cannot model is left to make
     ([commands](commands.md#sync)): every option of its port reports
     `locked: true` with `locked_by` `"options file"`, `"options.local"` or

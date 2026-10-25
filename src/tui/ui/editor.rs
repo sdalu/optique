@@ -403,7 +403,13 @@ fn flavor_summary(app: &App, info: &PortInfo) -> Option<Vec<Span<'static>>> {
     if info.flavors.is_empty() {
         return None;
     }
-    let owner = app.session.owner_info(info).canonical.flavor.clone();
+    // The file's owner, which a flavor reading no file is not: none marked
+    // when no flavor here reads it.
+    let owner = app
+        .session
+        .owners
+        .get(&info.options_name)
+        .and_then(|k| k.flavor.clone());
     let current = info.canonical.flavor.clone();
     let present: Vec<Option<String>> = app
         .session
@@ -715,9 +721,12 @@ fn option_line(
     // as the STALE line and the list's +N count it (Session::stale_delta).
     // A column of its own rather than a badge, so the eye finds every new
     // option down the left edge of the pane.
-    let is_new = state
-        .and_then(|s| s.saved.as_ref())
-        .is_some_and(|saved| !saved.decides(opt));
+    // None for a flavor reading no file (an override's NEW_OPTIONS is
+    // empty).
+    let is_new = !crate::session::reads_no_file(info)
+        && state
+            .and_then(|s| s.saved.as_ref())
+            .is_some_and(|saved| !saved.decides(opt));
     let mut spans: Vec<Span> = vec![Span::styled(
         if is_new { "N" } else { " " },
         Style::default()

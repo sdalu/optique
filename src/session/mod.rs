@@ -541,9 +541,12 @@ impl Session {
     /// (`SavedOptionsFile::local_decides`): every SET entry goes in before
     /// any UNSET one, so an edit to the file cannot turn it back on.
     pub fn local_decides(&self, info: &PortInfo, opt: &str) -> bool {
-        self.locals
-            .get(&info.options_name)
-            .is_some_and(|l| l.local_decides(opt))
+        // One reading no shared file reads no options.local either.
+        !reads_no_file(info)
+            && self
+                .locals
+                .get(&info.options_name)
+                .is_some_and(|l| l.local_decides(opt))
     }
 
     /// Why the port's options file is one optique cannot manage: make.conf
@@ -551,9 +554,13 @@ impl Session {
     /// what optique cannot model (`unmanaged_file`). Nothing is written or
     /// removed for it, no edit is taken, and its state is make's own
     /// PORT_OPTIONS. A flavor moved elsewhere leaves the shared file to the
-    /// flavors still reading it.
+    /// flavors still reading it; one under an OPTIONS_OVERRIDE reads neither
+    /// the file nor its .local, so what they hold makes it nothing.
     pub fn unmanaged(&self, info: &PortInfo) -> Option<Unmanaged> {
-        moved(info).or_else(|| self.locals.get(&info.options_name).and_then(unmanaged_file))
+        if reads_no_file(info) {
+            return moved(info);
+        }
+        self.locals.get(&info.options_name).and_then(unmanaged_file)
     }
 
     /// The listed origins MOVED moves to this port: its key, or, for one
@@ -958,6 +965,11 @@ impl Session {
     /// option list: a non-default flavor excludes options on purpose and
     /// must not read the owner-written file as stale.
     pub fn stale_delta(&self, info: &PortInfo) -> Option<(Vec<String>, Vec<String>)> {
+        // A flavor reading no file is behind on none (an override's
+        // NEW_OPTIONS is empty, bsd.options.mk:303).
+        if reads_no_file(info) {
+            return None;
+        }
         let saved = self.state(info)?.saved.as_ref()?;
         let owner = self.owner_info(info);
         let cur = &owner.options.complete;

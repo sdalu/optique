@@ -49,6 +49,14 @@ pub(super) fn app_for(tmp: &std::path::Path, graph: &[(&str, &[&str])]) -> App {
         let info = port(origin, deps);
         ports.insert(info.canonical.clone(), info);
     }
+    app_over(tmp, ports)
+}
+
+/// `app_for` over ports built by the caller, every one a root.
+pub(super) fn app_over(
+    tmp: &std::path::Path,
+    ports: std::collections::BTreeMap<PortKey, crate::model::port::PortInfo>,
+) -> App {
     let roots: Vec<PortKey> = ports.keys().cloned().collect();
     let files = OptionsFiles::new(&tmp.join("options"));
     let session = Session::new(ports, HashMap::new(), &roots, &files, false);
@@ -6076,4 +6084,86 @@ fn a_conflict_names_its_makeconf_cause() {
         causes(&app),
         [(prevents, Some("D on by make.conf OPTIONS_SET".into()))]
     );
+}
+
+/// Two flavors of misc/flav sharing one file, make.conf giving
+/// `overridden` an OPTIONS_OVERRIDE of A; `full` has A X Y, `nox` A only.
+fn flav_with_override(tmp: &std::path::Path, overridden: &str) -> (App, PortKey, PortKey) {
+    use crate::model::options::PortOptions;
+    use crate::model::port::PortInfo;
+    let mk = |flavor: &str, complete: &[&str]| {
+        let key = PortKey::parse(&format!("misc/flav@{flavor}")).unwrap();
+        let mut options = PortOptions {
+            complete: complete.iter().map(ToString::to_string).collect(),
+            defaults: complete.iter().map(ToString::to_string).collect(),
+            effective: complete.iter().map(ToString::to_string).collect(),
+            ..Default::default()
+        };
+        if flavor == overridden {
+            options.r#override = Some(["A".to_string()].into());
+            options.effective = ["A".to_string()].into();
+        }
+        PortInfo {
+            pkgname: "flav-1.0".into(),
+            options_name: "misc_flav".into(),
+            flavors: vec!["full".into(), "nox".into()],
+            options,
+            canonical: key.clone(),
+            key,
+            ..PortInfo::stub("misc/flav")
+        }
+    };
+    let (full, nox) = (mk("full", &["A", "X", "Y"]), mk("nox", &["A"]));
+    let keys = (full.key.clone(), nox.key.clone());
+    let ports = [full, nox]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    (app_over(tmp, ports), keys.0, keys.1)
+}
+
+/// Show `key`'s pane.
+fn show(app: &mut App, key: &PortKey) -> String {
+    let idx = app.visible.iter().position(|k| k == key).unwrap();
+    app.list_state.select(Some(idx));
+    app.rebuild_editor();
+    screen(app)
+}
+
+/// A flavor make.conf gives an OPTIONS_OVERRIDE reads no file: its pane
+/// lists nothing of the file as excluded or obsolete, says nothing stale,
+/// and marks the flavor reading the file as its owner; an options.local
+/// optique cannot model is the readers' concern, not its.
+#[test]
+fn an_override_flavors_pane_shows_nothing_of_the_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("options/misc_flav");
+    std::fs::create_dir_all(&dir).unwrap();
+    // As @full writes it.
+    std::fs::write(
+        dir.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=A X Y\nOPTIONS_FILE_SET+=A\nOPTIONS_FILE_SET+=X\n\
+         OPTIONS_FILE_SET+=Y\n",
+    )
+    .unwrap();
+    let (mut app, _, nox) = flav_with_override(tmp.path(), "nox");
+    let shown = show(&mut app, &nox);
+    assert!(shown.contains("flavors: full* nox‹"), "{shown}");
+    for word in ["obsolete", "excluded", "STALE", "UNMANAGED"] {
+        assert!(!shown.contains(word), "{word}:\n{shown}");
+    }
+
+    // As @nox writes it, the override on @full, which reads none of it.
+    std::fs::write(
+        dir.join("options"),
+        "_FILE_COMPLETE_OPTIONS_LIST=A\nOPTIONS_FILE_SET+=A\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("options.local"), "OPTIONS_FILE_SET=A\n").unwrap();
+    let (mut app, full, _) = flav_with_override(tmp.path(), "full");
+    let shown = show(&mut app, &full);
+    assert!(shown.contains("flavors: full‹ nox*"), "{shown}");
+    for word in ["STALE", "UNMANAGED", "new X"] {
+        assert!(!shown.contains(word), "{word}:\n{shown}");
+    }
 }

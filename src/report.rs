@@ -407,7 +407,8 @@ pub fn option_reports(sess: &Session, info: &PortInfo) -> Vec<OptionReport> {
                 staged,
                 default: opts.defaults.contains(name),
                 saved: file_value,
-                new: saved.is_some_and(|s| !s.decides(name)),
+                // An override's NEW_OPTIONS is empty (bsd.options.mk:303).
+                new: opts.r#override.is_none() && saved.is_some_and(|s| !s.decides(name)),
                 makeconf,
                 locked: locked_by.is_some(),
                 locked_by,

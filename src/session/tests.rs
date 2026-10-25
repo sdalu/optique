@@ -2721,6 +2721,9 @@ fn report_prefers_the_override_over_an_unmanaged_file() {
             "{}",
             r.name
         );
+        // NEW_OPTIONS is empty under the override (bsd.options.mk:303),
+        // though the file has no line for B.
+        assert!(!r.new, "{}", r.name);
         let mc = r.makeconf.as_ref().unwrap();
         assert_eq!(
             (mc.value, mc.scope),

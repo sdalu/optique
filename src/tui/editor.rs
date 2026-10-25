@@ -58,7 +58,10 @@ impl App {
             }
         }
         let owner_complete = &self.session.owner_info(info).options.complete;
-        if let Some(state) = self.session.state(info)
+        // A flavor reading no file has no file rows: nothing in it is
+        // excluded or obsolete for it.
+        if !crate::session::reads_no_file(info)
+            && let Some(state) = self.session.state(info)
             && let Some(saved) = &state.saved
         {
             let file_known: BTreeSet<String> = saved
