@@ -1266,13 +1266,10 @@ mod tests {
         .unwrap();
         let httpd = localbase.join("sbin/httpd");
         std::fs::create_dir_all(httpd.parent().unwrap()).unwrap();
-        std::fs::write(
+        crate::config::testutil::fake_executable(
             &httpd,
-            "#!/bin/sh\necho 'Server MPM:     event'\necho '  threaded:     yes'\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&httpd, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
+            "echo 'Server MPM:     event'\necho '  threaded:     yes'",
+        );
         let profile = staging.path().join("Live-make.conf");
         std::fs::write(&profile, format!("LOCALBASE={}\n", localbase.display())).unwrap();
         let make_conf =

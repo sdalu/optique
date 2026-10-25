@@ -840,8 +840,33 @@ fn stage_make_conf(
 
 /// Fixtures shared by the tests of every build.
 #[cfg(test)]
-mod testutil {
+pub(crate) mod testutil {
     use super::*;
+
+    /// A shell script at `path` running `body`, once it can be run: a
+    /// thread forking while it was being written holds a write descriptor
+    /// on it until its child execs, and until then running it fails with
+    /// ETXTBSY.
+    pub(crate) fn fake_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::{Command, Stdio};
+        fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        for _ in 0..500 {
+            let run = Command::new(path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match run {
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                _ => return,
+            }
+        }
+        panic!("{} stays busy", path.display());
+    }
 
     /// A fake ports tree at `dir`.
     pub(super) fn fake_tree(dir: &Path) {
@@ -916,13 +941,9 @@ mod tests {
     /// the environment's or the default.
     #[test]
     fn pkg_dbdir_asks_pkg() {
-        use std::os::unix::fs::PermissionsExt as _;
         let tmp = tempfile::tempdir().unwrap();
         let fake = tmp.path().join("pkg");
-        let script = |body: &str| {
-            fs::write(&fake, format!("#!/bin/sh\n{body}\n")).unwrap();
-            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
-        };
+        let script = |body: &str| fake_executable(&fake, body);
         script("[ \"$1 $2\" = \"config PKG_DBDIR\" ] && echo /pkgdb");
         assert_eq!(pkg_dbdir(&fake), Some(PathBuf::from("/pkgdb")));
         script("exit 1");
@@ -987,13 +1008,11 @@ mod tests {
 
         // pkg.conf moving the database: pkg's answer is keyed, not the
         // fallback, which names nothing here.
-        use std::os::unix::fs::PermissionsExt as _;
         let moved = tmp.path().join("moved");
         fs::create_dir_all(&moved).unwrap();
         fs::write(moved.join("local.sqlite"), "one package").unwrap();
         let pkg = tmp.path().join("pkg");
-        fs::write(&pkg, format!("#!/bin/sh\necho {}\n", moved.display())).unwrap();
-        fs::set_permissions(&pkg, fs::Permissions::from_mode(0o755)).unwrap();
+        fake_executable(&pkg, &format!("echo {}", moved.display()));
         let nowhere = tmp.path().join("nowhere.sqlite");
         let asked = HostPaths {
             pkg_db: PkgDb {
