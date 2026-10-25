@@ -661,7 +661,7 @@ defaults so the no-file outcome matches the framework's.
 
 `sync` and the TUI's apply write no file for a port that has none, whose
 every option make.conf decides (`session::undecided_options` empty) and
-whose staged values are those `sync` would record: `make
+that nobody edited: `make
 config-conditional` writes only when `NEW_OPTIONS` is non-empty, so
 `poudriere options -C` leaves such a port alone too
 (`apply::Covered::Leave`, `src/apply/mod.rs`). A file would not be
@@ -676,7 +676,9 @@ where make, by mention, writes one. Such a port is the final state, so
 `scan` and the TUI count it done without `-m`. Of flavors sharing the
 file, a default-flavor owner is judged alone: it writes only its own
 options, so a file would settle nothing another flavor alone has
-(audacious-plugins@gtk3's AOSD).
+(audacious-plugins@gtk3's AOSD); `Session::undecided` leaves such an
+option out too, so that flavor's row owes nothing for it and reads done
+as `sync` leaves it, the TUI refusing the option as before.
 
 Whether the user edited the port is the caller's to say (`edited`, files
 whose staged set left its baseline). Rejected: comparing the staged set

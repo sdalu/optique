@@ -1416,8 +1416,9 @@ fn leave_creates_no_file_for_flavors_make_conf_decides() {
 }
 
 /// Under a default flavor, which writes only its own options, another
-/// flavor's option make.conf leaves open asks for no file: one would
-/// settle nothing for it (audacious-plugins@gtk3's AOSD).
+/// flavor's option the file never records (audacious-plugins@gtk3's AOSD)
+/// asks for no file, which would settle nothing for it; and its row owes
+/// nothing either, so scan and the TUI count it done as sync leaves it.
 #[test]
 fn leave_judges_a_default_flavor_owner_alone() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1431,17 +1432,39 @@ fn leave_judges_a_default_flavor_owner_alone() {
     };
     let qt = flavored("qt", &["A"]);
     let gtk3 = flavored("gtk3", &["A", "AOSD"]);
+    let files = OptionsFiles::new(tmp.path());
     let ports = [(&qt.key, &qt), (&gtk3.key, &gtk3)];
     let none = BTreeSet::new();
     let planned = plan_writes_for(
         ports
             .iter()
             .map(|(k, i)| (*k, *i, sync_enabled_set(&qt, None))),
-        &OptionsFiles::new(tmp.path()),
+        &files,
         false,
         Covered::Leave { edited: &none },
     );
     assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+
+    let by_key: std::collections::BTreeMap<PortKey, PortInfo> = [qt.clone(), gtk3.clone()]
+        .into_iter()
+        .map(|i| (i.key.clone(), i))
+        .collect();
+    let roots: Vec<PortKey> = by_key.keys().cloned().collect();
+    let session = crate::session::Session::new(
+        by_key,
+        std::collections::HashMap::new(),
+        &roots,
+        &files,
+        false,
+    );
+    let row = &session.ports[&gtk3.key];
+    assert!(session.unstored(row, "AOSD").is_some(), "the premise");
+    assert!(
+        session.undecided(row).is_empty(),
+        "{:?}",
+        session.undecided(row)
+    );
+    assert!(session.covered_by_makeconf(row), "done, as sync leaves it");
 }
 
 /// A stale file is rewritten all the same, its port nothing undecided: it

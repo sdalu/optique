@@ -74,7 +74,8 @@ file that exists but cannot be read is one such error, reported for its port
 as `cannot read options file <path>: <reason>` rather than taken for an
 unconfigured one. The counts go by `status`, so a port counted
 `unconfigured` or `stale` may owe no decision (`mc_covered`); `attention`
-counts those that do.
+counts the ports that hold the gate shut: those owing one, conflicts, and
+under `-s` files synth refuses, blacklisted ports never.
 
 Each element of `ports` has `port`, `pkgname`, `status` (`ok`, `unconfigured`,
 `stale` or `conflict`; a port with an `options.local` and no options file is

@@ -568,16 +568,20 @@ impl Session {
 
     /// The options the port still owes a human answer for
     /// (`undecided_options`); none for a file optique cannot manage, which
-    /// it cannot read.
+    /// it cannot read, nor one the file never records (`unstored`): no
+    /// answer to it could be kept, and apply judges such a file by its
+    /// owner alone (`apply::plan_writes_for`).
     pub fn undecided(&self, info: &PortInfo) -> Vec<String> {
         if self.unmanaged(info).is_some() {
             return Vec::new();
         }
-        undecided_options(
+        let mut undecided = undecided_options(
             info,
             self.state(info).and_then(|s| s.saved.as_ref()),
             self.minimal,
-        )
+        );
+        undecided.retain(|opt| self.unstored(info, opt).is_none());
+        undecided
     }
 
     /// Why no edit of the port's options file is taken, whatever the

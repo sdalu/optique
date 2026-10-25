@@ -1824,7 +1824,10 @@ counts go by
 .Va status ,
 so a port counted unconfigured or stale may owe no decision;
 .Va attention
-counts those that do.
+counts the ports that hold the gate shut: those owing one, conflicts, and
+under
+.Fl s
+files synth refuses, blacklisted ports never.
 Each element of
 .Va loops
 has
@@ -2241,7 +2244,9 @@ which
 .Ql @qt6
 lacks
 .Pc ,
-shows that flavor's own outcome, and the TUI and
+shows that flavor's own outcome, is not counted
+.Va undecided ,
+and the TUI and
 .Cm decide
 refuse to change it.
 A hand-written
