@@ -1810,11 +1810,21 @@ under
 why synth would refuse to build with the saved file, null otherwise; see
 .Sx SYNTH
 .Pc .
-The ports shown as problems come first, then alphabetical order; under
-.Fl m ,
-an unconfigured or stale port its defaults and
+The ports shown as problems come first, then alphabetical order; an
+unconfigured port
 .Pa make.conf
-settle sorts with the ok ones.
+settles sorts with the ok ones, and so, under
+.Fl m ,
+does a stale port its defaults and
+.Pa make.conf
+settle.
+The
+.Va summary
+counts go by
+.Va status ,
+so a port counted unconfigured or stale may owe no decision;
+.Va attention
+counts those that do.
 Each element of
 .Va loops
 has

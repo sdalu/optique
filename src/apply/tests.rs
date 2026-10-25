@@ -1395,17 +1395,48 @@ fn leave_creates_no_file_for_flavors_make_conf_decides() {
         info.key = PortKey::parse(&format!("devel/git@{flavor}")).unwrap();
         info.canonical = info.key.clone();
         info.flavors = vec!["default".into(), "lite".into()];
-        info.options.mc_set = set_of(&["A"]);
-        info.options.mc_unset = set_of(&["B", "GUI"]);
+        info.options.mc_set = set_of(&["A", "GUI"]);
+        info.options.mc_unset = set_of(&["B"]);
         info
     };
-    let full = flavored("default", &["A", "B", "GUI"]);
+    let mut full = flavored("default", &["A", "B", "GUI"]);
+    full.options.effective = set_of(&["A", "GUI"]);
     let lite = flavored("lite", &["A", "B"]);
     let shared = sync_enabled_set(&full, None);
+    assert_ne!(shared, sync_enabled_set(&lite, None), "GUI is full's alone");
     let ports = [(&full.key, &full), (&lite.key, &lite)];
     let none = BTreeSet::new();
     let planned = plan_writes_for(
         ports.iter().map(|(k, i)| (*k, *i, shared.clone())),
+        &OptionsFiles::new(tmp.path()),
+        false,
+        Covered::Leave { edited: &none },
+    );
+    assert!(planned.writes.is_empty(), "{:?}", planned.writes);
+}
+
+/// Under a default flavor, which writes only its own options, another
+/// flavor's option make.conf leaves open asks for no file: one would
+/// settle nothing for it (audacious-plugins@gtk3's AOSD).
+#[test]
+fn leave_judges_a_default_flavor_owner_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let flavored = |flavor: &str, complete: &[&str]| {
+        let mut info = mk_info(complete, &["A"]);
+        info.key = PortKey::parse(&format!("audio/plugins@{flavor}")).unwrap();
+        info.canonical = info.key.clone();
+        info.flavors = vec!["qt".into(), "gtk3".into()];
+        info.options.mc_set = set_of(&["A"]);
+        info
+    };
+    let qt = flavored("qt", &["A"]);
+    let gtk3 = flavored("gtk3", &["A", "AOSD"]);
+    let ports = [(&qt.key, &qt), (&gtk3.key, &gtk3)];
+    let none = BTreeSet::new();
+    let planned = plan_writes_for(
+        ports
+            .iter()
+            .map(|(k, i)| (*k, *i, sync_enabled_set(&qt, None))),
         &OptionsFiles::new(tmp.path()),
         false,
         Covered::Leave { edited: &none },

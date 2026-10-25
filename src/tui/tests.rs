@@ -2254,6 +2254,36 @@ fn apply_leaves_a_port_make_conf_settles_but_writes_its_edit() {
     assert!(written.contains("OPTIONS_FILE_SET+=DOCS"), "{written}");
 }
 
+/// Flavors sharing a file make.conf decides for each get none from apply,
+/// though the shared staged set holds an option one of them lacks.
+#[test]
+fn apply_leaves_flavors_make_conf_settles() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut app = app_for(tmp.path(), &[("cat/alpha@a", &[]), ("cat/alpha@b", &[])]);
+    for (k, complete) in [
+        ("cat/alpha@a", &["DOCS", "GUI"][..]),
+        ("cat/alpha@b", &["DOCS"]),
+    ] {
+        let info = app
+            .session
+            .ports
+            .get_mut(&PortKey::parse(k).unwrap())
+            .unwrap();
+        info.flavors = vec!["a".into(), "b".into()];
+        info.options.complete = complete.iter().map(ToString::to_string).collect();
+        info.options.effective = info.options.complete.iter().cloned().collect();
+        info.options.mc_set = ["DOCS".to_string(), "GUI".to_string()].into();
+    }
+    let state = app.session.states.get_mut("cat_alpha").unwrap();
+    state.staged = ["DOCS".to_string(), "GUI".to_string()].into();
+    state.baseline = state.staged.clone();
+    for k in ["cat/alpha@a", "cat/alpha@b"] {
+        assert_eq!(app.effective_status(&info_of(&app, k)), UiStatus::Ok, "{k}");
+    }
+    let planned = app.compute_writes();
+    assert_eq!(planned.touched().count(), 0, "{:?}", planned.writes);
+}
+
 /// Apply writes every port, listed or not, so its preview warns about a
 /// conflict the filter keeps off the list too.
 #[test]

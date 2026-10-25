@@ -72,7 +72,9 @@ list above) and `pending`, which is `attention` + `loops_blocking` +
 `moved` + `errors` and is what the exit status reports. An options
 file that exists but cannot be read is one such error, reported for its port
 as `cannot read options file <path>: <reason>` rather than taken for an
-unconfigured one.
+unconfigured one. The counts go by `status`, so a port counted
+`unconfigured` or `stale` may owe no decision (`mc_covered`); `attention`
+counts those that do.
 
 Each element of `ports` has `port`, `pkgname`, `status` (`ok`, `unconfigured`,
 `stale` or `conflict`; a port with an `options.local` and no options file is
@@ -82,7 +84,9 @@ meaningful for `stale`), `mc_covered`, `blacklisted`, `in_loop`,
 for the ports tree) and `synth_refuses` (under `-s`, why synth would
 refuse to build with the saved file; `null` otherwise). With `--options`, two more keys appear: `violations` (why the
 status is `conflict`) and `options`, an array in the framework's own option
-order.
+order. The ports shown as problems come first, then alphabetical order:
+an `unconfigured` port make.conf settles sorts with the ok ones, as does,
+under `-m`, a `stale` one its defaults and make.conf settle.
 
 Each element of `options` carries everything a decision needs without
 re-running `make`:

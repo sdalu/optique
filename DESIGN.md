@@ -673,7 +673,10 @@ redundant for the same reason. Decided is judged by outcome, as
 everywhere ("make.conf decisions are judged by outcome, not by mention"),
 so a SINGLE or RADIO sibling of the member make.conf picks gets no file
 where make, by mention, writes one. Such a port is the final state, so
-`scan` and the TUI count it done without `-m`.
+`scan` and the TUI count it done without `-m`. Of flavors sharing the
+file, a default-flavor owner is judged alone: it writes only its own
+options, so a file would settle nothing another flavor alone has
+(audacious-plugins@gtk3's AOSD).
 
 Whether the user edited the port is the caller's to say (`edited`, files
 whose staged set left its baseline). Rejected: comparing the staged set

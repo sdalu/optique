@@ -447,6 +447,40 @@ fn options_local_without_an_options_file_is_read() {
     assert_eq!(f.make_v(origin, "PORT_OPTIONS"), make);
 }
 
+/// A port with no file whose every option make.conf decides reads as done
+/// without -m: scan shows it ok, owing nothing (its JSON status stays the
+/// factual `unconfigured`), and sync writes it none. make.conf names AUDIO,
+/// NAS and DOCS but not SOX, the SINGLE sibling of the NAS it picks: make
+/// still lists SOX in NEW_OPTIONS, so config-conditional would write a
+/// file, where optique, judging by outcome, writes none.
+#[test]
+#[ignore = "needs /usr/ports/Mk on a FreeBSD host"]
+fn a_port_make_conf_settles_reads_as_done_without_minimal() {
+    let f = Fixture::new();
+    let origin = "misc/cond";
+    std::fs::write(
+        &f.make_conf,
+        "misc_cond_SET=AUDIO NAS\nmisc_cond_UNSET=DOCS\n",
+    )
+    .unwrap();
+    assert_eq!(f.make_v(origin, "NEW_OPTIONS"), ["SOX"]);
+    let report = common::json(&f.run("scan", &["--json", origin]));
+    let port = &report["ports"][0];
+    assert_eq!(port["status"], "unconfigured", "{port}");
+    assert_eq!(port["mc_covered"], true, "{port}");
+    assert_eq!(report["summary"]["attention"], 0, "{report}");
+    let out = f.run("scan", &[origin]);
+    assert!(out.status.success(), "{}", common::stderr(&out));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines()
+            .any(|l| l.contains(origin) && l.contains("ok (no file: defaults + make.conf)")),
+        "{text}"
+    );
+    f.run("sync", &[origin]);
+    assert!(!f.file("misc_cond").exists(), "make.conf decides: no file");
+}
+
 /// make joins a line ending in `\` with the next before parsing it. The
 /// file sets AUDIO and, on a continued line, NAS: make has AUDIO and NAS
 /// on and nothing new; optique too, and the port is not stale.

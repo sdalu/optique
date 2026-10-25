@@ -313,7 +313,7 @@ The TUI's view rules (`m`, `w`, `-m`) are layered on `status` in
 
 ## Writing files
 
-`apply::plan_writes` groups the ports by options file, leaving out a
+`apply::plan_writes_for` groups the ports by options file, leaving out a
 flavor make.conf moves `OPTIONS_FILE` for (`session::moved`), and, for
 each:
 
@@ -326,7 +326,11 @@ each:
 3. under `-m`, removes it when, with `options.local` still read, it
    changes nothing for any flavor and holds no line those flavors cannot
    see;
-4. skips it when it is up to date (make would end up the same, and the
+4. under `Covered::Leave` (`sync`, the TUI's apply; `decide` writes
+   it), creates none when there is no file, the caller names no edit to
+   it, and make.conf leaves nothing undecided for the owner, or, when the
+   owner is no default flavor, for any flavor;
+5. skips it when it is up to date (make would end up the same, and the
    list is complete), else renders it as `make config` would, less the
    `_OPTIONS_READ` line and with a pkgname comment of 20 bytes or more,
    so no line trips synth's options check.
